@@ -1,0 +1,502 @@
+# Reguli proiect deviz_mvp
+
+## Tehnologie
+- Flutter/Dart, Firebase, arhitectură repository pattern
+- Structura cod în lib/features/ — respectă-o întotdeauna
+
+## Reguli obligatorii
+
+### Sincronizare
+- Tot ce implementezi trebuie să funcționeze OFFLINE și să se 
+  sincronizeze automat când revine conexiunea (cloud cross-device)
+- Folosește queue offline existent în proiect
+
+### Limbă și caractere
+- Toată interfața în română CU diacritice corecte (ă, â, î, ș, ț)
+- La fiecare modificare verifică dacă există caractere greșite 
+  (s fără virgulă, t fără virgulă, a fără accent)
+- Documentele generate (PDF, etc.) trebuie să aibă diacritice corecte
+
+### Protecția codului existent
+- NU modifica funcționalități care deja funcționează
+- Înainte de orice modificare majoră, anunță ce vei schimba
+- Dacă ceva funcțional trebuie restructurat, cere confirmare
+
+### La finalul fiecărui task
+1. Listează toate fișierele modificate
+2. Explică pe scurt ce ai făcut în fiecare
+3. Sugerează 2-3 îmbunătățiri relevante pentru ce ai lucrat
+4. Menționează dacă ai găsit bug-uri sau probleme în cod
+
+### Calitatea codului
+- Verifică că nu există erori de compilare după modificări
+- Respectă stilul de cod existent în proiect
+- Adaugă comentarii în română pentru cod complex
+### Consistență și reutilizare cod
+- Înainte de a implementa orice funcționalitate nouă, caută în 
+  tot proiectul dacă există deja implementată o logică similară
+- Dacă găsești o implementare similară (ex: selectare echipă, 
+  dropdown clienți, formular adresă), implementeaz-o EXACT la 
+  fel — același stil, aceeași structură, aceleași widget-uri
+- Fă legătura între module — dacă selectarea echipei există în 
+  Setări, folosește același serviciu/repository și în modulul nou
+- Nu crea cod duplicat — reutilizează serviciile, repository-urile 
+  și widget-urile existente
+- Dacă găsești o implementare mai bună decât ce există deja, 
+  anunță-mă înainte să schimbi ceva
+
+### Înainte de orice implementare nouă
+1. Caută în proiect dacă există deja ceva similar
+2. Raportează ce ai găsit și unde
+3. Explică cum vei face legătura cu ce există
+4. Abia apoi implementează
+## Harta modulelor importante
+- Selectare angajat: lib/features/employees/
+- Selectare client: lib/features/clients/
+- Sync offline: lib/features/sync/
+- Generare PDF: lib/features/field_sales/field_sales_quote_pdf_service.dart
+## Despre proiect
+Aplicație Flutter pentru managementul unei firme de construcții/devize.
+Utilizatori: angajații firmei pe teren și la birou.
+Scopul: să funcționeze offline pe șantier și să sincronizeze 
+datele când există internet.
+
+## Ce este implementat deja ✅
+- Autentificare utilizatori
+- Modul clienți (CRUD + Firebase)
+- Modul angajați
+- Modul field sales / devize pe teren
+- Generare PDF devize
+- Sync offline cu queue
+- Email server settings
+- Catalog materiale
+- hr_attendance: sincronizare offline cu queue — implementat
+- tools: sincronizare offline cu queue (upsert + delete) — implementat
+- tool_packages: sincronizare offline cu queue (upsert + delete) — implementat
+- agfr (equipments, interventions, reports, weighing reports): sincronizare offline cu queue — implementat
+- vehicles: sincronizare offline cu queue (upsert + delete) — implementat
+- registratura (registry entries): sincronizare offline cu queue (upsert + delete) — implementat
+- partner_financial: tranzacții parteneri (PartnerTransaction + PartnerFinancialSummary) cu sync offline — implementat
+- partner_financial: vânzare din catalog (partner_sale_form) + achiziție liberă (partner_purchase_form) — implementat
+- partner_financial: dashboard global în meniu COMERCIAL (financiar_parteneri) — implementat
+- partner_financial: alertă locală push când sold net < -1000 RON — implementat
+- Email notificări programări: filtru câmpuri relevante (fără modificări financiare/materiale) — implementat
+
+## Ce vreau să implementez în viitor 🚀
+- 
+
+## Cum lucrez eu
+- Nu știu să codez — agentul trebuie să implementeze complet
+- Vreau explicații simple, fără termeni tehnici complicați
+- Vreau să fiu anunțat înainte de modificări majore
+- Prefer să implementăm câte un lucru odată, testat și funcțional
+- Limba română cu diacritice peste tot în aplicație
+## Probleme cunoscute de rezolvat 🔴
+- Datele nu se salvează corect în aplicație și cross-device
+  la ultimele modificări — verifică și repară înainte de 
+  orice funcționalitate nouă
+
+## Reguli critice pentru date
+
+### Salvare și sincronizare
+- Verifică întotdeauna că datele se salvează corect LOCAL 
+  și în FIREBASE (cloud)
+- Testează că același document apare identic pe toate 
+  dispozitivele după sync
+- Nu considera un task finalizat dacă datele nu se 
+  sincronizează corect
+
+### Compatibilitate versiuni vechi
+- Aplicația trebuie să funcționeze corect chiar dacă 
+  unii angajați folosesc o versiune mai veche
+- Orice structură de date nouă trebuie să fie 
+  backward compatible (versiunile vechi să nu crape)
+- Când adaugi câmpuri noi în modele, pune întotdeauna 
+  valoare default pentru că versiunile vechi nu le au
+- Verifică că nu apar DUPLICATE în programări sau alte 
+  module când se sincronizează date între versiuni diferite
+
+### Înainte de orice modificare la modele de date
+1. Anunță ce câmpuri adaugi/modifici
+2. Verifică impactul asupra versiunilor mai vechi
+3. Adaugă migrare dacă e necesar
+4. Testează scenariul: user cu versiune veche + versiune noua
+## ⚠️ CRITIC — Aplicație în producție cu date reale
+
+Această aplicație este folosită REAL de angajați cu date reale.
+Orice greșeală poate afecta activitatea firmei PRO TERM SRL.
+
+### Reguli absolute înainte de orice modificare:
+
+1. **BACKUP OBLIGATORIU** — Înainte să modifici orice fișier, 
+   creează o copie: `numefisier.dart.bak`
+   
+2. **UN FIȘIER ODATĂ** — Nu modifica mai multe fișiere simultan.
+   Arată-mi ce vrei să schimbi și așteaptă confirmarea mea.
+
+3. **NU atinge funcțiile de normalizare/sync** — Acestea 
+   protejează datele existente din Firestore. Orice modificare 
+   poate strica datele reale ale clienților.
+
+4. **NU migrări de date Firestore** — Zero modificări la 
+   structura datelor existente fără aprobare explicită.
+
+5. **Testează înainte să confirmi** — După orice modificare 
+   verifică că aplicația compilează fără erori noi.
+
+6. **Dacă nu ești sigur 100% — NU face modificarea** 
+   Întreabă-mă mai întâi.
+
+### La finalul fiecărei sesiuni:
+- Listează toate fișierele modificate
+- Confirmă că toate backup-urile .bak există
+- Spune dacă aplicația compilează fără erori
+### Format rapoarte și rezumate
+- La finalul oricărui raport sau rezumat, pune 
+  conținutul într-un bloc de cod markdown astfel:
+  
+  ```rezumat
+  [conținutul raportului aici]
+  create a todo list when working on complex tasks to track progress and remain on track
+  ### Autonomie agent
+Poți rula fără să ceri confirmare pentru:
+- Analiză, rapoarte, citire cod
+- Modificări UI (butoane, texte, stiluri)
+- Adăugare funcționalități noi
+- Crearea backup-urilor .bak
+
+Cere ÎNTOTDEAUNA confirmare pentru:
+- Orice modificare la Firebase sau structura datelor
+- Ștergerea fișierelor (nu .bak)
+- Migrări de date în Firestore
+- Modificarea logicii de sincronizare offline
+Actualizează CLAUDE.md cu această regulă nouă:
+
+### Mod de lucru autonom
+- Lucrează autonom fără să ceri confirmare pentru 
+  implementări tehnice standard
+- Nu explica fiecare pas mic — acționează direct
+- La final dă doar rezumatul: ce ai făcut, 
+  fișiere modificate, dart analyze rezultat
+- Întreabă DOAR dacă găsești ceva neașteptat 
+  sau risc pentru date reale
+Actualizează CLAUDE.md cu secțiune nouă:
+
+## ⚠️ REGULA CRITICĂ — Legăturile între module (OBLIGATORIU)
+
+Când modific module, setări, sau structură:
+
+1. ÎNAINTE DE ORICE MODIFICARE:
+   - Documentează ce legăturile EXISTENTE depind de 
+     modulul pe care o voi modifica
+   - Exemplu: Dacă modific CompanySettings, 
+     găsesc TOȚI PDF service-urile care le folosesc
+   - Exemplu: Dacă modific HR Roles, verific cine folosește
+     acele roluri în policy-uri
+
+2. MODIFICARE SIGURĂ:
+   - NU ștergi cod vechi — ADAUG code paths noi
+   - Mențin backward compatibility (fallback-uri)
+   - Schimb referințele la módulul modificat 
+     în TOATE locurile care îl folosesc
+
+3. VERIFIC ȘI REFAC LEGĂTURILE:
+   - Dupa ce modific un modul, caut:
+     * Import-urile care îl folosesc (cmd+shift+f)
+     * Serviciile care îl apelează
+     * UI-ul care-l afișează
+     * PDF/Email service-urile care-l citesc
+   - Actualizez TOATE referințele
+   - Nicio legătură ruptă
+
+4. TESTARE OBLIGATORIE:
+   - Lanchez app și verific manual fluxurile care 
+     depind de modulul modificat
+   - Nu merg mai departe până nu sunt sigur că merge
+
+5. RAPORT CU LEGĂTURILE:
+   - Listez TOATE fișierele care am modificat
+   - Pentru fiecare modul modificat, raportez:
+     * Unde este folosit (import-uri)
+     * Ce s-a schimbat
+     * Cum am refăcut legăturile
+     * Teste efectuate
+
+6. EXEMPLU — Modificar CompanySettings:
+   Găsesc: HrPayslipPdfService, OfertaPdfService, 
+   EmailService, etc. le actualizez pe TOATE.
+   Testez: Generez fluturași, ofertă, email.
+
+7. Dacă găsesc o legătură ruptă DUPĂ:
+   - O refac imediat
+   - O raportez în raport final
+   - Mentionez cum am fixat-o
+
+NU continui la task-ul următor până nu sunt 100% 
+sigur că toate legăturile funcționează.
+
+## ⌨️ REGULA CÂMPURI TEXT — OBLIGATORIE
+
+În TOATE câmpurile editabile (TextField, TextFormField) din Flutter adaugă:
+
+```
+textCapitalization: TextCapitalization.sentences
+```
+
+EXCEPȚII (unde NU se pune):
+- Email → TextCapitalization.none
+- Parolă → TextCapitalization.none
+- Cod/număr (CUI, CIF, IBAN, număr factură) → TextCapitalization.none
+- URL → TextCapitalization.none
+- Câmpuri cu `keyboardType: TextInputType.number/phone/emailAddress/url`
+
+## ⚡ REGULI PERFORMANȚĂ — OBLIGATORII
+
+### După ORICE modificare verifică:
+
+1. FLUTTER (deviz_mvp):
+   - dart analyze — 0 erori, 0 warnings noi
+   - Niciun widget rebuild inutil
+     (folosește const unde posibil)
+   - Liste mari → ListView.builder 
+     (NICIODATĂ ListView cu children=[...] pentru liste mari)
+   - Niciun setState() inutil
+   - FutureBuilder/StreamBuilder cu loading state corect
+   - Dispose controllers în dispose()
+
+2. FIREBASE:
+   - Query-uri cu where() / limit() pentru colecții mari
+   - Niciun listen() fără dispose()
+   - Cache local înainte de Firebase call
+
+3. GENERAL:
+   - Niciun API call în build()
+   - const constructors peste tot posibil
+   - Dispose TextEditingController, ScrollController,
+     AnimationController, StreamSubscription
+
+### Raport performanță după fiecare task:
+✅ dart analyze: X erori/warnings
+✅ Widgets const: verificat
+✅ Liste: ListView.builder folosit
+✅ Memory leaks: niciun listener neînchis
+
+## ❓ REGULA BUTON HELP — OBLIGATORIE
+
+### În FIECARE modul/pagină nouă sau modificată:
+
+1. BUTON HELP obligatoriu în AppBar sau header:
+   ```dart
+   HelpButton(content: AppHelp.<cheieModul>)
+   ```
+
+2. CONȚINUT HELP în `lib/core/help_content.dart`:
+   - Titlu: "Cum se folosește [Nume Modul]"
+   - Secțiuni cu pași numerotați
+   - Limbă: ROMÂNĂ cu diacritice
+   - Maxim 5-6 puncte per secțiune
+
+3. CÂND SE ACTUALIZEAZĂ HELP-UL:
+   - La fiecare modificare de modul, actualizează textul
+   - Adaugă funcțiile noi în AppHelp getter-ul corespunzător
+
+4. FIȘIERE SISTEM HELP:
+   - Widget: `lib/core/widgets/help_button.dart`
+   - Conținut: `lib/core/help_content.dart` (clasa AppHelp)
+
+## 🔄 REGULA TASK QUEUE — OBLIGATORIE
+
+### Când primesc un task nou în timp ce lucrez:
+
+1. NU mă opresc din task-ul curent
+2. Termin complet ce am început (toate fișierele + dart analyze 0 erori)
+3. Notific: "Am primit task-ul nou. Termin [TASK CURENT] și trec la [TASK NOU]."
+4. Dacă task-ul curent necesită ceva suplimentar descoperit pe parcurs,
+   termin mai întâi suplimentarul, raportez, abia apoi trec la task nou.
+
+### Raport la finalul fiecărui task:
+✅ Task finalizat: [NUME TASK]
+📋 Fișiere modificate: [LISTA]
+🔍 dart analyze: 0 erori
+⏭️ Urmează: [NEXT TASK]
+
+### NICIODATĂ:
+- Nu abandona task la jumătate
+- Nu sări la task nou fără raport
+- Nu lăsa dart analyze cu erori
+
+## 📋 REGULA REGISTRATURĂ — OBLIGATORIE
+
+### Numărul documentului în Registratură:
+
+CRITICĂ: Când un document este înregistrat în Registratură,
+numărul și seria TREBUIE să fie EXACT ACELAȘI cu documentul sursă.
+NU se generează număr nou în Registratură!
+
+### Exemple corecte:
+- Ofertă OFF-2026-0042 → Registratură înregistrează: OFF-2026-0042 ✅
+- Contract CTR-2026-0015 → Registratură: CTR-2026-0015 ✅
+
+### GREȘIT:
+- Ofertă OFF-2026-0042 → Registratură generează: REG-2026-0001 ❌
+
+### Implementare:
+1. La înregistrare, preia automat: numărul, seria, tipul, data emiterii
+2. NU genera număr nou propriu
+3. Avertisment dacă numărul există deja
+4. Când modifici module care emit documente, verifică că transmit 
+   corect numărul și seria spre Registratură
+
+## 🔤 REGULA PDF DIACRITICE — OBLIGATORIE
+
+NICIODATĂ nu genera PDF fără font cu suport UTF-8 românesc!
+
+### Helper centralizat: `lib/core/pdf/pdf_font_helper.dart`
+
+La ORICE PDF service nou sau modificat:
+1. Importă PdfFontHelper: `import '../../core/pdf/pdf_font_helper.dart';`
+2. Apelează la început: `await PdfFontHelper.initialize();`
+3. Creează documentul cu tema: `pw.Document(theme: PdfFontHelper.theme)`
+4. Opțional: `PdfFontHelper.bold` / `PdfFontHelper.regular` pentru stiluri explicite
+
+### Servicii existente care au deja font OK:
+- offer_pdf_service.dart → PdfFontBundle ✅
+- hr_leave_request_pdf_service.dart → PdfFontBundle ✅
+- scule_handover_pdf_service.dart → PdfFontBundle ✅
+- warranty_intervention_report_pdf_service.dart → PdfFontBundle ✅
+- repair_report_pdf_service.dart → PdfFontBundle ✅
+- complaint_work_order_pdf_service.dart → PdfFontBundle ✅
+- complaint_client_centralizer_pdf_service.dart → PdfFontBundle ✅
+- situatie_lucrari_pdf_service.dart → PdfFontBundle ✅
+- warranty_certificate_pdf_service.dart → PdfFontBundle ✅
+- pdf_service.dart → _PdfFontSet (Arial) ✅
+- travel_order_pdf_service.dart → _FontSet (Arial) ✅
+
+### Servicii fixate cu PdfFontHelper:
+- hr_payslip_pdf_service.dart ✅
+- hr_attendance_report_pdf_service.dart ✅
+- hr_payroll_monthly_statement_pdf_service.dart ✅
+- hr_payroll_accounting_report_pdf_service.dart ✅
+- monthly_timesheet_pdf_service.dart ✅
+- agfr_report_pdf_service.dart ✅
+- field_sales_quote_pdf_service.dart ✅
+- hr_leave_approved_monthly_report_pdf_service.dart ✅
+- offer_acceptance_form_pdf_service.dart ✅
+- product_catalog_pricelist_pdf_service.dart ✅
+
+### Font folosit: Arial (arial.ttf + arialbd.ttf) — suportă diacritice românești ✅
+
+VERIFICARE OBLIGATORIE după orice PDF:
+Generează PDF de test și verifică vizual că ă, â, î, ș, ț apar corect.
+
+## 📧 REGULA EMAIL NOTIFICĂRI PROGRAMĂRI
+
+Email se trimite DOAR pentru modificări relevante:
+✅ Programare nouă creată
+✅ Schimbare dată/oră (amânare)
+✅ Schimbare client (clientId sau clientName)
+✅ Schimbare titlu sau locație sau tip
+✅ Schimbare status (inclusiv anulare)
+✅ Schimbare echipă/tehnician (teamId, assignedTeamIds,
+   assignedUserId, assignedUserEmail, assignedEmployeeIds)
+
+Email NU se trimite pentru:
+❌ Plăți/încasări (interventionPrice, adminCollectedAmount etc.)
+❌ Status financiar (adminFinancialStatus, executingPartnerPaymentStatus etc.)
+❌ Materiale/produse (materialUsage)
+❌ Note interne (notes, adminFinancialNotes etc.)
+❌ Upload poze/documente (linkedDocuments)
+❌ Prețuri și comisioane parteneri
+
+Implementare: metoda _hasRelevantChangesForEmail() în programari_page.dart
+verifică câmpurile relevante înainte de dispatch.
+
+## 💰 MODUL FINANCIAR PARTENERI
+
+### Fișiere principale:
+- `lib/features/partner_financial/partner_financial_models.dart`
+  → PartnerTransaction, PartnerFinancialSummary, enumerări tip/direcție/metodă
+- `lib/features/partner_financial/partner_financial_repository.dart`
+  → CRUD tranzacții + rebuild automat sold net după fiecare operație
+- `lib/features/partner_financial/partner_financial_page.dart`
+  → Pagina per partener: sumar sold + liste filtrate + butoane acțiune
+- `lib/features/partner_financial/partner_financial_dashboard_page.dart`
+  → Dashboard global: sumar agregat toți partenerii, accesat din meniu COMERCIAL
+- `lib/features/partner_financial/partner_sale_form.dart`
+  → Vânzare produs din catalog: search live, preț preluat automat, scădere stoc
+- `lib/features/partner_financial/partner_purchase_form.dart`
+  → Achiziție liberă: descriere, cantitate, UM, preț
+
+### Reguli obligatorii:
+- Sold net = intrări (totalDeIncasat) - ieșiri (totalDePlata) — calculat automat
+- La orice tranzacție nouă → rebuild PartnerFinancialSummary în Firebase
+- Fără email pentru modificări financiare din programări
+- Alertă push locală automată dacă sold net < -1000 RON
+  (via NotificationRuntimeService.instance.showLocalNotification)
+- La vânzare din catalog → scade automat stockQuantity în ProductCatalogService
+
+### Firebase collections:
+- partner_transactions — toate tranzacțiile
+- partner_financial_summary — sold net per partener (document id = partnerId)
+
+### Offline sync:
+- queuePartnerTransactionUpsert / queuePartnerTransactionDelete
+- queuePartnerFinancialSummaryUpsert
+- Handler în syncPending() din offline_sync_runtime.dart
+
+### Navigație:
+- Meniu COMERCIAL → "Financiar parteneri" (admin + birou)
+- Din pagina partener → buton 💰 în trailing + OutlinedButton "Financiar"
+- Din PartnerFinancialPage → butoane "Vânzare catalog" și "Achiziție"
+
+## 👁️ REGULA VIZIBILITATE — OBLIGATORIE
+
+La ORICE pagină cu listă implementată sau modificată:
+
+### 1. FILTRE RESPONSIV (mobil + Windows/desktop):
+- Folosește `LayoutBuilder` în toolbar cu `isWide = constraints.maxWidth >= 600`
+- **Desktop/Windows (≥600px)**: filtrele MEREU vizibile, fără buton toggle
+- **Mobil (<600px)**: filtrele ASCUNSE default, buton "Filtre" cu badge
+- `final showFilters = isWide || _filtersVisible;`
+- Badge cu numărul filtrelor active (incluzi search-ul dacă e completat)
+- Bordura evidențiată (colorScheme.primary) când există filtre active pe mobil
+
+### 2. SPAȚIU ECRAN:
+- Header + search + buton filtre: MAX 20% din ecran (1 rând compact)
+- Lista/conținut: MIN 75% din ecran
+- FAB/butoane fixe: jos, nu acoperă conținut
+
+### 3. TEXT COMPLET:
+- NICIODATĂ inițiale în loc de nume complet
+- NICIODATĂ text trunchiat în carduri (maxLines + overflow)
+- Categoria = nume complet, nu cod
+- Coduri de categorie → helper `_categoryDisplayName(String code)` cu mapare
+
+### 4. CARD STANDARD MOBILE:
+```
+┌──────────────────────────────┐
+│ [Tag categorie] [Status stoc] │
+│ Nume Produs Complet (bold)    │
+│ Brand · Model · Cod: XXX      │
+│ 💰 Preț RON [Editează][Șterge]│
+└──────────────────────────────┘
+```
+- Informație principală: font bold, vizibil
+- Badge-uri colorate pentru categorie și status
+- Preț/valoare: evidențiat cu cs.primary
+- Acțiuni: OutlinedButton, min 36px height
+
+### 5. PATTERN IMPLEMENTAT — Cod de referință:
+- Catalog Produse: `lib/features/product_catalog/product_catalog_page.dart`
+  (filtre colapsabile + chips categorii + card îmbunătățit)
+- Scule: `lib/features/tools/scule_page.dart`
+  (filtre colapsabile cu badge)
+- Clienți: `lib/features/clients/clients_page.dart`
+  (filtre colapsabile + resetare)
+
+### 6. VERIFICARE OBLIGATORIE după implementare:
+- Conținutul important vizibil fără scroll?
+- Textele sunt complete (nu trunchiate)?
+- Pe telefon de 5" funcționează OK?
+- Filtrele nu ascund conținutul?
+- dart analyze: 0 erori, 0 warnings
