@@ -1,0 +1,798 @@
+enum NotificationEventType {
+  appointmentCreated,
+  appointmentUpdated,
+  appointmentPostponed,
+  appointmentCancelled,
+  complaintCreated,
+  complaintAssigned,
+  complaintStatusChanged,
+  fieldLeadCreated,
+  toolTransferCreated,
+  toolTransferReceived,
+  jobAssigned,
+  jobStatusChanged,
+  documentGenerated,
+  approvalRequested,
+  approvalApproved,
+  approvalRejected,
+  requestConverted;
+
+  String get value {
+    switch (this) {
+      case NotificationEventType.appointmentCreated:
+        return 'appointment_created';
+      case NotificationEventType.appointmentUpdated:
+        return 'appointment_updated';
+      case NotificationEventType.appointmentPostponed:
+        return 'appointment_postponed';
+      case NotificationEventType.appointmentCancelled:
+        return 'appointment_cancelled';
+      case NotificationEventType.complaintCreated:
+        return 'complaint_created';
+      case NotificationEventType.complaintAssigned:
+        return 'complaint_assigned';
+      case NotificationEventType.complaintStatusChanged:
+        return 'complaint_status_changed';
+      case NotificationEventType.fieldLeadCreated:
+        return 'field_lead_created';
+      case NotificationEventType.toolTransferCreated:
+        return 'tool_transfer_created';
+      case NotificationEventType.toolTransferReceived:
+        return 'tool_transfer_received';
+      case NotificationEventType.jobAssigned:
+        return 'job_assigned';
+      case NotificationEventType.jobStatusChanged:
+        return 'job_status_changed';
+      case NotificationEventType.documentGenerated:
+        return 'document_generated';
+      case NotificationEventType.approvalRequested:
+        return 'approval_requested';
+      case NotificationEventType.approvalApproved:
+        return 'approval_approved';
+      case NotificationEventType.approvalRejected:
+        return 'approval_rejected';
+      case NotificationEventType.requestConverted:
+        return 'request_converted';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case NotificationEventType.appointmentCreated:
+        return 'Programare creata';
+      case NotificationEventType.appointmentUpdated:
+        return 'Programare actualizata';
+      case NotificationEventType.appointmentPostponed:
+        return 'Programare amanata';
+      case NotificationEventType.appointmentCancelled:
+        return 'Programare anulata';
+      case NotificationEventType.complaintCreated:
+        return 'Reclamatie noua';
+      case NotificationEventType.complaintAssigned:
+        return 'Reclamatie alocata';
+      case NotificationEventType.complaintStatusChanged:
+        return 'Status reclamatie schimbat';
+      case NotificationEventType.fieldLeadCreated:
+        return 'Lead teren creat';
+      case NotificationEventType.toolTransferCreated:
+        return 'Transfer scule creat';
+      case NotificationEventType.toolTransferReceived:
+        return 'Transfer scule procesat';
+      case NotificationEventType.jobAssigned:
+        return 'Lucrare alocata';
+      case NotificationEventType.jobStatusChanged:
+        return 'Status lucrare schimbat';
+      case NotificationEventType.documentGenerated:
+        return 'Document generat';
+      case NotificationEventType.approvalRequested:
+        return 'Aprobare solicitata';
+      case NotificationEventType.approvalApproved:
+        return 'Aprobare acordata';
+      case NotificationEventType.approvalRejected:
+        return 'Aprobare respinsa';
+      case NotificationEventType.requestConverted:
+        return 'Cerere convertita';
+    }
+  }
+
+  static NotificationEventType? fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    for (final item in NotificationEventType.values) {
+      if (item.value == value) {
+        return item;
+      }
+    }
+    return null;
+  }
+}
+
+class AppNotificationRecord {
+  const AppNotificationRecord({
+    required this.id,
+    required this.eventType,
+    required this.title,
+    required this.message,
+    required this.recipientUserId,
+    required this.recipientEmail,
+    required this.sourceModule,
+    required this.sourceEntityId,
+    required this.sourceLabel,
+    required this.isRead,
+    required this.sentInApp,
+    required this.sentEmail,
+    required this.sentPush,
+    this.emailStatus = 'not_requested',
+    this.pushStatus = 'not_requested',
+    this.emailErrorMessage = '',
+    this.pushErrorMessage = '',
+    required this.createdAt,
+    this.readAt,
+    this.lastDeliveryAttemptAt,
+    this.metadata = const <String, dynamic>{},
+  });
+
+  final String id;
+  final NotificationEventType eventType;
+  final String title;
+  final String message;
+  final String recipientUserId;
+  final String recipientEmail;
+  final String sourceModule;
+  final String sourceEntityId;
+  final String sourceLabel;
+  final bool isRead;
+  final bool sentInApp;
+  final bool sentEmail;
+  final bool sentPush;
+  final String emailStatus;
+  final String pushStatus;
+  final String emailErrorMessage;
+  final String pushErrorMessage;
+  final DateTime createdAt;
+  final DateTime? readAt;
+  final DateTime? lastDeliveryAttemptAt;
+  final Map<String, dynamic> metadata;
+
+  AppNotificationRecord copyWith({
+    String? id,
+    NotificationEventType? eventType,
+    String? title,
+    String? message,
+    String? recipientUserId,
+    String? recipientEmail,
+    String? sourceModule,
+    String? sourceEntityId,
+    String? sourceLabel,
+    bool? isRead,
+    bool? sentInApp,
+    bool? sentEmail,
+    bool? sentPush,
+    String? emailStatus,
+    String? pushStatus,
+    String? emailErrorMessage,
+    String? pushErrorMessage,
+    DateTime? createdAt,
+    DateTime? readAt,
+    bool clearReadAt = false,
+    DateTime? lastDeliveryAttemptAt,
+    bool clearLastDeliveryAttemptAt = false,
+    Map<String, dynamic>? metadata,
+  }) {
+    return AppNotificationRecord(
+      id: id ?? this.id,
+      eventType: eventType ?? this.eventType,
+      title: title ?? this.title,
+      message: message ?? this.message,
+      recipientUserId: recipientUserId ?? this.recipientUserId,
+      recipientEmail: recipientEmail ?? this.recipientEmail,
+      sourceModule: sourceModule ?? this.sourceModule,
+      sourceEntityId: sourceEntityId ?? this.sourceEntityId,
+      sourceLabel: sourceLabel ?? this.sourceLabel,
+      isRead: isRead ?? this.isRead,
+      sentInApp: sentInApp ?? this.sentInApp,
+      sentEmail: sentEmail ?? this.sentEmail,
+      sentPush: sentPush ?? this.sentPush,
+      emailStatus: emailStatus ?? this.emailStatus,
+      pushStatus: pushStatus ?? this.pushStatus,
+      emailErrorMessage: emailErrorMessage ?? this.emailErrorMessage,
+      pushErrorMessage: pushErrorMessage ?? this.pushErrorMessage,
+      createdAt: createdAt ?? this.createdAt,
+      readAt: clearReadAt ? null : (readAt ?? this.readAt),
+      lastDeliveryAttemptAt: clearLastDeliveryAttemptAt
+          ? null
+          : (lastDeliveryAttemptAt ?? this.lastDeliveryAttemptAt),
+      metadata: metadata ?? this.metadata,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'event_type': eventType.value,
+      'title': title,
+      'message': message,
+      'recipient_user_id': recipientUserId,
+      'recipient_email': recipientEmail,
+      'source_module': sourceModule,
+      'source_entity_id': sourceEntityId,
+      'source_label': sourceLabel,
+      'is_read': isRead,
+      'sent_in_app': sentInApp,
+      'sent_email': sentEmail,
+      'sent_push': sentPush,
+      'email_status': emailStatus,
+      'push_status': pushStatus,
+      'email_error_message': emailErrorMessage,
+      'push_error_message': pushErrorMessage,
+      'created_at': createdAt.toIso8601String(),
+      'read_at': readAt?.toIso8601String(),
+      'last_delivery_attempt_at': lastDeliveryAttemptAt?.toIso8601String(),
+      'metadata': metadata,
+    };
+  }
+
+  factory AppNotificationRecord.fromMap(Map<String, dynamic> map) {
+    DateTime parseDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString()) ?? DateTime.now();
+    }
+
+    DateTime? parseNullableDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString());
+    }
+
+    bool parseBool(dynamic raw) {
+      if (raw is bool) return raw;
+      final text = (raw ?? '').toString().trim().toLowerCase();
+      return text == 'true' || text == '1' || text == 'yes';
+    }
+
+    Map<String, dynamic> parseMap(dynamic raw) {
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+      return const <String, dynamic>{};
+    }
+
+    return AppNotificationRecord(
+      id: (map['id'] ?? '').toString().trim(),
+      eventType: NotificationEventType.fromValue(
+            (map['event_type'] ?? map['eventType'] ?? '').toString(),
+          ) ??
+          NotificationEventType.documentGenerated,
+      title: (map['title'] ?? '').toString().trim(),
+      message: (map['message'] ?? '').toString().trim(),
+      recipientUserId:
+          (map['recipient_user_id'] ?? map['recipientUserId'] ?? '')
+              .toString()
+              .trim(),
+      recipientEmail: (map['recipient_email'] ?? map['recipientEmail'] ?? '')
+          .toString()
+          .trim(),
+      sourceModule:
+          (map['source_module'] ?? map['sourceModule'] ?? '').toString().trim(),
+      sourceEntityId: (map['source_entity_id'] ?? map['sourceEntityId'] ?? '')
+          .toString()
+          .trim(),
+      sourceLabel:
+          (map['source_label'] ?? map['sourceLabel'] ?? '').toString().trim(),
+      isRead: parseBool(map['is_read'] ?? map['isRead']),
+      sentInApp: parseBool(map['sent_in_app'] ?? map['sentInApp']),
+      sentEmail: parseBool(map['sent_email'] ?? map['sentEmail']),
+      sentPush: parseBool(map['sent_push'] ?? map['sentPush']),
+      emailStatus:
+          (map['email_status'] ?? map['emailStatus'] ?? 'not_requested')
+              .toString()
+              .trim(),
+      pushStatus: (map['push_status'] ?? map['pushStatus'] ?? 'not_requested')
+          .toString()
+          .trim(),
+      emailErrorMessage:
+          (map['email_error_message'] ?? map['emailErrorMessage'] ?? '')
+              .toString()
+              .trim(),
+      pushErrorMessage:
+          (map['push_error_message'] ?? map['pushErrorMessage'] ?? '')
+              .toString()
+              .trim(),
+      createdAt: parseDate(map['created_at'] ?? map['createdAt']),
+      readAt: parseNullableDate(map['read_at'] ?? map['readAt']),
+      lastDeliveryAttemptAt: parseNullableDate(
+        map['last_delivery_attempt_at'] ?? map['lastDeliveryAttemptAt'],
+      ),
+      metadata: parseMap(map['metadata']),
+    );
+  }
+}
+
+class NotificationPreferenceRecord {
+  const NotificationPreferenceRecord({
+    required this.id,
+    required this.eventType,
+    this.userId = '',
+    this.roleKey = '',
+    required this.inAppEnabled,
+    required this.emailEnabled,
+    required this.pushEnabled,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final NotificationEventType eventType;
+  final String userId;
+  final String roleKey;
+  final bool inAppEnabled;
+  final bool emailEnabled;
+  final bool pushEnabled;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  NotificationPreferenceRecord copyWith({
+    String? id,
+    NotificationEventType? eventType,
+    String? userId,
+    String? roleKey,
+    bool? inAppEnabled,
+    bool? emailEnabled,
+    bool? pushEnabled,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) {
+    return NotificationPreferenceRecord(
+      id: id ?? this.id,
+      eventType: eventType ?? this.eventType,
+      userId: userId ?? this.userId,
+      roleKey: roleKey ?? this.roleKey,
+      inAppEnabled: inAppEnabled ?? this.inAppEnabled,
+      emailEnabled: emailEnabled ?? this.emailEnabled,
+      pushEnabled: pushEnabled ?? this.pushEnabled,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'event_type': eventType.value,
+      'user_id': userId,
+      'role_key': roleKey,
+      'in_app_enabled': inAppEnabled,
+      'email_enabled': emailEnabled,
+      'push_enabled': pushEnabled,
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+    };
+  }
+
+  factory NotificationPreferenceRecord.fromMap(Map<String, dynamic> map) {
+    bool parseBool(dynamic raw) {
+      if (raw is bool) return raw;
+      final text = (raw ?? '').toString().trim().toLowerCase();
+      return text == 'true' || text == '1' || text == 'yes';
+    }
+
+    DateTime parseDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString()) ?? DateTime.now();
+    }
+
+    return NotificationPreferenceRecord(
+      id: (map['id'] ?? '').toString().trim(),
+      eventType: NotificationEventType.fromValue(
+            (map['event_type'] ?? map['eventType'] ?? '').toString(),
+          ) ??
+          NotificationEventType.documentGenerated,
+      userId: (map['user_id'] ?? map['userId'] ?? '').toString().trim(),
+      roleKey: (map['role_key'] ?? map['roleKey'] ?? '').toString().trim(),
+      inAppEnabled: parseBool(
+        map['in_app_enabled'] ?? map['inAppEnabled'],
+      ),
+      emailEnabled: parseBool(
+        map['email_enabled'] ?? map['emailEnabled'],
+      ),
+      pushEnabled: parseBool(
+        map['push_enabled'] ?? map['pushEnabled'],
+      ),
+      createdAt: parseDate(map['created_at'] ?? map['createdAt']),
+      updatedAt: parseDate(map['updated_at'] ?? map['updatedAt']),
+    );
+  }
+}
+
+class NotificationEmailQueueRecord {
+  const NotificationEmailQueueRecord({
+    required this.id,
+    required this.notificationId,
+    required this.eventType,
+    required this.recipientUserId,
+    required this.recipientEmail,
+    required this.subject,
+    required this.bodyText,
+    this.bodyHtml = '',
+    this.attachments = const <Map<String, dynamic>>[],
+    this.inlineAssets = const <Map<String, dynamic>>[],
+    required this.sourceModule,
+    required this.sourceEntityId,
+    required this.status,
+    this.attemptCount = 0,
+    required this.createdAt,
+    this.lastAttemptAt,
+    this.processedAt,
+    this.errorMessage = '',
+    this.providerMessageId = '',
+    this.metadata = const <String, dynamic>{},
+  });
+
+  final String id;
+  final String notificationId;
+  final NotificationEventType eventType;
+  final String recipientUserId;
+  final String recipientEmail;
+  final String subject;
+  final String bodyText;
+  final String bodyHtml;
+  final String sourceModule;
+  final String sourceEntityId;
+  final String status;
+  final int attemptCount;
+  final DateTime createdAt;
+  final DateTime? lastAttemptAt;
+  final DateTime? processedAt;
+  final String errorMessage;
+  final String providerMessageId;
+  final Map<String, dynamic> metadata;
+  final List<Map<String, dynamic>> attachments;
+  final List<Map<String, dynamic>> inlineAssets;
+
+  NotificationEmailQueueRecord copyWith({
+    String? id,
+    String? notificationId,
+    NotificationEventType? eventType,
+    String? recipientUserId,
+    String? recipientEmail,
+    String? subject,
+    String? bodyText,
+    String? bodyHtml,
+    List<Map<String, dynamic>>? attachments,
+    List<Map<String, dynamic>>? inlineAssets,
+    String? sourceModule,
+    String? sourceEntityId,
+    String? status,
+    int? attemptCount,
+    DateTime? createdAt,
+    DateTime? lastAttemptAt,
+    bool clearLastAttemptAt = false,
+    DateTime? processedAt,
+    bool clearProcessedAt = false,
+    String? errorMessage,
+    String? providerMessageId,
+    Map<String, dynamic>? metadata,
+  }) {
+    return NotificationEmailQueueRecord(
+      id: id ?? this.id,
+      notificationId: notificationId ?? this.notificationId,
+      eventType: eventType ?? this.eventType,
+      recipientUserId: recipientUserId ?? this.recipientUserId,
+      recipientEmail: recipientEmail ?? this.recipientEmail,
+      subject: subject ?? this.subject,
+      bodyText: bodyText ?? this.bodyText,
+      bodyHtml: bodyHtml ?? this.bodyHtml,
+      attachments: attachments ?? this.attachments,
+      inlineAssets: inlineAssets ?? this.inlineAssets,
+      sourceModule: sourceModule ?? this.sourceModule,
+      sourceEntityId: sourceEntityId ?? this.sourceEntityId,
+      status: status ?? this.status,
+      attemptCount: attemptCount ?? this.attemptCount,
+      createdAt: createdAt ?? this.createdAt,
+      lastAttemptAt:
+          clearLastAttemptAt ? null : (lastAttemptAt ?? this.lastAttemptAt),
+      processedAt: clearProcessedAt ? null : (processedAt ?? this.processedAt),
+      errorMessage: errorMessage ?? this.errorMessage,
+      providerMessageId: providerMessageId ?? this.providerMessageId,
+      metadata: metadata ?? this.metadata,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'notification_id': notificationId,
+      'event_type': eventType.value,
+      'recipient_user_id': recipientUserId,
+      'recipient_email': recipientEmail,
+      'subject': subject,
+      'body_text': bodyText,
+      'body_html': bodyHtml,
+      'attachments': attachments,
+      'inline_assets': inlineAssets,
+      'source_module': sourceModule,
+      'source_entity_id': sourceEntityId,
+      'status': status,
+      'attempt_count': attemptCount,
+      'created_at': createdAt.toIso8601String(),
+      'last_attempt_at': lastAttemptAt?.toIso8601String(),
+      'processed_at': processedAt?.toIso8601String(),
+      'error_message': errorMessage,
+      'provider_message_id': providerMessageId,
+      'metadata': metadata,
+    };
+  }
+
+  factory NotificationEmailQueueRecord.fromMap(Map<String, dynamic> map) {
+    DateTime parseDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString()) ?? DateTime.now();
+    }
+
+    DateTime? parseNullableDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString());
+    }
+
+    Map<String, dynamic> parseMap(dynamic raw) {
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+      return const <String, dynamic>{};
+    }
+
+    return NotificationEmailQueueRecord(
+      id: (map['id'] ?? '').toString().trim(),
+      notificationId: (map['notification_id'] ?? map['notificationId'] ?? '')
+          .toString()
+          .trim(),
+      eventType: NotificationEventType.fromValue(
+            (map['event_type'] ?? map['eventType'] ?? '').toString(),
+          ) ??
+          NotificationEventType.documentGenerated,
+      recipientUserId:
+          (map['recipient_user_id'] ?? map['recipientUserId'] ?? '')
+              .toString()
+              .trim(),
+      recipientEmail: (map['recipient_email'] ?? map['recipientEmail'] ?? '')
+          .toString()
+          .trim(),
+      subject: (map['subject'] ?? '').toString().trim(),
+      bodyText: (map['body_text'] ?? map['bodyText'] ?? map['body'] ?? '')
+          .toString()
+          .trim(),
+      bodyHtml: (map['body_html'] ?? map['bodyHtml'] ?? '').toString().trim(),
+      sourceModule:
+          (map['source_module'] ?? map['sourceModule'] ?? '').toString().trim(),
+      sourceEntityId: (map['source_entity_id'] ?? map['sourceEntityId'] ?? '')
+          .toString()
+          .trim(),
+      status: (map['status'] ?? 'queued').toString().trim(),
+      attemptCount: int.tryParse(
+            (map['attempt_count'] ?? map['attemptCount'] ?? '0').toString(),
+          ) ??
+          0,
+      createdAt: parseDate(map['created_at'] ?? map['createdAt']),
+      lastAttemptAt:
+          parseNullableDate(map['last_attempt_at'] ?? map['lastAttemptAt']),
+      processedAt: parseNullableDate(map['processed_at'] ?? map['processedAt']),
+      errorMessage:
+          (map['error_message'] ?? map['errorMessage'] ?? '').toString(),
+      providerMessageId:
+          (map['provider_message_id'] ?? map['providerMessageId'] ?? '')
+              .toString()
+              .trim(),
+      metadata: parseMap(map['metadata']),
+      attachments: (map['attachments'] is List)
+          ? List<Map<String, dynamic>>.from(
+              (map['attachments'] as List)
+                  .whereType<Map>()
+                  .map((m) => Map<String, dynamic>.from(m)),
+            )
+          : const <Map<String, dynamic>>[],
+      inlineAssets: (map['inline_assets'] is List)
+          ? List<Map<String, dynamic>>.from(
+              (map['inline_assets'] as List)
+                  .whereType<Map>()
+                  .map((m) => Map<String, dynamic>.from(m)),
+            )
+          : const <Map<String, dynamic>>[],
+    );
+  }
+}
+
+class NotificationPushQueueRecord {
+  const NotificationPushQueueRecord({
+    required this.id,
+    required this.notificationId,
+    required this.eventType,
+    required this.recipientUserId,
+    required this.title,
+    required this.body,
+    required this.sourceModule,
+    required this.sourceEntityId,
+    required this.status,
+    this.attemptCount = 0,
+    required this.createdAt,
+    this.lastAttemptAt,
+    this.processedAt,
+    this.errorMessage = '',
+    this.metadata = const <String, dynamic>{},
+  });
+
+  final String id;
+  final String notificationId;
+  final NotificationEventType eventType;
+  final String recipientUserId;
+  final String title;
+  final String body;
+  final String sourceModule;
+  final String sourceEntityId;
+  final String status;
+  final int attemptCount;
+  final DateTime createdAt;
+  final DateTime? lastAttemptAt;
+  final DateTime? processedAt;
+  final String errorMessage;
+  final Map<String, dynamic> metadata;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'notification_id': notificationId,
+      'event_type': eventType.value,
+      'recipient_user_id': recipientUserId,
+      'title': title,
+      'body': body,
+      'source_module': sourceModule,
+      'source_entity_id': sourceEntityId,
+      'status': status,
+      'attempt_count': attemptCount,
+      'created_at': createdAt.toIso8601String(),
+      'last_attempt_at': lastAttemptAt?.toIso8601String(),
+      'processed_at': processedAt?.toIso8601String(),
+      'error_message': errorMessage,
+      'metadata': metadata,
+    };
+  }
+
+  factory NotificationPushQueueRecord.fromMap(Map<String, dynamic> map) {
+    DateTime parseDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString()) ?? DateTime.now();
+    }
+
+    DateTime? parseNullableDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString());
+    }
+
+    Map<String, dynamic> parseMap(dynamic raw) {
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+      return const <String, dynamic>{};
+    }
+
+    return NotificationPushQueueRecord(
+      id: (map['id'] ?? '').toString().trim(),
+      notificationId: (map['notification_id'] ?? map['notificationId'] ?? '')
+          .toString()
+          .trim(),
+      eventType: NotificationEventType.fromValue(
+            (map['event_type'] ?? map['eventType'] ?? '').toString(),
+          ) ??
+          NotificationEventType.documentGenerated,
+      recipientUserId:
+          (map['recipient_user_id'] ?? map['recipientUserId'] ?? '')
+              .toString()
+              .trim(),
+      title: (map['title'] ?? '').toString().trim(),
+      body: (map['body'] ?? '').toString().trim(),
+      sourceModule:
+          (map['source_module'] ?? map['sourceModule'] ?? '').toString().trim(),
+      sourceEntityId: (map['source_entity_id'] ?? map['sourceEntityId'] ?? '')
+          .toString()
+          .trim(),
+      status: (map['status'] ?? 'queued').toString().trim(),
+      attemptCount: int.tryParse(
+            (map['attempt_count'] ?? map['attemptCount'] ?? '0').toString(),
+          ) ??
+          0,
+      createdAt: parseDate(map['created_at'] ?? map['createdAt']),
+      lastAttemptAt:
+          parseNullableDate(map['last_attempt_at'] ?? map['lastAttemptAt']),
+      processedAt: parseNullableDate(map['processed_at'] ?? map['processedAt']),
+      errorMessage:
+          (map['error_message'] ?? map['errorMessage'] ?? '').toString(),
+      metadata: parseMap(map['metadata']),
+    );
+  }
+}
+
+class NotificationDeviceTokenRecord {
+  const NotificationDeviceTokenRecord({
+    required this.id,
+    required this.userId,
+    this.userEmail = '',
+    required this.token,
+    required this.platform,
+    this.deviceLabel = '',
+    this.isActive = true,
+    this.createdAt,
+    required this.updatedAt,
+    this.lastSeenAt,
+  });
+
+  final String id;
+  final String userId;
+  final String userEmail;
+  final String token;
+  final String platform;
+  final String deviceLabel;
+  final bool isActive;
+  final DateTime? createdAt;
+  final DateTime updatedAt;
+  final DateTime? lastSeenAt;
+
+  NotificationDeviceTokenRecord copyWith({
+    String? id,
+    String? userId,
+    String? userEmail,
+    String? token,
+    String? platform,
+    String? deviceLabel,
+    bool? isActive,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    DateTime? lastSeenAt,
+    bool clearLastSeenAt = false,
+  }) {
+    return NotificationDeviceTokenRecord(
+      id: id ?? this.id,
+      userId: userId ?? this.userId,
+      userEmail: userEmail ?? this.userEmail,
+      token: token ?? this.token,
+      platform: platform ?? this.platform,
+      deviceLabel: deviceLabel ?? this.deviceLabel,
+      isActive: isActive ?? this.isActive,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      lastSeenAt: clearLastSeenAt ? null : (lastSeenAt ?? this.lastSeenAt),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'user_id': userId,
+      'user_email': userEmail,
+      'token': token,
+      'platform': platform,
+      'device_label': deviceLabel,
+      'is_active': isActive,
+      'created_at': createdAt?.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+      'last_seen_at': lastSeenAt?.toIso8601String(),
+    };
+  }
+
+  factory NotificationDeviceTokenRecord.fromMap(Map<String, dynamic> map) {
+    DateTime parseDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString()) ?? DateTime.now();
+    }
+
+    DateTime? parseNullableDate(dynamic raw) {
+      return DateTime.tryParse((raw ?? '').toString());
+    }
+
+    bool parseBool(dynamic raw) {
+      if (raw is bool) return raw;
+      final text = (raw ?? '').toString().trim().toLowerCase();
+      return text == 'true' || text == '1' || text == 'yes';
+    }
+
+    return NotificationDeviceTokenRecord(
+      id: (map['id'] ?? '').toString().trim(),
+      userId: (map['user_id'] ?? map['userId'] ?? '').toString().trim(),
+      userEmail:
+          (map['user_email'] ?? map['userEmail'] ?? '').toString().trim(),
+      token: (map['token'] ?? '').toString().trim(),
+      platform: (map['platform'] ?? '').toString().trim(),
+      deviceLabel:
+          (map['device_label'] ?? map['deviceLabel'] ?? '').toString().trim(),
+      isActive: parseBool(map['is_active'] ?? map['isActive']),
+      createdAt: parseNullableDate(map['created_at'] ?? map['createdAt']),
+      updatedAt: parseDate(map['updated_at'] ?? map['updatedAt']),
+      lastSeenAt: parseNullableDate(map['last_seen_at'] ?? map['lastSeenAt']),
+    );
+  }
+}

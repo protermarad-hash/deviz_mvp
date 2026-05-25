@@ -1,0 +1,544 @@
+import 'dart:typed_data';
+
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../core/company_profile.dart';
+import '../../core/pdf/pdf_font_helper.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'deviz_tehnic_models.dart';
+
+class DevizTehnicPdfService {
+  const DevizTehnicPdfService._();
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required DevizTehnicRecord deviz,
+    bool forceSaveAs = false,
+    String outputDirectory = '',
+  }) async {
+    await PdfFontHelper.initialize();
+
+    CompanyProfile profile;
+    try {
+      profile = await repository.loadCompanyProfile();
+    } catch (_) {
+      profile = const CompanyProfile();
+    }
+
+    final doc = pw.Document(theme: PdfFontHelper.theme);
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    final dateFmt = DateFormat('dd.MM.yyyy');
+
+    // ── Culori ─────────────────────────────────────────────────────
+    const headerBg = PdfColor.fromInt(0xFF1565C0);   // albastru
+    const rowAlt = PdfColor.fromInt(0xFFF5F5F5);      // gri foarte deschis
+    const catMatBg = PdfColor.fromInt(0xFFE3F2FD);    // albastru deschis
+    const catManBg = PdfColor.fromInt(0xFFE8F5E9);    // verde deschis
+    const catUtilBg = PdfColor.fromInt(0xFFFFF3E0);   // portocaliu deschis
+    const catTranBg = PdfColor.fromInt(0xFFF3E5F5);   // mov deschis
+    const totalBg = PdfColor.fromInt(0xFF0D47A1);     // albastru închis
+    const white = PdfColors.white;
+    const black = PdfColors.black;
+    const grey = PdfColor.fromInt(0xFF757575);
+
+    final bold = PdfFontHelper.bold;
+    final regular = PdfFontHelper.regular;
+
+    // ── Helper text styles ────────────────────────────────────────
+    pw.TextStyle ts(
+            {double size = 9,
+            pw.Font? font,
+            PdfColor color = black,
+            bool italic = false}) =>
+        pw.TextStyle(
+          font: font ?? regular,
+          fontSize: size,
+          color: color,
+          fontStyle: italic ? pw.FontStyle.italic : pw.FontStyle.normal,
+        );
+
+    pw.TextStyle tsBold(
+            {double size = 9, PdfColor color = black}) =>
+        pw.TextStyle(font: bold, fontSize: size, color: color);
+
+    // ── Helper celulă tabel ───────────────────────────────────────
+    pw.Widget cell(
+      String text, {
+      pw.TextStyle? style,
+      pw.Alignment alignment = pw.Alignment.centerLeft,
+      PdfColor? bg,
+      pw.EdgeInsets? padding,
+    }) {
+      return pw.Container(
+        color: bg,
+        padding: padding ??
+            const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+        alignment: alignment,
+        child: pw.Text(text, style: style ?? ts()),
+      );
+    }
+
+    pw.Widget cellRight(String text,
+            {pw.TextStyle? style, PdfColor? bg}) =>
+        cell(text,
+            style: style, alignment: pw.Alignment.centerRight, bg: bg);
+
+    pw.Widget cellCenter(String text,
+            {pw.TextStyle? style, PdfColor? bg}) =>
+        cell(text,
+            style: style, alignment: pw.Alignment.center, bg: bg);
+
+    // ── Header firmă ─────────────────────────────────────────────
+    pw.Widget buildHeader() {
+      final companyLines = <String>[];
+      if (profile.companyName.isNotEmpty) companyLines.add(profile.companyName);
+      if (profile.address.isNotEmpty) companyLines.add(profile.address);
+      if (profile.city.isNotEmpty || profile.county.isNotEmpty) {
+        companyLines.add(
+            [profile.city, profile.county].where((s) => s.isNotEmpty).join(', '));
+      }
+      if (profile.cui.isNotEmpty) companyLines.add('CUI: ${profile.cui}');
+      if (profile.iban.isNotEmpty) companyLines.add('IBAN: ${profile.iban}');
+      if (profile.phone.isNotEmpty) companyLines.add('Tel: ${profile.phone}');
+
+      return pw.Container(
+        decoration: const pw.BoxDecoration(
+          border: pw.Border(bottom: pw.BorderSide(color: headerBg, width: 2)),
+        ),
+        padding: const pw.EdgeInsets.only(bottom: 8),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            // Firma
+            pw.Expanded(
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: companyLines
+                    .map((l) => pw.Text(l,
+                        style: tsBold(size: companyLines.first == l ? 11 : 8,
+                            color: companyLines.first == l
+                                ? headerBg
+                                : grey)))
+                    .toList(),
+              ),
+            ),
+            // Titlu document
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: [
+                pw.Text('DEVIZ TEHNIC',
+                    style: tsBold(size: 16, color: headerBg)),
+                pw.SizedBox(height: 2),
+                pw.Text('Nr. ${deviz.numar}',
+                    style: tsBold(size: 10, color: headerBg)),
+                pw.SizedBox(height: 2),
+                pw.Text('Data: ${dateFmt.format(deviz.dataEmiterii)}',
+                    style: ts(size: 9)),
+                if (deviz.zileValabilitate > 0)
+                  pw.Text(
+                      'Valabil ${deviz.zileValabilitate} zile de la data emiterii',
+                      style: ts(size: 8, color: grey, italic: true)),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    // ── Info proiect ─────────────────────────────────────────────
+    pw.Widget buildProjectInfo() {
+      final rows = <pw.TableRow>[];
+      void addRow(String label, String value) {
+        if (value.isEmpty) return;
+        rows.add(pw.TableRow(children: [
+          pw.Padding(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            child: pw.Text(label, style: tsBold(size: 9)),
+          ),
+          pw.Padding(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            child: pw.Text(value, style: ts(size: 9)),
+          ),
+        ]));
+      }
+
+      addRow('Lucrare:', deviz.titlu);
+      addRow('Obiectiv:', deviz.obiectiv);
+      addRow('Client:', deviz.clientName);
+      addRow('Cota TVA:', '${_fmtNum(deviz.tvaPercent)}%');
+
+      if (rows.isEmpty) return pw.SizedBox();
+
+      return pw.Container(
+        margin: const pw.EdgeInsets.symmetric(vertical: 8),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey300),
+          borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+        ),
+        child: pw.Table(
+          columnWidths: {
+            0: const pw.FixedColumnWidth(90),
+            1: const pw.FlexColumnWidth(),
+          },
+          children: rows,
+        ),
+      );
+    }
+
+    // ── Tabel articole ────────────────────────────────────────────
+    pw.Widget buildArticleTable() {
+      // Header tabel
+      final headerRow = pw.TableRow(
+        decoration: const pw.BoxDecoration(color: headerBg),
+        children: [
+          cellCenter('Nr.', style: tsBold(size: 8, color: white), bg: headerBg),
+          cell('Denumire articol', style: tsBold(size: 8, color: white), bg: headerBg),
+          cellCenter('UM', style: tsBold(size: 8, color: white), bg: headerBg),
+          cellRight('Cantitate', style: tsBold(size: 8, color: white), bg: headerBg),
+          cellCenter('Categorie', style: tsBold(size: 8, color: white), bg: headerBg),
+          cellRight('Preț unitar\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+          cellRight('Valoare\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+        ],
+      );
+
+      final dataRows = <pw.TableRow>[];
+      for (int i = 0; i < deviz.articole.length; i++) {
+        final a = deviz.articole[i];
+        final isAlt = i % 2 == 1;
+        final rowBg = isAlt ? rowAlt : null;
+
+        // Articolul are 4 sub-rânduri (Mat, Man, Utilaj, Transport) ca în Excel
+        final cats = [
+          _Cat('Mat', a.pretMat, a.valoareMat, catMatBg),
+          _Cat('Man', a.pretMan, a.valoareMan, catManBg),
+          _Cat('Utilaj', a.pretUtilaj, a.valoareUtilaj, catUtilBg),
+          _Cat('Transport', a.pretTransport, a.valoareTransport, catTranBg),
+        ];
+
+        // Primul sub-rând — cu denumire și număr
+        final first = cats[0];
+        dataRows.add(pw.TableRow(
+          decoration: pw.BoxDecoration(color: rowBg),
+          children: [
+            cellCenter('${i + 1}', style: tsBold(size: 8)),
+            cell(a.denumire.isNotEmpty ? a.denumire : '—',
+                style: tsBold(size: 8)),
+            cellCenter(a.um, style: ts(size: 8)),
+            cellRight(_fmtNum(a.cantitate), style: ts(size: 8)),
+            cellCenter(first.label,
+                style: ts(size: 8),
+                bg: first.bg),
+            cellRight(
+                first.pret > 0 ? fmt.format(first.pret) : '—',
+                style: ts(size: 8)),
+            cellRight(
+                first.valoare > 0 ? fmt.format(first.valoare) : '—',
+                style: tsBold(size: 8)),
+          ],
+        ));
+
+        // Sub-rândurile 2-4 (fără denumire, fără UM, fără cantitate)
+        for (int c = 1; c < cats.length; c++) {
+          final cat = cats[c];
+          dataRows.add(pw.TableRow(
+            decoration: pw.BoxDecoration(color: rowBg),
+            children: [
+              cellCenter('', style: ts(size: 8)),
+              cell('', style: ts(size: 8)),
+              cellCenter('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellCenter(cat.label,
+                  style: ts(size: 8), bg: cat.bg),
+              cellRight(
+                  cat.pret > 0 ? fmt.format(cat.pret) : '—',
+                  style: ts(size: 8)),
+              cellRight(
+                  cat.valoare > 0 ? fmt.format(cat.valoare) : '—',
+                  style: tsBold(size: 8)),
+            ],
+          ));
+        }
+
+        // Total articol
+        dataRows.add(pw.TableRow(
+          decoration: pw.BoxDecoration(
+              color: rowBg,
+              border: const pw.Border(
+                  bottom: pw.BorderSide(color: headerBg, width: 0.5))),
+          children: [
+            cellCenter('', style: ts(size: 8)),
+            cell('Total articol', style: tsBold(size: 8, color: headerBg)),
+            cellCenter('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellCenter('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight(fmt.format(a.totalArticol),
+                style: tsBold(size: 9, color: headerBg)),
+          ],
+        ));
+      }
+
+      return pw.Table(
+        columnWidths: {
+          0: const pw.FixedColumnWidth(22),
+          1: const pw.FlexColumnWidth(3),
+          2: const pw.FixedColumnWidth(30),
+          3: const pw.FixedColumnWidth(45),
+          4: const pw.FixedColumnWidth(50),
+          5: const pw.FixedColumnWidth(60),
+          6: const pw.FixedColumnWidth(65),
+        },
+        border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+        children: [headerRow, ...dataRows],
+      );
+    }
+
+    // ── Centralizator ────────────────────────────────────────────
+    pw.Widget buildCentralizator() {
+      pw.TableRow row(String label, double mat, double man, double utilaj,
+          double transport, double total,
+          {bool isHeader = false, bool isBold = false, PdfColor? bg}) {
+        final style = isHeader
+            ? tsBold(size: 8, color: white)
+            : isBold
+                ? tsBold(size: 8)
+                : ts(size: 8);
+        final rowBg = isHeader ? headerBg : bg;
+        return pw.TableRow(
+          decoration: pw.BoxDecoration(color: rowBg),
+          children: [
+            cell(label, style: style, bg: rowBg),
+            cellRight(mat > 0 || isHeader ? (isHeader ? 'Material' : fmt.format(mat)) : '—',
+                style: style, bg: rowBg),
+            cellRight(man > 0 || isHeader ? (isHeader ? 'Manoperă' : fmt.format(man)) : '—',
+                style: style, bg: rowBg),
+            cellRight(utilaj > 0 || isHeader ? (isHeader ? 'Utilaj' : fmt.format(utilaj)) : '—',
+                style: style, bg: rowBg),
+            cellRight(transport > 0 || isHeader ? (isHeader ? 'Transport' : fmt.format(transport)) : '—',
+                style: style, bg: rowBg),
+            cellRight(isHeader ? 'Total' : fmt.format(total),
+                style: isBold || isHeader ? tsBold(size: 8, color: isHeader ? white : black) : style,
+                bg: rowBg),
+          ],
+        );
+      }
+
+      final table = pw.Table(
+        columnWidths: {
+          0: const pw.FlexColumnWidth(2.5),
+          1: const pw.FlexColumnWidth(1),
+          2: const pw.FlexColumnWidth(1),
+          3: const pw.FlexColumnWidth(1),
+          4: const pw.FlexColumnWidth(1),
+          5: const pw.FlexColumnWidth(1),
+        },
+        border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+        children: [
+          row('1. Total cheltuieli directe din articole',
+              deviz.totalMat, deviz.totalMan, deviz.totalUtilaj,
+              deviz.totalTransport, deviz.totalDirect,
+              isHeader: false, isBold: true),
+          pw.TableRow(children: [
+            cell('2. Cheltuieli regie (${_fmtNum(deviz.regiePercent)}%)',
+                style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight(fmt.format(deviz.regie), style: ts(size: 8)),
+          ]),
+          pw.TableRow(children: [
+            cell('3. Profit (${_fmtNum(deviz.profitPercent)}%)',
+                style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight(fmt.format(deviz.profit), style: ts(size: 8)),
+          ]),
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFE3F2FD)),
+            children: [
+              cell('Total deviz fără TVA', style: tsBold(size: 9)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight(fmt.format(deviz.totalFaraTva), style: tsBold(size: 9)),
+            ],
+          ),
+          pw.TableRow(children: [
+            cell('TVA (${_fmtNum(deviz.tvaPercent)}%)', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight('', style: ts(size: 8)),
+            cellRight(fmt.format(deviz.tva), style: ts(size: 8)),
+          ]),
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(color: totalBg),
+            children: [
+              cell('TOTAL CU TVA', style: tsBold(size: 10, color: white)),
+              cellRight('', style: tsBold(size: 8, color: white)),
+              cellRight('', style: tsBold(size: 8, color: white)),
+              cellRight('', style: tsBold(size: 8, color: white)),
+              cellRight('', style: tsBold(size: 8, color: white)),
+              cellRight(fmt.format(deviz.totalCuTva),
+                  style: tsBold(size: 11, color: white)),
+            ],
+          ),
+        ],
+      );
+
+      return pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text('Centralizator cheltuieli construcție',
+              style: tsBold(size: 10, color: headerBg)),
+          pw.SizedBox(height: 4),
+          // Header coloane centralizator
+          pw.Table(
+            columnWidths: {
+              0: const pw.FlexColumnWidth(2.5),
+              1: const pw.FlexColumnWidth(1),
+              2: const pw.FlexColumnWidth(1),
+              3: const pw.FlexColumnWidth(1),
+              4: const pw.FlexColumnWidth(1),
+              5: const pw.FlexColumnWidth(1),
+            },
+            border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+            children: [
+              pw.TableRow(
+                decoration: const pw.BoxDecoration(color: headerBg),
+                children: [
+                  cell('Cheltuieli', style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Material\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Manoperă\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Utilaj\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Transport\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Total\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+                ],
+              ),
+            ],
+          ),
+          table,
+        ],
+      );
+    }
+
+    // ── Footer ───────────────────────────────────────────────────
+    pw.Widget buildFooter() {
+      return pw.Container(
+        margin: const pw.EdgeInsets.only(top: 12),
+        padding: const pw.EdgeInsets.all(8),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey300),
+          borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+        ),
+        child: pw.Row(
+          mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+          children: [
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                if (deviz.zileValabilitate > 0)
+                  pw.Text(
+                    'Oferta este valabilă ${deviz.zileValabilitate} de zile de la data emiterii.',
+                    style: ts(size: 8, color: grey, italic: true),
+                  ),
+                if (deviz.note.isNotEmpty)
+                  pw.Text('Notă: ${deviz.note}',
+                      style: ts(size: 8, color: grey)),
+              ],
+            ),
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: [
+                pw.Text('Întocmit de:',
+                    style: tsBold(size: 8)),
+                pw.SizedBox(height: 2),
+                pw.Text(
+                  deviz.intocmitDe.isNotEmpty
+                      ? deviz.intocmitDe
+                      : profile.contactName,
+                  style: ts(size: 9),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Text('la data: ${dateFmt.format(deviz.dataEmiterii)}',
+                    style: ts(size: 8, color: grey)),
+                pw.SizedBox(height: 16),
+                pw.Text('Semnătură: ________________',
+                    style: ts(size: 8, color: grey)),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    // ── Asamblare pagini ─────────────────────────────────────────
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(24),
+        header: (ctx) => buildHeader(),
+        footer: (ctx) => pw.Container(
+          margin: const pw.EdgeInsets.only(top: 4),
+          child: pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            children: [
+              pw.Text(
+                profile.companyName,
+                style: ts(size: 7, color: grey),
+              ),
+              pw.Text(
+                'Pagina ${ctx.pageNumber} din ${ctx.pagesCount}',
+                style: ts(size: 7, color: grey),
+              ),
+            ],
+          ),
+        ),
+        build: (ctx) => [
+          buildProjectInfo(),
+          pw.SizedBox(height: 8),
+          pw.Text('Articole deviz',
+              style: tsBold(size: 10, color: headerBg)),
+          pw.SizedBox(height: 4),
+          buildArticleTable(),
+          pw.SizedBox(height: 16),
+          buildCentralizator(),
+          buildFooter(),
+        ],
+      ),
+    );
+
+    final bytes = await doc.save();
+    final numarSafe =
+        deviz.numar.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
+    final fileName = 'DevizTehnic_${numarSafe}_${deviz.titlu.isEmpty ? 'deviz' : deviz.titlu.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_')}.pdf';
+
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: Uint8List.fromList(bytes),
+      fileName: fileName,
+      category: PdfDocumentCategory.offers,
+      outputDirectory: outputDirectory,
+      forceSaveAs: forceSaveAs,
+    );
+  }
+
+  static String _fmtNum(double v) =>
+      v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+}
+
+class _Cat {
+  const _Cat(this.label, this.pret, this.valoare, this.bg);
+  final String label;
+  final double pret;
+  final double valoare;
+  final PdfColor bg;
+}

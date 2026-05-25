@@ -1,0 +1,312 @@
+import 'dart:convert';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/firebase_collections.dart';
+import 'partner_financial_models.dart';
+
+class PartnerFinancialRepository {
+  static const String _transactionsLocalKey = 'partner_transactions_v1';
+  static const String _summariesLocalKey = 'partner_financial_summaries_v1';
+
+  bool get _isCloudAvailable => FirebaseBootstrap.isInitialized;
+
+  CollectionReference<Map<String, dynamic>> get _transactionsCollection =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.partnerTransactions);
+
+  CollectionReference<Map<String, dynamic>> get _summariesCollection =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.partnerFinancialSummary);
+
+  // ---------------------------------------------------------------------------
+  // TRANZACȚII
+  // ---------------------------------------------------------------------------
+
+  Future<List<PartnerTransaction>> listTransactionsForPartner(
+    String partnerId,
+  ) async {
+    final local = await _readLocalTransactions();
+    final filtered =
+        local.where((t) => t.partnerId == partnerId).toList(growable: false);
+    if (!_isCloudAvailable) return _sortTransactions(filtered);
+
+    try {
+      final snapshot = await _transactionsCollection
+          .where('partner_id', isEqualTo: partnerId)
+          .orderBy('date', descending: true)
+          .get();
+      final cloud = snapshot.docs
+          .map((doc) => PartnerTransaction.fromMap(doc.data()))
+          .toList(growable: false);
+      await _mergeAndSaveTransactions(cloud, partnerId);
+      return _sortTransactions(cloud);
+    } catch (_) {
+      return _sortTransactions(filtered);
+    }
+  }
+
+  Future<List<PartnerTransaction>> listAllTransactions() async {
+    final local = await _readLocalTransactions();
+    if (!_isCloudAvailable) return _sortTransactions(local);
+
+    try {
+      final snapshot = await _transactionsCollection
+          .orderBy('date', descending: true)
+          .limit(500)
+          .get();
+      final cloud = snapshot.docs
+          .map((doc) => PartnerTransaction.fromMap(doc.data()))
+          .toList(growable: false);
+      final all = [...cloud];
+      final knownIds = cloud.map((t) => t.id).toSet();
+      for (final local in local) {
+        if (!knownIds.contains(local.id)) all.add(local);
+      }
+      await _writeLocalTransactions(all);
+      return _sortTransactions(all);
+    } catch (_) {
+      return _sortTransactions(local);
+    }
+  }
+
+  Future<void> upsertTransaction(PartnerTransaction transaction) async {
+    final items = [...await _readLocalTransactions()];
+    final index = items.indexWhere((t) => t.id == transaction.id);
+    if (index >= 0) {
+      items[index] = transaction;
+    } else {
+      items.add(transaction);
+    }
+    await _writeLocalTransactions(items);
+
+    if (_isCloudAvailable) {
+      try {
+        await _transactionsCollection.doc(transaction.id).set(
+              transaction.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+
+    await _rebuildSummary(transaction.partnerId, transaction.partnerName);
+  }
+
+  Future<void> deleteTransaction(String transactionId) async {
+    final items = [...await _readLocalTransactions()];
+    final existing = items.firstWhere(
+      (t) => t.id == transactionId,
+      orElse: () => PartnerTransaction(
+        id: '',
+        partnerId: '',
+        partnerName: '',
+        type: PartnerTransactionType.incasareManuala,
+        direction: PartnerTransactionDirection.intrare,
+        amount: 0,
+        date: DateTime.now(),
+        description: '',
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+    );
+    items.removeWhere((t) => t.id == transactionId);
+    await _writeLocalTransactions(items);
+
+    if (_isCloudAvailable) {
+      try {
+        await _transactionsCollection.doc(transactionId).delete();
+      } catch (_) {}
+    }
+
+    if (existing.partnerId.isNotEmpty) {
+      await _rebuildSummary(existing.partnerId, existing.partnerName);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // SUMAR FINANCIAR
+  // ---------------------------------------------------------------------------
+
+  Future<PartnerFinancialSummary?> getSummaryForPartner(
+    String partnerId,
+  ) async {
+    final local = await _readLocalSummaries();
+    final localSummary = local.where((s) => s.partnerId == partnerId).firstOrNull;
+
+    if (!_isCloudAvailable) return localSummary;
+
+    try {
+      final doc = await _summariesCollection.doc(partnerId).get();
+      if (doc.exists && doc.data() != null) {
+        final summary = PartnerFinancialSummary.fromMap(doc.data()!);
+        await _upsertLocalSummary(summary);
+        return summary;
+      }
+    } catch (_) {}
+
+    return localSummary;
+  }
+
+  Future<List<PartnerFinancialSummary>> listAllSummaries() async {
+    final local = await _readLocalSummaries();
+    if (!_isCloudAvailable) return local;
+
+    try {
+      final snapshot = await _summariesCollection.get();
+      final cloud = snapshot.docs
+          .map((doc) => PartnerFinancialSummary.fromMap(doc.data()))
+          .toList(growable: false);
+      final all = [...cloud];
+      final knownIds = cloud.map((s) => s.partnerId).toSet();
+      for (final s in local) {
+        if (!knownIds.contains(s.partnerId)) all.add(s);
+      }
+      await _writeLocalSummaries(all);
+      return all;
+    } catch (_) {
+      return local;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // REBUILD SUMAR (calculat din tranzacții locale)
+  // ---------------------------------------------------------------------------
+
+  Future<PartnerFinancialSummary> _rebuildSummary(
+    String partnerId,
+    String partnerName,
+  ) async {
+    final allTransactions = await _readLocalTransactions();
+    final partnerTransactions =
+        allTransactions.where((t) => t.partnerId == partnerId).toList();
+
+    double totalDeIncasat = 0;
+    double totalDePlata = 0;
+    DateTime? lastDate;
+    for (final t in partnerTransactions) {
+      if (t.direction == PartnerTransactionDirection.intrare) {
+        totalDeIncasat += t.amount;
+      } else {
+        totalDePlata += t.amount;
+      }
+      if (lastDate == null || t.date.isAfter(lastDate)) {
+        lastDate = t.date;
+      }
+    }
+
+    final summary = PartnerFinancialSummary(
+      partnerId: partnerId,
+      partnerName: partnerName,
+      totalDeIncasat: totalDeIncasat,
+      totalDePlata: totalDePlata,
+      lastTransactionDate: lastDate,
+      transactionCount: partnerTransactions.length,
+      updatedAt: DateTime.now(),
+    );
+
+    await _upsertLocalSummary(summary);
+
+    if (_isCloudAvailable) {
+      try {
+        await _summariesCollection.doc(partnerId).set(
+              summary.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+
+    return summary;
+  }
+
+  // ---------------------------------------------------------------------------
+  // LOCAL STORAGE
+  // ---------------------------------------------------------------------------
+
+  Future<SharedPreferences> _prefs() => SharedPreferences.getInstance();
+
+  Future<List<PartnerTransaction>> _readLocalTransactions() async {
+    final prefs = await _prefs();
+    final raw = prefs.getString(_transactionsLocalKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <PartnerTransaction>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <PartnerTransaction>[];
+    return decoded
+        .whereType<Map>()
+        .map((item) => PartnerTransaction.fromMap(
+              Map<String, dynamic>.from(item),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<void> _writeLocalTransactions(
+    List<PartnerTransaction> items,
+  ) async {
+    final prefs = await _prefs();
+    await prefs.setString(
+      _transactionsLocalKey,
+      jsonEncode(items.map((t) => t.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<void> _mergeAndSaveTransactions(
+    List<PartnerTransaction> cloud,
+    String partnerId,
+  ) async {
+    final local = await _readLocalTransactions();
+    final otherPartners =
+        local.where((t) => t.partnerId != partnerId).toList();
+    final knownIds = cloud.map((t) => t.id).toSet();
+    final localOnly =
+        local.where((t) => t.partnerId == partnerId && !knownIds.contains(t.id)).toList();
+    await _writeLocalTransactions([...otherPartners, ...cloud, ...localOnly]);
+  }
+
+  Future<List<PartnerFinancialSummary>> _readLocalSummaries() async {
+    final prefs = await _prefs();
+    final raw = prefs.getString(_summariesLocalKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <PartnerFinancialSummary>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <PartnerFinancialSummary>[];
+    return decoded
+        .whereType<Map>()
+        .map((item) => PartnerFinancialSummary.fromMap(
+              Map<String, dynamic>.from(item),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<void> _writeLocalSummaries(
+    List<PartnerFinancialSummary> items,
+  ) async {
+    final prefs = await _prefs();
+    await prefs.setString(
+      _summariesLocalKey,
+      jsonEncode(items.map((s) => s.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<void> _upsertLocalSummary(PartnerFinancialSummary summary) async {
+    final items = [...await _readLocalSummaries()];
+    final index = items.indexWhere((s) => s.partnerId == summary.partnerId);
+    if (index >= 0) {
+      items[index] = summary;
+    } else {
+      items.add(summary);
+    }
+    await _writeLocalSummaries(items);
+  }
+
+  // ---------------------------------------------------------------------------
+  // UTILITARE
+  // ---------------------------------------------------------------------------
+
+  List<PartnerTransaction> _sortTransactions(List<PartnerTransaction> items) {
+    return [...items]..sort((a, b) => b.date.compareTo(a.date));
+  }
+}

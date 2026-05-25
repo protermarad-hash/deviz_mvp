@@ -1,0 +1,54 @@
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'offer_models.dart';
+
+class LocalOferteRepository {
+  static const String _offersKey = 'ultra_offers_v1';
+
+  Future<List<OfferRecord>> listOffers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_offersKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <OfferRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <OfferRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map((row) => OfferRecord.fromMap(Map<String, dynamic>.from(row)))
+        .where((item) => item.id.trim().isNotEmpty)
+        .toList(growable: false)
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
+  Future<void> upsertOffer(OfferRecord offer) async {
+    final current = [...await listOffers()];
+    final index = current.indexWhere((item) => item.id == offer.id);
+    if (index >= 0) {
+      current[index] = offer;
+    } else {
+      current.add(offer);
+    }
+    await _writeOffers(current);
+  }
+
+  Future<void> replaceOffers(List<OfferRecord> items) async {
+    await _writeOffers(items);
+  }
+
+  Future<void> deleteOffer(String offerId) async {
+    final current = [...await listOffers()]
+      ..removeWhere((item) => item.id == offerId);
+    await _writeOffers(current);
+  }
+
+  Future<void> _writeOffers(List<OfferRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = items.map((item) => item.toMap()).toList(growable: false);
+    await prefs.setString(_offersKey, jsonEncode(payload));
+  }
+}

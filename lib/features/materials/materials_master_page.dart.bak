@@ -1,0 +1,584 @@
+import 'package:flutter/material.dart';
+
+import '../../core/app_theme_preset.dart';
+import '../../core/help_content.dart';
+import '../../core/widgets/help_button.dart';
+import '../master/master_local_store.dart';
+import 'materials_catalog_service.dart';
+
+class MaterialsMasterPage extends StatefulWidget {
+  const MaterialsMasterPage({super.key});
+
+  @override
+  State<MaterialsMasterPage> createState() => _MaterialsMasterPageState();
+}
+
+class _MaterialsMasterPageState extends State<MaterialsMasterPage> {
+  bool _loading = true;
+  List<MasterMaterial> _rows = const [];
+  final MaterialsCatalogService _catalogService = MaterialsCatalogService();
+  String _categoryFilter = '';
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final rows = await _catalogService.listMaterials();
+    if (!mounted) return;
+    setState(() {
+      _rows = rows;
+      _loading = false;
+    });
+  }
+
+  Future<void> _adjustStock(MasterMaterial m) async {
+    double adjustment = 0;
+    final ctrl = TextEditingController();
+    String? err;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setS) => AlertDialog(
+          title: Text('Ajustare stoc: ${m.name}'),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                    'Stoc curent: ${m.quantityInStock.toStringAsFixed(2)} ${m.unit}'),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true, signed: true),
+                  decoration: InputDecoration(
+                    labelText: 'Cantitate (+întrare / -ieșire)',
+                    helperText: 'Ex: +10 sau -3.5',
+                    errorText: err,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final v =
+                    double.tryParse(ctrl.text.trim().replaceAll(',', '.'));
+                if (v == null) {
+                  setS(() => err = 'Introdu o valoare numerică.');
+                  return;
+                }
+                adjustment = v;
+                Navigator.of(ctx).pop(true);
+              },
+              child: const Text('Aplică'),
+            ),
+          ],
+        ),
+      ),
+    );
+    ctrl.dispose();
+    if (confirmed != true || !mounted) return;
+    final updated = MasterMaterial(
+      id: m.id,
+      name: m.name,
+      unit: m.unit,
+      price: m.price,
+      notes: m.notes,
+      quantityInStock:
+          (m.quantityInStock + adjustment).clamp(0.0, double.infinity),
+      minQuantityAlert: m.minQuantityAlert,
+      stockCategory: m.stockCategory,
+    );
+    await _catalogService.upsertMaterial(updated);
+    await _load();
+  }
+
+  Future<void> _edit([MasterMaterial? existing]) async {
+    final result = await showDialog<MasterMaterial>(
+      context: context,
+      builder: (_) => _MaterialDialog(existing: existing),
+    );
+    if (result == null) return;
+    await _catalogService.upsertMaterial(result);
+    await _load();
+  }
+
+  Future<void> _delete(MasterMaterial row) async {
+    await _catalogService.deleteMaterial(row.id);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final brand = theme.extension<AppBrandTheme>();
+
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    final lowStockCount = _rows.where((m) => m.isLowStock).length;
+    final categories = _rows.map((m) => m.stockCategory).where((c) => c.isNotEmpty).toSet();
+
+    final filtered = _rows.where((m) {
+      if (_categoryFilter.isNotEmpty && m.stockCategory != _categoryFilter) return false;
+      if (_searchQuery.isNotEmpty && !m.name.toLowerCase().contains(_searchQuery)) return false;
+      return true;
+    }).toList(growable: false);
+
+    return Scaffold(
+      body: Column(
+        children: [
+          // Hero header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: brand?.shellHeaderGradient ??
+                    LinearGradient(
+                      colors: [cs.tertiaryContainer, cs.primaryContainer],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: brand?.shellGlow ?? cs.primary.withValues(alpha: 0.12),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.inventory_2_outlined, size: 24, color: cs.primary),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Materiale',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: cs.onPrimaryContainer,
+                          ),
+                        ),
+                        Text(
+                          '${_rows.length} articole · ${categories.length} categorii · ${_catalogService.dataSourceLabel}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onPrimaryContainer.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (lowStockCount > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.orange.shade300),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.warning_amber_rounded, size: 13, color: Colors.orange.shade800),
+                          const SizedBox(width: 4),
+                          Text(
+                            '$lowStockCount stoc mic',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.orange.shade800),
+                          ),
+                        ],
+                      ),
+                    ),
+                  HelpButton(content: AppHelp.catalogMateriale),
+                ],
+              ),
+            ),
+          ),
+          // Low stock alert banner
+          if (lowStockCount > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber_outlined, size: 16, color: Colors.orange.shade800),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '$lowStockCount ${lowStockCount == 1 ? 'material are' : 'materiale au'} stoc sub limita minimă. Verificați și reaprovizionați.',
+                        style: TextStyle(fontSize: 12, color: Colors.orange.shade900),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          // Search + category filter
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(textCapitalization: TextCapitalization.sentences, 
+                    onChanged: (v) => setState(() => _searchQuery = v.trim().toLowerCase()),
+                    decoration: InputDecoration(
+                      labelText: 'Caută material',
+                      prefixIcon: const Icon(Icons.search),
+                      border: const OutlineInputBorder(),
+                      isDense: true,
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () => setState(() => _searchQuery = ''),
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: _categoryFilter,
+                  isDense: true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: '', child: Text('Toate')),
+                    DropdownMenuItem(value: 'material', child: Text('Materiale')),
+                    DropdownMenuItem(value: 'frigorant', child: Text('Frigoranți')),
+                    DropdownMenuItem(value: 'consumabil', child: Text('Consumabile')),
+                    DropdownMenuItem(value: 'unealtă', child: Text('Unelte')),
+                  ],
+                  onChanged: (v) => setState(() => _categoryFilter = v ?? ''),
+                ),
+              ],
+            ),
+          ),
+          // List
+          Expanded(
+            child: filtered.isEmpty
+                ? const Center(child: Text('Nu există materiale pentru criteriile selectate.'))
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+                    itemCount: filtered.length,
+                    itemBuilder: (context, i) => _buildMaterialCard(filtered[i], cs),
+                  ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _edit(),
+        icon: const Icon(Icons.add),
+        label: const Text('Adaugă material'),
+      ),
+    );
+  }
+
+  Widget _buildMaterialCard(MasterMaterial m, ColorScheme cs) {
+    final categoryColor = _categoryColor(m.stockCategory);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: m.isLowStock ? Colors.orange.shade50 : cs.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: m.isLowStock ? Colors.orange.shade300 : cs.outlineVariant,
+          width: m.isLowStock ? 1.5 : 1.0,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: m.isLowStock
+                ? Colors.orange.withValues(alpha: 0.08)
+                : cs.shadow.withValues(alpha: 0.04),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(13),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(13),
+          onTap: () => _edit(m),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: categoryColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: m.isLowStock
+                      ? Icon(Icons.warning_amber_rounded, size: 22, color: Colors.orange.shade700)
+                      : Icon(Icons.inventory_2_outlined, size: 22, color: categoryColor),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(m.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 5,
+                        runSpacing: 4,
+                        children: [
+                          if (m.stockCategory.isNotEmpty)
+                            _matBadge(m.stockCategory, categoryColor.withValues(alpha: 0.1), categoryColor),
+                          _matBadge(
+                            '${m.price.toStringAsFixed(2)} RON/${m.unit.isEmpty ? 'buc' : m.unit}',
+                            cs.surfaceContainerHighest,
+                            cs.onSurfaceVariant,
+                          ),
+                          _matBadge(
+                            'Stoc: ${m.quantityInStock.toStringAsFixed(1)}${m.unit.isEmpty ? '' : ' ${m.unit}'}',
+                            m.isLowStock ? Colors.orange.shade100 : cs.primaryContainer.withValues(alpha: 0.5),
+                            m.isLowStock ? Colors.orange.shade800 : cs.primary,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.add_circle_outline, size: 20, color: cs.primary),
+                      tooltip: 'Ajustează stoc',
+                      onPressed: () => _adjustStock(m),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.delete_outline, size: 20, color: cs.error.withValues(alpha: 0.7)),
+                      onPressed: () => _delete(m),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Color _categoryColor(String category) {
+    switch (category.toLowerCase()) {
+      case 'frigorant':
+        return const Color(0xFF0277BD);
+      case 'consumabil':
+        return const Color(0xFF2E7D32);
+      case 'unealtă':
+        return const Color(0xFF6A1B9A);
+      default:
+        return const Color(0xFF1565C0);
+    }
+  }
+
+  Widget _matBadge(String text, Color bg, Color fg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
+      child: Text(text, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: fg)),
+    );
+  }
+}
+
+class _MaterialDialog extends StatefulWidget {
+  const _MaterialDialog({this.existing});
+  final MasterMaterial? existing;
+
+  @override
+  State<_MaterialDialog> createState() => _MaterialDialogState();
+}
+
+class _MaterialDialogState extends State<_MaterialDialog> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.existing?.name ?? '');
+  late final TextEditingController _unit =
+      TextEditingController(text: widget.existing?.unit ?? '');
+  late final TextEditingController _price = TextEditingController(
+    text: widget.existing?.price.toStringAsFixed(2) ?? '0',
+  );
+  late final TextEditingController _notes =
+      TextEditingController(text: widget.existing?.notes ?? '');
+  late final TextEditingController _qty = TextEditingController(
+    text: widget.existing?.quantityInStock.toStringAsFixed(2) ?? '0',
+  );
+  late final TextEditingController _minQty = TextEditingController(
+    text: widget.existing?.minQuantityAlert.toStringAsFixed(2) ?? '0',
+  );
+  late String _category = widget.existing?.stockCategory ?? '';
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _unit.dispose();
+    _price.dispose();
+    _notes.dispose();
+    _qty.dispose();
+    _minQty.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.existing == null ? 'Adauga material' : 'Editeaza material',
+      ),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'Denumire'),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _unit,
+                      decoration: const InputDecoration(labelText: 'UM'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _price,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                          const InputDecoration(labelText: 'Preț unitar'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _category.isEmpty ? '' : _category,
+                decoration: const InputDecoration(labelText: 'Categorie stoc'),
+                items: const [
+                  DropdownMenuItem(value: '', child: Text('Necategorizat')),
+                  DropdownMenuItem(value: 'material', child: Text('Material')),
+                  DropdownMenuItem(
+                      value: 'frigorant', child: Text('Frigorant')),
+                  DropdownMenuItem(
+                      value: 'consumabil', child: Text('Consumabil')),
+                  DropdownMenuItem(value: 'unealtă', child: Text('Unealtă')),
+                ],
+                onChanged: (v) => setState(() => _category = v ?? ''),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _qty,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                          const InputDecoration(labelText: 'Stoc curent'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _minQty,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'Alertă stoc minim',
+                        helperText: '0 = fără alertă',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _notes,
+                decoration: const InputDecoration(labelText: 'Observatii'),
+                minLines: 2,
+                maxLines: 3,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Anulează'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _name.text.trim();
+            if (name.isEmpty) return;
+            double parseD(String raw) =>
+                double.tryParse(raw.trim().replaceAll(',', '.')) ?? 0;
+            final now = DateTime.now().millisecondsSinceEpoch;
+            Navigator.of(context).pop(
+              MasterMaterial(
+                id: widget.existing?.id ?? 'mat-$now',
+                name: name,
+                unit: _unit.text.trim(),
+                price: parseD(_price.text),
+                notes: _notes.text.trim(),
+                quantityInStock: parseD(_qty.text),
+                minQuantityAlert: parseD(_minQty.text),
+                stockCategory: _category,
+              ),
+            );
+          },
+          child: const Text('Salveaza'),
+        ),
+      ],
+    );
+  }
+}

@@ -1,0 +1,472 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+
+import '../../core/repositories/app_data_repository.dart';
+import 'field_photo_capture_service.dart';
+import 'field_photo_models.dart';
+
+class FieldPhotosPage extends StatefulWidget {
+  const FieldPhotosPage({
+    super.key,
+    required this.repository,
+    required this.sourceModule,
+    required this.sourceEntityId,
+    this.documentId = '',
+    this.title = 'Documentare foto',
+    this.preferredTakenByName = '',
+    this.preferredTakenByUserId = '',
+  });
+
+  final AppDataRepository repository;
+  final String sourceModule;
+  final String sourceEntityId;
+  final String documentId;
+  final String title;
+  final String preferredTakenByName;
+  final String preferredTakenByUserId;
+
+  @override
+  State<FieldPhotosPage> createState() => _FieldPhotosPageState();
+}
+
+class _FieldPhotosPageState extends State<FieldPhotosPage> {
+  bool _loading = true;
+  bool _saving = false;
+  List<FieldPhotoRecord> _photos = const <FieldPhotoRecord>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final items = await widget.repository.listFieldPhotos(
+      sourceModule: widget.sourceModule,
+      sourceEntityId: widget.sourceEntityId,
+      documentId: widget.documentId,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _photos = items;
+      _loading = false;
+    });
+  }
+
+  Future<void> _addPhoto(FieldPhotoInputSource source) async {
+    if (_saving) {
+      return;
+    }
+    final picked = await FieldPhotoCaptureService.pickPhoto(source: source);
+    if (picked == null || !mounted) {
+      return;
+    }
+    final metadata = await _showMetadataDialog();
+    if (metadata == null || !mounted) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final record = await FieldPhotoCaptureService.createPhotoRecord(
+        repository: widget.repository,
+        sourceModule: widget.sourceModule,
+        sourceEntityId: widget.sourceEntityId,
+        documentId: widget.documentId,
+        photoType: metadata.photoType.key,
+        description: metadata.description,
+        pickedFile: picked,
+        preferredTakenByName: widget.preferredTakenByName,
+        preferredTakenByUserId: widget.preferredTakenByUserId,
+      );
+      await widget.repository.saveFieldPhoto(record);
+      await _load();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Poza de teren a fost salvata.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nu am putut salva poza: $error')),
+      );
+      setState(() => _saving = false);
+      return;
+    }
+    if (mounted) {
+      setState(() => _saving = false);
+    }
+  }
+
+  Future<_PhotoMetadata?> _showMetadataDialog({
+    FieldPhotoRecord? current,
+  }) async {
+    var selectedType = current == null
+        ? FieldPhotoType.altul
+        : FieldPhotoTypeX.fromKey(current.photoType);
+    final descriptionController = TextEditingController(
+      text: current?.description ?? '',
+    );
+    final result = await showDialog<_PhotoMetadata>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(current == null ? 'Detalii poza' : 'Editeaza poza'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<FieldPhotoType>(
+                  initialValue: selectedType,
+                  decoration: const InputDecoration(labelText: 'Tip poza'),
+                  items: FieldPhotoType.values
+                      .map(
+                        (type) => DropdownMenuItem<FieldPhotoType>(
+                          value: type,
+                          child: Text(type.label),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    setDialogState(() => selectedType = value);
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: descriptionController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Descriere scurta',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(
+                _PhotoMetadata(
+                  photoType: selectedType,
+                  description: descriptionController.text.trim(),
+                ),
+              ),
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      ),
+    );
+    descriptionController.dispose();
+    return result;
+  }
+
+  Future<void> _editPhoto(FieldPhotoRecord photo) async {
+    final metadata = await _showMetadataDialog(current: photo);
+    if (metadata == null) {
+      return;
+    }
+    final updated = photo.copyWith(
+      photoType: metadata.photoType.key,
+      description: metadata.description,
+      updatedAt: DateTime.now(),
+    );
+    await widget.repository.saveFieldPhoto(updated);
+    await _load();
+  }
+
+  Future<void> _deletePhoto(FieldPhotoRecord photo) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ștergere poză'),
+        content: const Text('Sigur vrei sa stergi aceasta poza de teren?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) {
+      return;
+    }
+    await widget.repository.deleteFieldPhoto(photo.id);
+    await FieldPhotoCaptureService.deleteRemotePhoto(photo);
+    await _load();
+  }
+
+  ImageProvider<Object>? _imageProvider(FieldPhotoRecord photo) {
+    final filePath = photo.filePath.trim();
+    if (filePath.isNotEmpty) {
+      final file = File(filePath);
+      if (file.existsSync()) {
+        return FileImage(file);
+      }
+    }
+    final downloadUrl = photo.downloadUrl.trim();
+    if (downloadUrl.isNotEmpty) {
+      return NetworkImage(downloadUrl);
+    }
+    return null;
+  }
+
+  Future<void> _openPhotoDetails(FieldPhotoRecord photo) async {
+    final provider = _imageProvider(photo);
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  photo.fileName.trim().isEmpty
+                      ? 'Poza de teren'
+                      : photo.fileName,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 12),
+                AspectRatio(
+                  aspectRatio: 4 / 3,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      color:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: provider == null
+                        ? const Center(
+                            child: Icon(Icons.image_not_supported_outlined),
+                          )
+                        : Image(
+                            image: provider,
+                            fit: BoxFit.cover,
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    Chip(
+                      label: Text(
+                        FieldPhotoTypeX.fromKey(photo.photoType).label,
+                      ),
+                    ),
+                    Chip(label: Text(_formatDateTime(photo.takenAt))),
+                    if (photo.takenByName.trim().isNotEmpty)
+                      Chip(label: Text(photo.takenByName.trim())),
+                  ],
+                ),
+                if (photo.description.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(photo.description.trim()),
+                ],
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        Navigator.of(sheetContext).pop();
+                        await _editPhoto(photo);
+                      },
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('Editeaza'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        Navigator.of(sheetContext).pop();
+                        await _deletePhoto(photo);
+                      },
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('Șterge'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatDateTime(DateTime value) {
+    return '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year} ${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canUseCamera =
+        !Platform.isWindows && !Platform.isLinux && !Platform.isMacOS;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      if (canUseCamera)
+                        FilledButton.icon(
+                          onPressed: _saving
+                              ? null
+                              : () => _addPhoto(FieldPhotoInputSource.camera),
+                          icon: const Icon(Icons.photo_camera_outlined),
+                          label: const Text('Fa poza'),
+                        ),
+                      FilledButton.tonalIcon(
+                        onPressed: _saving
+                            ? null
+                            : () => _addPhoto(
+                                  canUseCamera
+                                      ? FieldPhotoInputSource.gallery
+                                      : FieldPhotoInputSource.file,
+                                ),
+                        icon: const Icon(Icons.photo_library_outlined),
+                        label: Text(canUseCamera
+                            ? 'Alege din galerie'
+                            : 'Alege imagine'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (_photos.isEmpty)
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text(
+                          'Nu exista poze de teren pentru acest context.',
+                        ),
+                      ),
+                    )
+                  else
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: _photos.map((photo) {
+                        final provider = _imageProvider(photo);
+                        return SizedBox(
+                          width: 220,
+                          child: Card(
+                            clipBehavior: Clip.antiAlias,
+                            child: InkWell(
+                              onTap: () => _openPhotoDetails(photo),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  AspectRatio(
+                                    aspectRatio: 4 / 3,
+                                    child: provider == null
+                                        ? Container(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .surfaceContainerHighest,
+                                            child: const Center(
+                                              child: Icon(
+                                                Icons
+                                                    .image_not_supported_outlined,
+                                              ),
+                                            ),
+                                          )
+                                        : Image(
+                                            image: provider,
+                                            fit: BoxFit.cover,
+                                          ),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          FieldPhotoTypeX.fromKey(
+                                                  photo.photoType)
+                                              .label,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _formatDateTime(photo.takenAt),
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
+                                        ),
+                                        if (photo.description
+                                            .trim()
+                                            .isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            photo.description.trim(),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(growable: false),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+class _PhotoMetadata {
+  const _PhotoMetadata({
+    required this.photoType,
+    required this.description,
+  });
+
+  final FieldPhotoType photoType;
+  final String description;
+}

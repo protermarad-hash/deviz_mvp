@@ -1,0 +1,1962 @@
+import 'package:flutter/material.dart';
+
+import '../../core/auth/field_auth_repository.dart';
+import '../../core/pdf_actions_helper.dart';
+import '../../core/auth/field_auth_repository_factory.dart';
+import '../../core/company_profile.dart';
+import '../../core/repositories/cloud_app_data_repository.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/team_models.dart';
+import '../master/master_local_store.dart';
+import '../tools/scule_handover_pdf_service.dart';
+import '../tools/scule_catalog_service.dart';
+import '../tools/scule_models.dart';
+import 'pachete_scule_catalog_service.dart';
+import 'pachete_scule_models.dart';
+
+class PacheteSculePage extends StatefulWidget {
+  const PacheteSculePage({
+    super.key,
+    this.repository,
+    this.currentUserId,
+    this.currentUserEmail,
+  });
+
+  final AppDataRepository? repository;
+  final String? currentUserId;
+  final String? currentUserEmail;
+
+  @override
+  State<PacheteSculePage> createState() => _PacheteSculePageState();
+}
+
+class _PacheteSculePageState extends State<PacheteSculePage> {
+  final PacheteSculeCatalogService _packagesService =
+      PacheteSculeCatalogService();
+  final SculeCatalogService _toolsService = SculeCatalogService();
+  final TextEditingController _searchController = TextEditingController();
+  late final FieldAuthRepository _authRepository;
+
+  bool _loading = true;
+  List<ToolPackageRecord> _packages = const <ToolPackageRecord>[];
+  List<ToolInventoryItem> _tools = const <ToolInventoryItem>[];
+  List<MasterTeam> _teams = const <MasterTeam>[];
+  List<ToolPackageHandoverDocument> _handoverDocs =
+      const <ToolPackageHandoverDocument>[];
+  List<ToolPackageNotification> _notifications =
+      const <ToolPackageNotification>[];
+  String _currentUserTeamId = '';
+  String? _lookupFallbackReason;
+
+  @override
+  void initState() {
+    super.initState();
+    _authRepository = FieldAuthRepositoryFactory.create();
+    _searchController.addListener(() => setState(() {}));
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    _lookupFallbackReason = null;
+    final packages = await _packagesService.listPackages();
+    final tools = await _toolsService.listTools();
+    final teams = await _loadTeams();
+    final docs = await _packagesService.listHandoverDocuments();
+    final notifications = await _packagesService.listNotifications();
+    final currentUserTeamId = await _resolveCurrentUserTeamId();
+    if (!mounted) return;
+    setState(() {
+      _packages = [...packages]
+        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _tools = [...tools]..sort((a, b) => a.name.compareTo(b.name));
+      _teams = teams;
+      _handoverDocs = docs;
+      _notifications = notifications;
+      _currentUserTeamId = currentUserTeamId;
+      _loading = false;
+    });
+  }
+
+  Future<String> _resolveCurrentUserTeamId() async {
+    final sessionUserId = (widget.currentUserId ?? '').trim();
+    final sessionEmail = (widget.currentUserEmail ?? '').trim().toLowerCase();
+    if (sessionUserId.isEmpty && sessionEmail.isEmpty) return '';
+    try {
+      final users = await _authRepository.listUsers();
+      for (final user in users) {
+        if (sessionUserId.isNotEmpty && user.id.trim() == sessionUserId) {
+          return user.teamId.trim();
+        }
+      }
+      for (final user in users) {
+        if (sessionEmail.isNotEmpty &&
+            user.email.trim().toLowerCase() == sessionEmail) {
+          return user.teamId.trim();
+        }
+      }
+    } catch (_) {
+      return '';
+    }
+    return '';
+  }
+
+  List<ToolPackageNotification> get _teamNotifications {
+    final teamId = _currentUserTeamId.trim();
+    if (teamId.isEmpty) return const <ToolPackageNotification>[];
+    return _notifications
+        .where(
+          (item) =>
+              item.targetTeamId.trim() == teamId && item.processed == false,
+        )
+        .toList(growable: false)
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+
+  ToolPackageRecord? _packageById(String packageId) {
+    final id = packageId.trim();
+    if (id.isEmpty) return null;
+    for (final item in _packages) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  Future<List<MasterTeam>> _loadTeams() async {
+    try {
+      final repository = widget.repository;
+      if (repository != null) {
+        final rows = await repository.listTeams();
+        final mapped = rows
+            .where((row) => row.id.trim().isNotEmpty)
+            .map(_masterTeamFromRepository)
+            .toList(growable: false);
+        if (mapped.isNotEmpty) {
+          await MasterLocalStore.writeTeams(mapped);
+          return mapped;
+        }
+      }
+      return MasterLocalStore.readTeams();
+    } catch (error) {
+      _lookupFallbackReason = _shortError(error);
+      return MasterLocalStore.readTeams();
+    }
+  }
+
+  MasterTeam _masterTeamFromRepository(Team row) {
+    return MasterTeam(
+      id: row.id.trim(),
+      name: row.name.trim(),
+      notes: row.notes.trim(),
+      memberIds: row.memberEmployeeIds
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false),
+    );
+  }
+
+  String _shortError(Object error) {
+    final raw = error.toString().replaceAll('\n', ' ').trim();
+    if (raw.isEmpty) return 'necunoscuta';
+    return raw.length > 140 ? '${raw.substring(0, 140)}...' : raw;
+  }
+
+  String _dateLabel(DateTime? value) {
+    if (value == null) return '-';
+    final d = value.day.toString().padLeft(2, '0');
+    final m = value.month.toString().padLeft(2, '0');
+    return '$d.$m.${value.year}';
+  }
+
+  String _dateTimeLabel(DateTime? value) {
+    if (value == null) return '-';
+    final date = _dateLabel(value);
+    final hh = value.hour.toString().padLeft(2, '0');
+    final mm = value.minute.toString().padLeft(2, '0');
+    return '$date $hh:$mm';
+  }
+
+  List<ToolPackageRecord> get _filteredPackages {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return _packages;
+    final toolById = <String, ToolInventoryItem>{
+      for (final row in _tools) row.id: row,
+    };
+    final toolByCode = <String, ToolInventoryItem>{
+      for (final row in _tools)
+        if (row.inventoryCode.trim().isNotEmpty)
+          row.inventoryCode.trim().toLowerCase(): row,
+    };
+    return _packages.where((row) {
+      final name = row.name.toLowerCase();
+      final notes = row.notes.toLowerCase();
+      final matchesTool = _packageToolRefs(row).any((ref) {
+        final tool = _toolByReference(ref, toolById, toolByCode);
+        if (tool == null) return false;
+        return tool.name.toLowerCase().contains(query);
+      });
+      return name.contains(query) || notes.contains(query) || matchesTool;
+    }).toList(growable: false);
+  }
+
+  List<String> _packageToolRefs(ToolPackageRecord row) {
+    final codes = row.toolInventoryCodes
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    if (codes.isNotEmpty) return codes;
+    return row.toolIds
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  ToolInventoryItem? _toolByReference(
+    String reference,
+    Map<String, ToolInventoryItem> byId,
+    Map<String, ToolInventoryItem> byCode,
+  ) {
+    final ref = reference.trim();
+    if (ref.isEmpty) return null;
+    return byId[ref] ?? byCode[ref.toLowerCase()];
+  }
+
+  Future<void> _openEditor([ToolPackageRecord? existing]) async {
+    final result = await showDialog<ToolPackageRecord>(
+      context: context,
+      builder: (_) => _ToolPackageEditorDialog(
+        existing: existing,
+        tools: _tools,
+      ),
+    );
+    if (result == null) return;
+    await _packagesService.upsertPackage(result);
+    await _appendPackageMovement(
+      pkg: result,
+      eventType: existing == null
+          ? ToolPackageMovementEventType.creare
+          : ToolPackageMovementEventType.editare,
+      notes:
+          existing == null ? 'Pachet creat.' : 'Pachet actualizat din editor.',
+    );
+    await _load();
+  }
+
+  Future<void> _delete(ToolPackageRecord row) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ștergere pachet scule'),
+        content: Text('Sigur stergi "${row.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await _packagesService.deletePackage(row.id);
+    await _load();
+  }
+
+  Future<MasterTeam?> _pickTeamDialog({
+    String title = 'Selecteaza echipa',
+    MasterTeam? initial,
+  }) async {
+    if (_teams.isEmpty) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nu exista echipe definite.')),
+      );
+      return null;
+    }
+    String? selectedId = initial?.id ?? _teams.first.id;
+    final selected = await showDialog<MasterTeam>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: DropdownButtonFormField<String>(
+          initialValue: selectedId,
+          decoration: const InputDecoration(labelText: 'Echipa'),
+          items: _teams
+              .map(
+                (team) => DropdownMenuItem<String>(
+                  value: team.id,
+                  child: Text(team.name),
+                ),
+              )
+              .toList(growable: false),
+          onChanged: (value) => selectedId = value,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = (selectedId ?? '').trim();
+              MasterTeam? found;
+              for (final team in _teams) {
+                if (team.id == value) {
+                  found = team;
+                  break;
+                }
+              }
+              if (found == null) return;
+              Navigator.of(context).pop(found);
+            },
+            child: const Text('Continua'),
+          ),
+        ],
+      ),
+    );
+    return selected;
+  }
+
+  _PackageToolIntegrity _integrityForPackage(ToolPackageRecord row) {
+    final toolById = <String, ToolInventoryItem>{
+      for (final item in _tools) item.id: item,
+    };
+    final toolByCode = <String, ToolInventoryItem>{
+      for (final item in _tools)
+        if (item.inventoryCode.trim().isNotEmpty)
+          item.inventoryCode.trim().toLowerCase(): item,
+    };
+    var available = 0;
+    var unavailable = 0;
+    var missing = 0;
+    for (final ref in _packageToolRefs(row)) {
+      final tool = _toolByReference(ref, toolById, toolByCode);
+      if (tool == null) {
+        missing += 1;
+        continue;
+      }
+      if (tool.status == ToolInventoryStatus.disponibila) {
+        available += 1;
+      } else {
+        unavailable += 1;
+      }
+    }
+    return _PackageToolIntegrity(
+      available: available,
+      unavailable: unavailable,
+      missing: missing,
+    );
+  }
+
+  Future<bool> _confirmIntegrityIfNeeded(
+    ToolPackageRecord row, {
+    required String actionLabel,
+  }) async {
+    final integrity = _integrityForPackage(row);
+    if (!integrity.hasIssues) return true;
+    final continueAction = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Atentie inainte de $actionLabel'),
+        content: Text(
+          'Pachetul contine:\n'
+          '- indisponibile: ${integrity.unavailable}\n'
+          '- lipsa din inventar: ${integrity.missing}\n\n'
+          'Vrei sa continui?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Nu'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Da, continua'),
+          ),
+        ],
+      ),
+    );
+    return continueAction == true;
+  }
+
+  Future<void> _assignPackage(ToolPackageRecord row) async {
+    final currentAssigned = row.assignedTeamId.trim();
+    MasterTeam? initial;
+    if (currentAssigned.isNotEmpty) {
+      for (final team in _teams) {
+        if (team.id == currentAssigned) {
+          initial = team;
+          break;
+        }
+      }
+    }
+    final pick = await _pickTeamDialog(
+      title: 'Atribuie pachet echipei',
+      initial: initial,
+    );
+    if (pick == null) return;
+
+    if (currentAssigned.isNotEmpty && currentAssigned != pick.id) {
+      if (!mounted) return;
+      final teamName = row.assignedTeamName.trim().isEmpty
+          ? 'alta echipa'
+          : row.assignedTeamName.trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pachetul este deja atribuit la $teamName. Retrage pachetul inainte de reasignare.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (currentAssigned.isNotEmpty &&
+        currentAssigned == pick.id &&
+        row.status != ToolPackageStatus.disponibil) {
+      if (!mounted) return;
+      final teamName = row.assignedTeamName.trim().isEmpty
+          ? pick.name
+          : row.assignedTeamName.trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pachetul este deja alocat echipei $teamName (status: ${row.status.label}).',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final validation = _validatePackageAssignment(row, targetTeamId: pick.id);
+    if (!validation.isValid) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Atribuire blocata'),
+          content: Text(validation.message),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Închide'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    final updated = row.copyWith(
+      status: ToolPackageStatus.inAsteptareReceptie,
+      assignedTeamId: pick.id,
+      assignedTeamName: pick.name,
+      assignedAt: now,
+      assignedByUserId: (widget.currentUserId ?? '').trim(),
+      assignedByUserEmail: (widget.currentUserEmail ?? '').trim(),
+      updatedAt: now,
+    );
+    await _packagesService.upsertPackage(updated);
+    await _appendPackageMovement(
+      pkg: updated,
+      eventType: ToolPackageMovementEventType.atribuire,
+      teamId: pick.id,
+      teamName: pick.name,
+      notes: 'Pachet atribuit echipei ${pick.name}.',
+    );
+    await _createAssignmentNotification(updated, pick);
+    await _load();
+    await _promptGeneratePackagePv(
+      updated,
+      operationType: _ToolPackageOperationType.predare,
+      forcedTeam: pick,
+    );
+  }
+
+  _PackageAssignmentValidation _validatePackageAssignment(
+    ToolPackageRecord row, {
+    required String targetTeamId,
+  }) {
+    final byId = <String, ToolInventoryItem>{
+      for (final item in _tools) item.id: item,
+    };
+    final byCode = <String, ToolInventoryItem>{
+      for (final item in _tools)
+        if (item.inventoryCode.trim().isNotEmpty)
+          item.inventoryCode.trim().toLowerCase(): item,
+    };
+
+    final missing = <String>[];
+    final unavailable = <String>[];
+    final unsafeReassign = <String>[];
+
+    final refs = _packageToolRefs(row);
+    if (refs.isEmpty) {
+      return const _PackageAssignmentValidation.invalid(
+        'Pachetul nu contine scule si nu poate fi atribuit.',
+      );
+    }
+
+    for (final ref in refs) {
+      final tool = _toolByReference(ref, byId, byCode);
+      if (tool == null) {
+        missing.add(ref);
+        continue;
+      }
+      if (tool.status != ToolInventoryStatus.disponibila) {
+        unavailable.add('${tool.name} (${tool.status.label})');
+      }
+      final assignedTeamId = tool.assignedTeamId.trim();
+      if (assignedTeamId.isNotEmpty && assignedTeamId != targetTeamId) {
+        final teamName = tool.assignedTeamName.trim().isEmpty
+            ? assignedTeamId
+            : tool.assignedTeamName.trim();
+        unsafeReassign.add('${tool.name} ($teamName)');
+      }
+    }
+
+    if (missing.isEmpty && unavailable.isEmpty && unsafeReassign.isEmpty) {
+      return const _PackageAssignmentValidation.valid();
+    }
+
+    final lines = <String>[
+      'Pachetul nu poate fi atribuit in siguranta.',
+      if (missing.isNotEmpty) 'Scule lipsa din inventar: ${missing.join(', ')}',
+      if (unavailable.isNotEmpty)
+        'Scule indisponibile: ${unavailable.join(', ')}',
+      if (unsafeReassign.isNotEmpty)
+        'Scule deja atribuite altei echipe: ${unsafeReassign.join(', ')}',
+    ];
+    return _PackageAssignmentValidation.invalid(lines.join('\n'));
+  }
+
+  String _nextHandoverNumber(DateTime date) {
+    final year = date.year;
+    final prefix = 'PV-PACHET-SCULE-$year-';
+    var max = 0;
+    for (final item in _handoverDocs) {
+      final number = item.documentNumber.trim().toUpperCase();
+      if (!number.startsWith(prefix)) continue;
+      final seq = int.tryParse(number.substring(prefix.length));
+      if (seq != null && seq > max) max = seq;
+    }
+    return '$prefix${(max + 1).toString().padLeft(4, '0')}';
+  }
+
+  List<ToolHandoverLine> _buildHandoverLines(ToolPackageRecord row) {
+    final toolById = <String, ToolInventoryItem>{
+      for (final item in _tools) item.id: item,
+    };
+    final toolByCode = <String, ToolInventoryItem>{
+      for (final item in _tools)
+        if (item.inventoryCode.trim().isNotEmpty)
+          item.inventoryCode.trim().toLowerCase(): item,
+    };
+    return _packageToolRefs(row).map((ref) {
+      final tool = _toolByReference(ref, toolById, toolByCode);
+      if (tool == null) {
+        return ToolHandoverLine(
+          name: 'Scula lipsa (ref: $ref)',
+          category: '-',
+          brandModel: '-',
+          inventoryCode: '-',
+          serialNumber: '-',
+          statusLabel: 'Lipsa',
+          notes: 'Nu mai exista in inventar la momentul generarii PV.',
+        );
+      }
+      final brandModel = [
+        tool.brand.trim(),
+        tool.model.trim(),
+      ].where((value) => value.isNotEmpty).join(' / ');
+      final notesParts = <String>[
+        'Pachet: ${row.name}',
+      ];
+      if (tool.description.trim().isNotEmpty) {
+        notesParts.add(tool.description.trim());
+      }
+      if (tool.notes.trim().isNotEmpty) {
+        notesParts.add(tool.notes.trim());
+      }
+      return ToolHandoverLine(
+        name: tool.name,
+        category: tool.category.trim().isEmpty ? '-' : tool.category,
+        brandModel: brandModel.isEmpty ? '-' : brandModel,
+        inventoryCode:
+            tool.inventoryCode.trim().isEmpty ? '-' : tool.inventoryCode,
+        serialNumber:
+            tool.serialNumber.trim().isEmpty ? '-' : tool.serialNumber,
+        statusLabel: tool.status.label,
+        notes: notesParts.join(' | '),
+      );
+    }).toList(growable: false);
+  }
+
+  Future<void> _promptGeneratePackagePv(
+    ToolPackageRecord row, {
+    required _ToolPackageOperationType operationType,
+    MasterTeam? forcedTeam,
+  }) async {
+    if (!mounted) return;
+    final shouldGenerate = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Genereaza PV pachet'),
+        content: Text(
+          operationType == _ToolPackageOperationType.predare
+              ? 'Vrei sa generezi PV de predare pentru pachetul "${row.name}"?'
+              : 'Vrei sa generezi PV de retur/retragere pentru pachetul "${row.name}"?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Nu acum'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Genereaza'),
+          ),
+        ],
+      ),
+    );
+    if (shouldGenerate != true) return;
+    await _generatePackageHandover(
+      row,
+      operationType: operationType,
+      forcedTeam: forcedTeam,
+    );
+  }
+
+  Future<void> _generatePackageHandover(
+    ToolPackageRecord row, {
+    _ToolPackageOperationType operationType = _ToolPackageOperationType.predare,
+    MasterTeam? forcedTeam,
+  }) async {
+    final refs = _packageToolRefs(row);
+    if (refs.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pachetul nu contine scule.')),
+      );
+      return;
+    }
+    if (!await _confirmIntegrityIfNeeded(row, actionLabel: 'generare PV')) {
+      return;
+    }
+
+    MasterTeam? team = forcedTeam;
+    final assignedId = row.assignedTeamId.trim();
+    if (team == null && assignedId.isNotEmpty) {
+      for (final item in _teams) {
+        if (item.id == assignedId) {
+          team = item;
+          break;
+        }
+      }
+    }
+    team ??= await _pickTeamDialog(title: 'Echipa pentru PV pachet');
+    if (team == null) return;
+
+    final documentDate = DateTime.now();
+    final number = _nextHandoverNumber(documentDate);
+    final lines = _buildHandoverLines(row);
+    final company = widget.repository == null
+        ? const CompanyProfile()
+        : await widget.repository!.loadCompanyProfile();
+    final predatDe = (widget.currentUserEmail ?? '').trim().isEmpty
+        ? 'Operator'
+        : widget.currentUserEmail!.trim();
+    final primitDe = team.name.trim();
+
+    try {
+      final path = await SculeHandoverPdfService.export(
+        repository: widget.repository ?? const CloudAppDataRepository(),
+        company: company,
+        documentNumber: number,
+        documentDate: documentDate,
+        teamName: team.name,
+        responsibleName: team.name,
+        lines: lines,
+        predatDe: predatDe,
+        primitDe: primitDe,
+        operationLabel: operationType.label,
+        packageName: row.name,
+      );
+      final doc = ToolPackageHandoverDocument(
+        id: 'pv-pachet-${documentDate.microsecondsSinceEpoch}',
+        documentNumber: number,
+        documentDate: documentDate,
+        packageId: row.id,
+        packageName: row.name,
+        teamId: team.id,
+        teamName: team.name,
+        operationType: operationType.value,
+        toolIds: refs,
+        filePath: path,
+        createdByUserId: (widget.currentUserId ?? '').trim(),
+        createdByUserEmail: (widget.currentUserEmail ?? '').trim(),
+        createdAt: documentDate,
+      );
+      await _packagesService.saveHandoverDocument(doc);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('PV pachet generat: $path')),
+      );
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'PV pachet scule generat',
+        shareSubject: 'Proces-verbal pachet scule',
+        shareText: 'PV pachet scule generat din aplicație.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Eroare generare PV pachet: ${_shortError(error)}')),
+      );
+    }
+  }
+
+  Future<void> _appendPackageMovement({
+    required ToolPackageRecord pkg,
+    required ToolPackageMovementEventType eventType,
+    String teamId = '',
+    String teamName = '',
+    String notes = '',
+  }) async {
+    final now = DateTime.now();
+    final event = ToolPackageMovementEvent(
+      id: 'pkg-move-${now.microsecondsSinceEpoch}',
+      packageId: pkg.id,
+      packageName: pkg.name,
+      eventType: eventType,
+      eventDate: now,
+      teamId: teamId.trim(),
+      teamName: teamName.trim(),
+      performedByUserId: (widget.currentUserId ?? '').trim(),
+      performedByUserEmail: (widget.currentUserEmail ?? '').trim(),
+      notes: notes.trim(),
+    );
+    await _packagesService.appendMovementEvent(event);
+  }
+
+  Future<void> _createAssignmentNotification(
+    ToolPackageRecord pkg,
+    MasterTeam team,
+  ) async {
+    await _createPackageNotification(
+      pkg: pkg,
+      eventType: 'atribuire_pachet',
+      message:
+          'Pachetul "${pkg.name}" a fost atribuit echipei ${team.name} si este in asteptare receptie.',
+      targetTeamId: team.id,
+      targetTeamName: team.name,
+    );
+  }
+
+  Future<void> _createPackageNotification({
+    required ToolPackageRecord pkg,
+    required String eventType,
+    required String message,
+    required String targetTeamId,
+    required String targetTeamName,
+    String sourceTeamId = '',
+    String sourceTeamName = '',
+  }) async {
+    final now = DateTime.now();
+    final notification = ToolPackageNotification(
+      id: 'pkg-notif-${now.microsecondsSinceEpoch}',
+      packageId: pkg.id,
+      packageName: pkg.name,
+      targetTeamId: targetTeamId.trim(),
+      targetTeamName: targetTeamName.trim(),
+      sourceTeamId: sourceTeamId.trim(),
+      sourceTeamName: sourceTeamName.trim(),
+      eventType: eventType.trim(),
+      message: message.trim(),
+      createdAt: now,
+      createdByUserId: (widget.currentUserId ?? '').trim(),
+      createdByUserEmail: (widget.currentUserEmail ?? '').trim(),
+      processed: false,
+      processedAt: null,
+      processedByUserId: '',
+      processedByUserEmail: '',
+      receivedAt: null,
+      receivedByUserId: '',
+      receivedByUserEmail: '',
+    );
+    await _packagesService.saveNotification(notification);
+  }
+
+  Future<void> _initiatePackageWithdrawal(ToolPackageRecord pkg) async {
+    if (pkg.status != ToolPackageStatus.receptionat) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Retragerea poate fi initiata doar pentru pachete receptionate (status: ${pkg.status.label}).',
+          ),
+        ),
+      );
+      return;
+    }
+    final teamId = pkg.assignedTeamId.trim();
+    final teamName = pkg.assignedTeamName.trim();
+    if (teamId.isEmpty || teamName.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pachetul nu are echipa valida pentru retragere.'),
+        ),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    final updated = pkg.copyWith(
+      status: ToolPackageStatus.inAsteptareRetragere,
+      updatedAt: now,
+    );
+    await _packagesService.upsertPackage(updated);
+    await _appendPackageMovement(
+      pkg: updated,
+      eventType: ToolPackageMovementEventType.initiereRetragere,
+      teamId: teamId,
+      teamName: teamName,
+      notes: 'Retragere initiata in aplicatie.',
+    );
+    await _createPackageNotification(
+      pkg: updated,
+      eventType: 'retragere_pachet',
+      message:
+          'Retragere solicitata pentru pachetul "${updated.name}". Confirma retragerea in aplicatie.',
+      targetTeamId: teamId,
+      targetTeamName: teamName,
+      sourceTeamId: teamId,
+      sourceTeamName: teamName,
+    );
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Retragere initiata.')),
+    );
+  }
+
+  Future<void> _initiatePackageMove(ToolPackageRecord pkg) async {
+    if (pkg.status != ToolPackageStatus.receptionat) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Mutarea este permisa doar pentru pachete receptionate (status: ${pkg.status.label}).',
+          ),
+        ),
+      );
+      return;
+    }
+    final sourceTeamId = pkg.assignedTeamId.trim();
+    final sourceTeamName = pkg.assignedTeamName.trim();
+    if (sourceTeamId.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pachetul nu are echipa sursa valida.')),
+      );
+      return;
+    }
+
+    MasterTeam? initial;
+    for (final row in _teams) {
+      if (row.id == sourceTeamId) {
+        initial = row;
+        break;
+      }
+    }
+    final target = await _pickTeamDialog(
+      title: 'Selecteaza echipa tinta pentru mutare',
+      initial: initial,
+    );
+    if (target == null) return;
+    if (target.id == sourceTeamId) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Echipa tinta trebuie sa fie diferita.')),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    final updated = pkg.copyWith(
+      status: ToolPackageStatus.inAsteptareReceptie,
+      assignedTeamId: target.id,
+      assignedTeamName: target.name,
+      assignedAt: now,
+      assignedByUserId: (widget.currentUserId ?? '').trim(),
+      assignedByUserEmail: (widget.currentUserEmail ?? '').trim(),
+      updatedAt: now,
+    );
+    await _packagesService.upsertPackage(updated);
+    await _appendPackageMovement(
+      pkg: updated,
+      eventType: ToolPackageMovementEventType.initiereMutare,
+      teamId: target.id,
+      teamName: target.name,
+      notes:
+          'Mutare initiata din ${sourceTeamName.isEmpty ? sourceTeamId : sourceTeamName} catre ${target.name}.',
+    );
+    await _createPackageNotification(
+      pkg: updated,
+      eventType: 'mutare_pachet',
+      message:
+          'Mutare pachet "${updated.name}" catre echipa ${target.name}. Asteapta receptia in aplicatie.',
+      targetTeamId: target.id,
+      targetTeamName: target.name,
+      sourceTeamId: sourceTeamId,
+      sourceTeamName: sourceTeamName,
+    );
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Mutare initiata.')),
+    );
+  }
+
+  Future<void> _markNotificationProcessed(
+    ToolPackageNotification notification, {
+    DateTime? receivedAt,
+    String receivedByUserId = '',
+    String receivedByUserEmail = '',
+  }) async {
+    final now = DateTime.now();
+    final updated = notification.copyWith(
+      processed: true,
+      processedAt: now,
+      processedByUserId: (widget.currentUserId ?? '').trim(),
+      processedByUserEmail: (widget.currentUserEmail ?? '').trim(),
+      receivedAt: receivedAt,
+      receivedByUserId: receivedByUserId,
+      receivedByUserEmail: receivedByUserEmail,
+    );
+    await _packagesService.saveNotification(updated);
+  }
+
+  Future<void> _receivePackageFromNotification(
+    ToolPackageNotification notification,
+  ) async {
+    final eventType = notification.eventType.trim();
+    if (eventType != 'atribuire_pachet' && eventType != 'mutare_pachet') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tip notificare invalid pentru receptie pachet.'),
+        ),
+      );
+      return;
+    }
+    final targetTeamId = notification.targetTeamId.trim();
+    final currentTeamId = _currentUserTeamId.trim();
+    if (currentTeamId.isEmpty ||
+        targetTeamId.isEmpty ||
+        currentTeamId != targetTeamId) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Receptia este permisa doar utilizatorilor din echipa tinta.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final pkg = _packageById(notification.packageId);
+    if (pkg == null) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pachetul nu mai exista. Notificarea a fost inchisa.'),
+        ),
+      );
+      return;
+    }
+
+    if (pkg.status != ToolPackageStatus.inAsteptareReceptie) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pachetul nu mai este in asteptare receptie (status: ${pkg.status.label}).',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (pkg.assignedTeamId.trim() != targetTeamId) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Pachetul nu mai este alocat echipei tinta din notificare.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final confirmedAt = DateTime.now();
+    final packageAfterReception = pkg.copyWith(
+      status: ToolPackageStatus.receptionat,
+      updatedAt: confirmedAt,
+    );
+    await _packagesService.upsertPackage(packageAfterReception);
+    await _appendPackageMovement(
+      pkg: packageAfterReception,
+      eventType: eventType == 'mutare_pachet'
+          ? ToolPackageMovementEventType.mutareReceptionata
+          : ToolPackageMovementEventType.receptie,
+      teamId: targetTeamId,
+      teamName: notification.targetTeamName,
+      notes: eventType == 'mutare_pachet'
+          ? 'Mutare receptionata in aplicatie de echipa tinta.'
+          : 'Receptie confirmata in aplicatie.',
+    );
+    await _markNotificationProcessed(
+      notification,
+      receivedAt: confirmedAt,
+      receivedByUserId: (widget.currentUserId ?? '').trim(),
+      receivedByUserEmail: (widget.currentUserEmail ?? '').trim(),
+    );
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Pachetul "${packageAfterReception.name}" a fost receptionat.',
+        ),
+      ),
+    );
+    return;
+/*
+    if (pkg == null) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pachetul nu mai există. Notificarea a fost închisă.'),
+        ),
+      );
+      return;
+    }
+
+    if (pkg.status != ToolPackageStatus.inAsteptareReceptie) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pachetul nu mai este în așteptare recepție (status: ${pkg.status.label}).',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final now = DateTime.now();
+    final updatedPackage = pkg.copyWith(
+      status: ToolPackageStatus.receptionat,
+      updatedAt: now,
+    );
+    await _packagesService.upsertPackage(updatedPackage);
+    await _appendPackageMovement(
+      pkg: updatedPackage,
+      eventType: ToolPackageMovementEventType.receptie,
+      teamId: targetTeamId,
+      teamName: notification.targetTeamName,
+      notes: 'Recepție confirmată în aplicație.',
+    );
+    await _markNotificationProcessed(
+      notification,
+      receivedAt: now,
+      receivedByUserId: (widget.currentUserId ?? '').trim(),
+      receivedByUserEmail: (widget.currentUserEmail ?? '').trim(),
+    );
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Pachetul "${updatedPackage.name}" a fost receptionat.'),
+      ),
+    );
+*/
+  }
+
+  Future<void> _confirmWithdrawalFromNotification(
+    ToolPackageNotification notification,
+  ) async {
+    if (notification.eventType.trim() != 'retragere_pachet') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Tip notificare invalid pentru confirmarea retragerii.'),
+        ),
+      );
+      return;
+    }
+
+    final targetTeamId = notification.targetTeamId.trim();
+    final currentTeamId = _currentUserTeamId.trim();
+    if (currentTeamId.isEmpty ||
+        targetTeamId.isEmpty ||
+        currentTeamId != targetTeamId) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Confirmarea retragerii este permisa doar echipei tinta.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final pkg = _packageById(notification.packageId);
+    if (pkg == null) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pachetul nu mai exista. Notificarea a fost inchisa.'),
+        ),
+      );
+      return;
+    }
+
+    if (pkg.status != ToolPackageStatus.inAsteptareRetragere) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Pachetul nu mai este in asteptare retragere (status: ${pkg.status.label}).',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (pkg.assignedTeamId.trim() != targetTeamId) {
+      await _markNotificationProcessed(notification);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Pachetul nu mai este alocat echipei tinta din notificare.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final confirmedAt = DateTime.now();
+    final previousTeamId = pkg.assignedTeamId.trim();
+    final previousTeamName = pkg.assignedTeamName.trim();
+    final updatedPackage = pkg.copyWith(
+      status: ToolPackageStatus.disponibil,
+      assignedTeamId: '',
+      assignedTeamName: '',
+      clearAssignedAt: true,
+      assignedByUserId: '',
+      assignedByUserEmail: '',
+      updatedAt: confirmedAt,
+    );
+    await _packagesService.upsertPackage(updatedPackage);
+    await _appendPackageMovement(
+      pkg: updatedPackage,
+      eventType: ToolPackageMovementEventType.retragereConfirmata,
+      teamId: previousTeamId,
+      teamName: previousTeamName,
+      notes: 'Retragere confirmata in aplicatie.',
+    );
+    await _markNotificationProcessed(
+      notification,
+      receivedAt: confirmedAt,
+      receivedByUserId: (widget.currentUserId ?? '').trim(),
+      receivedByUserEmail: (widget.currentUserEmail ?? '').trim(),
+    );
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Pachetul "${updatedPackage.name}" a fost retras.'),
+      ),
+    );
+  }
+
+  Future<void> _openPackageHistory(ToolPackageRecord pkg) async {
+    final events = await _packagesService.listMovementEvents(pkg.id);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Istoric pachet: ${pkg.name}'),
+        content: SizedBox(
+          width: 760,
+          child: events.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text('Nu exista evenimente pentru acest pachet.'),
+                  ),
+                )
+              : ListView.separated(
+                  primary: false,
+                  shrinkWrap: true,
+                  itemCount: events.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final row = events[index];
+                    final user = row.performedByUserEmail.trim().isEmpty
+                        ? '-'
+                        : row.performedByUserEmail.trim();
+                    final team =
+                        row.teamName.trim().isEmpty ? '-' : row.teamName.trim();
+                    return ListTile(
+                      dense: true,
+                      title: Text(
+                        '${_dateTimeLabel(row.eventDate)} - ${row.eventType.label}',
+                      ),
+                      subtitle: Text(
+                        'Echipa: $team\n'
+                        'Utilizator: $user'
+                        '${row.notes.trim().isEmpty ? '' : '\nObs: ${row.notes.trim()}'}',
+                      ),
+                      isThreeLine: true,
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Închide'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final filtered = _filteredPackages;
+    final teamNotifications = _teamNotifications;
+    final toolById = <String, ToolInventoryItem>{
+      for (final item in _tools) item.id: item,
+    };
+    final toolByCode = <String, ToolInventoryItem>{
+      for (final item in _tools)
+        if (item.inventoryCode.trim().isNotEmpty)
+          item.inventoryCode.trim().toLowerCase(): item,
+    };
+
+    return Scaffold(
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Caută pachet / sculă / observații...',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon:
+                              _searchController.text.trim().isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear),
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() {});
+                                      },
+                                    )
+                                  : null,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                            horizontal: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: (_lookupFallbackReason ?? '').isNotEmpty
+                          ? 'Reîncarcă (fallback: $_lookupFallbackReason)'
+                          : 'Reîncarcă',
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: teamNotifications.isEmpty
+                    ? Text(
+                        _currentUserTeamId.trim().isEmpty
+                            ? 'Notificari echipa: indisponibile (utilizator fara echipa asociata).'
+                            : 'Notificari echipa: nu exista notificari noi.',
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Notificari echipa (${teamNotifications.length})',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          ...teamNotifications.take(5).map((item) {
+                            final pkg = _packageById(item.packageId);
+                            final isReceptionEvent =
+                                item.eventType == 'atribuire_pachet' ||
+                                    item.eventType == 'mutare_pachet';
+                            final canReceive = isReceptionEvent &&
+                                pkg != null &&
+                                pkg.status ==
+                                    ToolPackageStatus.inAsteptareReceptie &&
+                                pkg.assignedTeamId.trim() ==
+                                    _currentUserTeamId.trim();
+                            final isWithdrawalEvent =
+                                item.eventType == 'retragere_pachet';
+                            final canConfirmWithdrawal = isWithdrawalEvent &&
+                                pkg != null &&
+                                pkg.status ==
+                                    ToolPackageStatus.inAsteptareRetragere &&
+                                pkg.assignedTeamId.trim() ==
+                                    _currentUserTeamId.trim();
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${_dateTimeLabel(item.createdAt)} - ${item.message}'
+                                    '${pkg == null ? '\nPachet indisponibil.' : '\nStatus pachet: ${pkg.status.label}'}',
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      if (isReceptionEvent)
+                                        FilledButton(
+                                          onPressed: canReceive
+                                              ? () =>
+                                                  _receivePackageFromNotification(
+                                                      item)
+                                              : null,
+                                          child: const Text('Receptioneaza'),
+                                        ),
+                                      if (isWithdrawalEvent)
+                                        OutlinedButton(
+                                          onPressed: canConfirmWithdrawal
+                                              ? () =>
+                                                  _confirmWithdrawalFromNotification(
+                                                    item,
+                                                  )
+                                              : null,
+                                          child:
+                                              const Text('Confirma retragerea'),
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+              ),
+            ),
+            Expanded(
+              child: filtered.isEmpty
+                  ? const Center(child: Text('Nu exista pachete scule.'))
+                  : ListView.separated(
+                      itemCount: filtered.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final row = filtered[index];
+                        var availableCount = 0;
+                        var unavailableCount = 0;
+                        final preview = <String>[];
+                        final refs = _packageToolRefs(row);
+                        for (final ref in refs) {
+                          final tool =
+                              _toolByReference(ref, toolById, toolByCode);
+                          if (tool == null) {
+                            if (preview.length < 6) {
+                              preview.add('Lipsa din inventar (ref: $ref)');
+                            }
+                            continue;
+                          }
+                          if (tool.status == ToolInventoryStatus.disponibila) {
+                            availableCount += 1;
+                          } else {
+                            unavailableCount += 1;
+                          }
+                          if (preview.length < 6) {
+                            if (tool.status ==
+                                ToolInventoryStatus.disponibila) {
+                              preview.add('${tool.name} • Disponibila');
+                            } else {
+                              preview
+                                  .add('${tool.name} • ${tool.status.label}');
+                            }
+                          }
+                        }
+                        final missingCount =
+                            refs.length - availableCount - unavailableCount;
+                        final assignedTeam = row.assignedTeamName.trim().isEmpty
+                            ? '-'
+                            : row.assignedTeamName.trim();
+                        final assignedAt = _dateLabel(row.assignedAt);
+                        return Card(
+                          child: ListTile(
+                            title: Text(row.name),
+                            subtitle: Text(
+                              'Scule in pachet: ${refs.length} | '
+                              'Disponibile: $availableCount | '
+                              'Indisponibile: $unavailableCount | '
+                              'Lipsa: $missingCount\n'
+                              'Status pachet: ${row.status.label}\n'
+                              'Atribuit echipei: $assignedTeam | Data: $assignedAt\n'
+                              '${preview.isEmpty ? '-' : preview.join('\n')}'
+                              '${row.notes.trim().isEmpty ? '' : '\nObs: ${row.notes.trim()}'}',
+                            ),
+                            isThreeLine: false,
+                            trailing: Wrap(
+                              spacing: 2,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Editeaza',
+                                  onPressed: () => _openEditor(row),
+                                  icon: const Icon(Icons.edit_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: 'Șterge',
+                                  onPressed: () => _delete(row),
+                                  icon: const Icon(Icons.delete_outline),
+                                ),
+                                IconButton(
+                                  tooltip: 'Atribuie echipei',
+                                  onPressed: () => _assignPackage(row),
+                                  icon:
+                                      const Icon(Icons.assignment_ind_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: 'Initiaza retragere',
+                                  onPressed: row.status !=
+                                          ToolPackageStatus.receptionat
+                                      ? null
+                                      : () => _initiatePackageWithdrawal(row),
+                                  icon: const Icon(
+                                      Icons.assignment_return_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: 'Muta pachet catre alta echipa',
+                                  onPressed: row.status !=
+                                          ToolPackageStatus.receptionat
+                                      ? null
+                                      : () => _initiatePackageMove(row),
+                                  icon: const Icon(Icons.swap_horiz_outlined),
+                                ),
+                                IconButton(
+                                  tooltip:
+                                      'Genereaza PV predare-primire pachet',
+                                  onPressed: () =>
+                                      _generatePackageHandover(row),
+                                  icon:
+                                      const Icon(Icons.picture_as_pdf_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: 'Istoric pachet',
+                                  onPressed: () => _openPackageHistory(row),
+                                  icon: const Icon(Icons.history),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openEditor,
+        icon: const Icon(Icons.add),
+        label: const Text('Adauga pachet'),
+      ),
+    );
+  }
+}
+
+class _ToolPackageEditorDialog extends StatefulWidget {
+  const _ToolPackageEditorDialog({
+    required this.tools,
+    this.existing,
+  });
+
+  final List<ToolInventoryItem> tools;
+  final ToolPackageRecord? existing;
+
+  @override
+  State<_ToolPackageEditorDialog> createState() =>
+      _ToolPackageEditorDialogState();
+}
+
+class _ToolPackageEditorDialogState extends State<_ToolPackageEditorDialog> {
+  late final TextEditingController _nameCtrl =
+      TextEditingController(text: widget.existing?.name ?? '');
+  late final TextEditingController _notesCtrl =
+      TextEditingController(text: widget.existing?.notes ?? '');
+  late final TextEditingController _toolSearchCtrl = TextEditingController();
+  final Set<String> _selectedToolIds = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    final byId = <String, ToolInventoryItem>{
+      for (final item in widget.tools) item.id: item,
+    };
+    final byCode = <String, ToolInventoryItem>{
+      for (final item in widget.tools)
+        if (item.inventoryCode.trim().isNotEmpty)
+          item.inventoryCode.trim().toLowerCase(): item,
+    };
+    final existing = widget.existing;
+    if (existing == null) return;
+    final refs = existing.toolInventoryCodes.isNotEmpty
+        ? existing.toolInventoryCodes
+        : existing.toolIds;
+    for (final ref in refs) {
+      final key = ref.trim();
+      if (key.isEmpty) continue;
+      final tool = byId[key] ?? byCode[key.toLowerCase()];
+      if (tool != null) {
+        _selectedToolIds.add(tool.id);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _notesCtrl.dispose();
+    _toolSearchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<ToolInventoryItem> get _filteredTools {
+    final query = _toolSearchCtrl.text.trim().toLowerCase();
+    if (query.isEmpty) return widget.tools;
+    return widget.tools.where((item) {
+      final name = item.name.toLowerCase();
+      final code = item.inventoryCode.toLowerCase();
+      final serial = item.serialNumber.toLowerCase();
+      return name.contains(query) ||
+          code.contains(query) ||
+          serial.contains(query);
+    }).toList(growable: false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final toolById = {
+      for (final item in widget.tools) item.id: item,
+    };
+    final missingIds = _selectedToolIds
+        .where((id) => !toolById.containsKey(id))
+        .toList(growable: false);
+    final unavailableIds = _selectedToolIds.where((id) {
+      final tool = toolById[id];
+      if (tool == null) return false;
+      return tool.status != ToolInventoryStatus.disponibila;
+    }).toList(growable: false);
+    final filtered = _filteredTools;
+    final selectedTools = _selectedToolIds
+        .map((id) => toolById[id])
+        .whereType<ToolInventoryItem>()
+        .toList(growable: false);
+    final unavailableSelected = selectedTools
+        .where((item) => item.status != ToolInventoryStatus.disponibila)
+        .toList(growable: false);
+    final availableForQuickAdd = widget.tools
+        .where((item) => !_selectedToolIds.contains(item.id))
+        .toList(growable: false);
+
+    return AlertDialog(
+      title: Text(
+        widget.existing == null
+            ? 'Adauga pachet scule'
+            : 'Editeaza pachet scule',
+      ),
+      content: SizedBox(
+        width: 760,
+        child: SingleChildScrollView(
+          primary: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _nameCtrl,
+                decoration: const InputDecoration(labelText: 'Nume pachet'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _notesCtrl,
+                minLines: 2,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: 'Observatii'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _toolSearchCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Filtreaza lista de scule (denumire/cod/serie)',
+                  prefixIcon: Icon(Icons.search),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Adaugare rapida scula',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Autocomplete<ToolInventoryItem>(
+                displayStringForOption: (option) => option.name,
+                optionsBuilder: (textEditingValue) {
+                  final query = textEditingValue.text.trim().toLowerCase();
+                  if (query.length < 2) {
+                    return const Iterable<ToolInventoryItem>.empty();
+                  }
+                  return availableForQuickAdd.where((item) {
+                    final name = item.name.toLowerCase();
+                    final code = item.inventoryCode.toLowerCase();
+                    final serial = item.serialNumber.toLowerCase();
+                    return name.startsWith(query) ||
+                        name.contains(query) ||
+                        code.startsWith(query) ||
+                        serial.startsWith(query);
+                  });
+                },
+                onSelected: (item) {
+                  setState(() {
+                    _selectedToolIds.add(item.id);
+                  });
+                },
+                fieldViewBuilder: (
+                  context,
+                  textEditingController,
+                  focusNode,
+                  onFieldSubmitted,
+                ) {
+                  return TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: textEditingController,
+                    focusNode: focusNode,
+                    decoration: const InputDecoration(
+                      hintText: 'Tasteaza minim 2 litere si selecteaza scula',
+                      prefixIcon: Icon(Icons.add_circle_outline),
+                    ),
+                  );
+                },
+                optionsViewBuilder: (context, onSelected, options) {
+                  final list = options.toList(growable: false);
+                  return Align(
+                    alignment: Alignment.topLeft,
+                    child: Material(
+                      elevation: 4,
+                      borderRadius: BorderRadius.circular(8),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxHeight: 220,
+                          maxWidth: 620,
+                        ),
+                        child: ListView.builder(
+                          padding: EdgeInsets.zero,
+                          itemCount: list.length,
+                          itemBuilder: (context, index) {
+                            final item = list[index];
+                            return ListTile(
+                              dense: true,
+                              title: Text(item.name),
+                              subtitle: Text(
+                                'Cod inv.: ${item.inventoryCode.isEmpty ? '-' : item.inventoryCode} | '
+                                'Serie: ${item.serialNumber.isEmpty ? '-' : item.serialNumber} | '
+                                'Status: ${item.status.label}',
+                              ),
+                              onTap: () => onSelected(item),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+              if (missingIds.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Scule lipsa din inventar: ${missingIds.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              if (unavailableIds.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Scule cu status indisponibil in pachet: ${unavailableIds.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              if (selectedTools.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Scule selectate in pachet (${_selectedToolIds.length})',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  constraints: const BoxConstraints(maxHeight: 180),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Theme.of(context).dividerColor),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: ListView.builder(
+                    primary: false,
+                    itemCount: selectedTools.length,
+                    itemBuilder: (context, index) {
+                      final item = selectedTools[index];
+                      return ListTile(
+                        dense: true,
+                        title: Text(item.name),
+                        subtitle: Text(
+                          'Status: ${item.status.label} | '
+                          'Cod inv.: ${item.inventoryCode.isEmpty ? '-' : item.inventoryCode}',
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Elimina din pachet',
+                          onPressed: () {
+                            setState(() {
+                              _selectedToolIds.remove(item.id);
+                            });
+                          },
+                          icon: const Icon(Icons.remove_circle_outline),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              if (unavailableSelected.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Atentie: unele scule selectate sunt indisponibile in inventar.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 4),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 320),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Theme.of(context).dividerColor),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: filtered.isEmpty
+                    ? const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(12),
+                          child: Text(
+                              'Nu exista scule care sa corespunda cautarii.'),
+                        ),
+                      )
+                    : ListView.builder(
+                        primary: false,
+                        itemCount: filtered.length,
+                        itemBuilder: (context, index) {
+                          final item = filtered[index];
+                          final selected = _selectedToolIds.contains(item.id);
+                          return CheckboxListTile(
+                            value: selected,
+                            title: Text(item.name),
+                            subtitle: Text(
+                              'Cod inv.: ${item.inventoryCode.isEmpty ? '-' : item.inventoryCode} | '
+                              'Serie: ${item.serialNumber.isEmpty ? '-' : item.serialNumber} | '
+                              'Status: ${item.status.label}',
+                            ),
+                            onChanged: (value) {
+                              setState(() {
+                                if (value == true) {
+                                  _selectedToolIds.add(item.id);
+                                } else {
+                                  _selectedToolIds.remove(item.id);
+                                }
+                              });
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _nameCtrl.text.trim();
+            if (name.isEmpty) return;
+            final now = DateTime.now();
+            final ids = _selectedToolIds.toList(growable: false);
+            ids.sort((a, b) {
+              final aName = toolById[a]?.name ?? a;
+              final bName = toolById[b]?.name ?? b;
+              return aName.toLowerCase().compareTo(bName.toLowerCase());
+            });
+            final inventoryCodes = ids.map((id) {
+              final code = toolById[id]?.inventoryCode.trim() ?? '';
+              return code.isEmpty ? id : code;
+            }).toList(growable: false);
+            Navigator.of(context).pop(
+              ToolPackageRecord(
+                id: widget.existing?.id ??
+                    'tool-package-${now.microsecondsSinceEpoch}',
+                name: name,
+                notes: _notesCtrl.text.trim(),
+                toolIds: ids,
+                toolInventoryCodes: inventoryCodes,
+                status: widget.existing?.status ?? ToolPackageStatus.disponibil,
+                assignedTeamId: widget.existing?.assignedTeamId ?? '',
+                assignedTeamName: widget.existing?.assignedTeamName ?? '',
+                assignedAt: widget.existing?.assignedAt,
+                assignedByUserId: widget.existing?.assignedByUserId ?? '',
+                assignedByUserEmail: widget.existing?.assignedByUserEmail ?? '',
+                createdAt: widget.existing?.createdAt ?? now,
+                updatedAt: now,
+              ),
+            );
+          },
+          child: const Text('Salveaza'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PackageToolIntegrity {
+  const _PackageToolIntegrity({
+    required this.available,
+    required this.unavailable,
+    required this.missing,
+  });
+
+  final int available;
+  final int unavailable;
+  final int missing;
+
+  bool get hasIssues => unavailable > 0 || missing > 0;
+}
+
+class _PackageAssignmentValidation {
+  const _PackageAssignmentValidation.valid()
+      : isValid = true,
+        message = '';
+
+  const _PackageAssignmentValidation.invalid(this.message) : isValid = false;
+
+  final bool isValid;
+  final String message;
+}
+
+enum _ToolPackageOperationType {
+  predare,
+  retragere;
+
+  String get value {
+    switch (this) {
+      case _ToolPackageOperationType.predare:
+        return 'predare';
+      case _ToolPackageOperationType.retragere:
+        return 'retragere';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case _ToolPackageOperationType.predare:
+        return 'Predare';
+      case _ToolPackageOperationType.retragere:
+        return 'Retur / Retragere';
+    }
+  }
+}

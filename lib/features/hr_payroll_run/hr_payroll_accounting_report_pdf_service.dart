@@ -1,0 +1,251 @@
+import '../../core/pdf/pdf_font_helper.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import 'hr_payroll_accounting_report_models.dart';
+
+class HrPayrollAccountingReportPdfService {
+  const HrPayrollAccountingReportPdfService._();
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required HrPayrollAccountingReport report,
+    String generatedByLabel = '',
+    String outputDirectory = '',
+  }) async {
+    await PdfFontHelper.initialize();
+    final doc = pw.Document(theme: PdfFontHelper.theme);
+
+    String textOrDash(String value) {
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? '-' : trimmed;
+    }
+
+    String dateTimeLabel(DateTime? value) {
+      if (value == null) return '-';
+      final d = value.day.toString().padLeft(2, '0');
+      final m = value.month.toString().padLeft(2, '0');
+      final y = value.year.toString().padLeft(4, '0');
+      final hh = value.hour.toString().padLeft(2, '0');
+      final mm = value.minute.toString().padLeft(2, '0');
+      return '$d.$m.$y $hh:$mm';
+    }
+
+    String monthLabel(DateTime value) =>
+        '${value.month.toString().padLeft(2, '0')}.${value.year.toString().padLeft(4, '0')}';
+
+    String money(dynamic raw) {
+      final value = raw is num
+          ? raw.toDouble()
+          : double.tryParse((raw ?? '').toString().replaceAll(',', '.')) ?? 0;
+      return value.toStringAsFixed(2);
+    }
+
+    pw.Widget infoLine(String label, String value) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 4),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: 170,
+              child: pw.Text(
+                label,
+                style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              ),
+            ),
+            pw.Expanded(child: pw.Text(textOrDash(value))),
+          ],
+        ),
+      );
+    }
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.all(24),
+        build: (_) => [
+          pw.Text(
+            'Centralizator salarizare contabilitate',
+            style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Container(
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: PdfColors.grey400),
+              borderRadius: pw.BorderRadius.circular(6),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                infoLine('Luna salarizare', monthLabel(report.payrollMonth)),
+                infoLine('Status document', report.status),
+                infoLine('Data generarii', dateTimeLabel(report.generatedAt)),
+                infoLine(
+                  'Generat de',
+                  generatedByLabel.isNotEmpty
+                      ? generatedByLabel
+                      : report.generatedByUserId,
+                ),
+                infoLine('Jurisdictie', report.jurisdiction),
+                infoLine('Număr angajați', report.employeeCount.toString()),
+                infoLine('Moneda', report.currency),
+                infoLine(
+                  'Observații',
+                  report.notes.trim().isEmpty ? '-' : report.notes.trim(),
+                ),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 12),
+          pw.Text(
+            'Centralizator pe angajați',
+            style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 6),
+          pw.TableHelper.fromTextArray(
+            headerStyle: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 8,
+            ),
+            cellStyle: const pw.TextStyle(fontSize: 8),
+            headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
+            cellPadding: const pw.EdgeInsets.symmetric(
+              horizontal: 4,
+              vertical: 4,
+            ),
+            headers: const [
+              'Angajat',
+              'Brut total',
+              'CAS',
+              'CASS',
+              'Impozit',
+              'Retineri',
+              'Recuperari avans',
+              'Popriri rezervate',
+              'Net final',
+            ],
+            columnWidths: <int, pw.TableColumnWidth>{
+              0: const pw.FlexColumnWidth(2.8),
+              1: const pw.FlexColumnWidth(1.1),
+              2: const pw.FlexColumnWidth(1),
+              3: const pw.FlexColumnWidth(1),
+              4: const pw.FlexColumnWidth(1),
+              5: const pw.FlexColumnWidth(1),
+              6: const pw.FlexColumnWidth(1.2),
+              7: const pw.FlexColumnWidth(1.2),
+              8: const pw.FlexColumnWidth(1.1),
+            },
+            headerAlignments: <int, pw.Alignment>{
+              0: pw.Alignment.centerLeft,
+              1: pw.Alignment.centerRight,
+              2: pw.Alignment.centerRight,
+              3: pw.Alignment.centerRight,
+              4: pw.Alignment.centerRight,
+              5: pw.Alignment.centerRight,
+              6: pw.Alignment.centerRight,
+              7: pw.Alignment.centerRight,
+              8: pw.Alignment.centerRight,
+            },
+            cellAlignments: <int, pw.Alignment>{
+              0: pw.Alignment.centerLeft,
+              1: pw.Alignment.centerRight,
+              2: pw.Alignment.centerRight,
+              3: pw.Alignment.centerRight,
+              4: pw.Alignment.centerRight,
+              5: pw.Alignment.centerRight,
+              6: pw.Alignment.centerRight,
+              7: pw.Alignment.centerRight,
+              8: pw.Alignment.centerRight,
+            },
+            data: report.lineItems
+                .map(
+                  (item) => [
+                    textOrDash((item['employee_name'] ?? '').toString()),
+                    money(item['gross_total']),
+                    money(item['cas_amount']),
+                    money(item['cass_amount']),
+                    money(item['income_tax_amount']),
+                    money(item['deduction_total']),
+                    money(item['advance_recovery_total']),
+                    money(item['garnishment_reserved_total']),
+                    money(item['net_final']),
+                  ],
+                )
+                .toList(growable: false),
+          ),
+          pw.SizedBox(height: 12),
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Container(
+              width: 320,
+              padding: const pw.EdgeInsets.all(10),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey400),
+                borderRadius: pw.BorderRadius.circular(6),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  infoLine(
+                    'Total brut',
+                    '${money(report.totals['gross_total'])} ${report.currency}',
+                  ),
+                  infoLine(
+                    'Total CAS',
+                    '${money(report.totals['cas_amount'])} ${report.currency}',
+                  ),
+                  infoLine(
+                    'Total CASS',
+                    '${money(report.totals['cass_amount'])} ${report.currency}',
+                  ),
+                  infoLine(
+                    'Total impozit',
+                    '${money(report.totals['income_tax_amount'])} ${report.currency}',
+                  ),
+                  infoLine(
+                    'Total retineri',
+                    '${money(report.totals['deduction_total'])} ${report.currency}',
+                  ),
+                  infoLine(
+                    'Total recuperari avans',
+                    '${money(report.totals['advance_recovery_total'])} ${report.currency}',
+                  ),
+                  infoLine(
+                    'Total popriri rezervate',
+                    '${money(report.totals['garnishment_reserved_total'])} ${report.currency}',
+                  ),
+                  pw.Divider(color: PdfColors.grey400),
+                  infoLine(
+                    'Total net',
+                    '${money(report.totals['net_final'])} ${report.currency}',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final bytes = await doc.save();
+    final fileName = _fileName(report.payrollMonth);
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: bytes,
+      fileName: fileName,
+      category: PdfDocumentCategory.hrAccountingReports,
+      outputDirectory: outputDirectory,
+    );
+  }
+
+  static String _fileName(DateTime payrollMonth) {
+    final monthKey =
+        '${payrollMonth.year.toString().padLeft(4, '0')}-${payrollMonth.month.toString().padLeft(2, '0')}';
+    return 'centralizator_payroll_contabilitate_$monthKey.pdf';
+  }
+}

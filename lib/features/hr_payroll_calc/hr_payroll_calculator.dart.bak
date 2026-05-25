@@ -1,0 +1,571 @@
+import '../hr_core/hr_employee_catalog_service.dart';
+import '../hr_payroll_input/hr_payroll_input_catalog_service.dart';
+import '../hr_payroll_input/hr_payroll_input_snapshot_models.dart';
+import '../hr_rules/hr_payroll_rule_models.dart';
+import '../hr_rules/hr_payroll_rules_catalog_service.dart';
+import 'hr_payroll_calculation_models.dart';
+
+class HrPayrollCalculator {
+  const HrPayrollCalculator();
+
+  Future<HrPayrollCalculationResult?> calculatePayrollForEmployeeMonth({
+    required String employeeId,
+    required DateTime payrollMonth,
+    required HrPayrollInputCatalogService payrollInputCatalogService,
+    required HrEmployeeCatalogService employeeCatalogService,
+    required HrPayrollRulesCatalogService payrollRulesCatalogService,
+    HrPayrollCalculationResult? existing,
+    HrPayrollInputSnapshot? inputSnapshot,
+  }) async {
+    final month = DateTime(payrollMonth.year, payrollMonth.month, 1);
+    final snapshot = inputSnapshot ??
+        await payrollInputCatalogService.findSnapshotForEmployeeMonth(
+          employeeId: employeeId,
+          payrollMonth: month,
+        );
+    if (snapshot == null) return null;
+
+    final contract = await employeeCatalogService.resolveActiveContract(
+      employeeId: employeeId,
+      date: month,
+    );
+    if (contract == null) return null;
+
+    final salaryTaxRule =
+        await payrollRulesCatalogService.resolveActiveRuleForPayrollMonth(
+      jurisdiction: contract.payrollRuleJurisdiction,
+      scope: 'payroll',
+      ruleType: 'salary_tax',
+      payrollMonth: month,
+    );
+    final mealTicketRule =
+        await payrollRulesCatalogService.resolveActiveRuleForPayrollMonth(
+      jurisdiction: contract.payrollRuleJurisdiction,
+      scope: 'meal_ticket',
+      ruleType: 'meal_ticket',
+      payrollMonth: month,
+    );
+
+    return _calculateFromSnapshot(
+      snapshot: snapshot,
+      salaryTaxRule: salaryTaxRule,
+      mealTicketRule: mealTicketRule,
+      existing: existing,
+    );
+  }
+
+  HrPayrollCalculationResult _calculateFromSnapshot({
+    required HrPayrollInputSnapshot snapshot,
+    required HrPayrollRuleVersion? salaryTaxRule,
+    required HrPayrollRuleVersion? mealTicketRule,
+    HrPayrollCalculationResult? existing,
+  }) {
+    final notes = <String>[];
+    final effectiveSalaryTaxRule = salaryTaxRule ??
+        HrPayrollRuleSeed.fallbackRoRuleForMonth(
+          scope: 'payroll',
+          ruleType: 'salary_tax',
+          payrollMonth: snapshot.payrollMonth,
+        );
+    final salaryPayload =
+        effectiveSalaryTaxRule?.rulePayload ?? const <String, dynamic>{};
+    final casPercent = _asDouble(salaryPayload['employee_cas_percent']);
+    final cassPercent = _asDouble(salaryPayload['employee_cass_percent']);
+    final incomeTaxPercent = _asDouble(salaryPayload['income_tax_percent']);
+    final employerCamPercent = _asDouble(salaryPayload['employer_cam_percent']);
+    final mealTicketPayload =
+        mealTicketRule?.rulePayload ?? const <String, dynamic>{};
+    final mealTicketFiscalTreatment = _asString(
+      mealTicketPayload['fiscal_treatment'],
+    ).isNotEmpty
+        ? _asString(mealTicketPayload['fiscal_treatment'])
+        : _asString(snapshot.sourceRefs['meal_ticket_fiscal_treatment']);
+    final mealTicketDailyCapRon = _asDouble(mealTicketPayload['daily_cap_ron']);
+
+    final grossBaseSalary = snapshot.baseSalaryGross;
+    final grossBonusesTaxable = _sumEntries(
+      snapshot.bonusEntries,
+      includeIf: (row) =>
+          !_isExplicitlyNonTaxable(row['taxable_mode']) &&
+          _asString(row['type']).toLowerCase() != 'non_taxable_bonus',
+    );
+    final grossBonusesNonTaxable = _sumEntries(
+      snapshot.bonusEntries,
+      includeIf: (row) => _isExplicitlyNonTaxable(row['taxable_mode']),
+    );
+
+    final grossAllowancesTaxable = _sumEntries(
+      snapshot.allowanceEntries,
+      includeIf: (row) =>
+          !_isAdvanceEntry(row) &&
+          !_isExplicitlyNonTaxable(row['taxable_mode']),
+    );
+    final grossNonTaxableAllowances = _sumEntries(
+      snapshot.allowanceEntries,
+      includeIf: (row) =>
+          !_isAdvanceEntry(row) && _isExplicitlyNonTaxable(row['taxable_mode']),
+    );
+
+    final advanceRecoveryTotal = _sumEntries(
+      snapshot.allowanceEntries,
+      includeIf: _isAdvanceEntry,
+    );
+    final mealTickets = <String, dynamic>{
+      'enabled': snapshot.mealTicketsEnabled,
+      'calculation_mode': snapshot.mealTicketCalculationMode,
+      'monthly_budget': snapshot.mealTicketsMonthlyBudget,
+      'configured_eligible_days': snapshot.mealTicketConfiguredEligibleDays,
+      'eligible_days': snapshot.mealTicketEligibleDays,
+      'value_per_day': snapshot.mealTicketValuePerDay,
+      'total_value': snapshot.mealTicketsTotalValue,
+      'eligibility_rules': snapshot.mealTicketEligibilityRules,
+      'eligibility_breakdown': snapshot.mealTicketEligibilityBreakdown,
+      'fiscal_treatment': mealTicketFiscalTreatment.isNotEmpty
+          ? mealTicketFiscalTreatment
+          : 'exempt_cas_subject_cass_subject_income_tax_10pct',
+    };
+
+    final mealTicketLegalCapTotal =
+        snapshot.mealTicketsEnabled && mealTicketDailyCapRon > 0
+            ? mealTicketDailyCapRon * snapshot.mealTicketEligibleDays
+            : snapshot.mealTicketsTotalValue;
+    final mealTicketsWithinCapValue = snapshot.mealTicketsEnabled
+        ? snapshot.mealTicketsTotalValue.clamp(0.0, mealTicketLegalCapTotal)
+        : 0.0;
+    final mealTicketExcessTaxableAsSalary = snapshot.mealTicketsEnabled
+        ? (snapshot.mealTicketsTotalValue - mealTicketsWithinCapValue)
+            .clamp(0.0, double.infinity)
+        : 0.0;
+
+    // ── Taxe pe tichete de masa ────────────────────────────────────────────
+    // Conform OUG 115/2023 (vigoare ian 2024), Legii 296/2023 si OUG 89/2025:
+    // - Tichete SCUTITE de CAS (25%) in limita plafonului zilnic
+    // - Tichete SUPUSE CASS (10%) — retinut din salariul net (OUG 115/2023 Titlul V)
+    // - Tichete SUPUSE impozitului pe venit (10%) — retinut din salariul net
+    // Ambele taxe se retin de angajator si se vireaza la stat.
+    final mealTicketIncomeTaxAmount =
+        snapshot.mealTicketsEnabled && mealTicketsWithinCapValue > 0
+            ? mealTicketsWithinCapValue * (incomeTaxPercent / 100.0)
+            : 0.0;
+    final mealTicketCassAmount =
+        snapshot.mealTicketsEnabled && mealTicketsWithinCapValue > 0
+            ? mealTicketsWithinCapValue * (cassPercent / 100.0)
+            : 0.0;
+
+    final deductionTotal = _sumEntries(
+      snapshot.deductionEntries,
+      includeIf: (row) => _asString(row['type']).toLowerCase() != 'garnishment',
+      amountKey: 'amount_value',
+    );
+
+    // ── Auto-computed supplements ─────────────────────────────────────────
+    // Use 165.334 h/luna (norma legala standard, HG 146/2026)
+    final hourlyRate = grossBaseSalary > 0 ? grossBaseSalary / 165.334 : 0.0;
+
+    // Spor noapte 25% (Codul Muncii art. 123) – auto, daca nu exista bonus
+    // manual de tip noapte/night in bonusEntries
+    final hasManualNightBonus = snapshot.bonusEntries.any((row) {
+      final t = _asString(row['type']).toLowerCase();
+      return t.contains('noapte') || t.contains('night');
+    });
+    final nightWorkSupplementAmount =
+        (!hasManualNightBonus && snapshot.nightHours > 0)
+            ? snapshot.nightHours * hourlyRate * 0.25
+            : 0.0;
+
+    // Spor ore suplimentare 75% (Codul Muncii art. 122) – auto, daca nu
+    // exista bonus manual de tip ore suplimentare/overtime in bonusEntries
+    final hasManualOvertimeBonus = snapshot.bonusEntries.any((row) {
+      final t = _asString(row['type']).toLowerCase();
+      return t.contains('suplimentar') ||
+          t.contains('overtime') ||
+          t.contains('ore_sup');
+    });
+    final overtimeSupplementAmount =
+        (!hasManualOvertimeBonus && snapshot.overtimeHours > 0)
+            ? snapshot.overtimeHours * hourlyRate * 0.75
+            : 0.0;
+
+    final grossTotalTaxable = grossBaseSalary +
+        grossBonusesTaxable +
+        grossAllowancesTaxable +
+        nightWorkSupplementAmount +
+        overtimeSupplementAmount +
+        mealTicketExcessTaxableAsSalary;
+    final employeeCasAmount = grossTotalTaxable * (casPercent / 100.0);
+    final employeeCassAmount = grossTotalTaxable * (cassPercent / 100.0);
+    final employerCamAmount = grossTotalTaxable * (employerCamPercent / 100.0);
+    final taxableBaseAfterContributions =
+        grossTotalTaxable - employeeCasAmount - employeeCassAmount;
+    final personalDeductionAmount = _calculatePersonalDeduction(
+      grossTotalTaxable: grossTotalTaxable,
+      payload: salaryPayload,
+    );
+    final taxableBaseForIncomeTax =
+        (taxableBaseAfterContributions - personalDeductionAmount)
+            .clamp(0.0, double.infinity);
+    final incomeTaxAmount = taxableBaseForIncomeTax > 0
+        ? taxableBaseForIncomeTax * (incomeTaxPercent / 100.0)
+        : 0.0;
+    final netBeforeDeductions = grossTotalTaxable +
+        grossBonusesNonTaxable +
+        grossNonTaxableAllowances -
+        employeeCasAmount -
+        employeeCassAmount -
+        incomeTaxAmount;
+
+    // ── Popriri cu plafonare legala CPC art. 729 ──────────────────────────
+    // Baza de calcul = venitul lunar net (dupa CAS+CASS+impozit, inainte de
+    // retineri voluntare sau popriri)
+    final garnishmentEntries = snapshot.deductionEntries
+        .where(
+          (row) => _asString(row['type']).toLowerCase() == 'garnishment',
+        )
+        .toList();
+    final garnishmentResult = _calculateGarnishments(
+      entries: garnishmentEntries,
+      netBase: netBeforeDeductions,
+    );
+    final garnishmentReservedTotal = garnishmentResult['total'] as double;
+    final garnishmentCapApplied = garnishmentResult['capped'] as bool;
+
+    final netFinal = netBeforeDeductions -
+        deductionTotal -
+        advanceRecoveryTotal -
+        garnishmentReservedTotal -
+        mealTicketIncomeTaxAmount -
+        mealTicketCassAmount;
+
+    if (salaryTaxRule == null && effectiveSalaryTaxRule != null) {
+      notes.add(
+        'A lipsit regula activa salary_tax din repository; a fost aplicat fallback-ul legal standard RO pentru luna selectata.',
+      );
+    }
+    if (effectiveSalaryTaxRule == null) {
+      notes.add(
+        'Lipseste regula activa salary_tax; procentele CAS/CASS/impozit au fost tratate ca 0.',
+      );
+    }
+    if (personalDeductionAmount > 0) {
+      notes.add(
+        'Deducere personala aplicata: ${personalDeductionAmount.toStringAsFixed(2)} RON (OUG 89/2025); baza impozit redusa la ${taxableBaseForIncomeTax.toStringAsFixed(2)} RON.',
+      );
+    }
+    if (nightWorkSupplementAmount > 0) {
+      notes.add(
+        'Spor noapte calculat automat: ${nightWorkSupplementAmount.toStringAsFixed(2)} RON'
+        ' (${snapshot.nightHours.toStringAsFixed(1)}h × ${hourlyRate.toStringAsFixed(4)} RON/h × 25%,'
+        ' Codul Muncii art. 123). Daca sporul este deja inclus in salariu de baza, adaugati-l manual ca bonus tip "noapte" pentru a evita dubla calcul.',
+      );
+    }
+    if (overtimeSupplementAmount > 0) {
+      notes.add(
+        'Spor ore suplimentare calculat automat: ${overtimeSupplementAmount.toStringAsFixed(2)} RON'
+        ' (${snapshot.overtimeHours.toStringAsFixed(1)}h × ${hourlyRate.toStringAsFixed(4)} RON/h × 75%,'
+        ' Codul Muncii art. 122). Daca a fost acordata recuperare prin ore libere, setati overtimeHours=0 in snapshot.',
+      );
+    }
+    if (garnishmentCapApplied) {
+      notes.add(
+        'Popririle au fost PLAFONATE conform CPC art. 729; suma efectiv retinuta: ${garnishmentReservedTotal.toStringAsFixed(2)} RON'
+        ' (max 1/3 din net pentru creditori generali, max 1/2 pentru pensie/intretinere, max 1/2 total combinat).',
+      );
+    } else if (garnishmentReservedTotal > 0) {
+      notes.add(
+        'Popriri aplicate: ${garnishmentReservedTotal.toStringAsFixed(2)} RON (CPC art. 729).',
+      );
+    }
+    if (snapshot.mealTicketsTotalValue > 0) {
+      notes.add(
+        'Tichete de masa: ${snapshot.mealTicketsTotalValue.toStringAsFixed(2)} RON'
+        ' (${snapshot.mealTicketEligibleDays.toStringAsFixed(0)} zile × ${snapshot.mealTicketValuePerDay.toStringAsFixed(2)} RON/zi)'
+        ' - impozit venit ${mealTicketIncomeTaxAmount.toStringAsFixed(2)} RON (10%) + CASS ${mealTicketCassAmount.toStringAsFixed(2)} RON (10%) retinute din net'
+        ' (scutite CAS; CASS si impozit datorate conform OUG 115/2023; Legea 296/2023).',
+      );
+      if (mealTicketExcessTaxableAsSalary > 0) {
+        notes.add(
+          'Excedent tichete peste plafon legal: ${mealTicketExcessTaxableAsSalary.toStringAsFixed(2)} RON.'
+          ' Aceasta componenta a fost tratata ca avantaj salarial taxabil integral (CAS/CASS/impozit).',
+        );
+      }
+    }
+
+    final now = DateTime.now();
+    final medicalLeaveRule = HrPayrollRuleSeed.fallbackRoRuleForMonth(
+      scope: 'medical_leave',
+      ruleType: 'medical_leave',
+      payrollMonth: snapshot.payrollMonth,
+    );
+    final breakdown = <String, dynamic>{
+      'salary_tax_rule_id': effectiveSalaryTaxRule?.id ?? '',
+      'salary_tax_rule_source':
+          salaryTaxRule != null ? 'catalog' : 'seed_fallback',
+      'salary_tax_legal_basis': effectiveSalaryTaxRule?.legalBasis ?? '',
+      'salary_tax_percentages': <String, dynamic>{
+        'employee_cas_percent': casPercent,
+        'employee_cass_percent': cassPercent,
+        'income_tax_percent': incomeTaxPercent,
+        'employer_cam_percent': employerCamPercent,
+        'personal_deduction_amount': personalDeductionAmount,
+        'taxable_base_for_income_tax': taxableBaseForIncomeTax,
+      },
+      'gross_components': <String, dynamic>{
+        'base_salary_gross': grossBaseSalary,
+        'bonuses_taxable': grossBonusesTaxable,
+        'bonuses_non_taxable': grossBonusesNonTaxable,
+        'allowances_taxable': grossAllowancesTaxable,
+        'allowances_non_taxable': grossNonTaxableAllowances,
+        'night_work_supplement': nightWorkSupplementAmount,
+        'overtime_supplement': overtimeSupplementAmount,
+      },
+      'auto_computed_supplements': <String, dynamic>{
+        'hourly_rate_used': hourlyRate,
+        'night_work_hours': snapshot.nightHours,
+        'night_work_supplement_amount': nightWorkSupplementAmount,
+        'night_work_supplement_applied':
+            !hasManualNightBonus && snapshot.nightHours > 0,
+        'night_work_manual_bonus_detected': hasManualNightBonus,
+        'overtime_hours': snapshot.overtimeHours,
+        'overtime_supplement_amount': overtimeSupplementAmount,
+        'overtime_supplement_applied':
+            !hasManualOvertimeBonus && snapshot.overtimeHours > 0,
+        'overtime_manual_bonus_detected': hasManualOvertimeBonus,
+      },
+      'employer_costs': <String, dynamic>{
+        'employer_cam_amount': employerCamAmount,
+      },
+      'medical_leave_policy': <String, dynamic>{
+        'rule_id': medicalLeaveRule?.id ?? '',
+        'requires_admin_completion':
+            _asBool(medicalLeaveRule?.rulePayload['requires_admin_completion']),
+        'temporary_reduction_days': _asDouble(
+            medicalLeaveRule?.rulePayload['temporary_reduction_days']),
+        'episode_recalculation_cross_month_required': _asBool(
+          medicalLeaveRule
+              ?.rulePayload['episode_recalculation_cross_month_required'],
+        ),
+      },
+      'attendance_leave_inputs': <String, dynamic>{
+        'worked_hours': snapshot.workedHours,
+        'leave_hours_paid': snapshot.leaveHoursPaid,
+        'leave_hours_unpaid': snapshot.leaveHoursUnpaid,
+        'vacation_working_days': snapshot.vacationWorkingDays,
+        'medical_leave_working_days': snapshot.medicalLeaveWorkingDays,
+        'other_leave_working_days': snapshot.otherLeaveWorkingDays,
+      },
+      'meal_tickets': mealTickets,
+      'withholdings': <String, dynamic>{
+        'deduction_total': deductionTotal,
+        'advance_recovery_total': advanceRecoveryTotal,
+        'garnishment_reserved_total': garnishmentReservedTotal,
+        'meal_ticket_income_tax_amount': mealTicketIncomeTaxAmount,
+        'meal_ticket_cass_amount': mealTicketCassAmount,
+        'meal_ticket_legal_cap_total': mealTicketLegalCapTotal,
+        'meal_tickets_within_cap_value': mealTicketsWithinCapValue,
+        'meal_ticket_excess_taxable_as_salary': mealTicketExcessTaxableAsSalary,
+        'garnishment_cap_applied': garnishmentCapApplied,
+        'garnishment_net_base': garnishmentResult['net_base_used'],
+        'garnishment_absolute_max': garnishmentResult['absolute_max'],
+        'garnishment_details': garnishmentResult['details'],
+      },
+    };
+
+    return HrPayrollCalculationResult(
+      id: _buildCalculationId(snapshot.employeeId, snapshot.payrollMonth),
+      employeeId: snapshot.employeeId,
+      hrEmployeeProfileId: snapshot.hrEmployeeProfileId,
+      contractId: snapshot.contractId,
+      payrollMonth: snapshot.payrollMonth,
+      snapshotId: snapshot.id,
+      ruleVersionIds: snapshot.ruleVersionIds,
+      grossBaseSalary: grossBaseSalary,
+      grossBonusesTaxable: grossBonusesTaxable,
+      grossAllowancesTaxable: grossAllowancesTaxable,
+      grossTotalTaxable: grossTotalTaxable,
+      employeeCasAmount: employeeCasAmount,
+      employeeCassAmount: employeeCassAmount,
+      taxableBaseAfterContributions: taxableBaseAfterContributions,
+      incomeTaxAmount: incomeTaxAmount,
+      grossNonTaxableAllowances:
+          grossBonusesNonTaxable + grossNonTaxableAllowances,
+      deductionTotal: deductionTotal,
+      advanceRecoveryTotal: advanceRecoveryTotal,
+      garnishmentReservedTotal: garnishmentReservedTotal,
+      mealTicketsTotalValue: snapshot.mealTicketsTotalValue,
+      mealTicketIncomeTaxAmount: mealTicketIncomeTaxAmount,
+      mealTicketCassAmount: mealTicketCassAmount,
+      nightWorkSupplementAmount: nightWorkSupplementAmount,
+      overtimeSupplementAmount: overtimeSupplementAmount,
+      netBeforeDeductions: netBeforeDeductions,
+      netFinal: netFinal,
+      currency: snapshot.currency,
+      calculatedAt: now,
+      notes: notes.join(' '),
+      breakdown: breakdown,
+      sourceRefs: <String, dynamic>{
+        ...snapshot.sourceRefs,
+        'snapshot_id': snapshot.id,
+        'rule_version_ids': snapshot.ruleVersionIds,
+        'salary_tax_rule_id': effectiveSalaryTaxRule?.id ?? '',
+        'salary_tax_rule_source':
+            salaryTaxRule != null ? 'catalog' : 'seed_fallback',
+        'medical_leave_rule_id': medicalLeaveRule?.id ?? '',
+        'meal_tickets': mealTickets,
+      },
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    );
+  }
+
+  String buildCalculationId(String employeeId, DateTime payrollMonth) {
+    return _buildCalculationId(employeeId, payrollMonth);
+  }
+
+  String _buildCalculationId(String employeeId, DateTime payrollMonth) {
+    final monthKey =
+        '${payrollMonth.year.toString().padLeft(4, '0')}-${payrollMonth.month.toString().padLeft(2, '0')}';
+    return 'hr-payroll-calculation-${employeeId.trim()}-$monthKey';
+  }
+
+  double _calculatePersonalDeduction({
+    required double grossTotalTaxable,
+    required Map<String, dynamic> payload,
+  }) {
+    if (payload['employee_personal_deduction_supported'] != true) return 0.0;
+    final baseDeduction = _asDouble(payload['personal_deduction_base_ron']);
+    final threshold =
+        _asDouble(payload['personal_deduction_threshold_gross_ron']);
+    final maxFactor = _asDouble(payload['personal_deduction_max_gross_factor']);
+    if (baseDeduction <= 0 || threshold <= 0) return 0.0;
+    if (grossTotalTaxable <= threshold) return baseDeduction;
+    final maxGross = threshold * (maxFactor > 0 ? maxFactor : 3.0);
+    if (grossTotalTaxable >= maxGross) return 0.0;
+    return baseDeduction *
+        (maxGross - grossTotalTaxable) /
+        (maxGross - threshold);
+  }
+
+  /// Calculeaza suma popririle cu plafonare legala conform CPC art. 729.
+  ///
+  /// - Baza = venitul lunar net (dupa CAS + CASS + impozit).
+  /// - Plafon general:  max 1/3 din net (creditori generali).
+  /// - Plafon pensie/intretinere: max 1/2 din net.
+  /// - Plafon combinat (mai multi creditori): max 1/2 din net total.
+  /// - Popririle sunt aplicate in ordinea [legal_priority] crescator.
+  Map<String, dynamic> _calculateGarnishments({
+    required List<Map<String, dynamic>> entries,
+    required double netBase,
+  }) {
+    if (entries.isEmpty || netBase <= 0) {
+      return <String, dynamic>{
+        'total': 0.0,
+        'capped': false,
+        'net_base_used': netBase,
+        'absolute_max': 0.0,
+        'details': <Map<String, dynamic>>[],
+      };
+    }
+
+    // Max absolut conform CPC art. 729 alin. 3: 1/2 din net total combinat
+    final absoluteMax = netBase / 2.0;
+    double remainingCap = absoluteMax;
+    double totalApplied = 0.0;
+    bool anyCapped = false;
+    final details = <Map<String, dynamic>>[];
+
+    // Sortare dupa prioritate legala crescatoare
+    final sorted = [...entries]..sort(
+        (a, b) => _asInt(a['legal_priority']) - _asInt(b['legal_priority']),
+      );
+
+    for (final entry in sorted) {
+      if (remainingCap <= 0) {
+        details.add(<String, dynamic>{
+          ...entry,
+          'applied_amount': 0.0,
+          'capped': true,
+          'cap_reason': 'combined_half_net_exhausted',
+        });
+        anyCapped = true;
+        continue;
+      }
+
+      // Plafon individual: 1/2 pentru pensie/intretinere, 1/3 pentru rest
+      final capMode = _asString(entry['legal_cap_mode']).toLowerCase();
+      final individualMax =
+          (capMode == 'one_half') ? netBase / 2.0 : netBase / 3.0;
+
+      // Suma solicitata (fixa RON sau procent din net)
+      final double requested;
+      if (_asString(entry['amount_type']).toLowerCase() == 'percent') {
+        requested = netBase * (_asDouble(entry['amount_value']) / 100.0);
+      } else {
+        requested = _asDouble(entry['amount_value']);
+      }
+
+      final effectiveCap =
+          individualMax < remainingCap ? individualMax : remainingCap;
+      final applied = requested > effectiveCap ? effectiveCap : requested;
+
+      if (applied < requested) anyCapped = true;
+      remainingCap -= applied;
+      totalApplied += applied;
+
+      details.add(<String, dynamic>{
+        ...entry,
+        'applied_amount': applied,
+        'requested_amount': requested,
+        'capped': applied < requested,
+        'individual_cap': individualMax,
+      });
+    }
+
+    return <String, dynamic>{
+      'total': totalApplied,
+      'capped': anyCapped,
+      'net_base_used': netBase,
+      'absolute_max': absoluteMax,
+      'details': details,
+    };
+  }
+
+  double _sumEntries(
+    List<Map<String, dynamic>> rows, {
+    required bool Function(Map<String, dynamic> row) includeIf,
+    String amountKey = 'amount',
+  }) {
+    return rows.fold<double>(0, (sum, row) {
+      if (!includeIf(row)) return sum;
+      return sum + _asDouble(row[amountKey] ?? row['amount']);
+    });
+  }
+
+  bool _isExplicitlyNonTaxable(dynamic raw) {
+    final value = _asString(raw).toLowerCase();
+    return value == 'non_taxable' ||
+        value == 'netaxabil' ||
+        value == 'non-taxable';
+  }
+
+  bool _isAdvanceEntry(Map<String, dynamic> row) {
+    return _asString(row['type']).toLowerCase() == 'advance';
+  }
+
+  double _asDouble(dynamic raw) {
+    if (raw is num) return raw.toDouble();
+    return double.tryParse((raw ?? '').toString().replaceAll(',', '.')) ?? 0;
+  }
+
+  bool _asBool(dynamic raw) {
+    if (raw is bool) return raw;
+    final text = (raw ?? '').toString().trim().toLowerCase();
+    return text == 'true' || text == '1';
+  }
+
+  String _asString(dynamic raw) => (raw ?? '').toString().trim();
+
+  int _asInt(dynamic raw) {
+    if (raw is num) return raw.toInt();
+    return int.tryParse((raw ?? '').toString()) ?? 0;
+  }
+}

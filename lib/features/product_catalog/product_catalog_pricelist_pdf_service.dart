@@ -1,0 +1,667 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../core/pdf/pdf_font_helper.dart';
+import '../../core/pdf_document_branding.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'product_catalog_models.dart';
+
+class ProductCatalogPricelistPdfItem {
+  const ProductCatalogPricelistPdfItem({
+    required this.productName,
+    this.category = '',
+    this.brand = '',
+    this.model = '',
+    this.capacity = '',
+    this.sku = '',
+    this.commercialDescription = '',
+    this.priceLabel = 'Pret la cerere',
+    this.imagePath = '',
+    this.pdfReferenceLabel = '',
+  });
+
+  final String productName;
+  final String category;
+  final String brand;
+  final String model;
+  final String capacity;
+  final String sku;
+  final String commercialDescription;
+  final String priceLabel;
+  final String imagePath;
+  final String pdfReferenceLabel;
+}
+
+class ProductCatalogPricelistPdfService {
+  const ProductCatalogPricelistPdfService._();
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required PriceListRecord priceList,
+    required List<ProductCatalogPricelistPdfItem> items,
+    String outputDirectory = '',
+    bool saveAs = false,
+  }) async {
+    await PdfFontHelper.initialize();
+    final doc = pw.Document(theme: PdfFontHelper.theme);
+    final companyProfile = await repository.loadCompanyProfile();
+    final branding = DocumentBrandingData.fromCompanyProfile(companyProfile);
+    final generatedAt = DateTime.now();
+
+    String dateLabel(DateTime value) {
+      final d = value.day.toString().padLeft(2, '0');
+      final m = value.month.toString().padLeft(2, '0');
+      return '$d.$m.${value.year}';
+    }
+
+    pw.Widget infoChip(String label, String value) {
+      if (value.trim().isEmpty) {
+        return pw.SizedBox.shrink();
+      }
+      return pw.Container(
+        margin: const pw.EdgeInsets.only(right: 6, bottom: 6),
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: pw.BoxDecoration(
+          color: PdfColors.grey100,
+          borderRadius: pw.BorderRadius.circular(10),
+          border: pw.Border.all(color: PdfColors.grey300),
+        ),
+        child: pw.Text(
+          '$label: ${value.trim()}',
+          style: const pw.TextStyle(fontSize: 8.8),
+        ),
+      );
+    }
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(28),
+        build: (context) => [
+          buildClassicDocumentHeader(
+            branding: branding,
+            documentTitle: 'CATALOG / LISTA DE PRET',
+            template: companyProfile.pdfExportSettings.visualTemplate,
+            metadata: <MapEntry<String, String>>[
+              MapEntry<String, String>('Lista comerciala', priceList.name),
+              MapEntry<String, String>('Tip lista', priceList.scope.label),
+              MapEntry<String, String>('Data generare', dateLabel(generatedAt)),
+              MapEntry<String, String>('Produse incluse', '${items.length}'),
+            ],
+          ),
+          pw.SizedBox(height: 12),
+          if (priceList.notes.trim().isNotEmpty)
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(10),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.grey100,
+                borderRadius: pw.BorderRadius.circular(6),
+                border: pw.Border.all(color: PdfColors.grey300),
+              ),
+              child: pw.Text(
+                priceList.notes.trim(),
+                style: const pw.TextStyle(fontSize: 9.2),
+              ),
+            ),
+          if (priceList.notes.trim().isNotEmpty) pw.SizedBox(height: 10),
+          ...items.map((item) => _buildItemCard(item, infoChip)),
+        ],
+      ),
+    );
+
+    final fileName =
+        'catalog_${_sanitizeFileName(priceList.name)}_${generatedAt.year}${generatedAt.month.toString().padLeft(2, '0')}${generatedAt.day.toString().padLeft(2, '0')}.pdf';
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: await doc.save(),
+      fileName: fileName,
+      category: PdfDocumentCategory.other,
+      outputDirectory: outputDirectory,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static pw.Widget _buildItemCard(
+    ProductCatalogPricelistPdfItem item,
+    pw.Widget Function(String label, String value) infoChip,
+  ) {
+    final imageBytes = _readImageBytes(item.imagePath);
+    final description = item.commercialDescription.trim().isNotEmpty
+        ? item.commercialDescription.trim()
+        : 'Descriere comerciala indisponibila.';
+
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 12),
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey400),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          if (imageBytes != null) ...[
+            pw.Container(
+              width: 88,
+              height: 88,
+              alignment: pw.Alignment.center,
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey300),
+                borderRadius: pw.BorderRadius.circular(6),
+              ),
+              child: pw.Image(
+                pw.MemoryImage(imageBytes),
+                fit: pw.BoxFit.contain,
+              ),
+            ),
+            pw.SizedBox(width: 12),
+          ],
+          pw.Expanded(
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  item.productName.trim().isEmpty
+                      ? '-'
+                      : item.productName.trim(),
+                  style: pw.TextStyle(
+                    fontSize: 12,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 6),
+                pw.Wrap(
+                  children: [
+                    infoChip('Categorie', item.category),
+                    infoChip('Brand', item.brand),
+                    infoChip('Model', item.model),
+                    infoChip('Capacitate', item.capacity),
+                    infoChip('SKU', item.sku),
+                  ],
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  description,
+                  style: const pw.TextStyle(fontSize: 9.2),
+                ),
+                if (item.pdfReferenceLabel.trim().isNotEmpty) ...[
+                  pw.SizedBox(height: 6),
+                  pw.Text(
+                    'Referinta document: ${item.pdfReferenceLabel.trim()}',
+                    style: const pw.TextStyle(fontSize: 8.7),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          pw.SizedBox(width: 12),
+          pw.Container(
+            width: 112,
+            padding: const pw.EdgeInsets.all(10),
+            decoration: pw.BoxDecoration(
+              color: PdfColors.blue50,
+              borderRadius: pw.BorderRadius.circular(6),
+              border: pw.Border.all(color: PdfColors.blue200),
+            ),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  'Pret',
+                  style: pw.TextStyle(
+                    fontSize: 9,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+                pw.SizedBox(height: 4),
+                pw.Text(
+                  item.priceLabel.trim().isEmpty
+                      ? 'Pret la cerere'
+                      : item.priceLabel.trim(),
+                  style: pw.TextStyle(
+                    fontSize: 11,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Uint8List? _readImageBytes(String imagePath) {
+    final normalized = imagePath.trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+    try {
+      final file = File(normalized);
+      if (!file.existsSync()) {
+        return null;
+      }
+      return file.readAsBytesSync();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static String _sanitizeFileName(String raw) {
+    final normalized = raw.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '_');
+    return normalized.replaceAll(RegExp(r'[^a-z0-9_\-]'), '');
+  }
+
+  // ── Export Listă prețuri rapide (Pachete / Produse / Servicii) ─────────────
+
+  static Future<String> exportListaPreturiTab({
+    required AppDataRepository repository,
+    required String title,
+    required String capacityFilter,
+    required List<ListaPreturiPachetItem> pachete,
+    required List<ListaPreturiSingleItem> produse,
+    required List<ListaPreturiSingleItem> servicii,
+    required int mode, // 0=pachete, 1=produse, 2=servicii
+    bool saveAs = false,
+  }) async {
+    await PdfFontHelper.initialize();
+    final doc = pw.Document(theme: PdfFontHelper.theme);
+    final companyProfile = await repository.loadCompanyProfile();
+    final branding = DocumentBrandingData.fromCompanyProfile(companyProfile);
+    final generatedAt = DateTime.now();
+
+    String dateStr(DateTime v) =>
+        '${v.day.toString().padLeft(2, '0')}.${v.month.toString().padLeft(2, '0')}.${v.year}';
+
+    String modeLabel() {
+      if (mode == 0) return 'Pachete (Produs + Montaj)';
+      if (mode == 1) return 'Produse';
+      return 'Servicii';
+    }
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 28, vertical: 28),
+        build: (ctx) => [
+          buildClassicDocumentHeader(
+            branding: branding,
+            documentTitle: title.trim().isEmpty
+                ? 'LISTA DE PREȚURI'
+                : title.trim().toUpperCase(),
+            template: companyProfile.pdfExportSettings.visualTemplate,
+            metadata: <MapEntry<String, String>>[
+              MapEntry('Tip', modeLabel()),
+              if (capacityFilter.isNotEmpty)
+                MapEntry('Capacitate', capacityFilter),
+              MapEntry('Data', dateStr(generatedAt)),
+            ],
+          ),
+          pw.SizedBox(height: 14),
+          if (mode == 0) ..._buildPacheteSection(pachete)
+          else if (mode == 1) ..._buildSingleSection(produse, 'Produs')
+          else ..._buildSingleSection(servicii, 'Serviciu'),
+          pw.SizedBox(height: 10),
+          pw.Text(
+            'Prețuri exprimate cu TVA inclus. Valabile la data generării. '
+            'Prețul final poate varia în funcție de condițiile specifice.',
+            style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey500),
+          ),
+        ],
+      ),
+    );
+
+    final modeTag = mode == 0 ? 'pachete' : (mode == 1 ? 'produse' : 'servicii');
+    final capTag = capacityFilter.isEmpty ? '' : '_${capacityFilter.replaceAll(' ', '')}';
+    final fileName =
+        'lista_preturi_$modeTag${capTag}_${generatedAt.year}${generatedAt.month.toString().padLeft(2, '0')}${generatedAt.day.toString().padLeft(2, '0')}.pdf';
+
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: await doc.save(),
+      fileName: fileName,
+      category: PdfDocumentCategory.other,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static List<pw.Widget> _buildPacheteSection(
+      List<ListaPreturiPachetItem> pachete) {
+    return pachete.map((pkg) {
+      final totalPrice = pkg.productPrice + (pkg.servicePrice ?? 0);
+      final imageBytes = _readImageBytes(pkg.productImagePath);
+
+      return pw.Container(
+        margin: const pw.EdgeInsets.only(bottom: 12),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey400),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            // Header pachet
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 8),
+              decoration: const pw.BoxDecoration(
+                color: PdfColors.blue900,
+                borderRadius: pw.BorderRadius.only(
+                  topLeft: pw.Radius.circular(7),
+                  topRight: pw.Radius.circular(7),
+                ),
+              ),
+              child: pw.Row(
+                children: [
+                  pw.Text(
+                    'PACHET',
+                    style: pw.TextStyle(
+                      fontSize: 9,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                  if (pkg.capacity.isNotEmpty) ...[
+                    pw.SizedBox(width: 8),
+                    pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: pw.BoxDecoration(
+                        color: PdfColors.blue700,
+                        borderRadius: pw.BorderRadius.circular(4),
+                      ),
+                      child: pw.Text(
+                        pkg.capacity,
+                        style: pw.TextStyle(
+                          fontSize: 8,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                  pw.Spacer(),
+                  if (totalPrice > 0)
+                    pw.Text(
+                      'TOTAL: ${_fmtPrice(totalPrice)}',
+                      style: pw.TextStyle(
+                        fontSize: 12,
+                        fontWeight: pw.FontWeight.bold,
+                        color: PdfColors.white,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            // Rândul produsului
+            pw.Padding(
+              padding: const pw.EdgeInsets.fromLTRB(12, 10, 12, 6),
+              child: pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  if (imageBytes != null) ...[
+                    pw.Container(
+                      width: 64,
+                      height: 64,
+                      margin: const pw.EdgeInsets.only(right: 10),
+                      decoration: pw.BoxDecoration(
+                        border: pw.Border.all(color: PdfColors.grey300),
+                        borderRadius: pw.BorderRadius.circular(4),
+                      ),
+                      child: pw.Image(pw.MemoryImage(imageBytes),
+                          fit: pw.BoxFit.contain),
+                    ),
+                  ],
+                  pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text(
+                          pkg.productName,
+                          style: pw.TextStyle(
+                              fontSize: 11, fontWeight: pw.FontWeight.bold),
+                        ),
+                        if (pkg.productSubtitle.isNotEmpty)
+                          pw.Text(pkg.productSubtitle,
+                              style: const pw.TextStyle(
+                                  fontSize: 9, color: PdfColors.grey600)),
+                        if (pkg.productDescription.isNotEmpty)
+                          pw.Padding(
+                            padding: const pw.EdgeInsets.only(top: 3),
+                            child: pw.Text(pkg.productDescription,
+                                style: const pw.TextStyle(
+                                    fontSize: 9, color: PdfColors.grey700),
+                                maxLines: 2),
+                          ),
+                      ],
+                    ),
+                  ),
+                  pw.SizedBox(width: 8),
+                  if (pkg.productPrice > 0)
+                    pw.Text(
+                      _fmtPrice(pkg.productPrice),
+                      style: pw.TextStyle(
+                          fontSize: 11, fontWeight: pw.FontWeight.bold),
+                    ),
+                ],
+              ),
+            ),
+            // Rândul serviciului
+            if (pkg.serviceName != null) ...[
+              pw.Divider(color: PdfColors.grey300, height: 1),
+              pw.Padding(
+                padding: const pw.EdgeInsets.fromLTRB(12, 6, 12, 10),
+                child: pw.Row(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Container(
+                      width: 16,
+                      height: 16,
+                      margin: const pw.EdgeInsets.only(right: 6, top: 1),
+                      decoration: pw.BoxDecoration(
+                        color: PdfColors.teal50,
+                        shape: pw.BoxShape.circle,
+                        border:
+                            pw.Border.all(color: PdfColors.teal200),
+                      ),
+                      child: pw.Center(
+                        child: pw.Text('+',
+                            style: pw.TextStyle(
+                              fontSize: 10,
+                              fontWeight: pw.FontWeight.bold,
+                              color: PdfColors.teal800,
+                            )),
+                      ),
+                    ),
+                    pw.Expanded(
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: [
+                          pw.Text(
+                            pkg.serviceName!,
+                            style: pw.TextStyle(
+                                fontSize: 10,
+                                fontWeight: pw.FontWeight.bold,
+                                color: PdfColors.teal800),
+                          ),
+                          if ((pkg.serviceDescription ?? '').isNotEmpty)
+                            pw.Text(pkg.serviceDescription!,
+                                style: const pw.TextStyle(
+                                    fontSize: 8.5,
+                                    color: PdfColors.grey600),
+                                maxLines: 2),
+                        ],
+                      ),
+                    ),
+                    pw.SizedBox(width: 8),
+                    if ((pkg.servicePrice ?? 0) > 0)
+                      pw.Text(
+                        _fmtPrice(pkg.servicePrice!),
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.teal800,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ] else
+              pw.Padding(
+                padding: const pw.EdgeInsets.fromLTRB(12, 4, 12, 10),
+                child: pw.Text(
+                  'Fără serviciu de montaj asociat.',
+                  style: const pw.TextStyle(
+                      fontSize: 8.5, color: PdfColors.grey500),
+                ),
+              ),
+          ],
+        ),
+      );
+    }).toList();
+  }
+
+  static List<pw.Widget> _buildSingleSection(
+      List<ListaPreturiSingleItem> items, String typeLabel) {
+    return items.map((item) {
+      final imageBytes = _readImageBytes(item.imagePath);
+      return pw.Container(
+        margin: const pw.EdgeInsets.only(bottom: 10),
+        padding: const pw.EdgeInsets.all(12),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey400),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            if (imageBytes != null) ...[
+              pw.Container(
+                width: 72,
+                height: 72,
+                margin: const pw.EdgeInsets.only(right: 12),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: PdfColors.grey300),
+                  borderRadius: pw.BorderRadius.circular(6),
+                ),
+                child: pw.Image(pw.MemoryImage(imageBytes),
+                    fit: pw.BoxFit.contain),
+              ),
+            ],
+            pw.Expanded(
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    item.name,
+                    style: pw.TextStyle(
+                        fontSize: 11, fontWeight: pw.FontWeight.bold),
+                  ),
+                  if (item.subtitle.isNotEmpty)
+                    pw.Text(item.subtitle,
+                        style: const pw.TextStyle(
+                            fontSize: 9, color: PdfColors.grey600)),
+                  if (item.capacity.isNotEmpty)
+                    pw.Text('Capacitate: ${item.capacity}',
+                        style: const pw.TextStyle(
+                            fontSize: 9, color: PdfColors.grey600)),
+                  if (item.description.isNotEmpty)
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(top: 3),
+                      child: pw.Text(item.description,
+                          style: const pw.TextStyle(
+                              fontSize: 9, color: PdfColors.grey700),
+                          maxLines: 3),
+                    ),
+                ],
+              ),
+            ),
+            pw.SizedBox(width: 12),
+            pw.Container(
+              width: 100,
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.blue50,
+                borderRadius: pw.BorderRadius.circular(6),
+                border: pw.Border.all(color: PdfColors.blue100),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(typeLabel,
+                      style: const pw.TextStyle(
+                          fontSize: 8, color: PdfColors.grey500)),
+                  pw.SizedBox(height: 3),
+                  pw.Text(
+                    item.price > 0
+                        ? _fmtPrice(item.price)
+                        : 'La cerere',
+                    style: pw.TextStyle(
+                        fontSize: 11, fontWeight: pw.FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }).toList();
+  }
+
+  static String _fmtPrice(double price) {
+    final s = price.toStringAsFixed(2).replaceAllMapped(
+        RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
+        (m) => '${m[1]}.');
+    return '$s RON';
+  }
+}
+
+// ── Modele pentru exportul rapid ───────────────────────────────────────────
+
+class ListaPreturiPachetItem {
+  const ListaPreturiPachetItem({
+    required this.productName,
+    this.productSubtitle = '',
+    this.productDescription = '',
+    this.productImagePath = '',
+    this.capacity = '',
+    required this.productPrice,
+    this.serviceName,
+    this.serviceDescription,
+    this.servicePrice,
+  });
+
+  final String productName;
+  final String productSubtitle;
+  final String productDescription;
+  final String productImagePath;
+  final String capacity;
+  final double productPrice;
+  final String? serviceName;
+  final String? serviceDescription;
+  final double? servicePrice;
+}
+
+class ListaPreturiSingleItem {
+  const ListaPreturiSingleItem({
+    required this.name,
+    this.subtitle = '',
+    this.capacity = '',
+    this.description = '',
+    this.imagePath = '',
+    required this.price,
+  });
+
+  final String name;
+  final String subtitle;
+  final String capacity;
+  final String description;
+  final String imagePath;
+  final double price;
+}

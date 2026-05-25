@@ -1,0 +1,871 @@
+import 'package:flutter/material.dart';
+
+import '../../core/app_theme_preset.dart';
+import '../../core/help_content.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import '../employees/angajati_cloud_repository.dart';
+import '../programari/appointment_models.dart';
+import '../employees/firebase_angajati_repository.dart';
+import '../master/master_local_store.dart';
+import '../tools/scule_catalog_service.dart';
+import '../tools/scule_models.dart';
+import 'echipe_cloud_repository.dart';
+import 'firebase_echipe_repository.dart';
+
+class TeamsPage extends StatefulWidget {
+  const TeamsPage({super.key});
+
+  @override
+  State<TeamsPage> createState() => _TeamsPageState();
+}
+
+class _TeamsPageState extends State<TeamsPage> {
+  bool _loading = true;
+  List<MasterTeam> _teams = const [];
+  List<MasterEmployee> _employees = const [];
+  List<ToolInventoryItem> _tools = const [];
+  EchipeCloudRepository? _cloudRepository;
+  AngajatiCloudRepository? _employeesCloudRepository;
+  final SculeCatalogService _toolsCatalogService = SculeCatalogService();
+  String _dataSourceLabel = 'local_cache';
+  String? _cloudFallbackReason;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshCloudRepositories();
+    _load();
+  }
+
+  void _refreshCloudRepositories() {
+    if (FirebaseBootstrap.isInitialized) {
+      _cloudRepository ??= FirebaseEchipeRepository();
+      _employeesCloudRepository ??= FirebaseAngajatiRepository();
+    } else {
+      _cloudFallbackReason = FirebaseBootstrap.lastErrorMessage;
+    }
+  }
+
+  String _shortCloudError(Object error) {
+    final raw = error.toString().replaceAll('\n', ' ').trim();
+    if (raw.isEmpty) return 'necunoscuta';
+    return raw.length > 120 ? '${raw.substring(0, 120)}...' : raw;
+  }
+
+  Future<List<MasterTeam>> _listTeamsResolved() async {
+    _refreshCloudRepositories();
+    final cloud = _cloudRepository;
+    final localRows = await MasterLocalStore.readTeams();
+    if (cloud == null) {
+      _dataSourceLabel = 'local_cache';
+      _cloudFallbackReason = 'cloud indisponibil';
+      return localRows;
+    }
+    try {
+      var cloudRows = await cloud.listTeams();
+      if (cloudRows.isEmpty && localRows.isNotEmpty) {
+        final knownIds = <String>{};
+        for (final row in localRows) {
+          final id = row.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await cloud.upsertTeam(row);
+          knownIds.add(id);
+        }
+        cloudRows = await cloud.listTeams();
+      }
+      _dataSourceLabel = 'cloud';
+      _cloudFallbackReason = null;
+      await MasterLocalStore.writeTeams(cloudRows);
+      return cloudRows;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _cloudFallbackReason = _shortCloudError(error);
+      _dataSourceLabel = 'local_cache';
+      return localRows;
+    }
+  }
+
+  Future<List<MasterEmployee>> _listEmployeesResolved() async {
+    final cloud = _employeesCloudRepository;
+    if (cloud == null) {
+      return MasterLocalStore.readEmployees();
+    }
+    try {
+      final rows = await cloud.listEmployees();
+      await MasterLocalStore.writeEmployees(rows);
+      return rows;
+    } catch (_) {
+      return MasterLocalStore.readEmployees();
+    }
+  }
+
+  Future<void> _saveTeamResolved(MasterTeam row) async {
+    _refreshCloudRepositories();
+    final cloud = _cloudRepository;
+    var queuedOffline = cloud == null;
+    if (cloud != null) {
+      try {
+        await cloud.upsertTeam(row);
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _cloudFallbackReason = _shortCloudError(error);
+        _dataSourceLabel = 'local_cache';
+        queuedOffline = true;
+      }
+    } else {
+      _dataSourceLabel = 'local_cache';
+      _cloudFallbackReason = 'cloud indisponibil';
+    }
+    final next = [..._teams];
+    final index = next.indexWhere((e) => e.id == row.id);
+    if (index >= 0) {
+      next[index] = row;
+    } else {
+      next.add(row);
+    }
+    await MasterLocalStore.writeTeams(next);
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueTeam(row);
+    }
+  }
+
+  Future<void> _deleteTeamResolved(MasterTeam row) async {
+    _refreshCloudRepositories();
+    final cloud = _cloudRepository;
+    var queuedOffline = cloud == null;
+    if (cloud != null) {
+      try {
+        await cloud.deleteTeam(row.id);
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _cloudFallbackReason = _shortCloudError(error);
+        _dataSourceLabel = 'local_cache';
+        queuedOffline = true;
+      }
+    } else {
+      _dataSourceLabel = 'local_cache';
+      _cloudFallbackReason = 'cloud indisponibil';
+    }
+    final next = _teams.where((e) => e.id != row.id).toList(growable: false);
+    await MasterLocalStore.writeTeams(next);
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueTeamDelete(row.id);
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      await OfflineSyncRuntime.instance.syncPending();
+      _refreshCloudRepositories();
+      final teams = await _listTeamsResolved();
+      final employees = await _listEmployeesResolved();
+      final tools = await _toolsCatalogService.listTools();
+      if (!mounted) return;
+      setState(() {
+        _teams = teams;
+        _employees = employees;
+        _tools = tools;
+      });
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _edit([MasterTeam? existing]) async {
+    final result = await showDialog<MasterTeam>(
+      context: context,
+      builder: (_) => _TeamDialog(existing: existing, employees: _employees),
+    );
+    if (result == null) return;
+    await _saveTeamResolved(result);
+    await _syncEmployeesForTeamUpdate(previous: existing, updated: result);
+    await _syncAppointmentsForTeamColorUpdate(
+      previous: existing,
+      updated: result,
+    );
+    await _load();
+  }
+
+  Future<void> _delete(MasterTeam row) async {
+    final teamId = row.id.trim();
+    final assignedTools = _tools
+        .where((item) => item.assignedTeamId.trim() == teamId)
+        .toList(growable: false);
+    if (assignedTools.isNotEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Nu poți șterge echipa: are ${assignedTools.length} scule atribuite.',
+          ),
+        ),
+      );
+      return;
+    }
+    final employeesInTeam = _employees
+        .where((item) => item.teamId.trim() == teamId)
+        .toList(growable: false);
+    if (employeesInTeam.isNotEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Nu poți șterge echipa: are ${employeesInTeam.length} angajați asociați.',
+          ),
+        ),
+      );
+      return;
+    }
+    await _deleteTeamResolved(row);
+    await _load();
+  }
+
+  MasterEmployee _copyEmployeeWithTeamId(MasterEmployee source, String teamId) {
+    return MasterEmployee(
+      id: source.id,
+      name: source.name,
+      role: source.role,
+      active: source.active,
+      teamId: teamId,
+      laborCostType: source.laborCostType,
+      costLunar: source.costLunar,
+      tarifOrar: source.tarifOrar,
+      oreLunareStandard: source.oreLunareStandard,
+      dailyAllowance: source.dailyAllowance,
+      defaultLodgingCost: source.defaultLodgingCost,
+      requiresLodgingByDefault: source.requiresLodgingByDefault,
+    );
+  }
+
+  Future<void> _upsertEmployeeResolved(MasterEmployee row) async {
+    final cloud = _employeesCloudRepository;
+    if (cloud != null) {
+      try {
+        await cloud.upsertEmployee(row);
+      } catch (_) {}
+    }
+    final next = [..._employees];
+    final index = next.indexWhere((e) => e.id == row.id);
+    if (index >= 0) {
+      next[index] = row;
+    } else {
+      next.add(row);
+    }
+    await MasterLocalStore.writeEmployees(next);
+  }
+
+  Future<void> _syncEmployeesForTeamUpdate({
+    MasterTeam? previous,
+    required MasterTeam updated,
+  }) async {
+    final previousMembers = <String>{
+      ...?previous?.memberIds.map((item) => item.trim()),
+    }..removeWhere((item) => item.isEmpty);
+    final currentMembers = <String>{
+      ...updated.memberIds.map((item) => item.trim()),
+    }..removeWhere((item) => item.isEmpty);
+
+    for (final employee in _employees) {
+      final id = employee.id.trim();
+      if (id.isEmpty) continue;
+
+      if (currentMembers.contains(id) && employee.teamId.trim() != updated.id) {
+        await _upsertEmployeeResolved(
+          _copyEmployeeWithTeamId(employee, updated.id),
+        );
+        continue;
+      }
+
+      final removedFromThisTeam =
+          previousMembers.contains(id) && !currentMembers.contains(id);
+      if (removedFromThisTeam && employee.teamId.trim() == updated.id) {
+        await _upsertEmployeeResolved(
+          _copyEmployeeWithTeamId(employee, ''),
+        );
+      }
+    }
+  }
+
+  String _normalizeColorCode(String raw) => raw.trim().toUpperCase();
+
+  String _colorCodeFromColorValue(int colorValue) {
+    if (colorValue == 0) {
+      return '';
+    }
+    final argb = colorValue.toRadixString(16).padLeft(8, '0').toUpperCase();
+    return '#${argb.substring(2)}';
+  }
+
+  bool _appointmentUsesTeam(MasterTeam team, Appointment item) {
+    final teamId = team.id.trim();
+    if (teamId.isEmpty) {
+      return false;
+    }
+    return item.resolvedAssignedTeamIds.any((id) => id.trim() == teamId);
+  }
+
+  Future<void> _syncAppointmentsForTeamColorUpdate({
+    required MasterTeam? previous,
+    required MasterTeam updated,
+  }) async {
+    if (previous != null && previous.colorValue == updated.colorValue) {
+      return;
+    }
+
+    final repository = LocalAppDataRepository();
+    final appointments = await repository.listAppointments();
+    if (appointments.isEmpty) {
+      return;
+    }
+
+    final oldCode = _normalizeColorCode(
+        _colorCodeFromColorValue(previous?.colorValue ?? 0));
+    final newCode =
+        _normalizeColorCode(_colorCodeFromColorValue(updated.colorValue));
+
+    var changes = 0;
+    for (final item in appointments) {
+      if (!_appointmentUsesTeam(updated, item)) {
+        continue;
+      }
+      final currentCode = _normalizeColorCode(item.colorCode);
+      final usesAuto = currentCode.isEmpty;
+      final inheritedOldColor = oldCode.isNotEmpty && currentCode == oldCode;
+      if (!usesAuto && !inheritedOldColor) {
+        continue;
+      }
+      if (currentCode == newCode) {
+        continue;
+      }
+      await repository.saveAppointment(item.copyWith(colorCode: newCode));
+      changes++;
+    }
+
+    if (changes == 0 || !mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Culoarea echipei a fost aplicata automat pe $changes programari.',
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final brand = theme.extension<AppBrandTheme>();
+    final totalMembers = _teams.fold<int>(0, (sum, t) => sum + t.memberIds.length);
+
+    final filtered = _searchQuery.isEmpty
+        ? _teams
+        : _teams
+            .where((t) => t.name.toLowerCase().contains(_searchQuery))
+            .toList(growable: false);
+
+    return Scaffold(
+      body: Column(
+        children: [
+          // Hero header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: brand?.shellHeaderGradient ??
+                    LinearGradient(
+                      colors: [cs.secondaryContainer, cs.primaryContainer],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: brand?.shellGlow ?? cs.primary.withValues(alpha: 0.12),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.groups_outlined, size: 24, color: cs.primary),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Echipe',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: cs.onPrimaryContainer,
+                          ),
+                        ),
+                        Text(
+                          '${_teams.length} echipe · $totalMembers membri · $_dataSourceLabel'
+                          '${(_cloudFallbackReason ?? '').isNotEmpty ? ' ⚠' : ''}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onPrimaryContainer.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  HelpButton(content: AppHelp.echipe),
+                ],
+              ),
+            ),
+          ),
+          // Search
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+            child: TextField(textCapitalization: TextCapitalization.sentences, 
+              onChanged: (v) => setState(() => _searchQuery = v.trim().toLowerCase()),
+              decoration: InputDecoration(
+                labelText: 'Caută echipă',
+                prefixIcon: const Icon(Icons.search),
+                border: const OutlineInputBorder(),
+                isDense: true,
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => setState(() => _searchQuery = ''),
+                      )
+                    : null,
+              ),
+            ),
+          ),
+          // List
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : filtered.isEmpty
+                    ? Center(
+                        child: Text(
+                          _searchQuery.isNotEmpty
+                              ? 'Nicio echipă găsită.'
+                              : 'Nu există echipe definite.',
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+                        itemCount: filtered.length,
+                        itemBuilder: (context, i) =>
+                            _buildTeamCard(filtered[i], cs, theme),
+                      ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _loading ? null : () => _edit(),
+        icon: const Icon(Icons.add),
+        label: const Text('Adaugă echipă'),
+      ),
+    );
+  }
+
+  Widget _buildTeamCard(MasterTeam t, ColorScheme cs, ThemeData theme) {
+    final teamColor = t.colorValue != 0 ? Color(t.colorValue) : cs.primary;
+    final memberNames = _employees
+        .where((e) => t.memberIds.contains(e.id))
+        .map((e) => e.name)
+        .where((n) => n.trim().isNotEmpty)
+        .toList(growable: false);
+    final toolCount = _tools
+        .where((item) => item.assignedTeamId.trim() == t.id.trim())
+        .length;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: teamColor.withValues(alpha: 0.3), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: teamColor.withValues(alpha: 0.08),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(13),
+        child: Column(
+          children: [
+            Container(
+              height: 3,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [teamColor, teamColor.withValues(alpha: 0.35)],
+                ),
+              ),
+            ),
+            InkWell(
+              onTap: () => _edit(t),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: teamColor,
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        t.name.trim().isEmpty
+                            ? '?'
+                            : t.name.trim()[0].toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            t.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          if (memberNames.isEmpty)
+                            Text(
+                              'Fără membri',
+                              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                            )
+                          else
+                            Wrap(
+                              spacing: 5,
+                              runSpacing: 4,
+                              children: memberNames.take(4).map((name) {
+                                final initials = name.trim().split(' ')
+                                    .where((w) => w.isNotEmpty)
+                                    .take(2)
+                                    .map((w) => w[0].toUpperCase())
+                                    .join();
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 7, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: teamColor.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                        color: teamColor.withValues(alpha: 0.25)),
+                                  ),
+                                  child: Text(
+                                    initials.isEmpty ? name.trim().substring(0, 1) : '$initials · ${name.split(' ').first}',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w500,
+                                      color: teamColor,
+                                    ),
+                                  ),
+                                );
+                              }).toList(growable: false),
+                            ),
+                          if (memberNames.length > 4)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 3),
+                              child: Text(
+                                '+${memberNames.length - 4} membri',
+                                style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+                              ),
+                            ),
+                          if (toolCount > 0)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.build_outlined, size: 11, color: cs.onSurfaceVariant),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    '$toolCount scule atribuite',
+                                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: teamColor.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            '${t.memberIds.length} membri',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: teamColor,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        IconButton(
+                          icon: Icon(Icons.delete_outline,
+                              size: 20, color: cs.error.withValues(alpha: 0.7)),
+                          onPressed: () => _delete(t),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TeamDialog extends StatefulWidget {
+  const _TeamDialog({
+    required this.employees,
+    this.existing,
+  });
+
+  final List<MasterEmployee> employees;
+  final MasterTeam? existing;
+
+  @override
+  State<_TeamDialog> createState() => _TeamDialogState();
+}
+
+class _TeamDialogState extends State<_TeamDialog> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.existing?.name ?? '');
+  late final TextEditingController _notes =
+      TextEditingController(text: widget.existing?.notes ?? '');
+  late final Set<String> _members = {...?widget.existing?.memberIds};
+  late int _colorValue = widget.existing?.colorValue ?? 0;
+
+  static const List<_TeamColorPreset> _colorPresets = [
+    _TeamColorPreset(label: 'Rosu', value: 0xFFD32F2F),
+    _TeamColorPreset(label: 'Portocaliu', value: 0xFFE64A19),
+    _TeamColorPreset(label: 'Galben', value: 0xFFF9A825),
+    _TeamColorPreset(label: 'Verde', value: 0xFF2E7D32),
+    _TeamColorPreset(label: 'Turcoaz', value: 0xFF00897B),
+    _TeamColorPreset(label: 'Albastru', value: 0xFF1565C0),
+    _TeamColorPreset(label: 'Indigo', value: 0xFF283593),
+    _TeamColorPreset(label: 'Mov', value: 0xFF6A1B9A),
+    _TeamColorPreset(label: 'Roz', value: 0xFFC2185B),
+    _TeamColorPreset(label: 'Grafit', value: 0xFF37474F),
+  ];
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _notes.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title:
+          Text(widget.existing == null ? 'Adauga echipa' : 'Editeaza echipa'),
+      content: SizedBox(
+        width: 500,
+        child: SingleChildScrollView(
+          primary: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'Nume echipa'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _notes,
+                decoration: const InputDecoration(labelText: 'Observatii'),
+                minLines: 2,
+                maxLines: 3,
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Culoare echipa',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    GestureDetector(
+                      onTap: () => setState(() => _colorValue = 0),
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade200,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: _colorValue == 0
+                                ? Theme.of(context).colorScheme.primary
+                                : Colors.transparent,
+                            width: 3,
+                          ),
+                        ),
+                        child: _colorValue == 0
+                            ? Icon(
+                                Icons.close,
+                                size: 16,
+                                color: Colors.grey.shade600,
+                              )
+                            : null,
+                      ),
+                    ),
+                    for (final preset in _colorPresets)
+                      Tooltip(
+                        message: preset.label,
+                        child: GestureDetector(
+                          onTap: () =>
+                              setState(() => _colorValue = preset.value),
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: Color(preset.value),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: _colorValue == preset.value
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Colors.transparent,
+                                width: 3,
+                              ),
+                            ),
+                            child: _colorValue == preset.value
+                                ? const Icon(
+                                    Icons.check,
+                                    size: 16,
+                                    color: Colors.white,
+                                  )
+                                : null,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (widget.employees.isEmpty)
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Nu exista angajati definiti.'),
+                ),
+              if (widget.employees.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Membri echipa',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+              ...widget.employees.map(
+                (e) => CheckboxListTile(
+                  value: _members.contains(e.id),
+                  title: Text(e.name),
+                  subtitle: Text(e.role.isEmpty ? '-' : e.role),
+                  onChanged: (value) {
+                    setState(() {
+                      if (value == true) {
+                        _members.add(e.id);
+                      } else {
+                        _members.remove(e.id);
+                      }
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Anulează'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _name.text.trim();
+            if (name.isEmpty) return;
+            final now = DateTime.now().millisecondsSinceEpoch;
+            Navigator.of(context).pop(
+              MasterTeam(
+                id: widget.existing?.id ?? 'team-$now',
+                name: name,
+                notes: _notes.text.trim(),
+                memberIds: _members.toList(growable: false),
+                colorValue: _colorValue,
+              ),
+            );
+          },
+          child: const Text('Salveaza'),
+        ),
+      ],
+    );
+  }
+}
+
+class _TeamColorPreset {
+  const _TeamColorPreset({required this.label, required this.value});
+  final String label;
+  final int value;
+}

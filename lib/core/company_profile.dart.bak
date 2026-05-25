@@ -1,0 +1,202 @@
+import 'pdf_export_settings.dart';
+import 'app_theme_preset.dart';
+import 'smartbill_settings.dart';
+
+class CompanyProfile {
+  const CompanyProfile({
+    this.companyName = '',
+    this.phone = '',
+    this.email = '',
+    this.cui = '',
+    this.tradeRegister = '',
+    this.bank = '',
+    this.iban = '',
+    this.contactName = '',
+    this.address = '',
+    this.logoBase64 = '',
+    this.appThemePreset = AppThemePreset.proTerm,
+    this.pdfExportSettings = const PdfExportSettings(),
+    this.smartBillSettings = const SmartBillSettings(),
+    this.defaultVatPercent = 21.0,
+    this.defaultProfitPercent = 15.0,
+    this.defaultOverheadPercent = 0.0,
+    this.agfrTechnicianName = '',
+    this.agfrTechnicianCertificateNumber = '',
+    this.agfrCompanyAuthorizationNumber = '',
+    this.corporateTaxType = 'profit_16',
+    this.corporateTaxPercent = 16.0,
+  });
+
+  final String companyName;
+  final String phone;
+  final String email;
+  final String cui;
+  final String tradeRegister;
+  final String bank;
+  final String iban;
+  final String contactName;
+  final String address;
+  final String logoBase64;
+  final AppThemePreset appThemePreset;
+  final PdfExportSettings pdfExportSettings;
+  final SmartBillSettings smartBillSettings;
+  final double defaultVatPercent;
+  final double defaultProfitPercent;
+  final double defaultOverheadPercent;
+  final String agfrTechnicianName;
+  final String agfrTechnicianCertificateNumber;
+  final String agfrCompanyAuthorizationNumber;
+
+  /// Tax type: 'profit_16' | 'micro_1' | 'micro_3' | 'custom'
+  final String corporateTaxType;
+
+  /// Effective corporate tax percent (used in profit calculations)
+  final double corporateTaxPercent;
+
+  CompanyProfile copyWith({
+    String? companyName,
+    String? phone,
+    String? email,
+    String? cui,
+    String? tradeRegister,
+    String? bank,
+    String? iban,
+    String? contactName,
+    String? address,
+    String? logoBase64,
+    AppThemePreset? appThemePreset,
+    PdfExportSettings? pdfExportSettings,
+    SmartBillSettings? smartBillSettings,
+    double? defaultVatPercent,
+    double? defaultProfitPercent,
+    double? defaultOverheadPercent,
+    String? agfrTechnicianName,
+    String? agfrTechnicianCertificateNumber,
+    String? agfrCompanyAuthorizationNumber,
+    String? corporateTaxType,
+    double? corporateTaxPercent,
+  }) {
+    return CompanyProfile(
+      companyName: companyName ?? this.companyName,
+      phone: phone ?? this.phone,
+      email: email ?? this.email,
+      cui: cui ?? this.cui,
+      tradeRegister: tradeRegister ?? this.tradeRegister,
+      bank: bank ?? this.bank,
+      iban: iban ?? this.iban,
+      contactName: contactName ?? this.contactName,
+      address: address ?? this.address,
+      logoBase64: logoBase64 ?? this.logoBase64,
+      appThemePreset: appThemePreset ?? this.appThemePreset,
+      pdfExportSettings: pdfExportSettings ?? this.pdfExportSettings,
+      smartBillSettings: smartBillSettings ?? this.smartBillSettings,
+      defaultVatPercent: defaultVatPercent ?? this.defaultVatPercent,
+      defaultProfitPercent: defaultProfitPercent ?? this.defaultProfitPercent,
+      defaultOverheadPercent:
+          defaultOverheadPercent ?? this.defaultOverheadPercent,
+      agfrTechnicianName: agfrTechnicianName ?? this.agfrTechnicianName,
+      agfrTechnicianCertificateNumber: agfrTechnicianCertificateNumber ??
+          this.agfrTechnicianCertificateNumber,
+      agfrCompanyAuthorizationNumber:
+          agfrCompanyAuthorizationNumber ?? this.agfrCompanyAuthorizationNumber,
+      corporateTaxType: corporateTaxType ?? this.corporateTaxType,
+      corporateTaxPercent: corporateTaxPercent ?? this.corporateTaxPercent,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'company_name': companyName,
+      'company_phone': phone,
+      'company_email': email,
+      'company_cui': cui,
+      'company_trade_register': tradeRegister,
+      'company_bank': bank,
+      'company_iban': iban,
+      'company_contact_name': contactName,
+      'company_address': address,
+      'company_logo_base64': logoBase64,
+      'app_theme': appThemePreset.value,
+      'pdf_export_settings': pdfExportSettings.toMap(),
+      'smartbill_settings': smartBillSettings.toMap(),
+      'default_vat_percent': defaultVatPercent,
+      'default_profit_percent': defaultProfitPercent,
+      'default_overhead_percent': defaultOverheadPercent,
+      'agfr_technician_name': agfrTechnicianName,
+      'agfr_technician_certificate_number': agfrTechnicianCertificateNumber,
+      'agfr_company_authorization_number': agfrCompanyAuthorizationNumber,
+      'corporate_tax_type': corporateTaxType,
+      'corporate_tax_percent': corporateTaxPercent,
+    };
+  }
+
+  factory CompanyProfile.fromMap(Map<String, dynamic> map) {
+    String pick(List<String> keys) {
+      for (final key in keys) {
+        final value = (map[key] ?? '').toString().trim();
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
+
+    PdfExportSettings readPdfExportSettings() {
+      final raw = map['pdf_export_settings'];
+      if (raw is Map<String, dynamic>) {
+        return PdfExportSettings.fromMap(raw);
+      }
+      if (raw is Map) {
+        return PdfExportSettings.fromMap(Map<String, dynamic>.from(raw));
+      }
+      return PdfExportSettings.fromMap(map);
+    }
+
+    SmartBillSettings readSmartBillSettings() {
+      final raw = map['smartbill_settings'];
+      if (raw is Map<String, dynamic>) {
+        return SmartBillSettings.fromMap(raw);
+      }
+      if (raw is Map) {
+        return SmartBillSettings.fromMap(Map<String, dynamic>.from(raw));
+      }
+      return SmartBillSettings.fromMap(map);
+    }
+
+    return CompanyProfile(
+      companyName: pick(const ['company_name', 'name', 'firma']),
+      phone: pick(const ['company_phone', 'phone']),
+      email: pick(const ['company_email', 'email']),
+      cui: pick(const ['company_cui', 'cui']),
+      tradeRegister: pick(const ['company_trade_register', 'trade_register']),
+      bank: pick(const ['company_bank', 'bank']),
+      iban: pick(const ['company_iban', 'iban']),
+      contactName: pick(const ['company_contact_name', 'contact_name']),
+      address: pick(const ['company_address', 'address']),
+      logoBase64: pick(const ['company_logo_base64', 'logo_base64']),
+      appThemePreset: AppThemePresetX.fromValue(
+        pick(const ['app_theme', 'theme_preset', 'themePreset']),
+      ),
+      pdfExportSettings: readPdfExportSettings(),
+      smartBillSettings: readSmartBillSettings(),
+      defaultVatPercent: _parseDouble(map['default_vat_percent'], 21.0),
+      defaultProfitPercent: _parseDouble(map['default_profit_percent'], 15.0),
+      defaultOverheadPercent:
+          _parseDouble(map['default_overhead_percent'], 0.0),
+      agfrTechnicianName: pick(const ['agfr_technician_name']),
+      agfrTechnicianCertificateNumber:
+          pick(const ['agfr_technician_certificate_number']),
+      agfrCompanyAuthorizationNumber:
+          pick(const ['agfr_company_authorization_number']),
+      corporateTaxType:
+          (map['corporate_tax_type'] ?? 'profit_16').toString().trim().isEmpty
+              ? 'profit_16'
+              : (map['corporate_tax_type'] ?? 'profit_16').toString().trim(),
+      corporateTaxPercent: _parseDouble(map['corporate_tax_percent'], 16.0),
+    );
+  }
+}
+
+double _parseDouble(Object? value, double fallback) {
+  if (value == null) return fallback;
+  if (value is num) return value.toDouble();
+  return double.tryParse(value.toString().replaceAll(',', '.')) ?? fallback;
+}

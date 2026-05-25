@@ -1,0 +1,130 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+import '../../core/cloud/firebase_collections.dart';
+import 'appointment_models.dart';
+import 'programari_cloud_repository.dart';
+
+class FirebaseProgramariRepository implements ProgramariCloudRepository {
+  FirebaseProgramariRepository({
+    FirebaseFirestore? firestore,
+  }) : _firestore = firestore ?? FirebaseFirestore.instance;
+
+  final FirebaseFirestore _firestore;
+
+  CollectionReference<Map<String, dynamic>> get _collection =>
+      _firestore.collection(FirebaseCollections.appointments);
+
+  @override
+  Future<void> deleteAppointment(String appointmentId) async {
+    final id = appointmentId.trim();
+    if (id.isEmpty) return;
+    await _collection.doc(id).delete();
+    // Write server-side tombstone so all devices (including old app versions)
+    // will filter this appointment out on their next listAppointments() call.
+    try {
+      await _firestore
+          .collection(FirebaseCollections.deletedAppointments)
+          .doc(id)
+          .set({'deletedAt': FieldValue.serverTimestamp()});
+    } catch (_) {
+      // Best-effort — the primary delete already succeeded.
+    }
+  }
+
+  @override
+  Future<List<Appointment>> listAppointments() async {
+    final snapshot = await _collection.get();
+    final docs = snapshot.docs;
+    return docs
+        .map((doc) => Appointment.fromMap(_normalizeAppointmentMap(doc.data())))
+        .toList(growable: false);
+  }
+
+  @override
+  Future<void> upsertAppointment(Appointment appointment) async {
+    await _collection
+        .doc(appointment.id)
+        .set(_appointmentToCloudMap(appointment), SetOptions(merge: true));
+  }
+
+  @override
+  Stream<List<Appointment>> watchAppointments() {
+    return _collection.snapshots().map((snapshot) {
+      return snapshot.docs
+          .map((doc) =>
+              Appointment.fromMap(_normalizeAppointmentMap(doc.data())))
+          .toList(growable: false);
+    });
+  }
+
+  Map<String, dynamic> _appointmentToCloudMap(Appointment item) {
+    return <String, dynamic>{
+      'id': item.id,
+      'client_id': item.clientId,
+      'client_name': item.clientName,
+      'contracting_client_id': item.contractingClientId,
+      'contracting_client_name': item.contractingClientName,
+      'title': item.title,
+      'location': item.location,
+      'scheduled_date': item.scheduledDate.toIso8601String(),
+      'start_time': item.startTime,
+      'end_time': item.endTime,
+      'start_date_time': item.startDateTime?.toIso8601String(),
+      'end_date_time': item.endDateTime?.toIso8601String(),
+      'team_id': item.primaryAssignedTeamId,
+      'assigned_team_ids': item.resolvedAssignedTeamIds,
+      'assigned_user_id': item.assignedUserId,
+      'assigned_user_email': item.assignedUserEmail,
+      'assigned_employee_ids': item.assignedEmployeeIds,
+      'vehicle_id': item.vehicleId,
+      'type': item.type,
+      'priority': item.priority,
+      'status': item.status,
+      'job_id': item.jobId,
+      'notes': item.notes,
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+  }
+
+  Map<String, dynamic> _normalizeAppointmentMap(Map<String, dynamic> raw) {
+    return <String, dynamic>{
+      'id': (raw['id'] ?? '').toString(),
+      'client_id': (raw['client_id'] ?? raw['clientId'] ?? '').toString(),
+      'client_name': (raw['client_name'] ?? raw['clientName'] ?? '').toString(),
+      'contracting_client_id':
+          (raw['contracting_client_id'] ?? raw['contractingClientId'] ?? '')
+              .toString(),
+      'contracting_client_name':
+          (raw['contracting_client_name'] ?? raw['contractingClientName'] ?? '')
+              .toString(),
+      'title': (raw['title'] ?? '').toString(),
+      'location': (raw['location'] ?? '').toString(),
+      'scheduled_date':
+          (raw['scheduled_date'] ?? raw['scheduledDate'] ?? '').toString(),
+      'start_time': (raw['start_time'] ?? raw['startTime'] ?? '').toString(),
+      'end_time': (raw['end_time'] ?? raw['endTime'] ?? '').toString(),
+      'start_date_time':
+          (raw['start_date_time'] ?? raw['startDateTime'] ?? '').toString(),
+      'end_date_time':
+          (raw['end_date_time'] ?? raw['endDateTime'] ?? '').toString(),
+      'team_id': (raw['team_id'] ?? raw['teamId'] ?? '').toString(),
+      'assigned_team_ids': raw['assigned_team_ids'] ??
+          raw['assignedTeamIds'] ??
+          const <String>[],
+      'assigned_user_id':
+          (raw['assigned_user_id'] ?? raw['assignedUserId'] ?? '').toString(),
+      'assigned_user_email':
+          (raw['assigned_user_email'] ?? raw['assignedUserEmail'] ?? '')
+              .toString(),
+      'assigned_employee_ids': raw['assigned_employee_ids'] ??
+          raw['assignedEmployeeIds'] ??
+          const <String>[],
+      'vehicle_id': (raw['vehicle_id'] ?? raw['vehicleId'] ?? '').toString(),
+      'type': (raw['type'] ?? '').toString(),
+      'priority': (raw['priority'] ?? '').toString(),
+      'status': (raw['status'] ?? '').toString(),
+      'job_id': (raw['job_id'] ?? raw['jobId'] ?? '').toString(),
+      'notes': (raw['notes'] ?? '').toString(),
+    };
+  }
+}

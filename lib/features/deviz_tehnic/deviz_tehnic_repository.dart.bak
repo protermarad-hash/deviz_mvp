@@ -1,0 +1,115 @@
+import 'dart:convert';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'deviz_tehnic_models.dart';
+
+/// Repository pentru devize tehnice — Firebase + cache local.
+class DevizTehnicRepository {
+  static const _collection = 'devize_tehnice';
+  static const _prefKey = 'devize_tehnice_cache';
+
+  CollectionReference<Map<String, dynamic>> get _col =>
+      FirebaseFirestore.instance.collection(_collection);
+
+  // ── Local cache ────────────────────────────────────────────────
+
+  Future<List<DevizTehnicRecord>> listLocal() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefKey);
+      if (raw == null || raw.isEmpty) return [];
+      final list = jsonDecode(raw) as List;
+      return list
+          .map((e) => DevizTehnicRecord.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> _saveLocal(List<DevizTehnicRecord> records) async {
+    final prefs = await SharedPreferences.getInstance();
+    final data = records.map((r) => r.toMap()).toList();
+    await prefs.setString(_prefKey, jsonEncode(data));
+  }
+
+  // ── Firebase ───────────────────────────────────────────────────
+
+  Future<List<DevizTehnicRecord>> listFromFirebase() async {
+    final snap = await _col.orderBy('updated_at', descending: true).get();
+    return snap.docs
+        .map((d) => DevizTehnicRecord.fromMap({...d.data(), 'id': d.id}))
+        .toList();
+  }
+
+  Future<List<DevizTehnicRecord>> list() async {
+    try {
+      final records = await listFromFirebase();
+      await _saveLocal(records);
+      return records;
+    } catch (_) {
+      return listLocal();
+    }
+  }
+
+  Future<DevizTehnicRecord> save(DevizTehnicRecord record) async {
+    final map = record.toMap();
+    map.remove('id');
+    if (record.id.isEmpty || record.id.startsWith('local-')) {
+      final ref = await _col.add(map);
+      final withId = DevizTehnicRecord.fromMap({...map, 'id': ref.id,
+        'created_at': record.createdAt.toIso8601String(),
+        'updated_at': record.updatedAt.toIso8601String(),
+        'articole': record.articole.map((a) => a.toMap()).toList(),
+      });
+      await _updateLocalCache(withId);
+      return withId;
+    } else {
+      await _col.doc(record.id).set(map, SetOptions(merge: true));
+      await _updateLocalCache(record);
+      return record;
+    }
+  }
+
+  Future<void> delete(String id) async {
+    await _col.doc(id).delete();
+    final locals = await listLocal();
+    final updated = locals.where((r) => r.id != id).toList();
+    await _saveLocal(updated);
+  }
+
+  Future<void> _updateLocalCache(DevizTehnicRecord record) async {
+    final locals = await listLocal();
+    final idx = locals.indexWhere((r) => r.id == record.id);
+    if (idx >= 0) {
+      locals[idx] = record;
+    } else {
+      locals.insert(0, record);
+    }
+    await _saveLocal(locals);
+  }
+
+  /// Generează număr următor (DVZ-YYYY-NNNN)
+  Future<String> nextNumber() async {
+    final year = DateTime.now().year;
+    try {
+      final snap = await _col
+          .where('numar', isGreaterThanOrEqualTo: 'DVZ-$year-')
+          .where('numar', isLessThan: 'DVZ-${year + 1}-')
+          .get();
+      final nums = snap.docs
+          .map((d) {
+            final n = (d.data()['numar'] ?? '').toString();
+            final parts = n.split('-');
+            return parts.length >= 3 ? int.tryParse(parts.last) ?? 0 : 0;
+          })
+          .toList();
+      final next = (nums.isEmpty ? 0 : nums.reduce((a, b) => a > b ? a : b)) + 1;
+      return 'DVZ-$year-${next.toString().padLeft(4, '0')}';
+    } catch (_) {
+      return 'DVZ-$year-0001';
+    }
+  }
+}

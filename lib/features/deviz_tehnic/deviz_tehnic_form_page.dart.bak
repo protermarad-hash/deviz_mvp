@@ -1,0 +1,1487 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+
+import '../../core/pdf_actions_helper.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../clients/client_models.dart';
+import '../master/master_local_store.dart';
+import '../materials/materials_catalog_service.dart';
+import '../oferte/deviz_articol_template_models.dart';
+import '../oferte/deviz_articol_template_repository.dart';
+import 'deviz_tehnic_models.dart';
+import 'deviz_tehnic_pdf_service.dart';
+import 'deviz_tehnic_repository.dart';
+
+/// Pagina de creare / editare deviz tehnic cu logică Excel:
+/// fiecare articol are 4 componente de cost (Mat, Man, Utilaj, Transport).
+class DevizTehnicFormPage extends StatefulWidget {
+  const DevizTehnicFormPage({
+    super.key,
+    this.existing,
+    required this.clients,
+    required this.currentUserName,
+    required this.currentUserId,
+    required this.repository,
+    required this.appRepository,
+  });
+
+  final DevizTehnicRecord? existing;
+  final List<ClientRecord> clients;
+  final String currentUserName;
+  final String currentUserId;
+  final DevizTehnicRepository repository;
+  final AppDataRepository appRepository;
+
+  @override
+  State<DevizTehnicFormPage> createState() => _DevizTehnicFormPageState();
+}
+
+class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _numarCtrl = TextEditingController();
+  final _titluCtrl = TextEditingController();
+  final _obiectivCtrl = TextEditingController();
+  final _intocmitDeCtrl = TextEditingController();
+  final _noteCtrl = TextEditingController();
+  final _regieCtrl = TextEditingController(text: '9');
+  final _profitCtrl = TextEditingController(text: '10');
+  final _tvaCtrl = TextEditingController(text: '21');
+  final _zileCtrl = TextEditingController(text: '30');
+
+  String? _selectedClientId;
+  String _selectedClientName = '';
+  DateTime _dataEmiterii = DateTime.now();
+  List<_ArticolState> _articole = [];
+  bool _saving = false;
+
+  final _materialsService = MaterialsCatalogService();
+  final _templateRepo = DevizArticolTemplateRepository();
+  List<MasterMaterial> _materialCatalog = [];
+  List<DevizArticolTemplate> _templateCatalog = [];
+  List<_Sugestie> _sugestii = [];
+
+  @override
+  void initState() {
+    super.initState();
+    final ex = widget.existing;
+    if (ex != null) {
+      _numarCtrl.text = ex.numar;
+      _titluCtrl.text = ex.titlu;
+      _obiectivCtrl.text = ex.obiectiv;
+      _intocmitDeCtrl.text = ex.intocmitDe;
+      _noteCtrl.text = ex.note;
+      _regieCtrl.text = _fmtPct(ex.regiePercent);
+      _profitCtrl.text = _fmtPct(ex.profitPercent);
+      _tvaCtrl.text = _fmtPct(ex.tvaPercent);
+      _zileCtrl.text = ex.zileValabilitate.toString();
+      _selectedClientId = ex.clientId.isEmpty ? null : ex.clientId;
+      _selectedClientName = ex.clientName;
+      _dataEmiterii = ex.dataEmiterii;
+      _articole = ex.articole.map(_ArticolState.fromModel).toList();
+    } else {
+      _intocmitDeCtrl.text = widget.currentUserName;
+      _articole = [_ArticolState()];
+      _loadNextNumber();
+      _loadCompanyDefaults();
+    }
+    _loadMaterialCatalog();
+  }
+
+  Future<void> _loadMaterialCatalog() async {
+    try {
+      final results = await Future.wait([
+        _materialsService.listMaterials(),
+        _templateRepo.listLocal(),
+      ]);
+      final materials = results[0] as List<MasterMaterial>;
+      final templates = results[1] as List<DevizArticolTemplate>;
+      if (!mounted) return;
+      setState(() {
+        _materialCatalog = materials;
+        _templateCatalog = templates;
+        _sugestii = _buildSugestii(materials, templates);
+      });
+    } catch (_) {}
+  }
+
+  static List<_Sugestie> _buildSugestii(
+    List<MasterMaterial> materials,
+    List<DevizArticolTemplate> templates,
+  ) {
+    final result = <_Sugestie>[];
+    // Template-urile primele (au toate 4 prețuri)
+    for (final t in templates) {
+      result.add(_Sugestie.fromTemplate(t));
+    }
+    // Materialele care nu sunt deja ca template
+    final templateNames =
+        templates.map((t) => t.denumire.trim().toLowerCase()).toSet();
+    for (final m in materials) {
+      if (!templateNames.contains(m.name.trim().toLowerCase())) {
+        result.add(_Sugestie.fromMaterial(m));
+      }
+    }
+    return result;
+  }
+
+  Future<void> _actualizatePretiriDinCatalog() async {
+    if (_materialCatalog.isEmpty) return;
+    var updated = 0;
+    for (final a in _articole) {
+      final denumire = a.denumireCtrl.text.trim().toLowerCase();
+      if (denumire.isEmpty) continue;
+      // Caută mai întâi în template-uri (au și Man/Utilaj/Transport)
+      final tpl = _templateCatalog
+          .where((t) => t.denumire.trim().toLowerCase() == denumire)
+          .firstOrNull;
+      if (tpl != null) {
+        final oldMat = a.mat;
+        final oldMan = a.man;
+        if (tpl.pretUnitarMat > 0) a.matCtrl.text = _fmtV(tpl.pretUnitarMat);
+        if (tpl.pretUnitarMan > 0) a.manCtrl.text = _fmtV(tpl.pretUnitarMan);
+        if (tpl.pretUnitarUtilaj > 0) a.utilajCtrl.text = _fmtV(tpl.pretUnitarUtilaj);
+        if (tpl.pretUnitarTransport > 0) a.transportCtrl.text = _fmtV(tpl.pretUnitarTransport);
+        if (a.mat != oldMat || a.man != oldMan) updated++;
+        continue;
+      }
+      // Fallback: caută în materiale (doar pretMat)
+      final mat = _materialCatalog
+          .where((m) => m.name.trim().toLowerCase() == denumire)
+          .firstOrNull;
+      if (mat != null && mat.price > 0 && mat.price != a.mat) {
+        a.matCtrl.text = _fmtV(mat.price);
+        updated++;
+      }
+    }
+    setState(() {});
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(updated > 0
+          ? 'Au fost actualizate $updated articole din catalog.'
+          : 'Toate prețurile sunt deja la zi.'),
+    ));
+  }
+
+
+  static String _fmtPct(double v) =>
+      v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+
+  Future<void> _loadCompanyDefaults() async {
+    try {
+      final profile = await widget.appRepository.loadCompanyProfile();
+      if (!mounted) return;
+      setState(() {
+        _tvaCtrl.text = _fmtPct(profile.defaultVatPercent);
+        _profitCtrl.text = _fmtPct(profile.defaultProfitPercent);
+        if (profile.defaultOverheadPercent > 0) {
+          _regieCtrl.text = _fmtPct(profile.defaultOverheadPercent);
+        }
+        // Păstrăm intocmitDe din currentUserName dacă nu e setat în profil
+      });
+    } catch (_) {
+      // Fallback la valorile hardcodate din controllers
+    }
+  }
+
+  Future<void> _loadNextNumber() async {
+    try {
+      final n = await widget.repository.nextNumber();
+      if (mounted) setState(() => _numarCtrl.text = n);
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _numarCtrl.dispose();
+    _titluCtrl.dispose();
+    _obiectivCtrl.dispose();
+    _intocmitDeCtrl.dispose();
+    _noteCtrl.dispose();
+    _regieCtrl.dispose();
+    _profitCtrl.dispose();
+    _tvaCtrl.dispose();
+    _zileCtrl.dispose();
+    for (final a in _articole) {
+      a.dispose();
+    }
+    super.dispose();
+  }
+
+  double get _regie => double.tryParse(_regieCtrl.text) ?? 9;
+  double get _profit => double.tryParse(_profitCtrl.text) ?? 10;
+  double get _tva => double.tryParse(_tvaCtrl.text) ?? 21;
+
+  List<DevizTehnicArticol> get _buildArticole =>
+      _articole.map((a) => a.toModel()).toList();
+
+  double get _totalMat =>
+      _buildArticole.fold(0, (s, a) => s + a.valoareMat);
+  double get _totalMan =>
+      _buildArticole.fold(0, (s, a) => s + a.valoareMan);
+  double get _totalUtilaj =>
+      _buildArticole.fold(0, (s, a) => s + a.valoareUtilaj);
+  double get _totalTransport =>
+      _buildArticole.fold(0, (s, a) => s + a.valoareTransport);
+  double get _totalDirect =>
+      _totalMat + _totalMan + _totalUtilaj + _totalTransport;
+  double get _regieVal => _totalDirect * _regie / 100;
+  double get _profitVal => (_totalDirect + _regieVal) * _profit / 100;
+  double get _totalFaraTva => _totalDirect + _regieVal + _profitVal;
+  double get _tvaVal => _totalFaraTva * _tva / 100;
+  double get _totalCuTva => _totalFaraTva + _tvaVal;
+
+  Future<void> _exportPdf() async {
+    final record = _buildRecord();
+    try {
+      final path = await DevizTehnicPdfService.export(
+        repository: widget.appRepository,
+        deviz: record,
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'PDF deviz tehnic generat',
+        shareSubject:
+            'Deviz ${record.numar.isNotEmpty ? record.numar : record.titlu}',
+        shareText: 'PDF deviz tehnic generat din aplicație.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare export PDF: $e')),
+      );
+    }
+  }
+
+  DevizTehnicRecord _buildRecord() {
+    final now = DateTime.now();
+    final ex = widget.existing;
+    return DevizTehnicRecord(
+      id: ex?.id ?? '',
+      numar: _numarCtrl.text.trim(),
+      titlu: _titluCtrl.text.trim(),
+      obiectiv: _obiectivCtrl.text.trim(),
+      clientId: _selectedClientId ?? '',
+      clientName: _selectedClientName,
+      dataEmiterii: _dataEmiterii,
+      zileValabilitate: int.tryParse(_zileCtrl.text) ?? 30,
+      articole: _buildArticole,
+      regiePercent: _regie,
+      profitPercent: _profit,
+      tvaPercent: _tva,
+      intocmitDe: _intocmitDeCtrl.text.trim(),
+      note: _noteCtrl.text.trim(),
+      createdAt: ex?.createdAt ?? now,
+      updatedAt: now,
+      createdByUserId: widget.currentUserId,
+    );
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_articole.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Adaugă cel puțin un articol.')),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final record = _buildRecord();
+      // Salvează materialele și template-urile de norme (fără duplicare)
+      for (final a in _articole) {
+        final denumire = a.denumireCtrl.text.trim();
+        final um = a.umCtrl.text.trim().isEmpty ? 'buc' : a.umCtrl.text.trim();
+        if (denumire.isEmpty) continue;
+        // Salvează în nomenclator materiale dacă are pretMat
+        if (a.mat > 0) {
+          await _materialsService.upsertFromOfferMaterial(
+            name: denumire,
+            unit: um,
+            price: a.mat,
+          );
+        }
+        // Salvează în baza de norme dacă are cel puțin Man/Utilaj/Transport
+        if (a.man > 0 || a.utilaj > 0 || a.transport > 0) {
+          final existing = _templateRepo.findByName(denumire, _templateCatalog);
+          final now = DateTime.now();
+          final tpl = DevizArticolTemplate(
+            id: existing?.id ?? 'tpl-${now.microsecondsSinceEpoch}',
+            denumire: denumire,
+            um: um,
+            pretUnitarMat: a.mat > 0 ? a.mat : (existing?.pretUnitarMat ?? 0),
+            pretUnitarMan: a.man > 0 ? a.man : (existing?.pretUnitarMan ?? 0),
+            pretUnitarUtilaj: a.utilaj > 0 ? a.utilaj : (existing?.pretUnitarUtilaj ?? 0),
+            pretUnitarTransport: a.transport > 0 ? a.transport : (existing?.pretUnitarTransport ?? 0),
+            lastUpdated: now,
+            folositDeCateOri: (existing?.folositDeCateOri ?? 0) + 1,
+          );
+          await _templateRepo.upsertLocal(tpl);
+          try {
+            await _templateRepo.upsertToFirebase(tpl);
+          } catch (_) {}
+        }
+      }
+      final saved = await widget.repository.save(record);
+      if (!mounted) return;
+      Navigator.of(context).pop(saved);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la salvare: $e')),
+      );
+    }
+  }
+
+  void _addArticol() {
+    setState(() => _articole.add(_ArticolState()));
+  }
+
+  void _removeArticol(int index) {
+    setState(() {
+      _articole[index].dispose();
+      _articole.removeAt(index);
+    });
+  }
+
+  void _moveArticol(int from, int to) {
+    if (to < 0 || to >= _articole.length) return;
+    setState(() {
+      final item = _articole.removeAt(from);
+      _articole.insert(to, item);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = DateFormat('dd.MM.yyyy');
+    final isNew = widget.existing == null;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(isNew ? 'Deviz tehnic nou' : 'Editează deviz tehnic'),
+        actions: [
+          if (!isNew)
+            IconButton(
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              tooltip: 'Exportă PDF',
+              onPressed: _exportPdf,
+            ),
+          if (_saving)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            TextButton.icon(
+              onPressed: _save,
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('Salvează'),
+            ),
+        ],
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // ── Informații generale ────────────────────────────
+            _SectionCard(
+              title: 'Informații generale',
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _numarCtrl,
+                        decoration:
+                            const InputDecoration(labelText: 'Număr deviz'),
+                        validator: (v) =>
+                            (v == null || v.trim().isEmpty) ? 'Obligatoriu' : null,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        title: const Text('Data emiterii'),
+                        subtitle: Text(fmt.format(_dataEmiterii)),
+                        trailing:
+                            const Icon(Icons.calendar_today_outlined, size: 18),
+                        onTap: () async {
+                          final p = await showDatePicker(
+                            context: context,
+                            initialDate: _dataEmiterii,
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime(2030),
+                            locale: const Locale('ro'),
+                          );
+                          if (p != null && mounted) {
+                            setState(() => _dataEmiterii = p);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _titluCtrl,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Titlu deviz / lucrare',
+                    hintText: 'ex: Instalație răcire tehnologică',
+                  ),
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty) ? 'Obligatoriu' : null,
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _obiectivCtrl,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Obiectiv / locație',
+                    hintText: 'ex: Cusătorie, Str. ...',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Client
+                DropdownButtonFormField<String>(
+                  value: _selectedClientId,
+                  decoration: const InputDecoration(labelText: 'Client'),
+                  hint: const Text('Selectează client'),
+                  items: [
+                    const DropdownMenuItem(value: null, child: Text('— Fără client —')),
+                    ...widget.clients.map(
+                      (c) => DropdownMenuItem(
+                        value: c.id,
+                        child: Text(c.name),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    setState(() {
+                      _selectedClientId = v;
+                      _selectedClientName = v == null
+                          ? ''
+                          : widget.clients
+                                  .firstWhere(
+                                    (c) => c.id == v,
+                                    orElse: () => ClientRecord(
+                                      id: v,
+                                      clientCode: '',
+                                      name: '',
+                                      phone: '',
+                                      email: '',
+                                      address: '',
+                                      city: '',
+                                      county: '',
+                                      notes: '',
+                                      isActive: true,
+                                      contactPerson: '',
+                                      type: ClientType.persoanaJuridica,
+                                      departments: const [],
+                                      createdAt: DateTime.now(),
+                                      updatedAt: DateTime.now(),
+                                    ),
+                                  )
+                                  .name;
+                    });
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // ── Articole ───────────────────────────────────────
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Articole deviz (${_articole.length})',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const Spacer(),
+                        if (_articole.isNotEmpty) ...[
+                          OutlinedButton.icon(
+                            onPressed: _actualizatePretiriDinCatalog,
+                            icon: const Icon(Icons.sync, size: 16),
+                            label: const Text('Actualizează prețuri'),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 6),
+                              textStyle: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        FilledButton.icon(
+                          onPressed: _addArticol,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Adaugă articol'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    // Header tabel
+                    const _ArticolHeader(),
+                    const Divider(),
+                    // Lista articole
+                    if (_articole.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text(
+                            'Niciun articol adăugat. Apasă „Adaugă articol".',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      ),
+                    ...List.generate(_articole.length, (i) {
+                      final a = _articole[i];
+                      return _ArticolRow(
+                        key: ValueKey(a),
+                        index: i,
+                        state: a,
+                        sugestii: _sugestii,
+                        onChanged: () => setState(() {}),
+                        onRemove: () => _removeArticol(i),
+                        onMoveUp: i > 0 ? () => _moveArticol(i, i - 1) : null,
+                        onMoveDown: i < _articole.length - 1
+                            ? () => _moveArticol(i, i + 1)
+                            : null,
+                      );
+                    }),
+                    const Divider(height: 24),
+                    // Total per articole
+                    _TotalRow(
+                      label: 'TOTAL ARTICOLE',
+                      mat: _totalMat,
+                      man: _totalMan,
+                      utilaj: _totalUtilaj,
+                      transport: _totalTransport,
+                      total: _totalDirect,
+                      bold: true,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── Centralizator ──────────────────────────────────
+            _SectionCard(
+              title: 'Centralizator cheltuieli',
+              children: [
+                _CentralizatorTable(
+                  totalMat: _totalMat,
+                  totalMan: _totalMan,
+                  totalUtilaj: _totalUtilaj,
+                  totalTransport: _totalTransport,
+                  totalDirect: _totalDirect,
+                  regiePercent: _regie,
+                  regieVal: _regieVal,
+                  profitPercent: _profit,
+                  profitVal: _profitVal,
+                  totalFaraTva: _totalFaraTva,
+                  tvaPercent: _tva,
+                  tvaVal: _tvaVal,
+                  totalCuTva: _totalCuTva,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // ── Cote recapitulație ─────────────────────────────
+            _SectionCard(
+              title: 'Cote recapitulație (%)',
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _regieCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.]')),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'Regie / Overhead %',
+                          suffixText: '%',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _profitCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.]')),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'Profit %',
+                          suffixText: '%',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _tvaCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.]')),
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'TVA %',
+                          suffixText: '%',
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // ── Informații finale ──────────────────────────────
+            _SectionCard(
+              title: 'Informații finale',
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _intocmitDeCtrl,
+                        textCapitalization: TextCapitalization.words,
+                        decoration:
+                            const InputDecoration(labelText: 'Întocmit de'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _zileCtrl,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'Valabilitate (zile)',
+                          suffixText: 'zile',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _noteCtrl,
+                  textCapitalization: TextCapitalization.sentences,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Note / observații',
+                    alignLabelWithHint: true,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 80),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _saving ? null : _save,
+        icon: _saving
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.save_outlined),
+        label: Text(_saving ? 'Se salvează...' : 'Salvează devizul'),
+      ),
+    );
+  }
+}
+
+// ── State intern pentru un articol (controllers) ────────────────────────────
+
+class _ArticolState {
+  _ArticolState({
+    String denumire = '',
+    String um = 'buc',
+    double cantitate = 0,
+    double pretMat = 0,
+    double pretMan = 0,
+    double pretUtilaj = 0,
+    double pretTransport = 0,
+  }) {
+    denumireCtrl = TextEditingController(text: denumire);
+    umCtrl = TextEditingController(text: um);
+    cantCtrl = TextEditingController(
+        text: cantitate == 0 ? '' : _fmt(cantitate));
+    matCtrl = TextEditingController(text: pretMat == 0 ? '' : _fmt(pretMat));
+    manCtrl = TextEditingController(text: pretMan == 0 ? '' : _fmt(pretMan));
+    utilajCtrl =
+        TextEditingController(text: pretUtilaj == 0 ? '' : _fmt(pretUtilaj));
+    transportCtrl = TextEditingController(
+        text: pretTransport == 0 ? '' : _fmt(pretTransport));
+  }
+
+  /// 'catalog' = material din nomenclator, 'norme' = din baza proprie, '' = manual
+  String sursa = '';
+
+  static _ArticolState fromModel(DevizTehnicArticol a) => _ArticolState(
+        denumire: a.denumire,
+        um: a.um,
+        cantitate: a.cantitate,
+        pretMat: a.pretMat,
+        pretMan: a.pretMan,
+        pretUtilaj: a.pretUtilaj,
+        pretTransport: a.pretTransport,
+      );
+
+  late final TextEditingController denumireCtrl;
+  late final TextEditingController umCtrl;
+  late final TextEditingController cantCtrl;
+  late final TextEditingController matCtrl;
+  late final TextEditingController manCtrl;
+  late final TextEditingController utilajCtrl;
+  late final TextEditingController transportCtrl;
+
+  static String _fmt(double v) =>
+      v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+
+  double get cant => double.tryParse(cantCtrl.text.replaceAll(',', '.')) ?? 0;
+  double get mat => double.tryParse(matCtrl.text.replaceAll(',', '.')) ?? 0;
+  double get man => double.tryParse(manCtrl.text.replaceAll(',', '.')) ?? 0;
+  double get utilaj =>
+      double.tryParse(utilajCtrl.text.replaceAll(',', '.')) ?? 0;
+  double get transport =>
+      double.tryParse(transportCtrl.text.replaceAll(',', '.')) ?? 0;
+
+  double get totalArticol => cant * (mat + man + utilaj + transport);
+
+  DevizTehnicArticol toModel() => DevizTehnicArticol(
+        denumire: denumireCtrl.text.trim(),
+        um: umCtrl.text.trim().isEmpty ? 'buc' : umCtrl.text.trim(),
+        cantitate: cant,
+        pretMat: mat,
+        pretMan: man,
+        pretUtilaj: utilaj,
+        pretTransport: transport,
+      );
+
+  void dispose() {
+    denumireCtrl.dispose();
+    umCtrl.dispose();
+    cantCtrl.dispose();
+    matCtrl.dispose();
+    manCtrl.dispose();
+    utilajCtrl.dispose();
+    transportCtrl.dispose();
+  }
+}
+
+// ── Widgets helper ───────────────────────────────────────────────────────────
+
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({required this.title, required this.children});
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ArticolHeader extends StatelessWidget {
+  const _ArticolHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(
+          fontWeight: FontWeight.bold,
+          color: Theme.of(context).colorScheme.primary,
+        );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          const SizedBox(width: 32), // reorder
+          Expanded(flex: 4, child: Text('Denumire articol', style: style)),
+          SizedBox(width: 52, child: Text('UM', style: style, textAlign: TextAlign.center)),
+          SizedBox(width: 64, child: Text('Cant.', style: style, textAlign: TextAlign.center)),
+          SizedBox(width: 72, child: Text('Mat RON', style: style, textAlign: TextAlign.center)),
+          SizedBox(width: 72, child: Text('Man RON', style: style, textAlign: TextAlign.center)),
+          SizedBox(width: 72, child: Text('Utilaj', style: style, textAlign: TextAlign.center)),
+          SizedBox(width: 72, child: Text('Transp.', style: style, textAlign: TextAlign.center)),
+          SizedBox(width: 80, child: Text('Total', style: style, textAlign: TextAlign.right)),
+          const SizedBox(width: 64), // actions
+        ],
+      ),
+    );
+  }
+}
+
+class _ArticolRow extends StatefulWidget {
+  const _ArticolRow({
+    super.key,
+    required this.index,
+    required this.state,
+    required this.sugestii,
+    required this.onChanged,
+    required this.onRemove,
+    this.onMoveUp,
+    this.onMoveDown,
+  });
+
+  final int index;
+  final _ArticolState state;
+  final List<_Sugestie> sugestii;
+  final VoidCallback onChanged;
+  final VoidCallback onRemove;
+  final VoidCallback? onMoveUp;
+  final VoidCallback? onMoveDown;
+
+  @override
+  State<_ArticolRow> createState() => _ArticolRowState();
+}
+
+class _ArticolRowState extends State<_ArticolRow> {
+  @override
+  void initState() {
+    super.initState();
+    for (final ctrl in _allControllers) {
+      ctrl.addListener(_onControllerChange);
+    }
+  }
+
+  List<TextEditingController> get _allControllers => [
+        widget.state.denumireCtrl,
+        widget.state.umCtrl,
+        widget.state.cantCtrl,
+        widget.state.matCtrl,
+        widget.state.manCtrl,
+        widget.state.utilajCtrl,
+        widget.state.transportCtrl,
+      ];
+
+  void _onControllerChange() {
+    setState(() {});
+    widget.onChanged();
+  }
+
+  @override
+  void dispose() {
+    for (final ctrl in _allControllers) {
+      ctrl.removeListener(_onControllerChange);
+    }
+    super.dispose();
+  }
+
+  Widget _numField(TextEditingController ctrl, {String hint = '0'}) {
+    return SizedBox(
+      width: 72,
+      child: TextFormField(
+        controller: ctrl,
+        keyboardType:
+            const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: [
+          FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+        ],
+        textAlign: TextAlign.right,
+        style: const TextStyle(fontSize: 13),
+        decoration: InputDecoration(
+          hintText: hint,
+          isDense: true,
+          border: const OutlineInputBorder(),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.state.totalArticol;
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    final cs = Theme.of(context).colorScheme;
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: cs.outlineVariant, width: 0.5)),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // reorder handle
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_upward, size: 14),
+                    onPressed: widget.onMoveUp,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 24, minHeight: 20),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.arrow_downward, size: 14),
+                    onPressed: widget.onMoveDown,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 24, minHeight: 20),
+                  ),
+                ],
+              ),
+              // Denumire — autocomplete unificat: norme proprii + nomenclator materiale
+              Expanded(
+                flex: 4,
+                child: Autocomplete<_Sugestie>(
+                  displayStringForOption: (s) => s.denumire,
+                  optionsBuilder: (textEditingValue) {
+                    final q = textEditingValue.text.trim().toLowerCase();
+                    if (q.isEmpty) return const [];
+                    return widget.sugestii.where((s) =>
+                        s.denumire.toLowerCase().contains(q));
+                  },
+                  onSelected: (s) {
+                    widget.state.denumireCtrl.text = s.denumire;
+                    widget.state.umCtrl.text = s.um;
+                    if (s.pretMat > 0) {
+                      widget.state.matCtrl.text = _fmtV(s.pretMat);
+                    }
+                    if (s.pretMan > 0) {
+                      widget.state.manCtrl.text = _fmtV(s.pretMan);
+                    }
+                    if (s.pretUtilaj > 0) {
+                      widget.state.utilajCtrl.text = _fmtV(s.pretUtilaj);
+                    }
+                    if (s.pretTransport > 0) {
+                      widget.state.transportCtrl.text = _fmtV(s.pretTransport);
+                    }
+                    widget.state.sursa = s.isTemplate ? 'norme' : 'catalog';
+                    widget.onChanged();
+                  },
+                  fieldViewBuilder:
+                      (context, autocompleteCtrl, focusNode, onFieldSubmitted) {
+                    if (autocompleteCtrl.text != widget.state.denumireCtrl.text) {
+                      autocompleteCtrl.text = widget.state.denumireCtrl.text;
+                    }
+                    return TextFormField(
+                      controller: autocompleteCtrl,
+                      focusNode: focusNode,
+                      textCapitalization: TextCapitalization.sentences,
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Denumire articol ${widget.index + 1}',
+                        isDense: true,
+                        border: const OutlineInputBorder(),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 8),
+                      ),
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty) ? 'Obligatoriu' : null,
+                      onChanged: (value) {
+                        widget.state.denumireCtrl.text = value;
+                        widget.state.sursa = '';
+                        widget.onChanged();
+                      },
+                      onFieldSubmitted: (_) => onFieldSubmitted(),
+                    );
+                  },
+                  optionsViewBuilder: (context, onSelected, options) {
+                    final rows = options.toList(growable: false);
+                    final cs = Theme.of(context).colorScheme;
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4,
+                        borderRadius: BorderRadius.circular(8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: 280,
+                            minWidth: 340,
+                            maxWidth: 600,
+                          ),
+                          child: ListView.builder(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            itemCount: rows.length,
+                            itemBuilder: (context, index) {
+                              final s = rows[index];
+                              final badgeColor = s.isTemplate
+                                  ? cs.secondaryContainer
+                                  : cs.surfaceContainerHighest;
+                              final badgeText =
+                                  s.isTemplate ? 'norme' : 'catalog';
+                              return ListTile(
+                                dense: true,
+                                title: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(s.denumire,
+                                          style:
+                                              const TextStyle(fontSize: 13)),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 1),
+                                      decoration: BoxDecoration(
+                                        color: badgeColor,
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(badgeText,
+                                          style: TextStyle(
+                                              fontSize: 10,
+                                              color: s.isTemplate
+                                                  ? cs.onSecondaryContainer
+                                                  : cs.onSurfaceVariant)),
+                                    ),
+                                  ],
+                                ),
+                                subtitle: Text(
+                                  _sugestieSubtitle(s),
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                onTap: () => onSelected(s),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(width: 4),
+              // UM
+              SizedBox(
+                width: 52,
+                child: TextFormField(
+                  controller: widget.state.umCtrl,
+                  style: const TextStyle(fontSize: 13),
+                  textAlign: TextAlign.center,
+                  decoration: const InputDecoration(
+                    hintText: 'UM',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              // Cantitate
+              SizedBox(
+                width: 64,
+                child: TextFormField(
+                  controller: widget.state.cantCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+                  ],
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: '0',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              _numField(widget.state.matCtrl),
+              const SizedBox(width: 4),
+              _numField(widget.state.manCtrl),
+              const SizedBox(width: 4),
+              _numField(widget.state.utilajCtrl),
+              const SizedBox(width: 4),
+              _numField(widget.state.transportCtrl),
+              const SizedBox(width: 8),
+              // Total articol
+              SizedBox(
+                width: 80,
+                child: Text(
+                  fmt.format(total),
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: cs.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              // Actions
+              SizedBox(
+                width: 60,
+                child: IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  color: cs.error,
+                  tooltip: 'Șterge articol',
+                  onPressed: widget.onRemove,
+                ),
+              ),
+            ],
+          ),
+          // Badge sursă + subtotaluri
+          Padding(
+            padding: const EdgeInsets.only(left: 36, top: 2),
+            child: Row(
+              children: [
+                if (widget.state.sursa.isNotEmpty)
+                  _SursaBadge(sursa: widget.state.sursa),
+                if (widget.state.sursa.isNotEmpty && widget.state.cant > 0)
+                  const SizedBox(width: 8),
+                if (widget.state.cant > 0)
+                  Expanded(child: _SubtotalRow(state: widget.state)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SubtotalRow extends StatelessWidget {
+  const _SubtotalRow({required this.state});
+  final _ArticolState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    final items = <String>[];
+    if (state.mat > 0) {
+      items.add('Mat: ${fmt.format(state.cant * state.mat)}');
+    }
+    if (state.man > 0) {
+      items.add('Man: ${fmt.format(state.cant * state.man)}');
+    }
+    if (state.utilaj > 0) {
+      items.add('Utilaj: ${fmt.format(state.cant * state.utilaj)}');
+    }
+    if (state.transport > 0) {
+      items.add('Transport: ${fmt.format(state.cant * state.transport)}');
+    }
+    if (items.isEmpty) return const SizedBox.shrink();
+    return Text(
+      items.join('  |  '),
+      style: TextStyle(
+        fontSize: 11,
+        color: Theme.of(context).colorScheme.outline,
+      ),
+    );
+  }
+}
+
+// ── Sugestie unificată (material + template norme) ───────────────────────────
+
+class _Sugestie {
+  const _Sugestie({
+    required this.denumire,
+    required this.um,
+    required this.pretMat,
+    required this.pretMan,
+    required this.pretUtilaj,
+    required this.pretTransport,
+    required this.isTemplate,
+  });
+
+  factory _Sugestie.fromTemplate(DevizArticolTemplate t) => _Sugestie(
+        denumire: t.denumire,
+        um: t.um,
+        pretMat: t.pretUnitarMat,
+        pretMan: t.pretUnitarMan,
+        pretUtilaj: t.pretUnitarUtilaj,
+        pretTransport: t.pretUnitarTransport,
+        isTemplate: true,
+      );
+
+  factory _Sugestie.fromMaterial(MasterMaterial m) => _Sugestie(
+        denumire: m.name,
+        um: m.unit,
+        pretMat: m.price,
+        pretMan: 0,
+        pretUtilaj: 0,
+        pretTransport: 0,
+        isTemplate: false,
+      );
+
+  final String denumire;
+  final String um;
+  final double pretMat;
+  final double pretMan;
+  final double pretUtilaj;
+  final double pretTransport;
+  final bool isTemplate;
+}
+
+String _sugestieSubtitle(_Sugestie s) {
+  final buf = StringBuffer('UM: ${s.um}');
+  if (s.pretMat > 0) buf.write('  •  Mat: ${s.pretMat.toStringAsFixed(2)}');
+  if (s.pretMan > 0) buf.write('  •  Man: ${s.pretMan.toStringAsFixed(2)}');
+  if (s.pretUtilaj > 0) buf.write('  •  Utilaj: ${s.pretUtilaj.toStringAsFixed(2)}');
+  if (s.pretTransport > 0) buf.write('  •  Transp: ${s.pretTransport.toStringAsFixed(2)}');
+  return buf.toString();
+}
+
+String _fmtV(double v) =>
+    v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+
+// ── Badge sursă articol ───────────────────────────────────────────────────────
+
+class _SursaBadge extends StatelessWidget {
+  const _SursaBadge({required this.sursa});
+  final String sursa;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isNorme = sursa == 'norme';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: isNorme ? cs.secondaryContainer : cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isNorme ? Icons.auto_fix_high : Icons.inventory_2_outlined,
+            size: 10,
+            color: isNorme ? cs.onSecondaryContainer : cs.onSurfaceVariant,
+          ),
+          const SizedBox(width: 3),
+          Text(
+            isNorme ? 'din norme' : 'din catalog',
+            style: TextStyle(
+              fontSize: 10,
+              color: isNorme ? cs.onSecondaryContainer : cs.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── TotalRow ──────────────────────────────────────────────────────────────────
+
+class _TotalRow extends StatelessWidget {
+  const _TotalRow({
+    required this.label,
+    required this.mat,
+    required this.man,
+    required this.utilaj,
+    required this.transport,
+    required this.total,
+    this.bold = false,
+  });
+
+  final String label;
+  final double mat, man, utilaj, transport, total;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    final style = TextStyle(
+      fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+      fontSize: 13,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: style)),
+          SizedBox(
+            width: 90,
+            child: Text('Mat: ${fmt.format(mat)}',
+                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+          ),
+          SizedBox(
+            width: 90,
+            child: Text('Man: ${fmt.format(man)}',
+                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+          ),
+          SizedBox(
+            width: 90,
+            child: Text('Utilaj: ${fmt.format(utilaj)}',
+                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+          ),
+          SizedBox(
+            width: 96,
+            child: Text('Transp: ${fmt.format(transport)}',
+                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+          ),
+          SizedBox(
+            width: 100,
+            child: Text(
+              fmt.format(total),
+              textAlign: TextAlign.right,
+              style: style.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CentralizatorTable extends StatelessWidget {
+  const _CentralizatorTable({
+    required this.totalMat,
+    required this.totalMan,
+    required this.totalUtilaj,
+    required this.totalTransport,
+    required this.totalDirect,
+    required this.regiePercent,
+    required this.regieVal,
+    required this.profitPercent,
+    required this.profitVal,
+    required this.totalFaraTva,
+    required this.tvaPercent,
+    required this.tvaVal,
+    required this.totalCuTva,
+  });
+
+  final double totalMat, totalMan, totalUtilaj, totalTransport, totalDirect;
+  final double regiePercent, regieVal;
+  final double profitPercent, profitVal;
+  final double totalFaraTva, tvaPercent, tvaVal, totalCuTva;
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    final cs = Theme.of(context).colorScheme;
+
+    Widget row(String label, double value,
+        {bool bold = false, bool highlight = false}) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            Text(
+              '${fmt.format(value)} RON',
+              style: TextStyle(
+                fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+                fontSize: 13,
+                color: highlight ? cs.primary : null,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Coloane categorii
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            children: [
+              Expanded(child: _catChip('Material', totalMat, cs)),
+              const SizedBox(width: 6),
+              Expanded(child: _catChip('Manoperă', totalMan, cs)),
+              const SizedBox(width: 6),
+              Expanded(child: _catChip('Utilaj', totalUtilaj, cs)),
+              const SizedBox(width: 6),
+              Expanded(child: _catChip('Transport', totalTransport, cs)),
+            ],
+          ),
+        ),
+        const Divider(),
+        row('1. Total cheltuieli directe', totalDirect, bold: true),
+        row('2. Cheltuieli regie ($regiePercent%)', regieVal),
+        row('3. Profit ($profitPercent%)', profitVal),
+        const Divider(),
+        row('Total deviz fără TVA', totalFaraTva, bold: true),
+        row('TVA ($tvaPercent%)', tvaVal),
+        const Divider(thickness: 2),
+        row('TOTAL CU TVA', totalCuTva, bold: true, highlight: true),
+      ],
+    );
+  }
+
+  Widget _catChip(String label, double val, ColorScheme cs) {
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+          Text(fmt.format(val),
+              style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: cs.onSurface)),
+        ],
+      ),
+    );
+  }
+}

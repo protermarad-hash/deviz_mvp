@@ -1,0 +1,756 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/pdf_actions_helper.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../clients/client_models.dart';
+import 'deviz_tehnic_models.dart';
+import 'deviz_tehnic_pdf_service.dart';
+import 'deviz_tehnic_repository.dart';
+import 'deviz_tehnic_form_page.dart';
+
+/// Lista devizelor tehnice cu logica de calcul Excel (Mat/Man/Utilaj/Transport).
+class DevizTehnicListPage extends StatefulWidget {
+  const DevizTehnicListPage({
+    super.key,
+    required this.repository,
+    required this.currentUserName,
+    required this.currentUserId,
+    this.hideAppBar = false,
+  });
+
+  final AppDataRepository repository;
+  final String currentUserName;
+  final String currentUserId;
+  final bool hideAppBar;
+
+  @override
+  State<DevizTehnicListPage> createState() => _DevizTehnicListPageState();
+}
+
+class _DevizTehnicListPageState extends State<DevizTehnicListPage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+  final _devizRepo = DevizTehnicRepository();
+  final _searchCtrl = TextEditingController();
+
+  bool _loading = true;
+  List<DevizTehnicRecord> _items = [];
+  List<ClientRecord> _clients = [];
+
+  // Filtre
+  bool _filtersVisible = false;
+  final Set<DevizTehnicTipDocument> _filterTip = {};
+  final Set<DevizTehnicStatus> _filterStatus = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl.addListener(_refresh);
+    // Listener onlineNotifier: dacă pagina s-a deschis înainte ca Firebase să
+    // fie ready (sau înainte de conexiune), reîncarcă automat.
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+    Future.microtask(_load);
+  }
+
+  @override
+  void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    // Reîncarcă automat când devenim online — DAR NUMAI dacă lista e goală
+    // (nu suprascriem date deja încărcate cu succes).
+    if (FirebaseBootstrap.onlineNotifier.value && _items.isEmpty && !_loading) {
+      _load();
+    }
+  }
+
+  void _refresh() => setState(() {});
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final results = await Future.wait([
+        _devizRepo.list(),
+        _loadClients(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _items = results[0] as List<DevizTehnicRecord>;
+        _clients = results[1] as List<ClientRecord>;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la încărcare: $e')),
+      );
+    }
+  }
+
+  Future<List<ClientRecord>> _loadClients() async {
+    try {
+      final list = await widget.repository.listClients();
+      return [...list]
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  int get _activeFilterCount {
+    int count = 0;
+    if (_searchCtrl.text.isNotEmpty) count++;
+    if (_filterTip.isNotEmpty) count++;
+    if (_filterStatus.isNotEmpty) count++;
+    return count;
+  }
+
+  void _resetFilters() {
+    setState(() {
+      _searchCtrl.clear();
+      _filterTip.clear();
+      _filterStatus.clear();
+    });
+  }
+
+  List<DevizTehnicRecord> get _filtered {
+    var list = _items;
+    final q = _searchCtrl.text.toLowerCase().trim();
+    if (q.isNotEmpty) {
+      list = list.where((d) {
+        return d.titlu.toLowerCase().contains(q) ||
+            d.numar.toLowerCase().contains(q) ||
+            d.clientName.toLowerCase().contains(q) ||
+            d.obiectiv.toLowerCase().contains(q);
+      }).toList();
+    }
+    if (_filterTip.isNotEmpty) {
+      list = list.where((d) => _filterTip.contains(d.tipDocument)).toList();
+    }
+    if (_filterStatus.isNotEmpty) {
+      list = list.where((d) => _filterStatus.contains(d.status)).toList();
+    }
+    return list;
+  }
+
+  Future<void> _exportPdf(DevizTehnicRecord d) async {
+    try {
+      final path = await DevizTehnicPdfService.export(
+        repository: widget.repository,
+        deviz: d,
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'PDF ${d.tipDocument.label.toLowerCase()} generat',
+        shareSubject:
+            '${d.tipDocument.label} ${d.numar.isNotEmpty ? d.numar : d.titlu}',
+        shareText:
+            'PDF ${d.tipDocument.label.toLowerCase()} generat din aplicație.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare export PDF: $e')),
+      );
+    }
+  }
+
+  Future<void> _openForm({DevizTehnicRecord? existing}) async {
+    final result = await Navigator.of(context).push<DevizTehnicRecord>(
+      MaterialPageRoute(
+        builder: (_) => DevizTehnicFormPage(
+          existing: existing,
+          clients: _clients,
+          currentUserName: widget.currentUserName,
+          currentUserId: widget.currentUserId,
+          repository: _devizRepo,
+          appRepository: widget.repository,
+        ),
+      ),
+    );
+    if (result != null) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(existing == null
+              ? '${result.tipDocument.label} salvat: ${result.numar}'
+              : '${result.tipDocument.label} actualizat: ${result.numar}'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _changeStatus(
+      DevizTehnicRecord d, DevizTehnicStatus newStatus) async {
+    try {
+      final updated = d.copyWith(
+        status: newStatus,
+        updatedAt: DateTime.now(),
+      );
+      await _devizRepo.save(updated);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Status schimbat în: ${newStatus.label}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Eroare: $e')));
+    }
+  }
+
+  Future<void> _confirmDelete(DevizTehnicRecord d) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Șterge deviz'),
+        content: Text(
+            'Ești sigur că vrei să ștergi devizul ${d.numar.isNotEmpty ? d.numar : d.titlu}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await _devizRepo.delete(d.id);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Deviz șters.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Eroare: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final items = _filtered;
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    final dateFmt = DateFormat('dd.MM.yyyy');
+    final cs = Theme.of(context).colorScheme;
+
+    final body = LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 600;
+        final showFilters = isWide || _filtersVisible;
+        final hasActiveFilters = _activeFilterCount > 0;
+
+        return Column(
+          children: [
+            // ── Toolbar: search + buton filtre ──
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchCtrl,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: InputDecoration(
+                        hintText: 'Caută după număr, titlu, client...',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _searchCtrl.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  _searchCtrl.clear();
+                                  setState(() {});
+                                },
+                              )
+                            : null,
+                        isDense: true,
+                        border: hasActiveFilters
+                            ? OutlineInputBorder(
+                                borderSide:
+                                    BorderSide(color: cs.primary, width: 1.5),
+                              )
+                            : const OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  if (!isWide) ...[
+                    const SizedBox(width: 8),
+                    Badge(
+                      isLabelVisible: _activeFilterCount > 0,
+                      label: Text('$_activeFilterCount'),
+                      child: IconButton(
+                        icon: Icon(_filtersVisible
+                            ? Icons.filter_list_off
+                            : Icons.filter_list),
+                        tooltip: 'Filtre',
+                        onPressed: () =>
+                            setState(() => _filtersVisible = !_filtersVisible),
+                      ),
+                    ),
+                  ],
+                  if (hasActiveFilters) ...[
+                    const SizedBox(width: 4),
+                    TextButton(
+                      onPressed: _resetFilters,
+                      child: const Text('Resetează'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            // ── Panoul de filtre ──
+            if (showFilters)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Filtrare tip document
+                    Text(
+                      'Tip document',
+                      style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: DevizTehnicTipDocument.values.map((tip) {
+                        final active = _filterTip.contains(tip);
+                        return FilterChip(
+                          label: Text(tip.label,
+                              style: const TextStyle(fontSize: 12)),
+                          selected: active,
+                          onSelected: (v) {
+                            setState(() {
+                              if (v) {
+                                _filterTip.add(tip);
+                              } else {
+                                _filterTip.remove(tip);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 8),
+                    // Filtrare status
+                    Text(
+                      'Status',
+                      style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: DevizTehnicStatus.values.map((st) {
+                        final active = _filterStatus.contains(st);
+                        return FilterChip(
+                          label: Text(st.label,
+                              style: const TextStyle(fontSize: 12)),
+                          selected: active,
+                          selectedColor: st.color.withValues(alpha: 0.2),
+                          checkmarkColor: st.color,
+                          onSelected: (v) {
+                            setState(() {
+                              if (v) {
+                                _filterStatus.add(st);
+                              } else {
+                                _filterStatus.remove(st);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+            // List
+          Expanded(
+            child: items.isEmpty
+                ? RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
+                      children: [
+                        const SizedBox(height: 32),
+                        Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.calculate_outlined,
+                                  size: 48, color: cs.outline),
+                              const SizedBox(height: 12),
+                              Text(
+                                _searchCtrl.text.isNotEmpty ||
+                                        _filterTip.isNotEmpty ||
+                                        _filterStatus.isNotEmpty
+                                    ? 'Niciun deviz corespunde filtrelor active.'
+                                    : 'Niciun deviz tehnic găsit.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: cs.outline),
+                              ),
+                              // Info debug — ajutor la depanare cross-device
+                              if (_searchCtrl.text.isEmpty &&
+                                  _filterTip.isEmpty &&
+                                  _filterStatus.isEmpty) ...[
+                                const SizedBox(height: 16),
+                                Card(
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 24),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: DefaultTextStyle(
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: cs.onSurfaceVariant),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            'Firebase: '
+                                            'init=${FirebaseBootstrap.isInitialized} '
+                                            'online=${FirebaseBootstrap.isOnline}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: FirebaseBootstrap
+                                                      .isInitialized
+                                                  ? cs.onSurfaceVariant
+                                                  : Colors.orange.shade700,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          const Text(
+                                            'Trage în jos pentru a reîncărca din cloud.',
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                FilledButton.icon(
+                                  onPressed: _loading ? null : _load,
+                                  icon: const Icon(Icons.refresh, size: 16),
+                                  label: const Text('Reîncarcă din cloud'),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (ctx, i) {
+                        final d = items[i];
+                        final statusColor = d.status.color;
+                        return Card(
+                          clipBehavior: Clip.antiAlias,
+                          // Chenar colorat după status (vizibil ca la programări)
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                              color: statusColor.withValues(alpha: 0.5),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: InkWell(
+                            onTap: () => _openForm(existing: d),
+                            child: Container(
+                              // Fundal colorat subtil după status
+                              decoration: BoxDecoration(
+                                color: statusColor.withValues(alpha: 0.06),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Tip document + număr + status + data
+                                  Row(
+                                    children: [
+                                      // Badge tip document
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: cs.secondaryContainer,
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          d.tipDocument.label,
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                            color: cs.onSecondaryContainer,
+                                          ),
+                                        ),
+                                      ),
+                                      if (d.numar.isNotEmpty) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: cs.primaryContainer,
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            d.numar,
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.bold,
+                                              color: cs.onPrimaryContainer,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                      const SizedBox(width: 6),
+                                      // Badge status colorat
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: statusColor
+                                              .withValues(alpha: 0.18),
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                          border: Border.all(
+                                            color: statusColor
+                                                .withValues(alpha: 0.5),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          d.status.label,
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: statusColor,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      Text(
+                                        dateFmt.format(d.dataEmiterii),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: cs.outline,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  // Titlu
+                                  Text(
+                                    d.titlu.isNotEmpty
+                                        ? d.titlu
+                                        : '(fără titlu)',
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  if (d.obiectiv.isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      d.obiectiv,
+                                      style: TextStyle(
+                                          fontSize: 13, color: cs.outline),
+                                    ),
+                                  ],
+                                  if (d.clientName.isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      children: [
+                                        Icon(Icons.person_outline,
+                                            size: 14, color: cs.outline),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          d.clientName,
+                                          style: TextStyle(
+                                              fontSize: 13, color: cs.outline),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                  const SizedBox(height: 8),
+                                  // Totaluri + articole count
+                                  Row(
+                                    children: [
+                                      _MiniStat(
+                                          label: 'Articole',
+                                          value: '${d.articole.length}'),
+                                      const SizedBox(width: 12),
+                                      _MiniStat(
+                                          label: 'Fără TVA',
+                                          value:
+                                              '${fmt.format(d.totalFaraTva)} RON'),
+                                      const SizedBox(width: 12),
+                                      _MiniStat(
+                                        label: 'TOTAL cu TVA',
+                                        value:
+                                            '${fmt.format(d.totalCuTva)} RON',
+                                        highlight: true,
+                                      ),
+                                      const Spacer(),
+                                      IconButton(
+                                        icon: const Icon(
+                                            Icons.picture_as_pdf_outlined,
+                                            size: 18),
+                                        tooltip: 'Exportă PDF',
+                                        onPressed: () => _exportPdf(d),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.edit_outlined,
+                                            size: 18),
+                                        tooltip: 'Editează',
+                                        onPressed: () => _openForm(existing: d),
+                                      ),
+                                      IconButton(
+                                        icon: Icon(Icons.delete_outline,
+                                            size: 18, color: cs.error),
+                                        tooltip: 'Șterge',
+                                        onPressed: () => _confirmDelete(d),
+                                      ),
+                                    ],
+                                  ),
+                                  // ── Butoane rapide schimbare status ──────────
+                                  const SizedBox(height: 6),
+                                  SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: Row(
+                                      children: DevizTehnicStatus.values
+                                          .where((s) => s != d.status)
+                                          .map(
+                                            (s) => Padding(
+                                              padding: const EdgeInsets.only(
+                                                  right: 6),
+                                              child: OutlinedButton(
+                                                style:
+                                                    OutlinedButton.styleFrom(
+                                                  foregroundColor: s.color,
+                                                  side: BorderSide(
+                                                      color: s.color
+                                                          .withValues(
+                                                              alpha: 0.5)),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                          horizontal: 10,
+                                                          vertical: 4),
+                                                  minimumSize:
+                                                      const Size(0, 28),
+                                                  tapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                  textStyle:
+                                                      const TextStyle(
+                                                          fontSize: 11),
+                                                ),
+                                                onPressed: () =>
+                                                    _changeStatus(d, s),
+                                                child: Text('→ ${s.label}'),
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+            ),
+          ],
+        );
+      },
+    );
+
+    final fab = FloatingActionButton.extended(
+      onPressed: () => _openForm(),
+      icon: const Icon(Icons.add),
+      label: const Text('Document nou'),
+    );
+
+    if (widget.hideAppBar) {
+      return Scaffold(body: body, floatingActionButton: fab);
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('Devize tehnice')),
+      body: body,
+      floatingActionButton: fab,
+    );
+  }
+}
+
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({
+    required this.label,
+    required this.value,
+    this.highlight = false,
+  });
+
+  final String label;
+  final String value;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: TextStyle(fontSize: 10, color: cs.outline)),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: highlight ? cs.primary : cs.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+}

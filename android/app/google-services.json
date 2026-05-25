@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "322174025333",
+    "project_id": "devizpro-ultra-pilot",
+    "storage_bucket": "devizpro-ultra-pilot.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:322174025333:android:21fb6ce5f61ea74a06023c",
+        "android_client_info": {
+          "package_name": "com.example.devizpro_ultra"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBySKgFjhHMTaIdkdI2LWJPDMAM-bu3aDc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

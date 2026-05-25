@@ -1,0 +1,740 @@
+import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../core/app_models.dart';
+import '../../core/app_theme_preset.dart';
+import '../../core/help_content.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/local_store.dart';
+import '../oferte/offer_real_vehicle_cost_resolver.dart';
+
+class VehiclesPage extends StatefulWidget {
+  const VehiclesPage({super.key});
+
+  @override
+  State<VehiclesPage> createState() => _VehiclesPageState();
+}
+
+class _VehiclesPageState extends State<VehiclesPage> {
+  late final Future<AppRepository> _repositoryFuture = AppRepository.create();
+  final Uuid _uuid = const Uuid();
+  final OfferRealVehicleCostResolver _costResolver =
+      const OfferRealVehicleCostResolver();
+  String _dataSourceLabel = 'local_cache';
+  String? _fallbackReason;
+
+  Future<AppRepository> _repository() => _repositoryFuture;
+
+  Future<List<VehicleRecord>> _loadVehicles() async {
+    final repository = await _repository();
+    final items = await repository.listVehicles();
+    _dataSourceLabel = repository.lastVehiclesDataSourceLabel;
+    final reason = repository.lastVehiclesFallbackReason.trim();
+    _fallbackReason = reason.isEmpty ? null : reason;
+    return items;
+  }
+
+  Future<void> _deleteVehicle(VehicleRecord vehicle) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Șterge autoturism'),
+        content: Text('Stergi autoturismul "${vehicle.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final repository = await _repository();
+    await repository.deleteVehicle(vehicle.id);
+    _dataSourceLabel = repository.lastVehiclesDataSourceLabel;
+    final reason = repository.lastVehiclesFallbackReason.trim();
+    _fallbackReason = reason.isEmpty ? null : reason;
+    if (!mounted) return;
+    setState(() {});
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Autoturism sters.')),
+    );
+  }
+
+  Future<void> _editVehicle([VehicleRecord? vehicle]) async {
+    final plate = TextEditingController(text: vehicle?.plateNumber ?? '');
+    final name = TextEditingController(text: vehicle?.name ?? '');
+    final fuelType = TextEditingController(text: vehicle?.fuelType ?? '');
+    final consumption = TextEditingController(
+      text: (vehicle?.fuelConsumptionLPer100Km ?? 0).toStringAsFixed(2),
+    );
+    final fuelPrice = TextEditingController(
+      text: (vehicle?.fuelPricePerLiter ?? 0).toStringAsFixed(2),
+    );
+    final costPerKm = TextEditingController(
+      text: (vehicle?.costPerKmOptional ?? 0).toStringAsFixed(2),
+    );
+    final purchasePrice = TextEditingController(
+      text: (vehicle?.purchasePrice ?? 0).toStringAsFixed(2),
+    );
+    final fixedDaily = TextEditingController(
+      text: (vehicle?.fixedDailyCost ?? 0).toStringAsFixed(2),
+    );
+    final leasing = TextEditingController(
+      text: (vehicle?.monthlyLeasingCost ?? 0).toStringAsFixed(2),
+    );
+    final insurance = TextEditingController(
+      text: (vehicle?.insuranceCostOptional ?? 0).toStringAsFixed(2),
+    );
+    final maintenance = TextEditingController(
+      text: (vehicle?.maintenanceCostOptional ?? 0).toStringAsFixed(2),
+    );
+    final depreciationMonths = TextEditingController(
+      text: (vehicle?.depreciationMonths ?? 60).toString(),
+    );
+    final annualInsurance = TextEditingController(
+      text: (vehicle?.annualInsuranceCost ?? 0).toStringAsFixed(2),
+    );
+    final annualTax = TextEditingController(
+      text: (vehicle?.annualTaxCost ?? 0).toStringAsFixed(2),
+    );
+    final annualRovinieta = TextEditingController(
+      text: (vehicle?.annualRovinietaCost ?? 0).toStringAsFixed(2),
+    );
+    final annualItp = TextEditingController(
+      text: (vehicle?.annualItpCost ?? 0).toStringAsFixed(2),
+    );
+    final annualMaintenanceBudget = TextEditingController(
+      text: (vehicle?.annualMaintenanceBudget ?? 0).toStringAsFixed(2),
+    );
+    final annualRepairBudget = TextEditingController(
+      text: (vehicle?.annualRepairBudget ?? 0).toStringAsFixed(2),
+    );
+    final tireSetCost = TextEditingController(
+      text: (vehicle?.tireSetCost ?? 0).toStringAsFixed(2),
+    );
+    final tireReplacementMonths = TextEditingController(
+      text: (vehicle?.tireReplacementMonths ?? 48).toString(),
+    );
+    final productiveHoursPerMonth = TextEditingController(
+      text: (vehicle?.productiveHoursPerMonth ?? 168).toStringAsFixed(2),
+    );
+    final expectedAnnualKm = TextEditingController(
+      text: (vehicle?.expectedAnnualKm ?? 0).toStringAsFixed(2),
+    );
+    final otherPerKmCost = TextEditingController(
+      text: (vehicle?.otherPerKmCost ?? 0).toStringAsFixed(2),
+    );
+    final notes = TextEditingController(text: vehicle?.notes ?? '');
+    var acquisitionType = vehicle?.normalizedAcquisitionType ?? 'purchase';
+    var active = vehicle?.active ?? true;
+
+    VehicleRecord buildPreview() => VehicleRecord(
+          id: vehicle?.id ?? _uuid.v4(),
+          plateNumber: plate.text.trim(),
+          name: name.text.trim(),
+          fuelType: fuelType.text.trim(),
+          fuelConsumptionLPer100Km: parseDouble(consumption.text),
+          fuelPricePerLiter: parseDouble(fuelPrice.text),
+          costPerKmOptional: parseDouble(costPerKm.text),
+          fixedDailyCost: parseDouble(fixedDaily.text),
+          acquisitionType: acquisitionType,
+          purchasePrice: parseDouble(purchasePrice.text),
+          monthlyLeasingCost: parseDouble(leasing.text),
+          insuranceCostOptional: parseDouble(insurance.text),
+          maintenanceCostOptional: parseDouble(maintenance.text),
+          depreciationMonths: parseDouble(depreciationMonths.text).round(),
+          annualInsuranceCost: parseDouble(annualInsurance.text),
+          annualTaxCost: parseDouble(annualTax.text),
+          annualRovinietaCost: parseDouble(annualRovinieta.text),
+          annualItpCost: parseDouble(annualItp.text),
+          annualMaintenanceBudget: parseDouble(annualMaintenanceBudget.text),
+          annualRepairBudget: parseDouble(annualRepairBudget.text),
+          tireSetCost: parseDouble(tireSetCost.text),
+          tireReplacementMonths:
+              parseDouble(tireReplacementMonths.text).round(),
+          productiveHoursPerMonth: parseDouble(productiveHoursPerMonth.text),
+          expectedAnnualKm: parseDouble(expectedAnnualKm.text),
+          otherPerKmCost: parseDouble(otherPerKmCost.text),
+          active: active,
+          notes: notes.text.trim(),
+        );
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) {
+            final preview = buildPreview();
+            final resolved = _costResolver.resolve(preview);
+            return AlertDialog(
+              title: Text(
+                vehicle == null ? 'Autoturism nou' : 'Editeaza autoturism',
+              ),
+              content: SizedBox(
+                width: 760,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _sectionCard(
+                        context,
+                        title: 'Date generale',
+                        children: [
+                          _textField(plate, 'Numar inmatriculare'),
+                          _textField(name, 'Denumire / model'),
+                          _textField(fuelType, 'Tip combustibil'),
+                          SwitchListTile(
+                            value: active,
+                            onChanged: (value) =>
+                                setDialogState(() => active = value),
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Activ'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _sectionCard(
+                        context,
+                        title: 'Achizitie / leasing',
+                        children: [
+                          DropdownButtonFormField<String>(
+                            initialValue: acquisitionType,
+                            decoration: const InputDecoration(
+                              labelText: 'Tip achizitie',
+                            ),
+                            items: const [
+                              DropdownMenuItem(
+                                value: 'purchase',
+                                child: Text('Achizitie'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'leasing',
+                                child: Text('Leasing'),
+                              ),
+                            ],
+                            onChanged: (value) => setDialogState(
+                              () => acquisitionType = value ?? 'purchase',
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          _numberField(purchasePrice, 'Pret achizitie'),
+                          _numberField(leasing, 'Cost lunar leasing'),
+                          _numberField(depreciationMonths, 'Amortizare (luni)'),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _sectionCard(
+                        context,
+                        title: 'Costuri fixe anuale',
+                        children: [
+                          _numberField(annualInsurance, 'Asigurari / an'),
+                          _numberField(annualTax, 'Impozit / an'),
+                          _numberField(annualRovinieta, 'Rovinieta / an'),
+                          _numberField(annualItp, 'ITP / an'),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _sectionCard(
+                        context,
+                        title: 'Anvelope / mentenanta / reparatii',
+                        children: [
+                          _numberField(
+                            annualMaintenanceBudget,
+                            'Buget mentenanta / an',
+                          ),
+                          _numberField(
+                            annualRepairBudget,
+                            'Buget reparatii / an',
+                          ),
+                          _numberField(tireSetCost, 'Cost set anvelope'),
+                          _numberField(
+                            tireReplacementMonths,
+                            'Inlocuire anvelope (luni)',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _sectionCard(
+                        context,
+                        title: 'Productivitate / km / combustibil',
+                        children: [
+                          _numberField(
+                            productiveHoursPerMonth,
+                            'Ore productive / luna',
+                          ),
+                          _numberField(expectedAnnualKm, 'Km estimati / an'),
+                          _numberField(consumption, 'Consum L / 100 km'),
+                          _numberField(fuelPrice, 'Pret combustibil / litru'),
+                          _numberField(otherPerKmCost, 'Alte costuri / km'),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _sectionCard(
+                        context,
+                        title: 'Fallback / compatibilitate',
+                        helper:
+                            'Campurile de mai jos raman disponibile pentru date vechi si fallback-uri operationale.',
+                        children: [
+                          _numberField(costPerKm, 'Cost / km optional'),
+                          _numberField(fixedDaily, 'Cost fix zilnic'),
+                          _numberField(insurance, 'Asigurare optional'),
+                          _numberField(maintenance, 'Mentenanta optional'),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _sectionCard(
+                        context,
+                        title: 'Indicatori calculati',
+                        children: [
+                          _infoLine(
+                            'Tip utilizat',
+                            preview.isLeasing ? 'Leasing' : 'Achizitie',
+                          ),
+                          _infoLine(
+                            'Leasing / amortizare lunara',
+                            '${preview.monthlyAcquisitionCost.toStringAsFixed(2)} RON',
+                          ),
+                          _infoLine(
+                            'Costuri fixe lunare estimate',
+                            '${resolved.fixedMonthlyCost.toStringAsFixed(2)} RON',
+                          ),
+                          _infoLine(
+                            'Cost combustibil / km',
+                            '${resolved.fuelCostPerKm.toStringAsFixed(2)} RON/km',
+                          ),
+                          _infoLine(
+                            'Cost intern / ora',
+                            '${resolved.internalHourlyCost.toStringAsFixed(2)} RON/h',
+                          ),
+                          _infoLine(
+                            'Cost intern / km',
+                            '${resolved.internalKmCost.toStringAsFixed(2)} RON/km',
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _sectionCard(
+                        context,
+                        title: 'Observatii',
+                        children: [
+                          _textField(notes, 'Observatii'),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Anulează'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final navigator = Navigator.of(dialogContext);
+                    final messenger = ScaffoldMessenger.of(this.context);
+                    final repository = await _repository();
+                    await repository.saveVehicle(buildPreview());
+                    _dataSourceLabel = repository.lastVehiclesDataSourceLabel;
+                    final reason = repository.lastVehiclesFallbackReason.trim();
+                    _fallbackReason = reason.isEmpty ? null : reason;
+                    if (!mounted) return;
+                    navigator.pop();
+                    setState(() {});
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('Autoturism salvat.')),
+                    );
+                  },
+                  child: const Text('Salveaza'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      plate.dispose();
+      name.dispose();
+      fuelType.dispose();
+      consumption.dispose();
+      fuelPrice.dispose();
+      costPerKm.dispose();
+      purchasePrice.dispose();
+      fixedDaily.dispose();
+      leasing.dispose();
+      insurance.dispose();
+      maintenance.dispose();
+      depreciationMonths.dispose();
+      annualInsurance.dispose();
+      annualTax.dispose();
+      annualRovinieta.dispose();
+      annualItp.dispose();
+      annualMaintenanceBudget.dispose();
+      annualRepairBudget.dispose();
+      tireSetCost.dispose();
+      tireReplacementMonths.dispose();
+      productiveHoursPerMonth.dispose();
+      expectedAnnualKm.dispose();
+      otherPerKmCost.dispose();
+      notes.dispose();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _VehiclePageShell(
+      title: 'Autoturisme',
+      action: FilledButton.icon(
+        onPressed: _editVehicle,
+        icon: const Icon(Icons.add),
+        label: const Text('Adauga'),
+      ),
+      child: FutureBuilder<List<VehicleRecord>>(
+        future: _loadVehicles(),
+        builder: (context, snapshot) {
+          final items = snapshot.data ?? const <VehicleRecord>[];
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              items.isEmpty) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (items.isEmpty) {
+            return const Card(
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Nu exista autoturisme definite. Adauga primul autoturism pentru a folosi costurile interne realiste in ofertare.',
+                  ),
+                ),
+              ),
+            );
+          }
+
+          final activeCount = items.where((item) => item.active).length;
+          final cs = Theme.of(context).colorScheme;
+          final brand = Theme.of(context).extension<AppBrandTheme>();
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(0, 0, 0, 12),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: brand?.shellHeaderGradient ??
+                        LinearGradient(
+                          colors: [cs.primaryContainer, cs.secondaryContainer],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: brand?.shellGlow ?? cs.primary.withValues(alpha: 0.1),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: cs.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(Icons.directions_car_outlined, size: 22, color: cs.primary),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Flotă autoturisme',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: cs.onPrimaryContainer,
+                              ),
+                            ),
+                            Text(
+                              '${items.length} total · $_dataSourceLabel'
+                              '${(_fallbackReason ?? '').isNotEmpty ? ' ⚠' : ''}',
+                              style: TextStyle(fontSize: 12, color: cs.onPrimaryContainer.withValues(alpha: 0.7)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _vehicleStatChip('$activeCount active', Colors.green.shade700, cs.surface),
+                      if (items.length - activeCount > 0) ...[
+                        const SizedBox(width: 6),
+                        _vehicleStatChip('${items.length - activeCount} inactive', Colors.grey.shade600, cs.surface),
+                      ],
+                      HelpButton(content: AppHelp.vehicule),
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: items.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final item = items[index];
+                    final resolved = _costResolver.resolve(item);
+                    return Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        item.name.trim().isEmpty
+                                            ? 'Autoturism fara denumire'
+                                            : item.name.trim(),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleMedium,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        item.plateNumber.trim().isEmpty
+                                            ? 'Fara numar de inmatriculare'
+                                            : item.plateNumber.trim(),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    Chip(
+                                      label: Text(
+                                        item.isLeasing
+                                            ? 'Leasing'
+                                            : 'Achizitie',
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                    Chip(
+                                      label: Text(
+                                        item.active ? 'Activ' : 'Inactiv',
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 8,
+                              children: [
+                                Chip(
+                                  label: Text(
+                                    'Cost intern / ora: ${resolved.internalHourlyCost.toStringAsFixed(2)} RON/h',
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                                Chip(
+                                  label: Text(
+                                    'Cost intern / km: ${resolved.internalKmCost.toStringAsFixed(2)} RON/km',
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                                Chip(
+                                  label: Text(
+                                    'Cost fix lunar: ${resolved.fixedMonthlyCost.toStringAsFixed(2)} RON',
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                                Chip(
+                                  label: Text(
+                                    'Combustibil / km: ${resolved.fuelCostPerKm.toStringAsFixed(2)} RON/km',
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              [
+                                if (item.fuelType.trim().isNotEmpty)
+                                  item.fuelType.trim(),
+                                'Consum ${item.fuelConsumptionLPer100Km.toStringAsFixed(2)} L/100km',
+                                'Pret ${item.fuelPricePerLiter.toStringAsFixed(2)} RON/L',
+                                'Km/an ${item.expectedAnnualKm.toStringAsFixed(0)}',
+                              ].join(' | '),
+                            ),
+                            if (item.notes.trim().isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(item.notes.trim()),
+                            ],
+                            const SizedBox(height: 8),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                TextButton.icon(
+                                  onPressed: () => _editVehicle(item),
+                                  icon: const Icon(Icons.edit_outlined),
+                                  label: const Text('Editeaza'),
+                                ),
+                                const SizedBox(width: 8),
+                                TextButton.icon(
+                                  onPressed: () => _deleteVehicle(item),
+                                  icon: const Icon(Icons.delete_outline),
+                                  label: const Text('Șterge'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _vehicleStatChip(String label, Color fg, Color bg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+    );
+  }
+}
+
+class _VehiclePageShell extends StatelessWidget {
+  const _VehiclePageShell({
+    required this.title,
+    required this.child,
+    this.action,
+  });
+
+  final String title;
+  final Widget child;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                title,
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const Spacer(),
+              if (action != null) action!,
+            ],
+          ),
+          const SizedBox(height: 16),
+          Expanded(child: child),
+        ],
+      ),
+    );
+  }
+}
+
+Widget _textField(TextEditingController controller, String label) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: TextField(
+      textCapitalization: TextCapitalization.sentences,
+      controller: controller,
+      decoration: InputDecoration(labelText: label),
+    ),
+  );
+}
+
+Widget _numberField(TextEditingController controller, String label) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: TextField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(labelText: label),
+    ),
+  );
+}
+
+Widget _sectionCard(
+  BuildContext context, {
+  required String title,
+  required List<Widget> children,
+  String? helper,
+}) {
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        if (helper != null && helper.trim().isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(helper.trim()),
+        ],
+        const SizedBox(height: 10),
+        ...children,
+      ],
+    ),
+  );
+}
+
+Widget _infoLine(String label, String value) {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 190,
+          child: Text(label),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    ),
+  );
+}

@@ -1,0 +1,974 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/firebase_collections.dart';
+import '../../core/auth/field_auth_repository.dart';
+import '../../core/auth/field_auth_repository_factory.dart';
+import 'notification_models.dart';
+import 'notification_template_service.dart';
+
+class NotificationDispatchRequest {
+  const NotificationDispatchRequest({
+    required this.eventType,
+    required this.title,
+    required this.message,
+    required this.sourceModule,
+    required this.sourceEntityId,
+    required this.sourceLabel,
+    this.recipientUserIds = const <String>[],
+    this.recipientEmails = const <String>[],
+    this.recipientTeamIds = const <String>[],
+    this.recipientRoleKeys = const <String>[],
+    this.recipientEmployeeIds = const <String>[],
+    this.metadata = const <String, dynamic>{},
+  });
+
+  final NotificationEventType eventType;
+  final String title;
+  final String message;
+  final String sourceModule;
+  final String sourceEntityId;
+  final String sourceLabel;
+  final List<String> recipientUserIds;
+  final List<String> recipientEmails;
+  final List<String> recipientTeamIds;
+  final List<String> recipientRoleKeys;
+  final List<String> recipientEmployeeIds;
+  final Map<String, dynamic> metadata;
+}
+
+class NotificationCenterService {
+  NotificationCenterService({
+    FirebaseFirestore? firestore,
+    FieldAuthRepository? authRepository,
+  })  : _firestore = firestore ??
+            (FirebaseBootstrap.isInitialized
+                ? FirebaseFirestore.instance
+                : null),
+        _authRepository = authRepository ?? FieldAuthRepositoryFactory.create();
+
+  static const String _notificationsKey = 'app_notifications_v1';
+  static const String _preferencesKey = 'app_notification_preferences_v1';
+  static const String _emailQueueKey = 'app_notification_email_queue_v1';
+  static const String _pushQueueKey = 'app_notification_push_queue_v1';
+  static const String _defaultCompanyId = 'default';
+  static const String _deviceTokensKey = 'app_notification_device_tokens_v1';
+
+  final FirebaseFirestore? _firestore;
+  final FieldAuthRepository _authRepository;
+  final Uuid _uuid = const Uuid();
+  final NotificationTemplateService _templateService =
+      const NotificationTemplateService();
+
+  bool get _isCloudAvailable => FirebaseBootstrap.isInitialized;
+
+  CollectionReference<Map<String, dynamic>> get _notificationsCollection =>
+      _firestore!.collection(FirebaseCollections.notifications);
+
+  CollectionReference<Map<String, dynamic>> get _preferencesCollection =>
+      _firestore!.collection(FirebaseCollections.notificationPreferences);
+
+  CollectionReference<Map<String, dynamic>> get _emailQueueCollection =>
+      _firestore!.collection(FirebaseCollections.notificationEmailQueue);
+
+  CollectionReference<Map<String, dynamic>> get _pushQueueCollection =>
+      _firestore!.collection(FirebaseCollections.notificationPushQueue);
+
+  CollectionReference<Map<String, dynamic>> get _deviceTokensCollection =>
+      _firestore!.collection(FirebaseCollections.notificationDeviceTokens);
+
+  Future<List<AppNotificationRecord>> listNotificationsForUser({
+    required String recipientUserId,
+    bool includeRead = true,
+  }) async {
+    final userId = recipientUserId.trim();
+    if (userId.isEmpty) return const <AppNotificationRecord>[];
+    final localItems = await _readLocalNotificationsOnly();
+    if (!_isCloudAvailable) {
+      return _filterNotifications(localItems, userId, includeRead);
+    }
+    try {
+      var cloudItems = await _notificationsCollection
+          .where('recipient_user_id', isEqualTo: userId)
+          .get()
+          .then(
+            (snapshot) => snapshot.docs
+                .map((doc) => AppNotificationRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (item.recipientUserId.trim() != userId ||
+              id.isEmpty ||
+              knownIds.contains(id)) {
+            continue;
+          }
+          await _notificationsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <AppNotificationRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareNotifications);
+      final otherUsers = localItems
+          .where((item) => item.recipientUserId.trim() != userId)
+          .toList(growable: false);
+      await _writeNotifications(
+        [...otherUsers, ...merged]..sort(_compareNotifications),
+      );
+      return _filterNotifications(merged, userId, includeRead);
+    } catch (_) {
+      return _filterNotifications(localItems, userId, includeRead);
+    }
+  }
+
+  Future<int> unreadCountForUser(String recipientUserId) async {
+    final rows = await listNotificationsForUser(
+      recipientUserId: recipientUserId,
+      includeRead: false,
+    );
+    return rows.length;
+  }
+
+  Future<void> markNotificationRead(String notificationId) async {
+    final id = notificationId.trim();
+    if (id.isEmpty) return;
+    final items = [...await _readLocalNotificationsOnly()];
+    final index = items.indexWhere((item) => item.id == id);
+    if (index < 0) {
+      return;
+    }
+    final updated = items[index].copyWith(
+      isRead: true,
+      readAt: DateTime.now(),
+      metadata: <String, dynamic>{
+        ...items[index].metadata,
+        'read_status': 'read',
+      },
+    );
+    items[index] = updated;
+    if (_isCloudAvailable) {
+      try {
+        await _notificationsCollection.doc(id).set(
+              updated.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeNotifications(items..sort(_compareNotifications));
+  }
+
+  Future<void> markAllReadForUser(String recipientUserId) async {
+    final rows = await listNotificationsForUser(
+      recipientUserId: recipientUserId,
+      includeRead: false,
+    );
+    for (final item in rows) {
+      await markNotificationRead(item.id);
+    }
+  }
+
+  Future<List<NotificationPreferenceRecord>> listPreferences() async {
+    final localItems = await _readLocalPreferencesOnly();
+    if (!_isCloudAvailable) {
+      return localItems;
+    }
+    try {
+      var cloudItems = await _preferencesCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => NotificationPreferenceRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _preferencesCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <NotificationPreferenceRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = [...cloudItems]..sort(_comparePreferences);
+      await _writePreferences(merged);
+      return merged;
+    } catch (_) {
+      return localItems;
+    }
+  }
+
+  Future<void> savePreference(NotificationPreferenceRecord preference) async {
+    final items = [...await _readLocalPreferencesOnly()];
+    final index = items.indexWhere((item) => item.id == preference.id);
+    final next = preference.copyWith(updatedAt: DateTime.now());
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    if (_isCloudAvailable) {
+      try {
+        await _preferencesCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writePreferences(items..sort(_comparePreferences));
+  }
+
+  Future<void> dispatchEvent(NotificationDispatchRequest request) async {
+    final recipients = await _resolveRecipients(request);
+    if (recipients.isEmpty) {
+      return;
+    }
+    final preferences = await listPreferences();
+    for (final recipient in recipients) {
+      final resolvedPreference = _resolvePreference(
+        eventType: request.eventType,
+        preferences: preferences,
+        recipient: recipient,
+      );
+      if (!resolvedPreference.inAppEnabled &&
+          !resolvedPreference.emailEnabled &&
+          !resolvedPreference.pushEnabled) {
+        continue;
+      }
+      final notificationId = _uuid.v4();
+      final emailEnabled =
+          resolvedPreference.emailEnabled && recipient.email.trim().isNotEmpty;
+      final pushEnabled =
+          resolvedPreference.pushEnabled && recipient.userId.trim().isNotEmpty;
+      final template = _templateService.build(
+        eventType: request.eventType,
+        title: request.title.trim(),
+        message: request.message.trim(),
+        sourceLabel: request.sourceLabel.trim(),
+        sourceModule: request.sourceModule.trim(),
+        metadata: request.metadata,
+      );
+      final notification = AppNotificationRecord(
+        id: notificationId,
+        eventType: request.eventType,
+        title: request.title.trim(),
+        message: request.message.trim(),
+        recipientUserId: recipient.userId,
+        recipientEmail: recipient.email,
+        sourceModule: request.sourceModule.trim(),
+        sourceEntityId: request.sourceEntityId.trim(),
+        sourceLabel: request.sourceLabel.trim(),
+        isRead: false,
+        sentInApp: resolvedPreference.inAppEnabled,
+        sentEmail: emailEnabled,
+        sentPush: pushEnabled,
+        emailStatus: emailEnabled ? 'queued' : 'not_requested',
+        pushStatus: pushEnabled ? 'queued' : 'not_requested',
+        createdAt: DateTime.now(),
+        metadata: <String, dynamic>{
+          ...request.metadata,
+          'recipient_name': recipient.name,
+          'recipient_role': recipient.roleKey,
+          'recipient_team_id': recipient.teamId,
+          'notification_delivery_mode': _deliveryModeLabel(
+            inAppEnabled: resolvedPreference.inAppEnabled,
+            emailEnabled: emailEnabled,
+            pushEnabled: pushEnabled,
+          ),
+        },
+      );
+      await _saveNotification(notification);
+      if (emailEnabled) {
+        await _queueEmail(
+          NotificationEmailQueueRecord(
+            id: _uuid.v4(),
+            notificationId: notification.id,
+            eventType: request.eventType,
+            recipientUserId: recipient.userId,
+            recipientEmail: recipient.email,
+            subject: template.subject,
+            bodyText: template.emailText,
+            bodyHtml: template.emailHtml,
+            sourceModule: request.sourceModule.trim(),
+            sourceEntityId: request.sourceEntityId.trim(),
+            status: 'queued',
+            createdAt: DateTime.now(),
+            metadata: <String, dynamic>{
+              'source_label': request.sourceLabel.trim(),
+              ...request.metadata,
+            },
+          ),
+        );
+      }
+      if (pushEnabled) {
+        await _queuePush(
+          NotificationPushQueueRecord(
+            id: _uuid.v4(),
+            notificationId: notification.id,
+            eventType: request.eventType,
+            recipientUserId: recipient.userId,
+            title: template.pushTitle,
+            body: template.pushBody,
+            sourceModule: request.sourceModule.trim(),
+            sourceEntityId: request.sourceEntityId.trim(),
+            status: 'queued',
+            createdAt: DateTime.now(),
+            metadata: <String, dynamic>{
+              'source_label': request.sourceLabel.trim(),
+              ...request.metadata,
+            },
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> registerDeviceToken({
+    required String userId,
+    required String token,
+    required String platform,
+    String userEmail = '',
+    String deviceLabel = '',
+  }) async {
+    final normalizedUserId = userId.trim();
+    final normalizedToken = token.trim();
+    if (normalizedUserId.isEmpty || normalizedToken.isEmpty) return;
+    final items = [...await _readLocalDeviceTokensOnly()];
+    final index = items.indexWhere((item) => item.token == normalizedToken);
+    final now = DateTime.now();
+    final next = NotificationDeviceTokenRecord(
+      id: index >= 0 ? items[index].id : _uuid.v4(),
+      userId: normalizedUserId,
+      userEmail: userEmail.trim(),
+      token: normalizedToken,
+      platform: platform.trim().isEmpty ? 'unknown' : platform.trim(),
+      deviceLabel: deviceLabel.trim(),
+      isActive: true,
+      createdAt: index >= 0 ? items[index].createdAt : now,
+      updatedAt: now,
+      lastSeenAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    if (_isCloudAvailable) {
+      try {
+        await _deviceTokensCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeDeviceTokens(items..sort(_compareDeviceTokens));
+  }
+
+  Future<void> deactivateDeviceToken(String token) async {
+    final normalizedToken = token.trim();
+    if (normalizedToken.isEmpty) return;
+    final items = [...await _readLocalDeviceTokensOnly()];
+    final index = items.indexWhere((item) => item.token == normalizedToken);
+    if (index < 0) return;
+    final updated = items[index].copyWith(
+      isActive: false,
+      updatedAt: DateTime.now(),
+      lastSeenAt: DateTime.now(),
+    );
+    items[index] = updated;
+    if (_isCloudAvailable) {
+      try {
+        await _deviceTokensCollection.doc(updated.id).set(
+              updated.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeDeviceTokens(items..sort(_compareDeviceTokens));
+  }
+
+  String _deliveryModeLabel({
+    required bool inAppEnabled,
+    required bool emailEnabled,
+    required bool pushEnabled,
+  }) {
+    final channels = <String>[];
+    if (inAppEnabled) channels.add('in_app');
+    if (emailEnabled) channels.add('email');
+    if (pushEnabled) channels.add('push');
+    return channels.isEmpty ? 'none' : channels.join('+');
+  }
+
+  NotificationPreferenceRecord buildPreference({
+    required NotificationEventType eventType,
+    String userId = '',
+    String roleKey = '',
+    bool? inAppEnabled,
+    bool? emailEnabled,
+    bool? pushEnabled,
+  }) {
+    final now = DateTime.now();
+    final normalizedRole = roleKey.trim().toLowerCase();
+    final id = userId.trim().isNotEmpty
+        ? 'notification-pref-user-${userId.trim()}-${eventType.value}'
+        : 'notification-pref-role-$normalizedRole-${eventType.value}';
+    return NotificationPreferenceRecord(
+      id: id,
+      eventType: eventType,
+      userId: userId.trim(),
+      roleKey: normalizedRole,
+      inAppEnabled: inAppEnabled ?? true,
+      emailEnabled:
+          emailEnabled ?? _defaultEmailEnabled(eventType, normalizedRole),
+      pushEnabled:
+          pushEnabled ?? _defaultPushEnabled(eventType, normalizedRole),
+      createdAt: now,
+      updatedAt: now,
+    );
+  }
+
+  NotificationPreferenceRecord _resolvePreference({
+    required NotificationEventType eventType,
+    required List<NotificationPreferenceRecord> preferences,
+    required _ResolvedNotificationRecipient recipient,
+  }) {
+    for (final item in preferences) {
+      if (item.eventType != eventType) continue;
+      if (item.userId.trim().isNotEmpty &&
+          item.userId.trim() == recipient.userId) {
+        return item;
+      }
+    }
+    for (final item in preferences) {
+      if (item.eventType != eventType) continue;
+      if (item.userId.trim().isEmpty &&
+          item.roleKey.trim().toLowerCase() == recipient.roleKey) {
+        return item;
+      }
+    }
+    return buildPreference(
+      eventType: eventType,
+      roleKey: recipient.roleKey,
+    );
+  }
+
+  bool _defaultEmailEnabled(
+    NotificationEventType eventType,
+    String roleKey,
+  ) {
+    switch (eventType) {
+      case NotificationEventType.appointmentCreated:
+      case NotificationEventType.appointmentPostponed:
+      case NotificationEventType.appointmentCancelled:
+      case NotificationEventType.complaintCreated:
+      case NotificationEventType.complaintAssigned:
+      case NotificationEventType.complaintStatusChanged:
+      case NotificationEventType.fieldLeadCreated:
+      case NotificationEventType.toolTransferCreated:
+      case NotificationEventType.toolTransferReceived:
+      case NotificationEventType.jobAssigned:
+      case NotificationEventType.jobStatusChanged:
+      case NotificationEventType.approvalRequested:
+      case NotificationEventType.approvalApproved:
+      case NotificationEventType.approvalRejected:
+      case NotificationEventType.requestConverted:
+        return true;
+      case NotificationEventType.appointmentUpdated:
+      case NotificationEventType.documentGenerated:
+        return roleKey == 'admin' || roleKey == 'office';
+    }
+  }
+
+  bool _defaultPushEnabled(
+    NotificationEventType eventType,
+    String roleKey,
+  ) {
+    switch (eventType) {
+      case NotificationEventType.appointmentCreated:
+      case NotificationEventType.appointmentUpdated:
+      case NotificationEventType.appointmentPostponed:
+      case NotificationEventType.appointmentCancelled:
+      case NotificationEventType.complaintCreated:
+      case NotificationEventType.complaintAssigned:
+      case NotificationEventType.complaintStatusChanged:
+      case NotificationEventType.toolTransferCreated:
+      case NotificationEventType.toolTransferReceived:
+      case NotificationEventType.jobAssigned:
+      case NotificationEventType.jobStatusChanged:
+      case NotificationEventType.approvalRequested:
+      case NotificationEventType.approvalApproved:
+      case NotificationEventType.approvalRejected:
+      case NotificationEventType.fieldLeadCreated:
+      case NotificationEventType.requestConverted:
+        return true;
+      case NotificationEventType.documentGenerated:
+        return roleKey == 'admin' || roleKey == 'office';
+    }
+  }
+
+  Future<List<_ResolvedNotificationRecipient>> _resolveRecipients(
+    NotificationDispatchRequest request,
+  ) async {
+    final users = await _authRepository.listUsers();
+    final normalizedUsers =
+        users.where((item) => item.active).toList(growable: false);
+    final userIds = request.recipientUserIds
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    final emails = request.recipientEmails
+        .map((item) => item.trim().toLowerCase())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    final teamIds = request.recipientTeamIds
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    final roleKeys = request.recipientRoleKeys
+        .map((item) => item.trim().toLowerCase())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    final employeeIds = request.recipientEmployeeIds
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    final resolved = <String, _ResolvedNotificationRecipient>{};
+    for (final user in normalizedUsers) {
+      final normalizedEmail = user.email.trim().toLowerCase();
+      final matches = userIds.contains(user.id.trim()) ||
+          emails.contains(normalizedEmail) ||
+          teamIds.contains(user.teamId.trim()) ||
+          roleKeys.contains(user.role.value) ||
+          employeeIds.contains(user.employeeId.trim());
+      if (!matches) continue;
+      resolved[user.id.trim()] = _ResolvedNotificationRecipient(
+        userId: user.id.trim(),
+        name: user.name.trim(),
+        email: normalizedEmail,
+        roleKey: user.role.value,
+        teamId: user.teamId.trim(),
+        employeeId: user.employeeId.trim(),
+      );
+    }
+    return resolved.values.toList(growable: false);
+  }
+
+  Future<void> _saveNotification(
+    AppNotificationRecord notification, {
+    bool requireCloudSuccess = false,
+  }) async {
+    final items = [...await _readLocalNotificationsOnly()];
+    final index = items.indexWhere((item) => item.id == notification.id);
+    if (index >= 0) {
+      items[index] = notification;
+    } else {
+      items.add(notification);
+    }
+    Object? cloudError;
+    if (_isCloudAvailable) {
+      try {
+        await _notificationsCollection.doc(notification.id).set(
+              notification.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (error) {
+        cloudError = error;
+      }
+    } else if (requireCloudSuccess) {
+      cloudError = StateError(
+        'Firebase cloud nu este disponibil. Trimiterea directa pe email necesita conexiune cloud activa.',
+      );
+    }
+    await _writeNotifications(items..sort(_compareNotifications));
+    if (requireCloudSuccess && cloudError != null) {
+      throw StateError(
+        'Nu am putut salva notificarea in cloud: $cloudError',
+      );
+    }
+  }
+
+  Future<void> _queueEmail(
+    NotificationEmailQueueRecord queueItem, {
+    bool requireCloudSuccess = false,
+  }) async {
+    final items = [...await _readLocalEmailQueueOnly()];
+    final index = items.indexWhere((item) => item.id == queueItem.id);
+    if (index >= 0) {
+      items[index] = queueItem;
+    } else {
+      items.add(queueItem);
+    }
+    Object? cloudError;
+    if (_isCloudAvailable) {
+      try {
+        await _emailQueueCollection.doc(queueItem.id).set(
+              queueItem.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (error) {
+        cloudError = error;
+      }
+    } else if (requireCloudSuccess) {
+      cloudError = StateError(
+        'Firebase cloud nu este disponibil. Documentul nu poate intra in notification_email_queue.',
+      );
+    }
+    await _writeEmailQueue(items..sort(_compareEmailQueue));
+    if (requireCloudSuccess && cloudError != null) {
+      throw StateError(
+        'Nu am putut scrie emailul in notification_email_queue: $cloudError',
+      );
+    }
+  }
+
+  /// Public helper to send an email from the app via the server-side queue.
+  /// This will create a notification record and enqueue an email with optional
+  /// attachments and inline assets.
+  Future<NotificationEmailQueueRecord> sendEmailNotification({
+    required String recipientEmail,
+    required String recipientName,
+    required String subject,
+    required String bodyText,
+    String bodyHtml = '',
+    List<Map<String, dynamic>> attachments = const <Map<String, dynamic>>[],
+    List<Map<String, dynamic>> inlineAssets = const <Map<String, dynamic>>[],
+    required String sourceModule,
+    required String sourceEntityId,
+    required NotificationEventType eventType,
+    Map<String, dynamic> metadata = const <String, dynamic>{},
+  }) async {
+    final notificationId = _uuid.v4();
+    final now = DateTime.now();
+    final notification = AppNotificationRecord(
+      id: notificationId,
+      eventType: eventType,
+      title: subject,
+      message: bodyText,
+      recipientUserId: '',
+      recipientEmail: recipientEmail,
+      sourceModule: sourceModule,
+      sourceEntityId: sourceEntityId,
+      sourceLabel: '',
+      isRead: false,
+      sentInApp: false,
+      sentEmail: false,
+      sentPush: false,
+      emailStatus: 'queued',
+      pushStatus: 'not_requested',
+      createdAt: now,
+      metadata: <String, dynamic>{
+        'recipient_name': recipientName,
+        'company_id': _defaultCompanyId,
+        ...metadata,
+      },
+    );
+
+    await _saveNotification(notification, requireCloudSuccess: true);
+
+    final queueItem = NotificationEmailQueueRecord(
+      id: _uuid.v4(),
+      notificationId: notification.id,
+      eventType: eventType,
+      recipientUserId: '',
+      recipientEmail: recipientEmail,
+      subject: subject,
+      bodyText: bodyText,
+      bodyHtml: bodyHtml,
+      sourceModule: sourceModule,
+      sourceEntityId: sourceEntityId,
+      status: 'queued',
+      attemptCount: 0,
+      createdAt: now,
+      metadata: <String, dynamic>{
+        'company_id': _defaultCompanyId,
+        ...metadata,
+        'attachment_count': attachments.length,
+        'inline_asset_count': inlineAssets.length,
+      },
+      attachments: attachments,
+      inlineAssets: inlineAssets,
+    );
+
+    await _queueEmail(queueItem, requireCloudSuccess: true);
+    return queueItem;
+  }
+
+  Future<NotificationEmailQueueRecord?> getEmailQueueById(
+    String queueId,
+  ) async {
+    final id = queueId.trim();
+    if (id.isEmpty) return null;
+
+    if (_isCloudAvailable) {
+      try {
+        final snapshot = await _emailQueueCollection.doc(id).get();
+        if (snapshot.exists) {
+          return NotificationEmailQueueRecord.fromMap(snapshot.data() ?? {});
+        }
+      } catch (_) {}
+    }
+
+    final local = await _readLocalEmailQueueOnly();
+    for (final item in local) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  Future<NotificationEmailQueueRecord?> waitForEmailQueueFinalStatus(
+    String queueId, {
+    Duration timeout = const Duration(seconds: 45),
+    Duration pollInterval = const Duration(seconds: 2),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    NotificationEmailQueueRecord? last;
+
+    while (DateTime.now().isBefore(deadline)) {
+      last = await getEmailQueueById(queueId);
+      final status = (last?.status ?? '').trim().toLowerCase();
+      if (status == 'sent' || status == 'failed') {
+        return last;
+      }
+      await Future<void>.delayed(pollInterval);
+    }
+
+    return last;
+  }
+
+  Future<void> _queuePush(NotificationPushQueueRecord queueItem) async {
+    final items = [...await _readLocalPushQueueOnly()];
+    final index = items.indexWhere((item) => item.id == queueItem.id);
+    if (index >= 0) {
+      items[index] = queueItem;
+    } else {
+      items.add(queueItem);
+    }
+    if (_isCloudAvailable) {
+      try {
+        await _pushQueueCollection.doc(queueItem.id).set(
+              queueItem.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writePushQueue(items..sort(_comparePushQueue));
+  }
+
+  Future<SharedPreferences> _prefs() => SharedPreferences.getInstance();
+
+  Future<List<AppNotificationRecord>> _readLocalNotificationsOnly() async {
+    final prefs = await _prefs();
+    final raw = prefs.getString(_notificationsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <AppNotificationRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <AppNotificationRecord>[];
+    return decoded
+        .whereType<Map>()
+        .map((item) => AppNotificationRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<void> _writeNotifications(List<AppNotificationRecord> items) async {
+    final prefs = await _prefs();
+    await prefs.setString(
+      _notificationsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<NotificationPreferenceRecord>> _readLocalPreferencesOnly() async {
+    final prefs = await _prefs();
+    final raw = prefs.getString(_preferencesKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <NotificationPreferenceRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <NotificationPreferenceRecord>[];
+    return decoded
+        .whereType<Map>()
+        .map((item) => NotificationPreferenceRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<void> _writePreferences(
+    List<NotificationPreferenceRecord> items,
+  ) async {
+    final prefs = await _prefs();
+    await prefs.setString(
+      _preferencesKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<NotificationEmailQueueRecord>> _readLocalEmailQueueOnly() async {
+    final prefs = await _prefs();
+    final raw = prefs.getString(_emailQueueKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <NotificationEmailQueueRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <NotificationEmailQueueRecord>[];
+    return decoded
+        .whereType<Map>()
+        .map((item) => NotificationEmailQueueRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<void> _writeEmailQueue(
+      List<NotificationEmailQueueRecord> items) async {
+    final prefs = await _prefs();
+    await prefs.setString(
+      _emailQueueKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<NotificationPushQueueRecord>> _readLocalPushQueueOnly() async {
+    final prefs = await _prefs();
+    final raw = prefs.getString(_pushQueueKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <NotificationPushQueueRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <NotificationPushQueueRecord>[];
+    return decoded
+        .whereType<Map>()
+        .map((item) => NotificationPushQueueRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<void> _writePushQueue(List<NotificationPushQueueRecord> items) async {
+    final prefs = await _prefs();
+    await prefs.setString(
+      _pushQueueKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<NotificationDeviceTokenRecord>>
+      _readLocalDeviceTokensOnly() async {
+    final prefs = await _prefs();
+    final raw = prefs.getString(_deviceTokensKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <NotificationDeviceTokenRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <NotificationDeviceTokenRecord>[];
+    return decoded
+        .whereType<Map>()
+        .map((item) => NotificationDeviceTokenRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ))
+        .toList(growable: false);
+  }
+
+  Future<void> _writeDeviceTokens(
+    List<NotificationDeviceTokenRecord> items,
+  ) async {
+    final prefs = await _prefs();
+    await prefs.setString(
+      _deviceTokensKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  List<AppNotificationRecord> _filterNotifications(
+    List<AppNotificationRecord> source,
+    String recipientUserId,
+    bool includeRead,
+  ) {
+    final filtered = source.where((item) {
+      if (item.recipientUserId.trim() != recipientUserId) {
+        return false;
+      }
+      if (!includeRead && item.isRead) {
+        return false;
+      }
+      return true;
+    }).toList(growable: false)
+      ..sort(_compareNotifications);
+    return filtered;
+  }
+
+  int _compareNotifications(
+    AppNotificationRecord a,
+    AppNotificationRecord b,
+  ) {
+    return b.createdAt.compareTo(a.createdAt);
+  }
+
+  int _comparePreferences(
+    NotificationPreferenceRecord a,
+    NotificationPreferenceRecord b,
+  ) {
+    final event = a.eventType.value.compareTo(b.eventType.value);
+    if (event != 0) return event;
+    final user = a.userId.compareTo(b.userId);
+    if (user != 0) return user;
+    return a.roleKey.compareTo(b.roleKey);
+  }
+
+  int _compareEmailQueue(
+    NotificationEmailQueueRecord a,
+    NotificationEmailQueueRecord b,
+  ) {
+    return b.createdAt.compareTo(a.createdAt);
+  }
+
+  int _comparePushQueue(
+    NotificationPushQueueRecord a,
+    NotificationPushQueueRecord b,
+  ) {
+    return b.createdAt.compareTo(a.createdAt);
+  }
+
+  int _compareDeviceTokens(
+    NotificationDeviceTokenRecord a,
+    NotificationDeviceTokenRecord b,
+  ) {
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+}
+
+class _ResolvedNotificationRecipient {
+  const _ResolvedNotificationRecipient({
+    required this.userId,
+    required this.name,
+    required this.email,
+    required this.roleKey,
+    required this.teamId,
+    required this.employeeId,
+  });
+
+  final String userId;
+  final String name;
+  final String email;
+  final String roleKey;
+  final String teamId;
+  final String employeeId;
+}

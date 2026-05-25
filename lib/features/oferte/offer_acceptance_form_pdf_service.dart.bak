@@ -1,0 +1,562 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../core/company_profile.dart';
+import '../../core/pdf/pdf_font_helper.dart';
+import 'offer_acceptance_models.dart';
+import 'offer_models.dart';
+
+/// Generează PDF pentru Formularul de Acceptare Ofertă.
+class OfferAcceptanceFormPdfService {
+  const OfferAcceptanceFormPdfService._();
+
+  static const _primaryColor = PdfColor.fromInt(0xFF1F3A5F);
+  static const _accentColor = PdfColor.fromInt(0xFFB8863B);
+  static const _lightGray = PdfColor.fromInt(0xFFF4F7FA);
+  static const _textGray = PdfColor.fromInt(0xFF516B84);
+  static const _darkText = PdfColor.fromInt(0xFF1A1A2E);
+
+  /// Generează PDF ca bytes — apelantul se ocupă de salvare.
+  static Future<Uint8List> buildBytes({
+    required OfferRecord offer,
+    required CompanyProfile company,
+    required List<OfferAcceptanceClause> clauses,
+  }) async {
+    await PdfFontHelper.initialize();
+    final pdf = pw.Document(theme: PdfFontHelper.theme);
+
+    // Decodează logo dacă există
+    pw.MemoryImage? logoImage;
+    if (company.logoBase64.isNotEmpty) {
+      try {
+        final bytes = _decodeBase64(company.logoBase64);
+        logoImage = pw.MemoryImage(bytes);
+      } catch (_) {}
+    }
+
+    // Decodează semnătura client dacă există
+    pw.MemoryImage? clientSigImage;
+    final clientSig = offer.acceptanceFormSignatureBase64;
+    if (clientSig.isNotEmpty) {
+      try {
+        clientSigImage = pw.MemoryImage(_decodeBase64(clientSig));
+      } catch (_) {}
+    }
+
+    // Decodează semnătura emitent
+    pw.MemoryImage? issuerSigImage;
+    if (offer.issuerSignatureBase64.isNotEmpty) {
+      try {
+        issuerSigImage = pw.MemoryImage(_decodeBase64(offer.issuerSignatureBase64));
+      } catch (_) {}
+    }
+
+    final dateFormatter = DateFormat('dd.MM.yyyy', 'ro');
+    final signedDate = offer.acceptanceFormSignedAt != null
+        ? dateFormatter.format(offer.acceptanceFormSignedAt!)
+        : '________________';
+    final issueDate = dateFormatter.format(offer.issueDate);
+    final totalStr = _formatMoney(offer.totalValue, offer.currency);
+    final enabledClauses = clauses.where((c) => c.enabled).toList()
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageTheme: pw.PageTheme(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.fromLTRB(28, 28, 28, 28),
+          buildBackground: (context) => pw.Container(
+            decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                left: pw.BorderSide(color: _primaryColor, width: 4),
+              ),
+            ),
+          ),
+        ),
+        header: (context) => _buildHeader(
+          company: company,
+          logoImage: logoImage,
+          offerNumber: offer.offerNumber,
+          issueDate: issueDate,
+        ),
+        footer: (context) => _buildFooter(context),
+        build: (context) => [
+          pw.SizedBox(height: 12),
+          _buildTitle(),
+          pw.SizedBox(height: 14),
+          _buildParties(offer: offer, company: company, issueDate: issueDate, totalStr: totalStr),
+          pw.SizedBox(height: 14),
+          _buildClauses(enabledClauses),
+          pw.SizedBox(height: 16),
+          _buildAcceptanceStatement(offer: offer, totalStr: totalStr, signedDate: signedDate),
+          pw.SizedBox(height: 20),
+          _buildSignatureSection(
+            clientName: offer.clientName,
+            companyName: company.companyName,
+            clientSigImage: clientSigImage,
+            issuerSigImage: issuerSigImage,
+            signedDate: signedDate,
+          ),
+        ],
+      ),
+    );
+
+    return pdf.save();
+  }
+
+  static String exportFileName(OfferRecord offer) {
+    return 'acceptare_${offer.offerNumber.replaceAll(RegExp(r'[^\w]'), '_')}.pdf';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Secțiuni PDF
+  // ---------------------------------------------------------------------------
+
+  static pw.Widget _buildHeader({
+    required CompanyProfile company,
+    required pw.MemoryImage? logoImage,
+    required String offerNumber,
+    required String issueDate,
+  }) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(bottom: 10),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(bottom: pw.BorderSide(color: _accentColor, width: 1.5)),
+      ),
+      child: pw.Row(
+        children: [
+          if (logoImage != null) ...[
+            pw.Image(logoImage, width: 48, height: 48, fit: pw.BoxFit.contain),
+            pw.SizedBox(width: 12),
+          ],
+          pw.Expanded(
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  company.companyName.isNotEmpty ? company.companyName : 'Prestator',
+                  style: pw.TextStyle(
+                    fontSize: 13,
+                    fontWeight: pw.FontWeight.bold,
+                    color: _primaryColor,
+                  ),
+                ),
+                if (company.address.isNotEmpty)
+                  pw.Text(
+                    company.address,
+                    style: const pw.TextStyle(fontSize: 8, color: _textGray),
+                  ),
+                if (company.cui.isNotEmpty)
+                  pw.Text(
+                    'CUI: ${company.cui}',
+                    style: const pw.TextStyle(fontSize: 8, color: _textGray),
+                  ),
+              ],
+            ),
+          ),
+          pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              pw.Text(
+                'Ref. ofertă: $offerNumber',
+                style: pw.TextStyle(
+                  fontSize: 8,
+                  color: _textGray,
+                ),
+              ),
+              pw.Text(
+                'Data: $issueDate',
+                style: const pw.TextStyle(fontSize: 8, color: _textGray),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _buildTitle() {
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      decoration: pw.BoxDecoration(
+        color: _primaryColor,
+        borderRadius: pw.BorderRadius.circular(6),
+      ),
+      child: pw.Column(
+        children: [
+          pw.Text(
+            'FORMULAR DE ACCEPTARE OFERTĂ',
+            style: pw.TextStyle(
+              fontSize: 14,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.white,
+              letterSpacing: 1.2,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+          pw.SizedBox(height: 2),
+          pw.Text(
+            'Acord comercial — Prestări servicii',
+            style: pw.TextStyle(fontSize: 9, color: PdfColors.white.shade(0.7)),
+            textAlign: pw.TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _buildParties({
+    required OfferRecord offer,
+    required CompanyProfile company,
+    required String issueDate,
+    required String totalStr,
+  }) {
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        color: _lightGray,
+        borderRadius: pw.BorderRadius.circular(6),
+        border: pw.Border.all(color: const PdfColor.fromInt(0xFFDDE3EB), width: 0.5),
+      ),
+      padding: const pw.EdgeInsets.all(12),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Expanded(
+            child: _partyColumn(
+              label: 'PRESTATOR',
+              name: company.companyName,
+              details: [
+                if (company.cui.isNotEmpty) 'CUI: ${company.cui}',
+                if (company.address.isNotEmpty) company.address,
+                if (company.phone.isNotEmpty) 'Tel: ${company.phone}',
+              ],
+            ),
+          ),
+          pw.Container(width: 1, color: const PdfColor.fromInt(0xFFCDD5DF)),
+          pw.SizedBox(width: 12),
+          pw.Expanded(
+            child: _partyColumn(
+              label: 'BENEFICIAR',
+              name: offer.clientName,
+              details: [
+                if (offer.contactPersonName.isNotEmpty) offer.contactPersonName,
+                if (offer.contactPersonPhone.isNotEmpty) 'Tel: ${offer.contactPersonPhone}',
+                if (offer.contactPersonEmail.isNotEmpty) offer.contactPersonEmail,
+              ],
+            ),
+          ),
+          pw.Container(width: 1, color: const PdfColor.fromInt(0xFFCDD5DF)),
+          pw.SizedBox(width: 12),
+          pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('VALOARE TOTALĂ',
+                  style: pw.TextStyle(
+                    fontSize: 7,
+                    fontWeight: pw.FontWeight.bold,
+                    color: _accentColor,
+                    letterSpacing: 0.8,
+                  )),
+              pw.SizedBox(height: 4),
+              pw.Text(
+                totalStr,
+                style: pw.TextStyle(
+                  fontSize: 14,
+                  fontWeight: pw.FontWeight.bold,
+                  color: _primaryColor,
+                ),
+              ),
+              pw.SizedBox(height: 2),
+              pw.Text('incl. TVA',
+                  style: const pw.TextStyle(fontSize: 7, color: _textGray)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _partyColumn({
+    required String label,
+    required String name,
+    required List<String> details,
+  }) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          label,
+          style: pw.TextStyle(
+            fontSize: 7,
+            fontWeight: pw.FontWeight.bold,
+            color: _accentColor,
+            letterSpacing: 0.8,
+          ),
+        ),
+        pw.SizedBox(height: 3),
+        pw.Text(
+          name,
+          style: pw.TextStyle(
+            fontSize: 10,
+            fontWeight: pw.FontWeight.bold,
+            color: _darkText,
+          ),
+        ),
+        ...details.map(
+          (d) => pw.Padding(
+            padding: const pw.EdgeInsets.only(top: 2),
+            child: pw.Text(d, style: const pw.TextStyle(fontSize: 8, color: _textGray)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  static pw.Widget _buildClauses(List<OfferAcceptanceClause> clauses) {
+    if (clauses.isEmpty) return pw.SizedBox.shrink();
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          'CONDIȚII ȘI CLAUZE COMERCIALE',
+          style: pw.TextStyle(
+            fontSize: 9,
+            fontWeight: pw.FontWeight.bold,
+            color: _primaryColor,
+            letterSpacing: 0.8,
+          ),
+        ),
+        pw.SizedBox(height: 8),
+        ...clauses.asMap().entries.map((entry) {
+          final idx = entry.key + 1;
+          final clause = entry.value;
+          return pw.Padding(
+            padding: const pw.EdgeInsets.only(bottom: 8),
+            child: pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Container(
+                  width: 20,
+                  height: 20,
+                  decoration: pw.BoxDecoration(
+                    color: _primaryColor,
+                    shape: pw.BoxShape.circle,
+                  ),
+                  alignment: pw.Alignment.center,
+                  child: pw.Text(
+                    '$idx',
+                    style: pw.TextStyle(
+                      fontSize: 8,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                ),
+                pw.SizedBox(width: 8),
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        clause.title,
+                        style: pw.TextStyle(
+                          fontSize: 9,
+                          fontWeight: pw.FontWeight.bold,
+                          color: _darkText,
+                        ),
+                      ),
+                      pw.SizedBox(height: 2),
+                      pw.Text(
+                        clause.content,
+                        style: const pw.TextStyle(fontSize: 8.5, color: _textGray),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  static pw.Widget _buildAcceptanceStatement({
+    required OfferRecord offer,
+    required String totalStr,
+    required String signedDate,
+  }) {
+    return pw.Container(
+      width: double.infinity,
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: _accentColor, width: 1),
+        borderRadius: pw.BorderRadius.circular(6),
+        color: const PdfColor.fromInt(0xFFFFFBF5),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            'DECLARAȚIE DE ACCEPTARE',
+            style: pw.TextStyle(
+              fontSize: 9,
+              fontWeight: pw.FontWeight.bold,
+              color: _accentColor,
+              letterSpacing: 0.8,
+            ),
+          ),
+          pw.SizedBox(height: 6),
+          pw.Text(
+            'Subsemnatul/a, în calitate de beneficiar, declar că am citit, înțeles și accept '
+            'toate condițiile din prezentul formular, inclusiv oferta nr. ${offer.offerNumber} '
+            'în valoare de $totalStr. Prin semnarea prezentului document confirm acordul meu '
+            'pentru executarea lucrărilor/prestarea serviciilor descrise în ofertă, în '
+            'condițiile și la prețul specificat.',
+            style: const pw.TextStyle(fontSize: 8.5, color: _darkText),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            'Data acceptării: $signedDate',
+            style: const pw.TextStyle(fontSize: 8, color: _textGray),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _buildSignatureSection({
+    required String clientName,
+    required String companyName,
+    required pw.MemoryImage? clientSigImage,
+    required pw.MemoryImage? issuerSigImage,
+    required String signedDate,
+  }) {
+    return pw.Row(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Expanded(
+          child: _signatureBox(
+            label: 'BENEFICIAR',
+            name: clientName,
+            sigImage: clientSigImage,
+            dateLabel: signedDate,
+          ),
+        ),
+        pw.SizedBox(width: 24),
+        pw.Expanded(
+          child: _signatureBox(
+            label: 'PRESTATOR',
+            name: companyName,
+            sigImage: issuerSigImage,
+            dateLabel: signedDate,
+          ),
+        ),
+      ],
+    );
+  }
+
+  static pw.Widget _signatureBox({
+    required String label,
+    required String name,
+    required pw.MemoryImage? sigImage,
+    required String dateLabel,
+  }) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: const PdfColor.fromInt(0xFFCDD5DF)),
+        borderRadius: pw.BorderRadius.circular(6),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            label,
+            style: pw.TextStyle(
+              fontSize: 7,
+              fontWeight: pw.FontWeight.bold,
+              color: _accentColor,
+              letterSpacing: 0.8,
+            ),
+          ),
+          pw.Text(
+            name,
+            style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: _darkText),
+          ),
+          pw.SizedBox(height: 8),
+          if (sigImage != null)
+            pw.Container(
+              height: 56,
+              alignment: pw.Alignment.centerLeft,
+              child: pw.Image(sigImage, height: 56, fit: pw.BoxFit.contain),
+            )
+          else
+            pw.Container(
+              height: 56,
+              decoration: const pw.BoxDecoration(
+                border: pw.Border(bottom: pw.BorderSide(color: _textGray, width: 0.5)),
+              ),
+              child: pw.Center(
+                child: pw.Text(
+                  'Semnătură',
+                  style: const pw.TextStyle(fontSize: 8, color: _textGray),
+                ),
+              ),
+            ),
+          pw.SizedBox(height: 6),
+          pw.Text(
+            'Data: $dateLabel',
+            style: const pw.TextStyle(fontSize: 8, color: _textGray),
+          ),
+          pw.Text(
+            'Ștampilă / L.S.',
+            style: const pw.TextStyle(fontSize: 7, color: _textGray),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _buildFooter(pw.Context context) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(top: 6),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(top: pw.BorderSide(color: _textGray, width: 0.3)),
+      ),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            'Formular de acceptare ofertă — document cu valoare contractuală',
+            style: const pw.TextStyle(fontSize: 7, color: _textGray),
+          ),
+          pw.Text(
+            'Pagina ${context.pageNumber} / ${context.pagesCount}',
+            style: const pw.TextStyle(fontSize: 7, color: _textGray),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Utilități
+  // ---------------------------------------------------------------------------
+
+  static Uint8List _decodeBase64(String b64) {
+    final clean = b64.contains(',') ? b64.split(',').last : b64;
+    return base64Decode(clean);
+  }
+
+  static String _formatMoney(double value, String currency) {
+    final formatter = NumberFormat('#,##0.00', 'ro_RO');
+    return '${formatter.format(value)} $currency';
+  }
+}

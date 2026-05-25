@@ -1,0 +1,222 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+/// Un articol din devizul tehnic.
+/// Fiecare articol are 4 componente de cost: Material, Manoperă, Utilaj, Transport.
+class DevizTehnicArticol {
+  const DevizTehnicArticol({
+    required this.denumire,
+    required this.um,
+    required this.cantitate,
+    this.pretMat = 0,
+    this.pretMan = 0,
+    this.pretUtilaj = 0,
+    this.pretTransport = 0,
+  });
+
+  final String denumire;
+  final String um;
+  final double cantitate;
+  final double pretMat;
+  final double pretMan;
+  final double pretUtilaj;
+  final double pretTransport;
+
+  double get valoareMat => cantitate * pretMat;
+  double get valoareMan => cantitate * pretMan;
+  double get valoareUtilaj => cantitate * pretUtilaj;
+  double get valoareTransport => cantitate * pretTransport;
+  double get totalArticol =>
+      valoareMat + valoareMan + valoareUtilaj + valoareTransport;
+
+  DevizTehnicArticol copyWith({
+    String? denumire,
+    String? um,
+    double? cantitate,
+    double? pretMat,
+    double? pretMan,
+    double? pretUtilaj,
+    double? pretTransport,
+  }) {
+    return DevizTehnicArticol(
+      denumire: denumire ?? this.denumire,
+      um: um ?? this.um,
+      cantitate: cantitate ?? this.cantitate,
+      pretMat: pretMat ?? this.pretMat,
+      pretMan: pretMan ?? this.pretMan,
+      pretUtilaj: pretUtilaj ?? this.pretUtilaj,
+      pretTransport: pretTransport ?? this.pretTransport,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'denumire': denumire,
+        'um': um,
+        'cantitate': cantitate,
+        'pret_mat': pretMat,
+        'pret_man': pretMan,
+        'pret_utilaj': pretUtilaj,
+        'pret_transport': pretTransport,
+      };
+
+  factory DevizTehnicArticol.fromMap(Map<String, dynamic> m) =>
+      DevizTehnicArticol(
+        denumire: (m['denumire'] ?? '').toString(),
+        um: (m['um'] ?? 'buc').toString(),
+        cantitate: _d(m['cantitate']),
+        pretMat: _d(m['pret_mat']),
+        pretMan: _d(m['pret_man']),
+        pretUtilaj: _d(m['pret_utilaj']),
+        pretTransport: _d(m['pret_transport']),
+      );
+
+  static double _d(dynamic v) =>
+      v == null ? 0 : double.tryParse(v.toString()) ?? 0;
+}
+
+/// Documentul principal — deviz tehnic / ofertă tehnică.
+class DevizTehnicRecord {
+  const DevizTehnicRecord({
+    required this.id,
+    this.numar = '',
+    this.titlu = '',
+    this.obiectiv = '',
+    this.clientId = '',
+    this.clientName = '',
+    required this.dataEmiterii,
+    this.zileValabilitate = 30,
+    this.articole = const [],
+    this.regiePercent = 9,
+    this.profitPercent = 10,
+    this.tvaPercent = 21,
+    this.intocmitDe = '',
+    this.note = '',
+    required this.createdAt,
+    required this.updatedAt,
+    this.createdByUserId = '',
+  });
+
+  final String id;
+  final String numar;
+  final String titlu;
+  final String obiectiv;
+  final String clientId;
+  final String clientName;
+  final DateTime dataEmiterii;
+  final int zileValabilitate;
+  final List<DevizTehnicArticol> articole;
+  final double regiePercent;
+  final double profitPercent;
+  final double tvaPercent;
+  final String intocmitDe;
+  final String note;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final String createdByUserId;
+
+  // ── Totaluri calculate ──────────────────────────────────────────
+  double get totalMat =>
+      articole.fold(0, (s, a) => s + a.valoareMat);
+  double get totalMan =>
+      articole.fold(0, (s, a) => s + a.valoareMan);
+  double get totalUtilaj =>
+      articole.fold(0, (s, a) => s + a.valoareUtilaj);
+  double get totalTransport =>
+      articole.fold(0, (s, a) => s + a.valoareTransport);
+  double get totalDirect => totalMat + totalMan + totalUtilaj + totalTransport;
+  double get regie => totalDirect * regiePercent / 100;
+  double get profit => (totalDirect + regie) * profitPercent / 100;
+  double get totalFaraTva => totalDirect + regie + profit;
+  double get tva => totalFaraTva * tvaPercent / 100;
+  double get totalCuTva => totalFaraTva + tva;
+
+  DevizTehnicRecord copyWith({
+    String? numar,
+    String? titlu,
+    String? obiectiv,
+    String? clientId,
+    String? clientName,
+    DateTime? dataEmiterii,
+    int? zileValabilitate,
+    List<DevizTehnicArticol>? articole,
+    double? regiePercent,
+    double? profitPercent,
+    double? tvaPercent,
+    String? intocmitDe,
+    String? note,
+    DateTime? updatedAt,
+  }) {
+    return DevizTehnicRecord(
+      id: id,
+      numar: numar ?? this.numar,
+      titlu: titlu ?? this.titlu,
+      obiectiv: obiectiv ?? this.obiectiv,
+      clientId: clientId ?? this.clientId,
+      clientName: clientName ?? this.clientName,
+      dataEmiterii: dataEmiterii ?? this.dataEmiterii,
+      zileValabilitate: zileValabilitate ?? this.zileValabilitate,
+      articole: articole ?? this.articole,
+      regiePercent: regiePercent ?? this.regiePercent,
+      profitPercent: profitPercent ?? this.profitPercent,
+      tvaPercent: tvaPercent ?? this.tvaPercent,
+      intocmitDe: intocmitDe ?? this.intocmitDe,
+      note: note ?? this.note,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      createdByUserId: createdByUserId,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'numar': numar,
+        'titlu': titlu,
+        'obiectiv': obiectiv,
+        'client_id': clientId,
+        'client_name': clientName,
+        'data_emiterii': dataEmiterii.toIso8601String(),
+        'zile_valabilitate': zileValabilitate,
+        'articole': articole.map((a) => a.toMap()).toList(),
+        'regie_percent': regiePercent,
+        'profit_percent': profitPercent,
+        'tva_percent': tvaPercent,
+        'intocmit_de': intocmitDe,
+        'note': note,
+        'created_at': createdAt.toIso8601String(),
+        'updated_at': updatedAt.toIso8601String(),
+        'created_by_user_id': createdByUserId,
+      };
+
+  factory DevizTehnicRecord.fromMap(Map<String, dynamic> m) {
+    DateTime parseDate(dynamic v) {
+      if (v == null) return DateTime.now();
+      if (v is Timestamp) return v.toDate();
+      return DateTime.tryParse(v.toString()) ?? DateTime.now();
+    }
+
+    final artList = (m['articole'] as List?)
+            ?.map((e) =>
+                DevizTehnicArticol.fromMap(Map<String, dynamic>.from(e as Map)))
+            .toList() ??
+        [];
+
+    return DevizTehnicRecord(
+      id: (m['id'] ?? '').toString(),
+      numar: (m['numar'] ?? '').toString(),
+      titlu: (m['titlu'] ?? '').toString(),
+      obiectiv: (m['obiectiv'] ?? '').toString(),
+      clientId: (m['client_id'] ?? '').toString(),
+      clientName: (m['client_name'] ?? '').toString(),
+      dataEmiterii: parseDate(m['data_emiterii']),
+      zileValabilitate: int.tryParse((m['zile_valabilitate'] ?? 30).toString()) ?? 30,
+      articole: artList,
+      regiePercent: double.tryParse((m['regie_percent'] ?? 9).toString()) ?? 9,
+      profitPercent: double.tryParse((m['profit_percent'] ?? 10).toString()) ?? 10,
+      tvaPercent: double.tryParse((m['tva_percent'] ?? 21).toString()) ?? 21,
+      intocmitDe: (m['intocmit_de'] ?? '').toString(),
+      note: (m['note'] ?? '').toString(),
+      createdAt: parseDate(m['created_at']),
+      updatedAt: parseDate(m['updated_at']),
+      createdByUserId: (m['created_by_user_id'] ?? '').toString(),
+    );
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "functions": {
+    "source": "functions"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "devizpro-ultra-pilot",
+          "appId": "1:322174025333:android:21fb6ce5f61ea74a06023c",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "devizpro-ultra-pilot",
+          "configurations": {
+            "android": "1:322174025333:android:21fb6ce5f61ea74a06023c",
+            "web": "1:322174025333:web:ebd857d1cca64c4906023c",
+            "windows": "1:322174025333:web:c09b2308cdd49a4906023c"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,306 @@
+import '../../core/cloud/firebase_bootstrap.dart';
+import 'firebase_hr_attendance_repository.dart';
+import 'hr_attendance_cloud_repository.dart';
+import 'hr_attendance_models.dart';
+import 'hr_attendance_resolver.dart';
+import 'local_hr_attendance_store.dart';
+
+class HrAttendanceCatalogService {
+  HrAttendanceCatalogService({
+    HrAttendanceCloudRepository? cloudRepository,
+    LocalHrAttendanceStore? localStore,
+    HrAttendanceResolver? resolver,
+  })  : _cloudRepository = cloudRepository ??
+            (FirebaseBootstrap.isInitialized
+                ? FirebaseHrAttendanceRepository()
+                : null),
+        _localStore = localStore ?? LocalHrAttendanceStore(),
+        _resolver = resolver ?? const HrAttendanceResolver();
+
+  final HrAttendanceCloudRepository? _cloudRepository;
+  final LocalHrAttendanceStore _localStore;
+  final HrAttendanceResolver _resolver;
+
+  String dataSourceLabel = 'cloud';
+  String? fallbackReason;
+
+  String _shortCloudError(Object error) {
+    final raw = error.toString().replaceAll('\n', ' ').trim();
+    if (raw.isEmpty) return 'necunoscuta';
+    return raw.length > 140 ? '${raw.substring(0, 140)}...' : raw;
+  }
+
+  void _markCloudPrimary() {
+    dataSourceLabel = 'cloud';
+    fallbackReason = null;
+  }
+
+  void _markLocalFallback(String reason) {
+    dataSourceLabel = 'local_cache';
+    fallbackReason = reason;
+  }
+
+  Future<List<HrAttendanceEntry>> listEntries() async {
+    final localRows = await _localStore.listEntries();
+    final cloud = _cloudRepository;
+    if (cloud == null) {
+      _markLocalFallback('cloud_repository_unavailable');
+      return localRows;
+    }
+    try {
+      final cloudRows = await cloud.listEntries();
+      await _localStore.saveEntries(cloudRows);
+      _markCloudPrimary();
+      return cloudRows;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _markLocalFallback('cloud_unavailable:${_shortCloudError(error)}');
+      return localRows;
+    }
+  }
+
+  Future<void> upsertEntry(HrAttendanceEntry item) async {
+    final cloud = _cloudRepository;
+    if (cloud != null) {
+      try {
+        await cloud.upsertEntry(item);
+        _markCloudPrimary();
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _markLocalFallback('cloud_unavailable:${_shortCloudError(error)}');
+      }
+    } else {
+      _markLocalFallback('cloud_repository_unavailable');
+    }
+    final local = [...await _localStore.listEntries()];
+    final index = local.indexWhere((row) => row.id == item.id);
+    if (index >= 0) {
+      local[index] = item;
+    } else {
+      local.add(item);
+    }
+    await _localStore.saveEntries(local);
+  }
+
+  Future<HrAttendanceDaySummary> summarizeDay({
+    required String employeeId,
+    required DateTime date,
+  }) async {
+    final entries = await listEntries();
+    return _resolver.summarizeDay(
+      entries: entries,
+      employeeId: employeeId,
+      date: date,
+    );
+  }
+
+  Future<HrAttendanceDaySummary> summarizeApprovedDay({
+    required String employeeId,
+    required DateTime date,
+  }) async {
+    final entries = await listEntries();
+    return _resolver.summarizeApprovedDay(
+      entries: entries,
+      employeeId: employeeId,
+      date: date,
+    );
+  }
+
+  Future<double> totalWorkedHours({
+    required String employeeId,
+    required DateTime dateFrom,
+    required DateTime dateTo,
+  }) async {
+    final summary = await summarizeInterval(
+      employeeId: employeeId,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+    return summary.workedHours;
+  }
+
+  Future<double> totalOvertimeHours({
+    required String employeeId,
+    required DateTime dateFrom,
+    required DateTime dateTo,
+  }) async {
+    final summary = await summarizeInterval(
+      employeeId: employeeId,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+    return summary.overtimeHours;
+  }
+
+  Future<double> totalNightHours({
+    required String employeeId,
+    required DateTime dateFrom,
+    required DateTime dateTo,
+  }) async {
+    final summary = await summarizeInterval(
+      employeeId: employeeId,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+    return summary.nightHours;
+  }
+
+  Future<double> totalLeaveHours({
+    required String employeeId,
+    required DateTime dateFrom,
+    required DateTime dateTo,
+  }) async {
+    final summary = await summarizeInterval(
+      employeeId: employeeId,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+    return summary.leaveHours;
+  }
+
+  Future<HrAttendanceIntervalSummary> summarizeInterval({
+    required String employeeId,
+    required DateTime dateFrom,
+    required DateTime dateTo,
+  }) async {
+    final entries = await listEntries();
+    return _resolver.summarizeInterval(
+      entries: entries,
+      employeeId: employeeId,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+  }
+
+  Future<HrAttendanceIntervalSummary> summarizeApprovedInterval({
+    required String employeeId,
+    required DateTime dateFrom,
+    required DateTime dateTo,
+  }) async {
+    final entries = await listEntries();
+    return _resolver.summarizeApprovedInterval(
+      entries: entries,
+      employeeId: employeeId,
+      dateFrom: dateFrom,
+      dateTo: dateTo,
+    );
+  }
+
+  Future<HrAttendanceMonthlySummary> summarizeMonth({
+    required String employeeId,
+    required DateTime month,
+  }) async {
+    final entries = await listEntries();
+    return _resolver.summarizeMonth(
+      entries: entries,
+      employeeId: employeeId,
+      month: month,
+    );
+  }
+
+  Future<HrAttendanceMonthlySummary> summarizeApprovedMonth({
+    required String employeeId,
+    required DateTime month,
+  }) async {
+    final entries = await listEntries();
+    return _resolver.summarizeApprovedMonth(
+      entries: entries,
+      employeeId: employeeId,
+      month: month,
+    );
+  }
+
+  Future<void> submitAttendanceEntry({
+    required String entryId,
+    String submittedByUserId = '',
+  }) async {
+    final item = await _findById(entryId);
+    if (item == null) return;
+    final now = DateTime.now();
+    await upsertEntry(
+      item.copyWith(
+        status: 'submitted',
+        submittedAt: now,
+        submittedByUserId: submittedByUserId,
+        clearApprovedAt: true,
+        approvedByUserId: '',
+        clearReviewedAt: true,
+        reviewedByUserId: '',
+        reviewNotes: '',
+        updatedAt: now,
+      ),
+    );
+  }
+
+  Future<void> approveAttendanceEntry({
+    required String entryId,
+    String approvedByUserId = '',
+  }) async {
+    final item = await _findById(entryId);
+    if (item == null) return;
+    final now = DateTime.now();
+    await upsertEntry(
+      item.copyWith(
+        status: 'approved',
+        approvedAt: now,
+        approvedByUserId: approvedByUserId,
+        clearReviewedAt: true,
+        reviewedByUserId: '',
+        reviewNotes: '',
+        updatedAt: now,
+      ),
+    );
+  }
+
+  Future<void> markAttendanceEntryNeedsReview({
+    required String entryId,
+    String reviewedByUserId = '',
+    String reviewNotes = '',
+  }) async {
+    final item = await _findById(entryId);
+    if (item == null) return;
+    final now = DateTime.now();
+    await upsertEntry(
+      item.copyWith(
+        status: 'needs_review',
+        reviewedAt: now,
+        reviewedByUserId: reviewedByUserId,
+        reviewNotes: reviewNotes,
+        clearApprovedAt: true,
+        approvedByUserId: '',
+        updatedAt: now,
+      ),
+    );
+  }
+
+  Future<void> rejectAttendanceEntry({
+    required String entryId,
+    String reviewedByUserId = '',
+    String reviewNotes = '',
+  }) async {
+    final item = await _findById(entryId);
+    if (item == null) return;
+    final now = DateTime.now();
+    await upsertEntry(
+      item.copyWith(
+        status: 'rejected',
+        reviewedAt: now,
+        reviewedByUserId: reviewedByUserId,
+        reviewNotes: reviewNotes,
+        clearApprovedAt: true,
+        approvedByUserId: '',
+        updatedAt: now,
+      ),
+    );
+  }
+
+  Future<HrAttendanceEntry?> _findById(String entryId) async {
+    final target = entryId.trim();
+    if (target.isEmpty) return null;
+    final rows = await listEntries();
+    for (final row in rows) {
+      if (row.id.trim() == target) return row;
+    }
+    return null;
+  }
+}

@@ -1,0 +1,229 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../core/repositories/app_data_repository.dart';
+import 'field_photo_models.dart';
+
+enum FieldPhotoInputSource {
+  camera,
+  gallery,
+  file,
+}
+
+class PickedFieldPhotoFile {
+  const PickedFieldPhotoFile({
+    required this.filePath,
+    required this.fileName,
+    required this.takenAt,
+  });
+
+  final String filePath;
+  final String fileName;
+  final DateTime takenAt;
+}
+
+class FieldPhotoCaptureService {
+  FieldPhotoCaptureService._();
+
+  static final ImagePicker _imagePicker = ImagePicker();
+  static const Uuid _uuid = Uuid();
+
+  static Future<PickedFieldPhotoFile?> pickPhoto({
+    required FieldPhotoInputSource source,
+  }) async {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      if (source == FieldPhotoInputSource.camera) {
+        final picked = await _imagePicker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 88,
+        );
+        return _persistPickedFile(
+          originalPath: picked?.path ?? '',
+          preferredName: picked?.name ?? '',
+        );
+      }
+      if (source == FieldPhotoInputSource.gallery) {
+        final picked = await _imagePicker.pickImage(
+          source: ImageSource.gallery,
+          imageQuality: 92,
+        );
+        return _persistPickedFile(
+          originalPath: picked?.path ?? '',
+          preferredName: picked?.name ?? '',
+        );
+      }
+    }
+
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: false,
+      allowedExtensions: const <String>[
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+      ],
+    );
+    final file = result?.files.single;
+    return _persistPickedFile(
+      originalPath: file?.path?.trim() ?? '',
+      preferredName: file?.name ?? '',
+    );
+  }
+
+  static Future<PickedFieldPhotoFile?> _persistPickedFile({
+    required String originalPath,
+    required String preferredName,
+  }) async {
+    final normalizedPath = originalPath.trim();
+    if (normalizedPath.isEmpty) {
+      return null;
+    }
+    final sourceFile = File(normalizedPath);
+    if (!sourceFile.existsSync()) {
+      return null;
+    }
+    final directory = await getApplicationDocumentsDirectory();
+    final targetDir = Directory(
+      '${directory.path}${Platform.pathSeparator}field_photos',
+    );
+    if (!targetDir.existsSync()) {
+      targetDir.createSync(recursive: true);
+    }
+    final fileName = _normalizedFileName(
+      preferredName.trim().isEmpty ? sourceFile.uri.pathSegments.last : preferredName,
+    );
+    final targetName =
+        '${DateTime.now().millisecondsSinceEpoch}_${_uuid.v4().substring(0, 8)}_$fileName';
+    final targetPath =
+        '${targetDir.path}${Platform.pathSeparator}$targetName';
+    final copied = await sourceFile.copy(targetPath);
+    return PickedFieldPhotoFile(
+      filePath: copied.path,
+      fileName: targetName,
+      takenAt: DateTime.now(),
+    );
+  }
+
+  /// Returnează un [FieldPhotoRecord] și un mesaj de eroare opțional dacă
+  /// upload-ul în Firebase Storage a eșuat.
+  /// Chiar dacă upload-ul eșuează, record-ul este valid local (filePath e setat).
+  static Future<({FieldPhotoRecord record, String? uploadError})>
+      createPhotoRecord({
+    required AppDataRepository repository,
+    required String sourceModule,
+    required String sourceEntityId,
+    required String documentId,
+    required String photoType,
+    required String description,
+    required PickedFieldPhotoFile pickedFile,
+    String preferredTakenByName = '',
+    String preferredTakenByUserId = '',
+  }) async {
+    final now = DateTime.now();
+    final user = await repository.loadCurrentUser();
+    final id = _uuid.v4();
+    final normalizedModule = sourceModule.trim();
+    final normalizedEntityId = sourceEntityId.trim();
+    final cloudFileName =
+        '${id}_${pickedFile.fileName.replaceAll(RegExp(r"[^A-Za-z0-9._-]+"), "_")}';
+    var cloudPath = '';
+    var downloadUrl = '';
+    String? uploadError;
+
+    try {
+      final ref = FirebaseStorage.instance
+          .ref()
+          .child('field_photos')
+          .child(normalizedModule.isEmpty ? 'general' : normalizedModule)
+          .child(normalizedEntityId.isEmpty ? 'unassigned' : normalizedEntityId)
+          .child(cloudFileName);
+      await ref.putFile(File(pickedFile.filePath));
+      cloudPath = ref.fullPath;
+      downloadUrl = await ref.getDownloadURL();
+    } catch (e) {
+      // Salvăm local chiar dacă upload-ul eșuează.
+      // Utilizatorul poate re-încărca ulterior cu butonul de retry.
+      uploadError = e.toString();
+    }
+
+    final record = FieldPhotoRecord(
+      id: id,
+      sourceModule: normalizedModule,
+      sourceEntityId: normalizedEntityId,
+      documentId: documentId.trim(),
+      photoType:
+          photoType.trim().isEmpty ? FieldPhotoType.altul.key : photoType.trim(),
+      description: description.trim(),
+      filePath: pickedFile.filePath,
+      fileName: pickedFile.fileName,
+      cloudPath: cloudPath,
+      downloadUrl: downloadUrl,
+      takenAt: pickedFile.takenAt,
+      takenByName: preferredTakenByName.trim().isNotEmpty
+          ? preferredTakenByName.trim()
+          : user?.displayName.trim() ?? '',
+      takenByUserId: preferredTakenByUserId.trim().isNotEmpty
+          ? preferredTakenByUserId.trim()
+          : user?.id.trim() ?? '',
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    return (record: record, uploadError: uploadError);
+  }
+
+  /// Re-încearcă upload-ul unui record care nu a ajuns în cloud (downloadUrl gol).
+  /// Returnează record-ul actualizat cu cloudPath și downloadUrl completate.
+  static Future<FieldPhotoRecord> retryUpload(FieldPhotoRecord photo) async {
+    final localPath = photo.filePath.trim();
+    if (localPath.isEmpty || !File(localPath).existsSync()) {
+      throw Exception(
+          'Fișierul local nu mai există. Nu se poate re-încărca.');
+    }
+    final cloudFileName = photo.fileName.replaceAll(
+        RegExp(r"[^A-Za-z0-9._-]+"), "_");
+    final ref = FirebaseStorage.instance
+        .ref()
+        .child('field_photos')
+        .child(
+            photo.sourceModule.isEmpty ? 'general' : photo.sourceModule)
+        .child(
+            photo.sourceEntityId.isEmpty ? 'unassigned' : photo.sourceEntityId)
+        .child('${photo.id}_$cloudFileName');
+    await ref.putFile(File(localPath));
+    final newCloudPath = ref.fullPath;
+    final newDownloadUrl = await ref.getDownloadURL();
+    return photo.copyWith(
+      cloudPath: newCloudPath,
+      downloadUrl: newDownloadUrl,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  static Future<void> deleteRemotePhoto(FieldPhotoRecord photo) async {
+    final cloudPath = photo.cloudPath.trim();
+    if (cloudPath.isEmpty) {
+      return;
+    }
+    try {
+      await FirebaseStorage.instance.ref(cloudPath).delete();
+    } catch (_) {}
+  }
+
+  static String _normalizedFileName(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return 'photo.jpg';
+    }
+    final parts = trimmed.split(RegExp(r'[\\/]'));
+    final base = parts.isEmpty ? trimmed : parts.last;
+    return base.replaceAll(RegExp(r"[^A-Za-z0-9._-]+"), "_");
+  }
+}

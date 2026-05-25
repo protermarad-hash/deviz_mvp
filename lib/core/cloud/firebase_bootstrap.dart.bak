@@ -1,0 +1,33 @@
+import 'package:firebase_core/firebase_core.dart';
+
+import 'firebase_options_loader.dart';
+
+class FirebaseBootstrap {
+  FirebaseBootstrap._();
+
+  static bool _initialized = false;
+  static String? _lastErrorMessage;
+
+  static bool get isInitialized => _initialized;
+  static String? get lastErrorMessage => _lastErrorMessage;
+
+  static void registerRuntimeError(Object error) {
+    _lastErrorMessage = error.toString();
+  }
+
+  static Future<void> initializeSafe() async {
+    _lastErrorMessage = null;
+    try {
+      final options = resolveFirebaseOptions();
+      if (options != null) {
+        await Firebase.initializeApp(options: options);
+      } else {
+        await Firebase.initializeApp();
+      }
+      _initialized = true;
+    } catch (error) {
+      _initialized = false;
+      _lastErrorMessage = error.toString();
+    }
+  }
+}

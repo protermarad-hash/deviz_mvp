@@ -1,0 +1,1036 @@
+import 'package:flutter/material.dart';
+
+import '../../core/repositories/app_data_repository.dart';
+import '../agfr/agfr_models.dart';
+import '../clients/client_models.dart';
+import '../jobs/job_models.dart';
+import 'refrigerant_reporting_models.dart';
+
+class RefrigerantReportingPage extends StatefulWidget {
+  const RefrigerantReportingPage({
+    super.key,
+    required this.repository,
+  });
+
+  final AppDataRepository repository;
+
+  @override
+  State<RefrigerantReportingPage> createState() =>
+      _RefrigerantReportingPageState();
+}
+
+class _RefrigerantReportingPageState extends State<RefrigerantReportingPage> {
+  bool _loading = true;
+  final TextEditingController _searchController = TextEditingController();
+  List<RefrigerantReportingRecord> _items =
+      const <RefrigerantReportingRecord>[];
+  List<ClientRecord> _clients = const <ClientRecord>[];
+  List<JobRecord> _jobs = const <JobRecord>[];
+  List<AgfrEquipmentRecord> _agfrEquipments = const <AgfrEquipmentRecord>[];
+  List<AgfrInterventionRecord> _agfrInterventions =
+      const <AgfrInterventionRecord>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_onSearchChanged);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController
+      ..removeListener(_onSearchChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+  }
+
+  Future<void> _load() async {
+    final results = await Future.wait<dynamic>(<Future<dynamic>>[
+      widget.repository.listRefrigerantReportingRecords(),
+      widget.repository.listClients(),
+      widget.repository.listJobs(),
+      widget.repository.listAgfrEquipments(),
+      widget.repository.listAgfrInterventions(),
+    ]);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _items = results[0] as List<RefrigerantReportingRecord>;
+      _clients = results[1] as List<ClientRecord>;
+      _jobs = results[2] as List<JobRecord>;
+      _agfrEquipments = results[3] as List<AgfrEquipmentRecord>;
+      _agfrInterventions = results[4] as List<AgfrInterventionRecord>;
+      _loading = false;
+    });
+  }
+
+  String _clientName(String clientId) {
+    final id = clientId.trim();
+    if (id.isEmpty) {
+      return '';
+    }
+    for (final client in _clients) {
+      if (client.id == id) {
+        return client.name.trim();
+      }
+    }
+    return '';
+  }
+
+  JobRecord? _jobById(String jobId) {
+    final id = jobId.trim();
+    if (id.isEmpty) {
+      return null;
+    }
+    for (final job in _jobs) {
+      if (job.id == id) {
+        return job;
+      }
+    }
+    return null;
+  }
+
+  String _jobLabel(String jobId) {
+    final job = _jobById(jobId);
+    if (job == null) {
+      return '-';
+    }
+    final code = job.jobCode.trim();
+    final title = job.title.trim();
+    if (code.isNotEmpty && title.isNotEmpty) {
+      return '$code - $title';
+    }
+    return code.isNotEmpty ? code : (title.isNotEmpty ? title : job.id);
+  }
+
+  String _equipmentSummary(List<String> equipmentIds) {
+    if (equipmentIds.isEmpty) {
+      return '';
+    }
+    final labels = <String>[];
+    for (final id in equipmentIds) {
+      for (final equipment in _agfrEquipments) {
+        if (equipment.id == id) {
+          final parts = <String>[
+            equipment.equipmentType.trim(),
+            equipment.brand.trim(),
+            equipment.model.trim(),
+          ].where((item) => item.isNotEmpty).toList(growable: false);
+          labels.add(parts.isEmpty ? equipment.id : parts.join(' | '));
+          break;
+        }
+      }
+    }
+    if (labels.isEmpty) {
+      return '';
+    }
+    if (labels.length <= 2) {
+      return labels.join(', ');
+    }
+    return '${labels.take(2).join(', ')} +${labels.length - 2}';
+  }
+
+  List<RefrigerantReportingRecord> get _filteredItems {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _items;
+    }
+    return _items.where((item) {
+      return item.clientName.toLowerCase().contains(query) ||
+          item.questionnaireTitle.toLowerCase().contains(query) ||
+          item.reportingCategory.label.toLowerCase().contains(query) ||
+          item.status.label.toLowerCase().contains(query) ||
+          item.location.toLowerCase().contains(query) ||
+          item.workLocation.toLowerCase().contains(query) ||
+          item.notes.toLowerCase().contains(query);
+    }).toList(growable: false);
+  }
+
+  Future<void> _showAnpmReport() async {
+    final now = DateTime.now();
+    int selectedYear = now.year - 1; // Default: previous year
+    String selectedClientId = '';
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx2, setSt) {
+            // Build aggregation from interventions already loaded
+            final interventions = _agfrInterventions.where((i) {
+              final yearMatch = i.operationDate.year == selectedYear;
+              final clientMatch =
+                  selectedClientId.isEmpty || i.clientId == selectedClientId;
+              return yearMatch && clientMatch;
+            }).toList(growable: false);
+
+            // Aggregate by refrigerant type
+            final Map<String, _RefrigerantSummary> summary = {};
+            for (final i in interventions) {
+              final type = i.refrigerantType.trim().isEmpty
+                  ? '(nespecificat)'
+                  : i.refrigerantType.trim();
+              summary[type] ??= _RefrigerantSummary(refrigerantType: type);
+              summary[type] = summary[type]!.add(i.chargedKg, i.recoveredKg);
+            }
+            final rows = summary.values.toList(growable: false)
+              ..sort((a, b) => a.refrigerantType.compareTo(b.refrigerantType));
+
+            return AlertDialog(
+              title: const Text('Raport anual ANPM / F-Gas'),
+              content: SizedBox(
+                width: 600,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Filters
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<int>(
+                              initialValue: selectedYear,
+                              decoration: const InputDecoration(
+                                  labelText: 'An raportare'),
+                              items: List.generate(
+                                6,
+                                (i) => DropdownMenuItem(
+                                  value: now.year - i,
+                                  child: Text('${now.year - i}'),
+                                ),
+                              ),
+                              onChanged: (v) =>
+                                  setSt(() => selectedYear = v ?? selectedYear),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: selectedClientId,
+                              decoration:
+                                  const InputDecoration(labelText: 'Client'),
+                              items: [
+                                const DropdownMenuItem(
+                                  value: '',
+                                  child: Text('Toți clienții'),
+                                ),
+                                ..._clients.map(
+                                  (c) => DropdownMenuItem(
+                                    value: c.id,
+                                    child: Text(
+                                      c.name,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              onChanged: (v) => setSt(
+                                () => selectedClientId = v ?? '',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        '${interventions.length} intervenții găsite pentru $selectedYear',
+                        style: Theme.of(ctx2).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 12),
+                      if (rows.isEmpty)
+                        const Text(
+                          'Nu există intervenții AGFR înregistrate pentru această perioadă.',
+                        )
+                      else ...[
+                        // Table header
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: Text(
+                                'Tip refrigerant',
+                                style: Theme.of(ctx2)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                'Încărcat (kg)',
+                                style: Theme.of(ctx2)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                                textAlign: TextAlign.end,
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                'Recuperat (kg)',
+                                style: Theme.of(ctx2)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                                textAlign: TextAlign.end,
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                'Sold net (kg)',
+                                style: Theme.of(ctx2)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                                textAlign: TextAlign.end,
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                'Intervenții',
+                                style: Theme.of(ctx2)
+                                    .textTheme
+                                    .labelMedium
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                                textAlign: TextAlign.end,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Divider(),
+                        ...rows.map(
+                          (r) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: Text(r.refrigerantType),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Text(
+                                    r.totalChargedKg.toStringAsFixed(3),
+                                    textAlign: TextAlign.end,
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Text(
+                                    r.totalRecoveredKg.toStringAsFixed(3),
+                                    textAlign: TextAlign.end,
+                                  ),
+                                ),
+                                Expanded(
+                                  flex: 2,
+                                  child: Text(
+                                    r.netKg.toStringAsFixed(3),
+                                    textAlign: TextAlign.end,
+                                    style: TextStyle(
+                                      color: r.netKg > 0
+                                          ? Colors.orange[700]
+                                          : null,
+                                      fontWeight:
+                                          r.netKg > 0 ? FontWeight.w600 : null,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    '${r.count}',
+                                    textAlign: TextAlign.end,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const Divider(),
+                        // Totals row
+                        Row(
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: Text(
+                                'TOTAL',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                rows
+                                    .fold(0.0, (s, r) => s + r.totalChargedKg)
+                                    .toStringAsFixed(3),
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                rows
+                                    .fold(0.0, (s, r) => s + r.totalRecoveredKg)
+                                    .toStringAsFixed(3),
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                rows
+                                    .fold(0.0, (s, r) => s + r.netKg)
+                                    .toStringAsFixed(3),
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                '${rows.fold(0, (s, r) => s + r.count)}',
+                                textAlign: TextAlign.end,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Închide'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _openForm({RefrigerantReportingRecord? current}) async {
+    final now = DateTime.now();
+    String selectedClientId = current?.clientId ?? '';
+    String selectedJobId = current?.jobId ?? '';
+    final Set<String> selectedEquipmentIds = {...?current?.equipmentIds};
+    int selectedYear = current?.reportingYear ?? now.year;
+    RefrigerantReportingEntityType selectedEntityType =
+        current?.entityType ?? RefrigerantReportingEntityType.persoanaJuridica;
+    RefrigerantReportingCategory selectedCategory =
+        current?.reportingCategory ??
+            RefrigerantReportingCategory.refrigerareComerciala;
+    RefrigerantReportingStatus selectedStatus =
+        current?.status ?? RefrigerantReportingStatus.draft;
+    final titleController = TextEditingController(
+      text: current?.questionnaireTitle ?? 'Chestionar ANMAP',
+    );
+    final workLocationController =
+        TextEditingController(text: current?.workLocation ?? '');
+    final locationController =
+        TextEditingController(text: current?.location ?? '');
+    final notesController = TextEditingController(text: current?.notes ?? '');
+    String? formError;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final availableEquipments = _agfrEquipments
+                .where(
+                  (item) =>
+                      selectedClientId.isEmpty ||
+                      item.clientId == selectedClientId,
+                )
+                .toList(growable: false);
+            return AlertDialog(
+              title: Text(
+                current == null
+                    ? 'Raportare refrigeranti noua'
+                    : 'Editeaza raportarea',
+              ),
+              content: SizedBox(
+                width: 760,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          SizedBox(
+                            width: 180,
+                            child: DropdownButtonFormField<int>(
+                              initialValue: selectedYear,
+                              decoration: const InputDecoration(
+                                labelText: 'An raportare',
+                              ),
+                              items: List<DropdownMenuItem<int>>.generate(
+                                5,
+                                (index) {
+                                  final year = now.year - 2 + index;
+                                  return DropdownMenuItem<int>(
+                                    value: year,
+                                    child: Text('$year'),
+                                  );
+                                },
+                              ),
+                              onChanged: (value) => setDialogState(() {
+                                selectedYear = value ?? selectedYear;
+                              }),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 180,
+                            child: DropdownButtonFormField<
+                                RefrigerantReportingEntityType>(
+                              initialValue: selectedEntityType,
+                              decoration: const InputDecoration(
+                                labelText: 'Tip entitate',
+                              ),
+                              items: RefrigerantReportingEntityType.values
+                                  .map(
+                                    (item) => DropdownMenuItem<
+                                        RefrigerantReportingEntityType>(
+                                      value: item,
+                                      child: Text(item.label),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                              onChanged: (value) => setDialogState(() {
+                                selectedEntityType =
+                                    value ?? selectedEntityType;
+                              }),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 260,
+                            child: DropdownButtonFormField<
+                                RefrigerantReportingStatus>(
+                              initialValue: selectedStatus,
+                              decoration: const InputDecoration(
+                                labelText: 'Stare raportare',
+                              ),
+                              items: RefrigerantReportingStatus.values
+                                  .map(
+                                    (item) => DropdownMenuItem<
+                                        RefrigerantReportingStatus>(
+                                      value: item,
+                                      child: Text(item.label),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                              onChanged: (value) => setDialogState(() {
+                                selectedStatus = value ?? selectedStatus;
+                              }),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: titleController,
+                        decoration: const InputDecoration(
+                          labelText: 'Titlu chestionar / raportare',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue:
+                            _clients.any((c) => c.id == selectedClientId)
+                                ? selectedClientId
+                                : null,
+                        decoration: const InputDecoration(labelText: 'Client'),
+                        items: _clients
+                            .map(
+                              (client) => DropdownMenuItem<String>(
+                                value: client.id,
+                                child: Text(client.name),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) => setDialogState(() {
+                          selectedClientId = (value ?? '').trim();
+                          selectedEquipmentIds.removeWhere(
+                            (equipmentId) => !_agfrEquipments.any(
+                              (item) =>
+                                  item.id == equipmentId &&
+                                  item.clientId == selectedClientId,
+                            ),
+                          );
+                        }),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: _jobs.any((j) => j.id == selectedJobId)
+                            ? selectedJobId
+                            : '',
+                        decoration: const InputDecoration(
+                          labelText: 'Lucrare asociata (optional)',
+                        ),
+                        items: <DropdownMenuItem<String>>[
+                          const DropdownMenuItem<String>(
+                            value: '',
+                            child: Text('Neselectata'),
+                          ),
+                          ..._jobs.map(
+                            (job) => DropdownMenuItem<String>(
+                              value: job.id,
+                              child: Text(_jobLabel(job.id)),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) => setDialogState(() {
+                          selectedJobId = (value ?? '').trim();
+                          final job = _jobById(selectedJobId);
+                          if (selectedClientId.isEmpty && job != null) {
+                            selectedClientId = job.clientId.trim();
+                          }
+                          if (locationController.text.trim().isEmpty &&
+                              job != null &&
+                              job.location.trim().isNotEmpty) {
+                            locationController.text = job.location.trim();
+                          }
+                        }),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<RefrigerantReportingCategory>(
+                        initialValue: selectedCategory,
+                        decoration: const InputDecoration(
+                          labelText: 'Categorie oficiala',
+                        ),
+                        items: RefrigerantReportingCategory.values
+                            .map(
+                              (item) => DropdownMenuItem<
+                                  RefrigerantReportingCategory>(
+                                value: item,
+                                child: Text(item.label),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) => setDialogState(() {
+                          selectedCategory = value ?? selectedCategory;
+                        }),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: workLocationController,
+                        decoration: const InputDecoration(
+                          labelText: 'Punct de lucru / operator',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: locationController,
+                        decoration: const InputDecoration(
+                          labelText: 'Locatie',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Echipamente relevante',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      if (availableEquipments.isEmpty)
+                        const Text(
+                          'Nu exista echipamente AGFR asociabile pentru clientul selectat.',
+                        )
+                      else
+                        ...availableEquipments.map(
+                          (equipment) => CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: selectedEquipmentIds.contains(equipment.id),
+                            title: Text(
+                              [
+                                equipment.equipmentType.trim(),
+                                equipment.brand.trim(),
+                                equipment.model.trim(),
+                              ].where((item) => item.isNotEmpty).join(' | '),
+                            ),
+                            subtitle: Text(
+                              [
+                                equipment.refrigerantType.trim(),
+                                if (equipment.location.trim().isNotEmpty)
+                                  equipment.location.trim(),
+                              ].join(' | '),
+                            ),
+                            onChanged: (value) => setDialogState(() {
+                              if (value ?? false) {
+                                selectedEquipmentIds.add(equipment.id);
+                              } else {
+                                selectedEquipmentIds.remove(equipment.id);
+                              }
+                            }),
+                          ),
+                        ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: notesController,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Observatii',
+                        ),
+                      ),
+                      if ((formError ?? '').trim().isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          formError!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Renunță'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final resolvedClientName = _clientName(selectedClientId);
+                    if (selectedClientId.isEmpty ||
+                        resolvedClientName.isEmpty) {
+                      setDialogState(() {
+                        formError = 'Selecteaza clientul.';
+                      });
+                      return;
+                    }
+                    if (titleController.text.trim().isEmpty) {
+                      setDialogState(() {
+                        formError = 'Completeaza titlul raportarii.';
+                      });
+                      return;
+                    }
+                    final record = RefrigerantReportingRecord(
+                      id: current?.id ??
+                          DateTime.now().microsecondsSinceEpoch.toString(),
+                      reportingYear: selectedYear,
+                      clientId: selectedClientId,
+                      clientName: resolvedClientName,
+                      entityType: selectedEntityType,
+                      jobId: selectedJobId,
+                      workLocation: workLocationController.text.trim(),
+                      location: locationController.text.trim(),
+                      reportingCategory: selectedCategory,
+                      equipmentIds:
+                          selectedEquipmentIds.toList(growable: false),
+                      equipmentSummary:
+                          _equipmentSummary(selectedEquipmentIds.toList()),
+                      status: selectedStatus,
+                      questionnaireTitle: titleController.text.trim(),
+                      notes: notesController.text.trim(),
+                      registryEntryId: current?.registryEntryId ?? '',
+                      documentType: current?.documentType ?? 'chestionar_anmap',
+                      sourceModule:
+                          current?.sourceModule ?? 'refrigeranti_anmap',
+                      generatedDocumentPath:
+                          current?.generatedDocumentPath ?? '',
+                      generatedDocumentFileName:
+                          current?.generatedDocumentFileName ?? '',
+                      createdAt: current?.createdAt ?? now,
+                      updatedAt: DateTime.now(),
+                    );
+                    await widget.repository.saveRefrigerantReportingRecord(
+                      record,
+                    );
+                    if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop(true);
+                    }
+                  },
+                  child: const Text('Salveaza'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    titleController.dispose();
+    workLocationController.dispose();
+    locationController.dispose();
+    notesController.dispose();
+
+    if (saved == true && mounted) {
+      await _load();
+    }
+  }
+
+  Widget _statusChip(RefrigerantReportingStatus status) {
+    Color background;
+    Color foreground;
+    switch (status) {
+      case RefrigerantReportingStatus.draft:
+        background = Colors.grey.shade200;
+        foreground = Colors.grey.shade800;
+      case RefrigerantReportingStatus.inLucru:
+        background = Colors.orange.shade100;
+        foreground = Colors.orange.shade900;
+      case RefrigerantReportingStatus.pregatita:
+        background = Colors.blue.shade100;
+        foreground = Colors.blue.shade900;
+      case RefrigerantReportingStatus.transmisa:
+        background = Colors.green.shade100;
+        foreground = Colors.green.shade900;
+    }
+    return Chip(
+      label: Text(status.label),
+      backgroundColor: background,
+      labelStyle: TextStyle(color: foreground, fontWeight: FontWeight.w700),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final items = _filteredItems;
+    final registeredCount =
+        _items.where((item) => item.registryEntryId.trim().isNotEmpty).length;
+
+    return Scaffold(
+      floatingActionButton: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'anpm_report',
+            onPressed: _showAnpmReport,
+            icon: const Icon(Icons.bar_chart_outlined),
+            label: const Text('Raport ANPM'),
+          ),
+          const SizedBox(width: 12),
+          FloatingActionButton.extended(
+            heroTag: 'add_report',
+            onPressed: () => _openForm(),
+            icon: const Icon(Icons.add),
+            label: const Text('Adauga'),
+          ),
+        ],
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text(
+            'Raportari refrigeranti / Chestionare ANMAP',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Modul separat de AGFR, pregatit pentru centralizare si raportare oficiala, cu structura apropiata de chestionarele primite.',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              _metricCard('Raportari', '${_items.length}', Icons.table_chart),
+              _metricCard(
+                'In Registratura',
+                '$registeredCount',
+                Icons.library_books_outlined,
+              ),
+              _metricCard(
+                'Cross-device',
+                'Cloud-first',
+                Icons.cloud_done_outlined,
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _searchController,
+            decoration: const InputDecoration(
+              labelText: 'Cauta dupa client, categorie, titlu, locatie, status',
+              prefixIcon: Icon(Icons.search),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Listare chestionare / raportari',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (items.isEmpty)
+                    const Text(
+                      'Nu exista raportari de refrigeranti salvate inca.',
+                    )
+                  else
+                    ...items.map(
+                      (item) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(item.questionnaireTitle),
+                        subtitle: Text(
+                          '${item.reportingYear} | ${item.clientName} | ${item.reportingCategory.label}\n${item.workLocation.trim().isEmpty ? '-' : item.workLocation} | ${item.location.trim().isEmpty ? '-' : item.location}\n${item.equipmentSummary.trim().isEmpty ? 'Fara echipamente asociate' : item.equipmentSummary}',
+                        ),
+                        isThreeLine: true,
+                        trailing: Wrap(
+                          spacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _statusChip(item.status),
+                            if (item.registryEntryId.trim().isNotEmpty)
+                              const Icon(
+                                Icons.link_outlined,
+                                size: 18,
+                              ),
+                            IconButton(
+                              tooltip: 'Editeaza',
+                              onPressed: () => _openForm(current: item),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Fundatie document / Registratura',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Fiecare raportare pastreaza metadata pentru tip document oficial, sursa modul, legatura la Registratura si calea fisierului generat, astfel incat exportul si inregistrarea sa poata fi adaugate ulterior fara schimbari mari de model.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metricCard(String title, String value, IconData icon) {
+    return Container(
+      width: 220,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outlineVariant,
+        ),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            backgroundColor:
+                Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+            child: Icon(icon, color: Theme.of(context).colorScheme.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RefrigerantSummary {
+  const _RefrigerantSummary({
+    required this.refrigerantType,
+    this.totalChargedKg = 0,
+    this.totalRecoveredKg = 0,
+    this.count = 0,
+  });
+
+  final String refrigerantType;
+  final double totalChargedKg;
+  final double totalRecoveredKg;
+  final int count;
+
+  double get netKg => totalChargedKg - totalRecoveredKg;
+
+  _RefrigerantSummary add(double charged, double recovered) {
+    return _RefrigerantSummary(
+      refrigerantType: refrigerantType,
+      totalChargedKg: totalChargedKg + charged,
+      totalRecoveredKg: totalRecoveredKg + recovered,
+      count: count + 1,
+    );
+  }
+}

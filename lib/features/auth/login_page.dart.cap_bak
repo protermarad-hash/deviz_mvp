@@ -1,0 +1,125 @@
+import 'package:flutter/material.dart';
+
+import '../../core/auth_models.dart';
+import '../../core/auth_session.dart';
+
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final TextEditingController _displayName = TextEditingController();
+  UserRole _role = UserRole.admin;
+
+  @override
+  void dispose() {
+    _displayName.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = AppSessionScope.of(context);
+    final isLocalMode = !session.isCloudEnabled;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('ProVentaris'),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Card(
+            margin: const EdgeInsets.all(24),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'ProVentaris',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Excelenta operationala in HVAC',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Platforma profesionala pentru ofertare, interventii, documente si control operational HVAC.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    isLocalMode ? 'Mod local / demo' : 'Autentificare cloud',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    isLocalMode
+                        ? 'Supabase nu este configurat. Aplicatia poate continua local, cu rol selectabil.'
+                        : 'Fundatia de autentificare este pregatita pentru integrarea Supabase.',
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _displayName,
+                    decoration: const InputDecoration(
+                      labelText: 'Nume utilizator',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<UserRole>(
+                    initialValue: _role,
+                    items: UserRole.values
+                        .map(
+                          (role) => DropdownMenuItem<UserRole>(
+                            value: role,
+                            child: Text(role.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _role = value);
+                      }
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Rol',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: () async {
+                      await session.signInLocalDemo(
+                        displayName: _displayName.text.trim().isEmpty
+                            ? 'Utilizator local'
+                            : _displayName.text.trim(),
+                        role: _role,
+                      );
+                      if (!context.mounted) {
+                        return;
+                      }
+                      Navigator.of(context).maybePop();
+                    },
+                    child: Text(
+                      isLocalMode ? 'Intra in modul local' : 'Continua',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,283 @@
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import 'hr_payroll_run_models.dart';
+
+class HrPayrollMonthlyStatementPdfService {
+  const HrPayrollMonthlyStatementPdfService._();
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required DateTime payrollMonth,
+    required List<HrPayslip> payslips,
+    required Map<String, String> employeeNamesById,
+    String outputDirectory = '',
+    bool saveAs = false,
+  }) async {
+    final doc = pw.Document();
+
+    String textOrDash(String value) {
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? '-' : trimmed;
+    }
+
+    String monthLabel(DateTime value) =>
+        '${value.month.toString().padLeft(2, '0')}.${value.year.toString().padLeft(4, '0')}';
+
+    String money(double value) => value.toStringAsFixed(2);
+
+    pw.Widget infoLine(String label, String value) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 4),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: 160,
+              child: pw.Text(
+                label,
+                style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              ),
+            ),
+            pw.Expanded(child: pw.Text(textOrDash(value))),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget signatureBox(String title) {
+      return pw.Container(
+        height: 72,
+        padding: const pw.EdgeInsets.all(8),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey400),
+          borderRadius: pw.BorderRadius.circular(6),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(title, style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+            pw.Spacer(),
+            pw.Container(height: 1, color: PdfColors.grey500),
+          ],
+        ),
+      );
+    }
+
+    final rows = payslips.toList(growable: false)
+      ..sort((a, b) {
+        final aName = employeeNamesById[a.employeeId] ?? a.employeeId;
+        final bName = employeeNamesById[b.employeeId] ?? b.employeeId;
+        return aName.compareTo(bName);
+      });
+
+    final totalGross =
+        rows.fold<double>(0, (sum, item) => sum + item.grossTotal);
+    final totalCas = rows.fold<double>(0, (sum, item) => sum + item.casAmount);
+    final totalCass =
+        rows.fold<double>(0, (sum, item) => sum + item.cassAmount);
+    final totalIncomeTax =
+        rows.fold<double>(0, (sum, item) => sum + item.incomeTaxAmount);
+    final totalDeductions =
+        rows.fold<double>(0, (sum, item) => sum + item.deductionTotal);
+    final totalNet = rows.fold<double>(0, (sum, item) => sum + item.netFinal);
+    double mealTicketsTotal(HrPayslip item) {
+      final raw =
+          (item.breakdown['meal_tickets'] as Map?)?.cast<String, dynamic>();
+      final value = raw?['total_value'];
+      if (value is num) return value.toDouble();
+      return double.tryParse((value ?? '').toString().replaceAll(',', '.')) ??
+          0;
+    }
+
+    String mealTicketSummary(HrPayslip item) {
+      final raw =
+          (item.breakdown['meal_tickets'] as Map?)?.cast<String, dynamic>() ??
+              const <String, dynamic>{};
+      final enabled = raw['enabled'] == true;
+      final eligibleDays = raw['eligible_days'];
+      final valuePerDay = raw['value_per_day'];
+      final days = eligibleDays is num ? eligibleDays.toDouble() : 0.0;
+      final perDay = valuePerDay is num ? valuePerDay.toDouble() : 0.0;
+      if (!enabled) return '-';
+      return '${money(mealTicketsTotal(item))} (${days.toStringAsFixed(0)} x ${money(perDay)})';
+    }
+
+    final totalMealTickets =
+        rows.fold<double>(0, (sum, item) => sum + mealTicketsTotal(item));
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.all(24),
+        build: (_) => [
+          pw.Text(
+            'Stat de plata',
+            style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 12),
+          infoLine('Luna selectata', monthLabel(payrollMonth)),
+          infoLine('Număr angajați', rows.length.toString()),
+          infoLine(
+            'Tichete de masa',
+            'Coloana include totalul si formula zile eligibile x valoare / zi, dupa regula activa din salarizare.',
+          ),
+          pw.SizedBox(height: 12),
+          if (rows.isEmpty)
+            pw.Text('Nu exista fluturasi de salariu pentru luna selectata.')
+          else
+            pw.TableHelper.fromTextArray(
+              headerStyle: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 8,
+              ),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              headerDecoration:
+                  const pw.BoxDecoration(color: PdfColors.grey300),
+              cellPadding: const pw.EdgeInsets.symmetric(
+                horizontal: 4,
+                vertical: 4,
+              ),
+              headers: const [
+                'Nume angajat',
+                'Funcție',
+                'Ore',
+                'Brut total',
+                'CAS',
+                'CASS',
+                'Impozit',
+                'Tichete masa',
+                'Retineri',
+                'Net final',
+                'Status',
+              ],
+              columnWidths: <int, pw.TableColumnWidth>{
+                0: const pw.FlexColumnWidth(2.8),
+                1: const pw.FlexColumnWidth(1.8),
+                2: const pw.FlexColumnWidth(0.9),
+                3: const pw.FlexColumnWidth(1.1),
+                4: const pw.FlexColumnWidth(1),
+                5: const pw.FlexColumnWidth(1),
+                6: const pw.FlexColumnWidth(1),
+                7: const pw.FlexColumnWidth(1.5),
+                8: const pw.FlexColumnWidth(1),
+                9: const pw.FlexColumnWidth(1.1),
+                10: const pw.FlexColumnWidth(1),
+              },
+              headerAlignments: <int, pw.Alignment>{
+                0: pw.Alignment.centerLeft,
+                1: pw.Alignment.centerLeft,
+                2: pw.Alignment.centerRight,
+                3: pw.Alignment.centerRight,
+                4: pw.Alignment.centerRight,
+                5: pw.Alignment.centerRight,
+                6: pw.Alignment.centerRight,
+                7: pw.Alignment.centerRight,
+                8: pw.Alignment.centerRight,
+                9: pw.Alignment.centerRight,
+                10: pw.Alignment.centerLeft,
+              },
+              cellAlignments: <int, pw.Alignment>{
+                0: pw.Alignment.centerLeft,
+                1: pw.Alignment.centerLeft,
+                2: pw.Alignment.centerRight,
+                3: pw.Alignment.centerRight,
+                4: pw.Alignment.centerRight,
+                5: pw.Alignment.centerRight,
+                6: pw.Alignment.centerRight,
+                7: pw.Alignment.centerRight,
+                8: pw.Alignment.centerRight,
+                9: pw.Alignment.centerRight,
+                10: pw.Alignment.centerLeft,
+              },
+              data: rows.map(
+                (item) {
+                  final contract = (item.breakdown['contract'] as Map?)
+                          ?.cast<String, dynamic>() ??
+                      const <String, dynamic>{};
+                  final attendance =
+                      (item.breakdown['attendance_leave_inputs'] as Map?)
+                              ?.cast<String, dynamic>() ??
+                          const <String, dynamic>{};
+                  return [
+                    textOrDash(
+                        employeeNamesById[item.employeeId] ?? item.employeeId),
+                    textOrDash((contract['job_title'] ?? '').toString()),
+                    money(
+                      (attendance['worked_hours'] as num?)?.toDouble() ?? 0,
+                    ),
+                    money(item.grossTotal),
+                    money(item.casAmount),
+                    money(item.cassAmount),
+                    money(item.incomeTaxAmount),
+                    mealTicketSummary(item),
+                    money(item.deductionTotal),
+                    money(item.netFinal),
+                    textOrDash(item.status),
+                  ];
+                },
+              ).toList(growable: false),
+            ),
+          pw.SizedBox(height: 12),
+          pw.Align(
+            alignment: pw.Alignment.centerRight,
+            child: pw.Container(
+              width: 320,
+              padding: const pw.EdgeInsets.all(10),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey400),
+                borderRadius: pw.BorderRadius.circular(6),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  infoLine('Total brut', money(totalGross)),
+                  infoLine('Total CAS', money(totalCas)),
+                  infoLine('Total CASS', money(totalCass)),
+                  infoLine('Total impozit', money(totalIncomeTax)),
+                  infoLine('Total tichete', money(totalMealTickets)),
+                  infoLine('Total retineri', money(totalDeductions)),
+                  pw.Divider(color: PdfColors.grey400),
+                  infoLine('Total net', money(totalNet)),
+                ],
+              ),
+            ),
+          ),
+          pw.SizedBox(height: 18),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Expanded(child: signatureBox('Intocmit de')),
+              pw.SizedBox(width: 16),
+              pw.Expanded(child: signatureBox('Verificat de')),
+              pw.SizedBox(width: 16),
+              pw.Expanded(child: signatureBox('Aprobat de')),
+              pw.SizedBox(width: 16),
+              pw.Expanded(child: signatureBox('Semnătură')),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final bytes = await doc.save();
+    final fileName = _fileName(payrollMonth);
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: bytes,
+      fileName: fileName,
+      category: PdfDocumentCategory.hrStatements,
+      outputDirectory: outputDirectory,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static String _fileName(DateTime payrollMonth) {
+    final monthKey =
+        '${payrollMonth.year.toString().padLeft(4, '0')}-${payrollMonth.month.toString().padLeft(2, '0')}';
+    return 'stat_de_plata_$monthKey.pdf';
+  }
+}

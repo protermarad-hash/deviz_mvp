@@ -1,0 +1,709 @@
+import 'package:flutter/material.dart';
+
+import '../../core/auth/field_auth_models.dart';
+import '../../core/auth/field_auth_repository.dart';
+import '../../core/auth/field_auth_repository_factory.dart';
+import '../../core/auth/field_local_auth_repository.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../employees/angajati_cloud_repository.dart';
+import '../employees/firebase_angajati_repository.dart';
+import '../master/master_local_store.dart';
+import '../teams/echipe_cloud_repository.dart';
+import '../teams/firebase_echipe_repository.dart';
+
+class LocalUsersAdminPage extends StatefulWidget {
+  const LocalUsersAdminPage({super.key});
+
+  @override
+  State<LocalUsersAdminPage> createState() => _LocalUsersAdminPageState();
+}
+
+class _LocalUsersAdminPageState extends State<LocalUsersAdminPage> {
+  final FieldLocalAuthRepository _repository = FieldLocalAuthRepository();
+  late final FieldAuthRepository _authRepository;
+  final AngajatiCloudRepository _employeesCloudRepository =
+      FirebaseAngajatiRepository();
+  final EchipeCloudRepository _teamsCloudRepository =
+      FirebaseEchipeRepository();
+
+  bool _loading = true;
+  List<FieldAuthUser> _users = const <FieldAuthUser>[];
+  List<MasterEmployee> _employees = const <MasterEmployee>[];
+  List<MasterTeam> _teams = const <MasterTeam>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _authRepository = FieldAuthRepositoryFactory.create();
+    _load();
+  }
+
+  Future<void> _load() async {
+    await _repository.ensureSeedUsers();
+    final users = await _authRepository.listUsers();
+    final employees = await _loadEmployeesLookup();
+    final teams = await _loadTeamsLookup();
+    if (!mounted) return;
+    setState(() {
+      _users = users;
+      _employees = _dedupeById(employees, (row) => row.id);
+      _teams = _dedupeById(teams, (row) => row.id);
+      _loading = false;
+    });
+  }
+
+  List<T> _dedupeById<T>(List<T> rows, String Function(T row) getId) {
+    final seen = <String>{};
+    final out = <T>[];
+    for (final row in rows) {
+      final id = getId(row).trim();
+      if (id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      out.add(row);
+    }
+    return out;
+  }
+
+  Future<List<MasterEmployee>> _loadEmployeesLookup() async {
+    if (!FirebaseBootstrap.isInitialized) {
+      return MasterLocalStore.readEmployees();
+    }
+    try {
+      final rows = await _employeesCloudRepository.listEmployees();
+      await MasterLocalStore.writeEmployees(rows);
+      return rows;
+    } catch (_) {
+      return MasterLocalStore.readEmployees();
+    }
+  }
+
+  Future<List<MasterTeam>> _loadTeamsLookup() async {
+    if (!FirebaseBootstrap.isInitialized) {
+      return MasterLocalStore.readTeams();
+    }
+    try {
+      final rows = await _teamsCloudRepository.listTeams();
+      await MasterLocalStore.writeTeams(rows);
+      return rows;
+    } catch (_) {
+      return MasterLocalStore.readTeams();
+    }
+  }
+
+  Future<void> _saveUser(FieldAuthUser user) async {
+    await _authRepository.saveUser(user);
+  }
+
+  String _roleLabel(FieldUserRole role) => _roleLabelForUi(role);
+
+  MasterEmployee? _employeeById(String employeeId) {
+    final id = employeeId.trim();
+    if (id.isEmpty) return null;
+    for (final row in _employees) {
+      if (row.id == id) return row;
+    }
+    return null;
+  }
+
+  MasterTeam? _teamById(String teamId) {
+    final id = teamId.trim();
+    if (id.isEmpty) return null;
+    for (final row in _teams) {
+      if (row.id == id) return row;
+    }
+    return null;
+  }
+
+  String _teamIdForEmployee(String employeeId) {
+    final employee = _employeeById(employeeId);
+    if (employee == null) return '';
+    if (employee.teamId.trim().isNotEmpty) {
+      return employee.teamId.trim();
+    }
+    for (final team in _teams) {
+      if (team.memberIds.contains(employee.id)) {
+        return team.id;
+      }
+    }
+    return '';
+  }
+
+  Future<void> _openEditor({FieldAuthUser? user}) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _UserEditDialog(
+        user: user,
+        roleLabelBuilder: _roleLabel,
+        hashPassword: _repository.hashPasswordForStorage,
+        onSave: _saveUser,
+        employees: _employees,
+        teams: _teams,
+        teamIdForEmployee: _teamIdForEmployee,
+      ),
+    );
+
+    if (!mounted) return;
+    if (saved == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Utilizator salvat.')),
+      );
+    }
+  }
+
+  Future<void> _changePassword(FieldAuthUser user) async {
+    final updated = await showDialog<bool>(
+      context: context,
+      builder: (_) => _UserPasswordDialog(
+        email: user.email,
+        onSave: (newPassword) async {
+          await _saveUser(
+            user.copyWith(
+              passwordHash: _repository.hashPasswordForStorage(newPassword),
+            ),
+          );
+        },
+      ),
+    );
+
+    if (!mounted) return;
+    if (updated == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Parola a fost actualizată.')),
+      );
+    }
+  }
+
+  Future<void> _toggleActive(FieldAuthUser user) async {
+    await _saveUser(user.copyWith(active: !user.active));
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Utilizatori'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Center(
+              child: Text('Sursa date: ${_authRepository.authSourceLabel}'),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openEditor(),
+        icon: const Icon(Icons.person_add_alt_1),
+        label: const Text('Adaugă utilizator'),
+      ),
+      body: _users.isEmpty
+          ? const Center(child: Text('Nu există utilizatori.'))
+          : ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: _users.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final user = _users[index];
+                final employee = _employeeById(user.employeeId);
+                final resolvedTeamId = user.teamId.trim().isNotEmpty
+                    ? user.teamId.trim()
+                    : _teamIdForEmployee(user.employeeId);
+                final team = _teamById(resolvedTeamId);
+
+                final meta = <String>[
+                  _roleLabel(user.role),
+                  employee == null ? 'Angajat: -' : 'Angajat: ${employee.name}',
+                  team == null ? 'Echipa: -' : 'Echipa: ${team.name}',
+                  user.phone.trim().isEmpty
+                      ? 'Telefon: -'
+                      : 'Telefon: ${user.phone}',
+                  user.active ? 'Activ' : 'Inactiv',
+                ].join(' | ');
+
+                return Card(
+                  child: ListTile(
+                    title: Text(user.name),
+                    subtitle: Text('${user.email}\n$meta'),
+                    isThreeLine: true,
+                    trailing: Wrap(
+                      spacing: 4,
+                      children: [
+                        IconButton(
+                          tooltip: 'Editează',
+                          onPressed: () => _openEditor(user: user),
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
+                        IconButton(
+                          tooltip: 'Schimbă parola',
+                          onPressed: () => _changePassword(user),
+                          icon: const Icon(Icons.password_outlined),
+                        ),
+                        IconButton(
+                          tooltip: user.active ? 'Dezactivează' : 'Activează',
+                          onPressed: () => _toggleActive(user),
+                          icon: Icon(
+                            user.active
+                                ? Icons.toggle_on_outlined
+                                : Icons.toggle_off_outlined,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _UserEditDialog extends StatefulWidget {
+  const _UserEditDialog({
+    required this.hashPassword,
+    required this.onSave,
+    required this.roleLabelBuilder,
+    required this.employees,
+    required this.teams,
+    required this.teamIdForEmployee,
+    this.user,
+  });
+
+  final FieldAuthUser? user;
+  final String Function(String raw) hashPassword;
+  final Future<void> Function(FieldAuthUser user) onSave;
+  final String Function(FieldUserRole role) roleLabelBuilder;
+  final List<MasterEmployee> employees;
+  final List<MasterTeam> teams;
+  final String Function(String employeeId) teamIdForEmployee;
+
+  @override
+  State<_UserEditDialog> createState() => _UserEditDialogState();
+}
+
+class _UserEditDialogState extends State<_UserEditDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameController =
+      TextEditingController(text: widget.user?.name ?? '');
+  late final TextEditingController _emailController =
+      TextEditingController(text: widget.user?.email ?? '');
+  late final TextEditingController _phoneController =
+      TextEditingController(text: widget.user?.phone ?? '');
+  late final TextEditingController _passwordController =
+      TextEditingController();
+  late final ScrollController _scrollController = ScrollController();
+
+  late FieldUserRole _selectedRole;
+  late bool _active;
+  late String _selectedEmployeeId;
+  late String _selectedTeamId;
+  bool _teamManuallyChanged = false;
+  bool _saving = false;
+  String? _error;
+
+  bool get _isNew => widget.user == null;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedRole = widget.user?.role ?? FieldUserRole.employee;
+    _active = widget.user?.active ?? true;
+    _selectedEmployeeId = widget.user?.employeeId ?? '';
+    _selectedTeamId = widget.user?.teamId ?? '';
+    _teamManuallyChanged = _selectedTeamId.trim().isNotEmpty;
+    if (_selectedTeamId.trim().isEmpty &&
+        _selectedEmployeeId.trim().isNotEmpty) {
+      final inferred = widget.teamIdForEmployee(_selectedEmployeeId);
+      if (inferred.trim().isNotEmpty) {
+        _selectedTeamId = inferred;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    _phoneController.dispose();
+    _passwordController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    FocusScope.of(context).unfocus();
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+
+    final existingHash = widget.user?.passwordHash ?? '';
+    final nextHash = _passwordController.text.trim().isEmpty
+        ? existingHash
+        : widget.hashPassword(_passwordController.text.trim());
+
+    if (_isNew && nextHash.isEmpty) {
+      setState(() {
+        _error = 'Parola este obligatorie la creare.';
+      });
+      return;
+    }
+
+    final nextUser = FieldAuthUser(
+      id: widget.user?.id ?? 'user-${DateTime.now().microsecondsSinceEpoch}',
+      name: _nameController.text.trim(),
+      email: _emailController.text.trim().toLowerCase(),
+      role: _selectedRole,
+      active: _active,
+      employeeId: _selectedEmployeeId.trim(),
+      teamId: _selectedTeamId.trim(),
+      phone: _phoneController.text.trim(),
+      passwordHash: nextHash,
+    );
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    try {
+      await widget.onSave(nextUser);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'Nu s-a putut salva utilizatorul.';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
+  List<DropdownMenuItem<String>> _employeeItems() {
+    final seen = <String>{''};
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem<String>(
+        value: '',
+        child: Text('Fără angajat asociat'),
+      ),
+    ];
+    for (final employee in widget.employees) {
+      final id = employee.id.trim();
+      if (id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      final role = employee.role.trim();
+      final label = role.isEmpty ? employee.name : '${employee.name} ($role)';
+      items.add(
+        DropdownMenuItem<String>(
+          value: id,
+          child: Text(label),
+        ),
+      );
+    }
+    final current = _selectedEmployeeId.trim();
+    if (current.isNotEmpty && !seen.contains(current)) {
+      items.add(
+        DropdownMenuItem<String>(
+          value: current,
+          child: Text('Angajat indisponibil ($current)'),
+        ),
+      );
+    }
+    return items;
+  }
+
+  List<DropdownMenuItem<String>> _teamItems() {
+    final seen = <String>{''};
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem<String>(
+        value: '',
+        child: Text('Fără echipă asociată'),
+      ),
+    ];
+    for (final team in widget.teams) {
+      final id = team.id.trim();
+      if (id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      items.add(
+        DropdownMenuItem<String>(
+          value: id,
+          child: Text(team.name),
+        ),
+      );
+    }
+    final current = _selectedTeamId.trim();
+    if (current.isNotEmpty && !seen.contains(current)) {
+      items.add(
+        DropdownMenuItem<String>(
+          value: current,
+          child: Text('Echipa indisponibila ($current)'),
+        ),
+      );
+    }
+    return items;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(_isNew ? 'Utilizator nou' : 'Editează utilizator'),
+      content: SizedBox(
+        width: 520,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            controller: _scrollController,
+            primary: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'Nume'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Numele este obligatoriu.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(labelText: 'Email'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Emailul este obligatoriu.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<FieldUserRole>(
+                  initialValue: _selectedRole,
+                  decoration: const InputDecoration(labelText: 'Rol'),
+                  items: FieldUserRole.values
+                      .map(
+                        (role) => DropdownMenuItem<FieldUserRole>(
+                          value: role,
+                          child: Text(widget.roleLabelBuilder(role)),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: _saving
+                      ? null
+                      : (value) {
+                          if (value == null) return;
+                          setState(() => _selectedRole = value);
+                        },
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedEmployeeId.trim(),
+                  decoration:
+                      const InputDecoration(labelText: 'Angajat asociat'),
+                  items: _employeeItems(),
+                  onChanged: _saving
+                      ? null
+                      : (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _selectedEmployeeId = value;
+                            if (!_teamManuallyChanged) {
+                              final inferred = widget.teamIdForEmployee(value);
+                              _selectedTeamId = inferred;
+                            }
+                          });
+                        },
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedTeamId.trim(),
+                  decoration:
+                      const InputDecoration(labelText: 'Echipa asociata'),
+                  items: _teamItems(),
+                  onChanged: _saving
+                      ? null
+                      : (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _selectedTeamId = value;
+                            _teamManuallyChanged = true;
+                          });
+                        },
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: _phoneController,
+                  decoration: const InputDecoration(labelText: 'Telefon'),
+                ),
+                const SizedBox(height: 10),
+                SwitchListTile(
+                  value: _active,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Activ'),
+                  onChanged: _saving
+                      ? null
+                      : (value) => setState(() => _active = value),
+                ),
+                const SizedBox(height: 6),
+                TextFormField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: _isNew ? 'Parolă' : 'Parolă nouă (opțional)',
+                  ),
+                  validator: (value) {
+                    if (_isNew && (value ?? '').trim().isEmpty) {
+                      return 'Parola este obligatorie la creare.';
+                    }
+                    return null;
+                  },
+                ),
+                if ((_error ?? '').trim().isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _UserPasswordDialog extends StatefulWidget {
+  const _UserPasswordDialog({
+    required this.email,
+    required this.onSave,
+  });
+
+  final String email;
+  final Future<void> Function(String newPassword) onSave;
+
+  @override
+  State<_UserPasswordDialog> createState() => _UserPasswordDialogState();
+}
+
+class _UserPasswordDialogState extends State<_UserPasswordDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  late final TextEditingController _passwordController =
+      TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    FocusScope.of(context).unfocus();
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.onSave(_passwordController.text.trim());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = 'Nu s-a putut actualiza parola.';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Schimbă parola (${widget.email})'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextFormField(
+              controller: _passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Parolă nouă'),
+              validator: (value) {
+                if ((value ?? '').trim().isEmpty) {
+                  return 'Parola nu poate fi goală.';
+                }
+                return null;
+              },
+            ),
+            if ((_error ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: Colors.red),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: const Text('Actualizează'),
+        ),
+      ],
+    );
+  }
+}
+
+String _roleLabelForUi(FieldUserRole role) {
+  switch (role) {
+    case FieldUserRole.admin:
+      return 'Admin';
+    case FieldUserRole.office:
+      return 'Birou';
+    case FieldUserRole.teamLead:
+      return 'Șef echipă';
+    case FieldUserRole.employee:
+      return 'Angajat';
+  }
+}

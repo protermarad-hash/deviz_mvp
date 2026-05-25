@@ -1,0 +1,121 @@
+enum CloudEntityType {
+  users,
+  teams,
+  appointments,
+  appointmentMaterialKitTemplates,
+  clients,
+  offers,
+  jobs,
+  complaints,
+  documents,
+  materials,
+  hrAttendanceEntries,
+  toolInventoryItems,
+  toolPackages,
+  agfrEquipments,
+  agfrInterventions,
+  agfrReports,
+  agfrWeighingReports,
+  vehicles,
+  registryEntries,
+  partnerTransactions,
+  partnerFinancialSummary,
+  devizArticoleTemplate,
+  fieldPhotos,
+  devizeTehnice,
+  devizeFiltreCta,
+  appTasks,
+  unknown,
+}
+
+class CloudSyncItem {
+  CloudSyncItem({
+    required this.id,
+    required this.entityType,
+    required this.entityId,
+    required this.payload,
+    required this.updatedAt,
+    this.syncedAt,
+    this.deleted = false,
+    this.retryCount = 0,
+    this.lastError,
+    this.lastAttemptAt,
+    this.nextAttemptAt,
+  });
+
+  final String id;
+  final CloudEntityType entityType;
+  final String entityId;
+  final Map<String, dynamic> payload;
+  final DateTime updatedAt;
+  final DateTime? syncedAt;
+  final bool deleted;
+  final int retryCount;
+  final String? lastError;
+  final DateTime? lastAttemptAt;
+  final DateTime? nextAttemptAt;
+
+  bool get isSynced => syncedAt != null;
+
+  CloudSyncItem copyWith({
+    DateTime? syncedAt,
+    int? retryCount,
+    String? lastError,
+    DateTime? lastAttemptAt,
+    DateTime? nextAttemptAt,
+    bool clearFailureState = false,
+  }) {
+    return CloudSyncItem(
+      id: id,
+      entityType: entityType,
+      entityId: entityId,
+      payload: payload,
+      updatedAt: updatedAt,
+      syncedAt: syncedAt ?? this.syncedAt,
+      deleted: deleted,
+      retryCount: clearFailureState ? 0 : (retryCount ?? this.retryCount),
+      lastError: clearFailureState ? null : (lastError ?? this.lastError),
+      lastAttemptAt:
+          clearFailureState ? null : (lastAttemptAt ?? this.lastAttemptAt),
+      nextAttemptAt: clearFailureState ? null : (nextAttemptAt ?? this.nextAttemptAt),
+    );
+  }
+
+  Map<String, dynamic> toMap() => <String, dynamic>{
+        'id': id,
+        'entityType': entityType.name,
+        'entityId': entityId,
+        'payload': payload,
+        'updatedAt': updatedAt.toIso8601String(),
+        'syncedAt': syncedAt?.toIso8601String(),
+        'deleted': deleted,
+        'retryCount': retryCount,
+        'lastError': lastError,
+        'lastAttemptAt': lastAttemptAt?.toIso8601String(),
+        'nextAttemptAt': nextAttemptAt?.toIso8601String(),
+      };
+
+  factory CloudSyncItem.fromMap(Map<String, dynamic> map) {
+    return CloudSyncItem(
+      id: map['id'] as String? ?? '',
+      entityType: CloudEntityType.values.firstWhere(
+        (value) => value.name == (map['entityType'] as String? ?? ''),
+        orElse: () => CloudEntityType.unknown,
+      ),
+      entityId: map['entityId'] as String? ?? '',
+      payload: Map<String, dynamic>.from(
+        (map['payload'] as Map?) ?? const <String, dynamic>{},
+      ),
+      updatedAt: DateTime.tryParse(map['updatedAt'] as String? ?? '') ??
+          DateTime.now(),
+      syncedAt: DateTime.tryParse(map['syncedAt'] as String? ?? ''),
+      deleted: map['deleted'] == true,
+      retryCount: (map['retryCount'] as num?)?.toInt() ?? 0,
+      lastError: (map['lastError'] as String?)?.trim().isEmpty == true
+          ? null
+          : map['lastError'] as String?,
+      lastAttemptAt: DateTime.tryParse(map['lastAttemptAt'] as String? ?? ''),
+      nextAttemptAt: DateTime.tryParse(map['nextAttemptAt'] as String? ?? ''),
+    );
+  }
+}

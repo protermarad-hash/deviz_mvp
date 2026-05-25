@@ -1,0 +1,4 @@
+enum AppMode {
+  localOnly,
+  hybridCloud,
+}

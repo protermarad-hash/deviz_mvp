@@ -1,0 +1,2778 @@
+import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/widgets/anaf_company_autofill_section.dart';
+import '../../core/widgets/app_viewport_guard.dart';
+import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
+import '../jobs/job_models.dart';
+import '../oferte/oferte_page.dart';
+import '../oferte/firebase_oferte_repository.dart';
+import '../oferte/local_oferte_repository.dart';
+import '../oferte/offer_models.dart';
+import '../programari/programari_page.dart';
+import '../programari/appointment_models.dart';
+import '../reclamatii/complaint_client_centralizer_editor_page.dart';
+import '../reclamatii/complaint_document_models.dart';
+import '../reclamatii/complaint_models.dart';
+import '../reclamatii/complaint_work_order_editor_page.dart';
+import '../reclamatii/reclamatii_page.dart';
+import '../reclamatii/repair_report_models.dart';
+import '../reclamatii/warranty_intervention_report_models.dart';
+import '../agfr/agfr_models.dart';
+import 'client_models.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
+
+class ClientsPage extends StatefulWidget {
+  const ClientsPage({
+    super.key,
+    required this.repository,
+  });
+
+  final AppDataRepository repository;
+
+  @override
+  State<ClientsPage> createState() => _ClientsPageState();
+}
+
+class _ClientsPageState extends State<ClientsPage> {
+  bool _loading = true;
+  final TextEditingController _search = TextEditingController();
+  final LocalOferteRepository _localOffersRepository = LocalOferteRepository();
+  List<ClientRecord> _items = const <ClientRecord>[];
+  ClientType? _typeFilter;
+  bool? _activeFilter;
+  String _dataSourceLabel = 'local_cache';
+  String? _cloudFallbackReason;
+  bool _filtersVisible = false;
+
+  int get _activeFilterCount {
+    int count = 0;
+    if (_typeFilter != null) count++;
+    if (_activeFilter != null) count++;
+    if (_search.text.trim().isNotEmpty) count++;
+    return count;
+  }
+
+  String _shortCloudError(Object error) {
+    final raw = error.toString().replaceAll('\n', ' ').trim();
+    if (raw.isEmpty) return 'necunoscuta';
+    return raw.length > 140 ? '${raw.substring(0, 140)}…' : raw;
+  }
+
+  void _syncClientDataSourceLabel() {
+    final repository = widget.repository;
+    if (repository is LocalAppDataRepository) {
+      _dataSourceLabel = repository.lastClientsDataSourceLabel;
+      final reason = repository.lastClientsFallbackReason.trim();
+      _cloudFallbackReason = reason.isEmpty ? null : _shortCloudError(reason);
+      return;
+    }
+    _dataSourceLabel = 'cloud';
+    _cloudFallbackReason = null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  Future<List<ClientRecord>> _listClientsResolved() async {
+    await OfflineSyncRuntime.instance.syncPending();
+    final items = await widget.repository.listClients();
+    _syncClientDataSourceLabel();
+    return items;
+  }
+
+  Future<void> _saveClientResolved(ClientRecord item) async {
+    final saved = await widget.repository.saveClient(item);
+    _syncClientDataSourceLabel();
+    await OfflineSyncRuntime.instance.queueClient(saved);
+  }
+
+  Future<void> _importCsv() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['csv', 'txt'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final bytes = result.files.first.bytes;
+    if (bytes == null) return;
+
+    final content = String.fromCharCodes(bytes);
+    final lines = content
+        .split(RegExp(r'\r?\n'))
+        .where((l) => l.trim().isNotEmpty)
+        .toList(growable: false);
+    if (lines.length < 2) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('CSV gol sau fără rânduri de date.')),
+        );
+      }
+      return;
+    }
+
+    List<String> parseCsvRow(String line) {
+      final fields = <String>[];
+      final buf = StringBuffer();
+      bool inQuotes = false;
+      for (var i = 0; i < line.length; i++) {
+        final ch = line[i];
+        if (ch == '"') {
+          if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
+            buf.write('"');
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (ch == ',' && !inQuotes) {
+          fields.add(buf.toString().trim());
+          buf.clear();
+        } else {
+          buf.write(ch);
+        }
+      }
+      fields.add(buf.toString().trim());
+      return fields;
+    }
+
+    // Parse header
+    final header = parseCsvRow(lines[0]).map((h) => h.toLowerCase()).toList();
+    int col(String name) => header.indexOf(name);
+
+    final iName = col('name') != -1 ? col('name') : col('nume');
+    final iCui = col('cui') != -1 ? col('cui') : col('cif');
+    final iPhone = col('phone') != -1 ? col('phone') : col('telefon');
+    final iEmail = col('email');
+    final iAddress = col('address') != -1 ? col('address') : col('adresa');
+    final iCity = col('city') != -1 ? col('city') : col('oras');
+    final iCounty = col('county') != -1 ? col('county') : col('judet');
+
+    if (iName == -1) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Coloana "name" sau "nume" nu a fost găsită în header CSV.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    String safeField(List<String> row, int idx) =>
+        idx >= 0 && idx < row.length ? row[idx] : '';
+
+    final preview = <ClientRecord>[];
+    final now = DateTime.now();
+    for (var i = 1; i < lines.length; i++) {
+      final row = parseCsvRow(lines[i]);
+      final name = safeField(row, iName);
+      if (name.isEmpty) continue;
+      preview.add(
+        ClientRecord(
+          id: 'csv-import-${now.millisecondsSinceEpoch}-$i',
+          clientCode: '',
+          externalClientCode: '',
+          externalClientSource: '',
+          type: ClientType.persoanaJuridica,
+          name: name,
+          contactPerson: '',
+          phone: safeField(row, iPhone),
+          email: safeField(row, iEmail),
+          cui: safeField(row, iCui),
+          regCom: '',
+          iban: '',
+          bank: '',
+          departments: const [],
+          contactPeople: const [],
+          address: safeField(row, iAddress),
+          city: safeField(row, iCity),
+          county: safeField(row, iCounty),
+          notes: '',
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+    }
+
+    if (!mounted) return;
+
+    // Show preview dialog
+    if (preview.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nu s-au găsit rânduri valide în CSV.')),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Import ${preview.length} clienți din CSV'),
+        content: SizedBox(
+          width: 560,
+          height: 400,
+          child: ListView.builder(
+            itemCount: preview.length,
+            itemBuilder: (_, i) {
+              final c = preview[i];
+              return ListTile(
+                dense: true,
+                title: Text(c.name),
+                subtitle: Text(
+                  [
+                    if (c.cui.isNotEmpty) 'CUI: ${c.cui}',
+                    if (c.phone.isNotEmpty) c.phone,
+                    if (c.email.isNotEmpty) c.email,
+                    if (c.city.isNotEmpty) c.city,
+                  ].join(' | '),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Importă ${preview.length} clienți'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    int imported = 0;
+    for (final client in preview) {
+      try {
+        final code = await widget.repository.nextClientCode();
+        final withCode = client.copyWith(clientCode: code);
+        await _saveClientResolved(withCode);
+        imported++;
+      } catch (_) {
+        // skip failed rows
+      }
+    }
+    await _load();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Importat $imported din ${preview.length} clienți.')),
+      );
+    }
+  }
+
+  Future<void> _deleteClientResolved(String id) async {
+    await widget.repository.deleteClient(id);
+    _syncClientDataSourceLabel();
+    await OfflineSyncRuntime.instance.queueClientDelete(id);
+  }
+
+  Future<List<OfferRecord>> _listOffersResolved() async {
+    if (FirebaseBootstrap.isInitialized) {
+      try {
+        final cloudItems = await FirebaseOferteRepository().listOffers();
+        await _localOffersRepository.replaceOffers(cloudItems);
+        return cloudItems;
+      } catch (_) {}
+    }
+    return _localOffersRepository.listOffers();
+  }
+
+  Future<void> _load() async {
+    try {
+      final items = await _listClientsResolved();
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+      });
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  List<ClientRecord> get _filtered {
+    final query = _search.text.trim().toLowerCase();
+    return _items.where((item) {
+      if (_typeFilter != null && item.type != _typeFilter) return false;
+      if (_activeFilter != null && item.isActive != _activeFilter) return false;
+      if (query.isEmpty) return true;
+      return item.name.toLowerCase().contains(query) ||
+          item.phone.toLowerCase().contains(query) ||
+          item.phone2.toLowerCase().contains(query) ||
+          item.phone3.toLowerCase().contains(query) ||
+          item.email.toLowerCase().contains(query) ||
+          item.cui.toLowerCase().contains(query) ||
+          item.clientCode.toLowerCase().contains(query) ||
+          item.externalClientCode.toLowerCase().contains(query) ||
+          item.externalClientSource.toLowerCase().contains(query);
+    }).toList();
+  }
+
+  Future<void> _openForm({ClientRecord? current}) async {
+    final isEdit = current != null;
+    final initialCode =
+        isEdit ? current.clientCode : await widget.repository.nextClientCode();
+    if (!mounted) return;
+    final code = TextEditingController(text: initialCode);
+    final externalClientCode = TextEditingController(
+      text: current?.externalClientCode ?? '',
+    );
+    final externalClientSource = TextEditingController(
+      text: current?.externalClientSource ?? '',
+    );
+    final name = TextEditingController(text: current?.name ?? '');
+    final contact = TextEditingController(text: current?.contactPerson ?? '');
+    final phone = TextEditingController(text: current?.phone ?? '');
+    final phone2 = TextEditingController(text: current?.phone2 ?? '');
+    final phone3 = TextEditingController(text: current?.phone3 ?? '');
+    final email = TextEditingController(text: current?.email ?? '');
+    final cui = TextEditingController(text: current?.cui ?? '');
+    final reg = TextEditingController(text: current?.regCom ?? '');
+    final bank = TextEditingController(text: current?.bank ?? '');
+    final iban = TextEditingController(text: current?.iban ?? '');
+    final address = TextEditingController(text: current?.address ?? '');
+    final city = TextEditingController(text: current?.city ?? '');
+    final county = TextEditingController(text: current?.county ?? '');
+    final notes = TextEditingController(text: current?.notes ?? '');
+    final type = ValueNotifier<ClientType>(
+      current?.type ?? ClientType.persoanaJuridica,
+    );
+    final useAutomaticCode = ValueNotifier<bool>(
+      !isEdit || current.clientCode.trim().isEmpty,
+    );
+    final active = ValueNotifier<bool>(current?.isActive ?? true);
+    final departments = <ClientDepartment>[...?current?.departments];
+    final contacts = <ClientContactPerson>[...?current?.contactPeople];
+    String? formError;
+    final dialogScrollController = ScrollController();
+
+    Future<ClientDepartment?> openDepartmentDialog({
+      ClientDepartment? existing,
+    }) async {
+      final nameController = TextEditingController(text: existing?.name ?? '');
+      final notesController =
+          TextEditingController(text: existing?.notes ?? '');
+      String? localError;
+      final saved = await showDialog<ClientDepartment>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setLocalState) {
+              return AlertDialog(
+                title: Text(
+                  existing == null
+                      ? 'Adaugă departament'
+                      : 'Editează departament',
+                ),
+                content: SizedBox(
+                  width: 420,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                            labelText: 'Nume departament'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: notesController,
+                        maxLines: 3,
+                        decoration:
+                            const InputDecoration(labelText: 'Observații'),
+                      ),
+                      if ((localError ?? '').trim().isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            localError!,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('Renunță'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      final trimmedName = nameController.text.trim();
+                      if (trimmedName.isEmpty) {
+                        setLocalState(() {
+                          localError = 'Completează numele departamentului.';
+                        });
+                        return;
+                      }
+                      Navigator.of(dialogContext).pop(
+                        ClientDepartment(
+                          id: existing?.id ??
+                              'dep-${DateTime.now().microsecondsSinceEpoch}',
+                          name: trimmedName,
+                          notes: notesController.text.trim(),
+                        ),
+                      );
+                    },
+                    child: const Text('Salvează'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+      nameController.dispose();
+      notesController.dispose();
+      return saved;
+    }
+
+    Future<ClientContactPerson?> openContactDialog({
+      ClientContactPerson? existing,
+    }) async {
+      final fullNameController =
+          TextEditingController(text: existing?.fullName ?? '');
+      final roleController = TextEditingController(text: existing?.role ?? '');
+      final emailController =
+          TextEditingController(text: existing?.email ?? '');
+      final phoneController =
+          TextEditingController(text: existing?.phone ?? '');
+      final notesController =
+          TextEditingController(text: existing?.notes ?? '');
+      String? selectedDepartmentId =
+          (existing?.departmentId ?? '').trim().isEmpty
+              ? null
+              : existing?.departmentId.trim();
+      String? localError;
+      final saved = await showDialog<ClientContactPerson>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setLocalState) {
+              return AlertDialog(
+                title: Text(
+                    existing == null ? 'Adaugă contact' : 'Editează contact'),
+                content: SizedBox(
+                  width: 520,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: fullNameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Nume complet',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: roleController,
+                          decoration:
+                              const InputDecoration(labelText: 'Funcție'),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: phoneController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Telefon',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: emailController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Email',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String?>(
+                          initialValue: selectedDepartmentId != null &&
+                                  departments.any(
+                                    (item) => item.id == selectedDepartmentId,
+                                  )
+                              ? selectedDepartmentId
+                              : null,
+                          decoration:
+                              const InputDecoration(labelText: 'Departament'),
+                          items: [
+                            const DropdownMenuItem<String?>(
+                              value: null,
+                              child: Text('Fără departament'),
+                            ),
+                            ...departments.map(
+                              (item) => DropdownMenuItem<String?>(
+                                value: item.id,
+                                child: Text(item.name),
+                              ),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            setLocalState(() {
+                              selectedDepartmentId = value;
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: notesController,
+                          maxLines: 3,
+                          decoration:
+                              const InputDecoration(labelText: 'Observații'),
+                        ),
+                        if ((localError ?? '').trim().isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              localError!,
+                              style: const TextStyle(color: Colors.red),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('Renunță'),
+                  ),
+                  FilledButton(
+                    onPressed: () {
+                      final trimmedName = fullNameController.text.trim();
+                      if (trimmedName.isEmpty) {
+                        setLocalState(() {
+                          localError =
+                              'Completează numele persoanei de contact.';
+                        });
+                        return;
+                      }
+                      Navigator.of(dialogContext).pop(
+                        ClientContactPerson(
+                          id: existing?.id ??
+                              'contact-${DateTime.now().microsecondsSinceEpoch}',
+                          fullName: trimmedName,
+                          role: roleController.text.trim(),
+                          email: emailController.text.trim(),
+                          phone: phoneController.text.trim(),
+                          departmentId: selectedDepartmentId ?? '',
+                          notes: notesController.text.trim(),
+                        ),
+                      );
+                    },
+                    child: const Text('Salvează'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+      fullNameController.dispose();
+      roleController.dispose();
+      emailController.dispose();
+      phoneController.dispose();
+      notesController.dispose();
+      return saved;
+    }
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setDialog) {
+            return AlertDialog(
+              title: Text(isEdit ? 'Editează client' : 'Adaugă client'),
+              content: SizedBox(
+                width: 760,
+                child: SingleChildScrollView(
+                  controller: dialogScrollController,
+                  primary: false,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: code,
+                        enabled: !useAutomaticCode.value,
+                        decoration: InputDecoration(
+                          labelText: 'Cod client intern',
+                          helperText: useAutomaticCode.value
+                              ? 'Generat automat'
+                              : 'Editare manuala',
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: ValueListenableBuilder<bool>(
+                          valueListenable: useAutomaticCode,
+                          builder: (_, value, __) {
+                            return SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              value: value,
+                              title: const Text('Cod client intern automat'),
+                              onChanged: (newValue) async {
+                                useAutomaticCode.value = newValue;
+                                if (newValue) {
+                                  code.text =
+                                      current?.clientCode.trim().isNotEmpty ==
+                                              true
+                                          ? current!.clientCode.trim()
+                                          : await widget.repository
+                                              .nextClientCode();
+                                  if (!dialogCtx.mounted) return;
+                                }
+                                setDialog(() {});
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: externalClientCode,
+                              decoration: const InputDecoration(
+                                labelText: 'Cod client extern',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: externalClientSource,
+                              decoration: const InputDecoration(
+                                labelText: 'Sursa cod extern / Partener',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ValueListenableBuilder<ClientType>(
+                        valueListenable: type,
+                        builder: (_, value, __) {
+                          return DropdownButtonFormField<ClientType>(
+                            initialValue: value,
+                            items: ClientType.values
+                                .map(
+                                  (item) => DropdownMenuItem<ClientType>(
+                                    value: item,
+                                    child: Text(item.label),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (newValue) {
+                              if (newValue == null) return;
+                              type.value = newValue;
+                              setDialog(() {});
+                            },
+                            decoration:
+                                const InputDecoration(labelText: 'Tip client'),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: name,
+                        decoration: const InputDecoration(
+                          labelText: 'Nume client / Denumire firma',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: contact,
+                        decoration: const InputDecoration(
+                          labelText: 'Persoana principala de contact',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: phone,
+                              keyboardType: TextInputType.phone,
+                              decoration:
+                                  const InputDecoration(labelText: 'Telefon'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: email,
+                              keyboardType: TextInputType.emailAddress,
+                              decoration:
+                                  const InputDecoration(labelText: 'Email'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: phone2,
+                              keyboardType: TextInputType.phone,
+                              decoration: const InputDecoration(
+                                labelText: 'Telefon 2 (opțional)',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: phone3,
+                              keyboardType: TextInputType.phone,
+                              decoration: const InputDecoration(
+                                labelText: 'Telefon 3 (opțional)',
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      ValueListenableBuilder<ClientType>(
+                        valueListenable: type,
+                        builder: (_, value, __) {
+                          if (value == ClientType.persoanaJuridica) {
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: AnafCompanyAutofillSection(
+                                cuiController: cui,
+                                nameController: name,
+                                tradeRegisterController: reg,
+                                phoneController: phone,
+                                ibanController: iban,
+                                addressController: address,
+                                cityController: city,
+                                countyController: county,
+                              ),
+                            );
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: TextField(
+                              controller: cui,
+                              decoration:
+                                  const InputDecoration(labelText: 'CUI'),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: reg,
+                              decoration: const InputDecoration(
+                                labelText: 'Nr. Reg. Com.',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Expanded(child: SizedBox.shrink()),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: bank,
+                              decoration:
+                                  const InputDecoration(labelText: 'Banca'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: iban,
+                              decoration:
+                                  const InputDecoration(labelText: 'IBAN'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: address,
+                        decoration: const InputDecoration(labelText: 'Adresa'),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: city,
+                              decoration:
+                                  const InputDecoration(labelText: 'Oras'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: county,
+                              decoration:
+                                  const InputDecoration(labelText: 'Judet'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: notes,
+                        maxLines: 3,
+                        decoration:
+                            const InputDecoration(labelText: 'Observații'),
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Departamente',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            final savedDepartment =
+                                await openDepartmentDialog();
+                            if (savedDepartment == null) return;
+                            setDialog(() {
+                              departments.add(savedDepartment);
+                            });
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('Adaugă departament'),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      if (departments.isEmpty)
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('Fără departamente definite.'),
+                        )
+                      else
+                        Column(
+                          children: departments.map((department) {
+                            return ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(department.name),
+                              subtitle: Text(
+                                department.notes.trim().isEmpty
+                                    ? '-'
+                                    : department.notes.trim(),
+                              ),
+                              trailing: Wrap(
+                                spacing: 4,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Editează departament',
+                                    onPressed: () async {
+                                      final updated =
+                                          await openDepartmentDialog(
+                                        existing: department,
+                                      );
+                                      if (updated == null) return;
+                                      setDialog(() {
+                                        final index = departments.indexWhere(
+                                          (item) => item.id == department.id,
+                                        );
+                                        if (index >= 0) {
+                                          departments[index] = updated;
+                                        }
+                                      });
+                                    },
+                                    icon: const Icon(Icons.edit_outlined),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Șterge departament',
+                                    onPressed: () {
+                                      setDialog(() {
+                                        departments.removeWhere(
+                                          (item) => item.id == department.id,
+                                        );
+                                        for (var i = 0;
+                                            i < contacts.length;
+                                            i++) {
+                                          if (contacts[i].departmentId ==
+                                              department.id) {
+                                            contacts[i] = contacts[i].copyWith(
+                                              departmentId: '',
+                                            );
+                                          }
+                                        }
+                                      });
+                                    },
+                                    icon: const Icon(Icons.delete_outline),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(growable: false),
+                        ),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Persoane de contact',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () async {
+                            final savedContact = await openContactDialog();
+                            if (savedContact == null) return;
+                            setDialog(() {
+                              contacts.add(savedContact);
+                            });
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('Adaugă contact'),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      if (contacts.isEmpty)
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('Fără persoane de contact definite.'),
+                        )
+                      else
+                        Column(
+                          children: contacts.map((contactItem) {
+                            final departmentName = departments
+                                .where(
+                                  (item) => item.id == contactItem.departmentId,
+                                )
+                                .map((item) => item.name.trim())
+                                .cast<String>()
+                                .firstWhere(
+                                  (item) => item.isNotEmpty,
+                                  orElse: () => '',
+                                );
+                            final subtitleParts = <String>[
+                              if (contactItem.role.trim().isNotEmpty)
+                                contactItem.role.trim(),
+                              if (departmentName.isNotEmpty)
+                                'Dept: $departmentName',
+                              if (contactItem.phone.trim().isNotEmpty)
+                                'Tel: ${contactItem.phone.trim()}',
+                              if (contactItem.email.trim().isNotEmpty)
+                                'Email: ${contactItem.email.trim()}',
+                            ];
+                            return ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(contactItem.fullName),
+                              subtitle: Text(
+                                subtitleParts.isEmpty
+                                    ? '-'
+                                    : subtitleParts.join(' | '),
+                              ),
+                              trailing: Wrap(
+                                spacing: 4,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Editează contact',
+                                    onPressed: () async {
+                                      final updated = await openContactDialog(
+                                        existing: contactItem,
+                                      );
+                                      if (updated == null) return;
+                                      setDialog(() {
+                                        final index = contacts.indexWhere(
+                                          (item) => item.id == contactItem.id,
+                                        );
+                                        if (index >= 0) {
+                                          contacts[index] = updated;
+                                        }
+                                      });
+                                    },
+                                    icon: const Icon(Icons.edit_outlined),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Șterge contact',
+                                    onPressed: () {
+                                      setDialog(() {
+                                        contacts.removeWhere(
+                                          (item) => item.id == contactItem.id,
+                                        );
+                                      });
+                                    },
+                                    icon: const Icon(Icons.delete_outline),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList(growable: false),
+                        ),
+                      const SizedBox(height: 8),
+                      ValueListenableBuilder<bool>(
+                        valueListenable: active,
+                        builder: (_, value, __) {
+                          return SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: value,
+                            title: const Text('Client activ'),
+                            onChanged: (newValue) {
+                              active.value = newValue;
+                              setDialog(() {});
+                            },
+                          );
+                        },
+                      ),
+                      if (formError != null && formError!.trim().isNotEmpty)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            formError!,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(false),
+                  child: const Text('Renunță'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final hasName = name.text.trim().isNotEmpty;
+                    final hasPhoneOrEmail = phone.text.trim().isNotEmpty ||
+                        email.text.trim().isNotEmpty;
+                    if (!hasName) {
+                      setDialog(() {
+                        formError = 'Completează numele clientului.';
+                      });
+                      return;
+                    }
+                    if (code.text.trim().isEmpty) {
+                      setDialog(() {
+                        formError = 'Completează codul clientului intern.';
+                      });
+                      return;
+                    }
+                    if (!hasPhoneOrEmail) {
+                      setDialog(() {
+                        formError = 'Completează cel puțin telefon sau email.';
+                      });
+                      return;
+                    }
+                    final now = DateTime.now();
+                    final item = ClientRecord(
+                      id: current?.id ?? now.microsecondsSinceEpoch.toString(),
+                      clientCode: code.text.trim(),
+                      externalClientCode: externalClientCode.text.trim(),
+                      externalClientSource: externalClientSource.text.trim(),
+                      type: type.value,
+                      name: name.text.trim(),
+                      contactPerson: contact.text.trim(),
+                      phone: phone.text.trim(),
+                      phone2: phone2.text.trim(),
+                      phone3: phone3.text.trim(),
+                      email: email.text.trim(),
+                      cui: cui.text.trim(),
+                      regCom: reg.text.trim(),
+                      iban: iban.text.trim(),
+                      bank: bank.text.trim(),
+                      departments: List<ClientDepartment>.unmodifiable(
+                        departments,
+                      ),
+                      contactPeople: List<ClientContactPerson>.unmodifiable(
+                        contacts,
+                      ),
+                      address: address.text.trim(),
+                      city: city.text.trim(),
+                      county: county.text.trim(),
+                      notes: notes.text.trim(),
+                      isActive: active.value,
+                      createdAt: current?.createdAt ?? now,
+                      updatedAt: now,
+                    );
+                    // Duplicate CUI detection
+                    final cuiValue = cui.text.trim();
+                    if (cuiValue.isNotEmpty) {
+                      ClientRecord? duplicate;
+                      for (final c in _items) {
+                        if (c.cui.trim().toLowerCase() ==
+                                cuiValue.toLowerCase() &&
+                            c.id != (current?.id ?? '')) {
+                          duplicate = c;
+                          break;
+                        }
+                      }
+                      if (duplicate != null && dialogCtx.mounted) {
+                        final proceed = await showDialog<bool>(
+                          context: dialogCtx,
+                          builder: (alertCtx) => AlertDialog(
+                            title: const Text('CUI duplicat detectat'),
+                            content: Text(
+                              'Există deja un client cu CUI "$cuiValue":\n\n'
+                              '• ${duplicate!.name.trim().isEmpty ? duplicate.id : duplicate.name}\n\n'
+                              'Doriți să salvați oricum?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(alertCtx).pop(false),
+                                child: const Text('Anulează'),
+                              ),
+                              FilledButton(
+                                onPressed: () =>
+                                    Navigator.of(alertCtx).pop(true),
+                                child: const Text('Salvează oricum'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (proceed != true) return;
+                      }
+                    }
+                    await _saveClientResolved(item);
+                    if (dialogCtx.mounted) {
+                      Navigator.of(dialogCtx).pop(true);
+                    }
+                  },
+                  child: const Text('Salvează'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    dialogScrollController.dispose();
+    code.dispose();
+    externalClientCode.dispose();
+    externalClientSource.dispose();
+    name.dispose();
+    contact.dispose();
+    phone.dispose();
+    phone2.dispose();
+    phone3.dispose();
+    email.dispose();
+    cui.dispose();
+    reg.dispose();
+    bank.dispose();
+    iban.dispose();
+    address.dispose();
+    city.dispose();
+    county.dispose();
+    notes.dispose();
+    type.dispose();
+    useAutomaticCode.dispose();
+    active.dispose();
+    if (!mounted) return;
+    if (saved == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Clientul a fost salvat cu succes.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _delete(ClientRecord client) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          title: const Text('Șterge client'),
+          content: Text(
+            'Sigur vrei să ștergi clientul ${client.name} (${client.clientCode})?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(false),
+              child: const Text('Nu'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(true),
+              child: const Text('Da, șterge'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirm != true) return;
+    await _deleteClientResolved(client.id);
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Clientul a fost sters.')),
+    );
+  }
+
+  String _dateLabel(DateTime? value) {
+    if (value == null) {
+      return '-';
+    }
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    return '$day.$month.${value.year}';
+  }
+
+  String _appointmentStatusLabel(String rawStatus) {
+    switch (rawStatus.trim().toLowerCase()) {
+      case 'planificata':
+        return 'Planificata';
+      case 'in_curs':
+        return 'In curs';
+      case 'finalizata':
+        return 'Finalizata';
+      case 'amanata':
+        return 'Amanata';
+      case 'anulata':
+        return 'Anulata';
+      default:
+        return rawStatus.trim().isEmpty ? '-' : rawStatus.trim();
+    }
+  }
+
+  bool _matchesClientId(String sourceClientId, ClientRecord client) {
+    final left = sourceClientId.trim();
+    final right = client.id.trim();
+    return left.isNotEmpty && right.isNotEmpty && left == right;
+  }
+
+  bool _matchesClientName(String rawName, ClientRecord client) {
+    final left = rawName.trim().toLowerCase();
+    final right = client.name.trim().toLowerCase();
+    return left.isNotEmpty && right.isNotEmpty && left == right;
+  }
+
+  OfferRecord? _offerForCentralizerComplaint(
+    ComplaintRecord complaint,
+    List<OfferRecord> offers,
+  ) {
+    final complaintId = complaint.id.trim();
+    if (complaintId.isNotEmpty) {
+      for (final offer in offers) {
+        if (offer.complaintId.trim() == complaintId) {
+          return offer;
+        }
+      }
+    }
+    final complaintNumber = complaint.complaintNumber.trim().toLowerCase();
+    if (complaintNumber.isEmpty) {
+      return null;
+    }
+    for (final offer in offers) {
+      if (offer.complaintNumber.trim().toLowerCase() == complaintNumber) {
+        return offer;
+      }
+    }
+    return null;
+  }
+
+  RepairReportRecord? _repairReportForCentralizerComplaint(
+    String complaintId,
+    List<RepairReportRecord> reports,
+  ) {
+    final normalizedId = complaintId.trim();
+    if (normalizedId.isEmpty) {
+      return null;
+    }
+    for (final report in reports) {
+      if (report.complaintId.trim() == normalizedId) {
+        return report;
+      }
+    }
+    return null;
+  }
+
+  WarrantyInterventionReportRecord? _warrantyReportForCentralizerComplaint(
+    String complaintId,
+    List<WarrantyInterventionReportRecord> reports,
+  ) {
+    final normalizedId = complaintId.trim();
+    if (normalizedId.isEmpty) {
+      return null;
+    }
+    for (final report in reports) {
+      if (report.complaintId.trim() == normalizedId) {
+        return report;
+      }
+    }
+    return null;
+  }
+
+  ComplaintRecord? _complaintForCentralizerOffer(
+    OfferRecord offer,
+    List<ComplaintRecord> complaints,
+  ) {
+    final complaintId = offer.complaintId.trim();
+    if (complaintId.isNotEmpty) {
+      for (final complaint in complaints) {
+        if (complaint.id.trim() == complaintId) {
+          return complaint;
+        }
+      }
+    }
+    final complaintNumber = offer.complaintNumber.trim().toLowerCase();
+    if (complaintNumber.isEmpty) {
+      return null;
+    }
+    for (final complaint in complaints) {
+      if (complaint.complaintNumber.trim().toLowerCase() == complaintNumber) {
+        return complaint;
+      }
+    }
+    return null;
+  }
+
+  String _centralizerSummaryFromComplaint(ComplaintRecord complaint) {
+    if (complaint.fieldWorkPerformed.trim().isNotEmpty) {
+      return complaint.fieldWorkPerformed.trim();
+    }
+    if (complaint.fieldFinding.trim().isNotEmpty) {
+      return complaint.fieldFinding.trim();
+    }
+    if (complaint.problemDescription.trim().isNotEmpty) {
+      return complaint.problemDescription.trim();
+    }
+    return 'Interventie client';
+  }
+
+  String _centralizerSummaryFromOffer(OfferRecord offer) {
+    if (offer.title.trim().isNotEmpty) {
+      return offer.title.trim();
+    }
+    if (offer.notes.trim().isNotEmpty) {
+      return offer.notes.trim();
+    }
+    return 'Oferta comerciala';
+  }
+
+  String _centralizerBeneficiaryFromComplaint(
+    ComplaintRecord complaint,
+    ClientRecord client,
+  ) {
+    if (complaint.beneficiaryName.trim().isNotEmpty) {
+      return complaint.beneficiaryName.trim();
+    }
+    if (complaint.contractorName.trim().isNotEmpty) {
+      return complaint.contractorName.trim();
+    }
+    return client.name.trim();
+  }
+
+  String _centralizerBeneficiaryFromOffer(
+      OfferRecord offer, ClientRecord client) {
+    if (offer.beneficiaryName.trim().isNotEmpty) {
+      return offer.beneficiaryName.trim();
+    }
+    if (offer.commercialRecipientName.trim().isNotEmpty) {
+      return offer.commercialRecipientName.trim();
+    }
+    if (offer.clientName.trim().isNotEmpty) {
+      return offer.clientName.trim();
+    }
+    return client.name.trim();
+  }
+
+  ComplaintClientCentralizerLine _buildCentralizerLineFromComplaint(
+    ClientRecord client,
+    ComplaintRecord complaint,
+    _ClientActivityBundle bundle,
+  ) {
+    final offer = _offerForCentralizerComplaint(complaint, bundle.offers);
+    final repairReport = _repairReportForCentralizerComplaint(
+      complaint.id,
+      bundle.repairReports,
+    );
+    final warrantyReport = _warrantyReportForCentralizerComplaint(
+      complaint.id,
+      bundle.warrantyReports,
+    );
+    final offerValue = offer?.totalValue ?? 0;
+    return ComplaintClientCentralizerLine(
+      id: 'centralizer-complaint-${complaint.id}',
+      complaintId: complaint.id,
+      complaintNumber: complaint.complaintNumber.trim().isEmpty
+          ? complaint.id
+          : complaint.complaintNumber.trim(),
+      interventionDate: complaint.complaintDate,
+      beneficiaryName: _centralizerBeneficiaryFromComplaint(complaint, client),
+      workSummary: _centralizerSummaryFromComplaint(complaint),
+      offerId: offer?.id ?? '',
+      offerNumber: offer?.offerNumber ?? '',
+      offerValue: offerValue,
+      repairReportId: repairReport?.id ?? '',
+      repairReportNumber: repairReport?.reportNumber ?? '',
+      warrantyReportId: warrantyReport?.id ?? '',
+      warrantyReportNumber: warrantyReport?.documentNumber ?? '',
+      includeInTotal: offerValue > 0,
+    );
+  }
+
+  ComplaintClientCentralizerLine _buildCentralizerLineFromOffer(
+    ClientRecord client,
+    OfferRecord offer,
+    _ClientActivityBundle bundle,
+  ) {
+    final complaint = _complaintForCentralizerOffer(offer, bundle.complaints);
+    final repairReport = complaint == null
+        ? null
+        : _repairReportForCentralizerComplaint(
+            complaint.id,
+            bundle.repairReports,
+          );
+    final warrantyReport = complaint == null
+        ? null
+        : _warrantyReportForCentralizerComplaint(
+            complaint.id,
+            bundle.warrantyReports,
+          );
+    final complaintNumber = complaint?.complaintNumber.trim().isNotEmpty == true
+        ? complaint!.complaintNumber.trim()
+        : offer.complaintNumber.trim().isNotEmpty
+            ? offer.complaintNumber.trim()
+            : offer.offerNumber.trim().isNotEmpty
+                ? 'Oferta ${offer.offerNumber.trim()}'
+                : 'Oferta fara numar';
+    return ComplaintClientCentralizerLine(
+      id: 'centralizer-offer-${offer.id}',
+      complaintId: complaint?.id ?? offer.complaintId.trim(),
+      complaintNumber: complaintNumber,
+      interventionDate: complaint?.complaintDate ?? offer.issueDate,
+      beneficiaryName: complaint == null
+          ? _centralizerBeneficiaryFromOffer(offer, client)
+          : _centralizerBeneficiaryFromComplaint(complaint, client),
+      workSummary: complaint == null
+          ? _centralizerSummaryFromOffer(offer)
+          : _centralizerSummaryFromComplaint(complaint),
+      offerId: offer.id,
+      offerNumber: offer.offerNumber,
+      offerValue: offer.totalValue,
+      repairReportId: repairReport?.id ?? '',
+      repairReportNumber: repairReport?.reportNumber ?? '',
+      warrantyReportId: warrantyReport?.id ?? '',
+      warrantyReportNumber: warrantyReport?.documentNumber ?? '',
+      includeInTotal: offer.totalValue > 0,
+    );
+  }
+
+  ComplaintClientCentralizerRecord _buildClientCentralizerFromSelection(
+    ClientRecord client,
+    _ClientActivityBundle bundle,
+    _CentralizerSourceSelection selection,
+  ) {
+    final lines = <ComplaintClientCentralizerLine>[];
+    final selectedComplaintIds = selection.complaintIds;
+    final selectedOfferIds = selection.offerIds;
+
+    for (final complaint in bundle.complaints) {
+      if (!selectedComplaintIds.contains(complaint.id)) {
+        continue;
+      }
+      lines.add(_buildCentralizerLineFromComplaint(client, complaint, bundle));
+    }
+
+    for (final offer in bundle.offers) {
+      if (!selectedOfferIds.contains(offer.id)) {
+        continue;
+      }
+      final linkedComplaint = _complaintForCentralizerOffer(
+        offer,
+        bundle.complaints,
+      );
+      final linkedComplaintId = linkedComplaint?.id.trim() ?? '';
+      if (linkedComplaintId.isNotEmpty &&
+          selectedComplaintIds.contains(linkedComplaintId)) {
+        continue;
+      }
+      lines.add(_buildCentralizerLineFromOffer(client, offer, bundle));
+    }
+
+    lines.sort((left, right) {
+      final leftDate = left.interventionDate ?? DateTime(2000);
+      final rightDate = right.interventionDate ?? DateTime(2000);
+      return leftDate.compareTo(rightDate);
+    });
+
+    final dates = lines
+        .map((line) => line.interventionDate)
+        .whereType<DateTime>()
+        .toList(growable: false);
+    final firstDate = dates.isEmpty
+        ? DateTime.now()
+        : dates.reduce(
+            (previous, item) => item.isBefore(previous) ? item : previous,
+          );
+    final lastDate = dates.isEmpty
+        ? DateTime.now()
+        : dates.reduce(
+            (previous, item) => item.isAfter(previous) ? item : previous,
+          );
+    final periodStart =
+        DateTime(firstDate.year, firstDate.month, firstDate.day);
+    final periodEnd = DateTime(lastDate.year, lastDate.month, lastDate.day);
+    final complaintsCount =
+        lines.where((line) => line.complaintId.isNotEmpty).length;
+    final offersCount = lines.where((line) => line.offerId.isNotEmpty).length;
+
+    return ComplaintClientCentralizerRecord(
+      id: 'client-centralizer-${DateTime.now().microsecondsSinceEpoch}',
+      documentNumber: '',
+      clientId: client.id,
+      clientName: client.name,
+      periodStart: periodStart,
+      periodEnd: periodEnd,
+      title: 'Centralizator ${client.name}',
+      summaryDescription:
+          'Centralizator generat din modulul Clienti pentru ${client.name}. Include $complaintsCount reclamatii si $offersCount oferte selectate.',
+      lines: List<ComplaintClientCentralizerLine>.unmodifiable(lines),
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  Future<_CentralizerSourceSelection?> _selectCentralizerSources(
+    ClientRecord client,
+    _ClientActivityBundle bundle,
+  ) async {
+    final selectedComplaintIds = bundle.complaints
+        .map((item) => item.id.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    final selectedOfferIds = bundle.offers
+        .map((item) => item.id.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    String? validationMessage;
+
+    return showDialog<_CentralizerSourceSelection>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Centralizator selectiv • ${client.name}'),
+              content: SizedBox(
+                width: 860,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Selecteaza reclamatiile si ofertele pe care vrei sa le incluzi in centralizator.',
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            'Reclamatii selectate: ${selectedComplaintIds.length}',
+                          ),
+                        ),
+                        Chip(
+                          label: Text(
+                            'Oferte selectate: ${selectedOfferIds.length}',
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Flexible(
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: [
+                          Text(
+                            'Reclamatii',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          if (bundle.complaints.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 12),
+                              child: Text(
+                                  'Clientul nu are reclamatii disponibile.'),
+                            )
+                          else
+                            ...bundle.complaints.map((item) {
+                              final complaintId = item.id.trim();
+                              return CheckboxListTile(
+                                contentPadding: EdgeInsets.zero,
+                                value:
+                                    selectedComplaintIds.contains(complaintId),
+                                title: Text(
+                                  item.complaintNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.complaintNumber.trim(),
+                                ),
+                                subtitle: Text(
+                                  'Data: ${_dateLabel(item.complaintDate)} | Status: ${item.status.label} | Problema: ${item.problemDescription.trim().isEmpty ? '-' : item.problemDescription.trim()}',
+                                ),
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    if (value == true) {
+                                      selectedComplaintIds.add(complaintId);
+                                    } else {
+                                      selectedComplaintIds.remove(complaintId);
+                                    }
+                                  });
+                                },
+                              );
+                            }),
+                          const Divider(height: 24),
+                          Text(
+                            'Oferte',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          if (bundle.offers.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 12),
+                              child:
+                                  Text('Clientul nu are oferte disponibile.'),
+                            )
+                          else
+                            ...bundle.offers.map((item) {
+                              final offerId = item.id.trim();
+                              return CheckboxListTile(
+                                contentPadding: EdgeInsets.zero,
+                                value: selectedOfferIds.contains(offerId),
+                                title: Text(
+                                  item.offerNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.offerNumber.trim(),
+                                ),
+                                subtitle: Text(
+                                  'Data: ${_dateLabel(item.issueDate)} | Total: ${item.totalValue.toStringAsFixed(2)} | Reclamatie: ${item.complaintNumber.trim().isEmpty ? '-' : item.complaintNumber.trim()}',
+                                ),
+                                onChanged: (value) {
+                                  setDialogState(() {
+                                    if (value == true) {
+                                      selectedOfferIds.add(offerId);
+                                    } else {
+                                      selectedOfferIds.remove(offerId);
+                                    }
+                                  });
+                                },
+                              );
+                            }),
+                        ],
+                      ),
+                    ),
+                    if ((validationMessage ?? '').trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        validationMessage!,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Renunță'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    if (selectedComplaintIds.isEmpty &&
+                        selectedOfferIds.isEmpty) {
+                      setDialogState(() {
+                        validationMessage =
+                            'Selecteaza cel putin o reclamatie sau o oferta.';
+                      });
+                      return;
+                    }
+                    Navigator.of(dialogContext).pop(
+                      _CentralizerSourceSelection(
+                        complaintIds:
+                            Set<String>.unmodifiable(selectedComplaintIds),
+                        offerIds: Set<String>.unmodifiable(selectedOfferIds),
+                      ),
+                    );
+                  },
+                  child: const Text('Genereaza centralizator selectiv'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _openCentralizerGeneratorForClient(
+    ClientRecord client, {
+    _ClientActivityBundle? initialBundle,
+  }) async {
+    final bundle = initialBundle ?? await _loadClientActivityBundle(client);
+    if (!mounted) {
+      return;
+    }
+    if (bundle.complaints.isEmpty && bundle.offers.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Clientul ${client.name} nu are reclamatii sau oferte pentru centralizator.',
+          ),
+        ),
+      );
+      return;
+    }
+    final selection = await _selectCentralizerSources(client, bundle);
+    if (!mounted || selection == null) {
+      return;
+    }
+    final draft = _buildClientCentralizerFromSelection(
+      client,
+      bundle,
+      selection,
+    );
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ComplaintClientCentralizerEditorPage(
+          repository: widget.repository,
+          initialRecord: draft,
+        ),
+      ),
+    );
+  }
+
+  Future<_ClientActivityBundle> _loadClientActivityBundle(
+    ClientRecord client,
+  ) async {
+    final results = await Future.wait<dynamic>(<Future<dynamic>>[
+      _listOffersResolved(),
+      widget.repository.listAppointments(),
+      widget.repository.listComplaints(),
+      widget.repository.listJobs(),
+      widget.repository.listRepairReports(),
+      widget.repository.listWarrantyInterventionReports(),
+      widget.repository.listComplaintClientCentralizers(),
+      widget.repository.listComplaintWorkOrders(),
+      widget.repository.listAgfrEquipments(),
+    ]);
+
+    final offers = (results[0] as List<OfferRecord>)
+        .where(
+          (item) =>
+              _matchesClientId(item.clientId, client) ||
+              _matchesClientId(item.beneficiaryClientId, client) ||
+              _matchesClientId(item.commercialRecipientClientId, client) ||
+              _matchesClientName(item.clientName, client) ||
+              _matchesClientName(item.beneficiaryName, client) ||
+              _matchesClientName(item.commercialRecipientName, client),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+    final appointments = (results[1] as List<Appointment>)
+        .where(
+          (item) =>
+              _matchesClientId(item.clientId, client) ||
+              _matchesClientId(item.contractingClientId, client) ||
+              _matchesClientName(item.clientName, client) ||
+              _matchesClientName(item.contractingClientName, client),
+        )
+        .toList(growable: false)
+      ..sort((a, b) =>
+          b.effectiveStartDateTime.compareTo(a.effectiveStartDateTime));
+
+    final complaints = (results[2] as List<ComplaintRecord>)
+        .where(
+          (item) =>
+              _matchesClientId(item.beneficiaryClientId, client) ||
+              _matchesClientId(item.contractorClientId, client) ||
+              _matchesClientName(item.beneficiaryName, client) ||
+              _matchesClientName(item.contractorName, client),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => b.complaintDate.compareTo(a.complaintDate));
+
+    final complaintIds = complaints
+        .map((item) => item.id.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+
+    final jobs = (results[3] as List<JobRecord>)
+        .where((item) => _matchesClientId(item.clientId, client))
+        .toList(growable: false)
+      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+    final repairReports = (results[4] as List<RepairReportRecord>)
+        .where(
+          (item) =>
+              complaintIds.contains(item.complaintId.trim()) ||
+              _matchesClientName(item.beneficiaryName, client) ||
+              _matchesClientName(item.contractorName, client),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => b.interventionDate.compareTo(a.interventionDate));
+
+    final warrantyReports =
+        (results[5] as List<WarrantyInterventionReportRecord>)
+            .where(
+              (item) =>
+                  complaintIds.contains(item.complaintId.trim()) ||
+                  _matchesClientId(item.clientId, client) ||
+                  _matchesClientName(item.clientName, client),
+            )
+            .toList(growable: false)
+          ..sort((a, b) {
+            final left = a.documentDate ?? a.updatedAt;
+            final right = b.documentDate ?? b.updatedAt;
+            return right.compareTo(left);
+          });
+
+    final centralizers = (results[6] as List<ComplaintClientCentralizerRecord>)
+        .where(
+          (item) =>
+              _matchesClientId(item.clientId, client) ||
+              _matchesClientName(item.clientName, client),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => b.periodEnd.compareTo(a.periodEnd));
+
+    final workOrders = (results[7] as List<ComplaintWorkOrderRecord>)
+        .where(
+          (item) =>
+              _matchesClientId(item.clientId, client) ||
+              _matchesClientName(item.clientName, client) ||
+              _matchesClientName(item.beneficiaryName, client),
+        )
+        .toList(growable: false)
+      ..sort((a, b) => b.issueDate.compareTo(a.issueDate));
+
+    final agfrEquipments = (results[8] as List<AgfrEquipmentRecord>)
+        .where((item) => _matchesClientId(item.clientId, client))
+        .toList(growable: false)
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    return _ClientActivityBundle(
+      offers: offers,
+      appointments: appointments,
+      complaints: complaints,
+      jobs: jobs,
+      repairReports: repairReports,
+      warrantyReports: warrantyReports,
+      centralizers: centralizers,
+      workOrders: workOrders,
+      agfrEquipments: agfrEquipments,
+    );
+  }
+
+  Future<void> _openOfferFromHistory(OfferRecord offer) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => OfertePage(
+          repository: widget.repository,
+          initialFocusOfferId: offer.id,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAppointmentFromHistory(Appointment appointment) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ProgramariPage(
+          repository: widget.repository,
+          initialFocusAppointmentId: appointment.id,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openComplaintFromHistory(String complaintId) async {
+    if (complaintId.trim().isEmpty) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ReclamatiiPage(
+          repository: widget.repository,
+          initialFocusComplaintId: complaintId.trim(),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openJobFromHistory(JobRecord job, ClientRecord client) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LucrareDetaliiPage(
+          repository: widget.repository,
+          job: job,
+          clientName: client.name.trim(),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openCentralizerFromHistory(
+    ComplaintClientCentralizerRecord record,
+  ) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ComplaintClientCentralizerEditorPage(
+          repository: widget.repository,
+          initialRecord: record,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openWorkOrderFromHistory(
+    ComplaintWorkOrderRecord record,
+  ) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ComplaintWorkOrderEditorPage(
+          repository: widget.repository,
+          initialRecord: record,
+        ),
+      ),
+    );
+  }
+
+  Widget _historyMetric(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required int count,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18),
+          const SizedBox(width: 8),
+          Text('$label: $count'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActivitySection({
+    required String title,
+    required IconData icon,
+    required int count,
+    required List<Widget> children,
+  }) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ExpansionTile(
+        leading: Icon(icon),
+        title: Text(title),
+        subtitle:
+            Text(count == 0 ? 'Fara inregistrari' : '$count inregistrari'),
+        initiallyExpanded: count > 0,
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: children.isEmpty
+            ? const [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Text('Nu exista date pentru aceasta categorie.'),
+                  ),
+                ),
+              ]
+            : children,
+      ),
+    );
+  }
+
+  Future<void> _openClientHistory(ClientRecord client) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('Istoric client • ${client.name}'),
+          content: SizedBox(
+            width: 980,
+            child: FutureBuilder<_ClientActivityBundle>(
+              future: _loadClientActivityBundle(client),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const SizedBox(
+                    height: 240,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (snapshot.hasError || !snapshot.hasData) {
+                  return const SizedBox(
+                    height: 240,
+                    child: Center(
+                      child: Text(
+                        'Nu am putut incarca istoricul clientului.',
+                      ),
+                    ),
+                  );
+                }
+                final bundle = snapshot.data!;
+                ComplaintRecord? complaintForId(String complaintId) {
+                  final normalized = complaintId.trim();
+                  if (normalized.isEmpty) {
+                    return null;
+                  }
+                  return bundle.complaints
+                      .where((item) => item.id == normalized)
+                      .fold<ComplaintRecord?>(
+                        null,
+                        (previous, item) => previous ?? item,
+                      );
+                }
+
+                Future<void> closeAndOpen(
+                    Future<void> Function() action) async {
+                  Navigator.of(dialogContext).pop();
+                  await action();
+                }
+
+                return SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.icon(
+                          onPressed: () => closeAndOpen(
+                            () => _openCentralizerGeneratorForClient(
+                              client,
+                              initialBundle: bundle,
+                            ),
+                          ),
+                          icon: const Icon(Icons.post_add_outlined),
+                          label: const Text('Centralizator selectiv'),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _historyMetric(
+                            context,
+                            icon: Icons.request_quote_outlined,
+                            label: 'Oferte',
+                            count: bundle.offers.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.event_note_outlined,
+                            label: 'Programari',
+                            count: bundle.appointments.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.support_agent_outlined,
+                            label: 'Reclamatii',
+                            count: bundle.complaints.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.work_outline,
+                            label: 'Lucrari',
+                            count: bundle.jobs.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.description_outlined,
+                            label: 'PV reparatie',
+                            count: bundle.repairReports.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.assignment_turned_in_outlined,
+                            label: 'PV garantie',
+                            count: bundle.warrantyReports.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.table_chart_outlined,
+                            label: 'Centralizatoare',
+                            count: bundle.centralizers.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.receipt_long_outlined,
+                            label: 'Comenzi lucrari',
+                            count: bundle.workOrders.length,
+                          ),
+                          _historyMetric(
+                            context,
+                            icon: Icons.air_outlined,
+                            label: 'Echipamente HVAC',
+                            count: bundle.agfrEquipments.length,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      _buildActivitySection(
+                        title: 'Oferte',
+                        icon: Icons.request_quote_outlined,
+                        count: bundle.offers.length,
+                        children: bundle.offers
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: () => closeAndOpen(
+                                  () => _openOfferFromHistory(item),
+                                ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.offerNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.offerNumber,
+                                ),
+                                subtitle: Text(
+                                  '${item.title.trim().isEmpty ? 'Oferta fara titlu' : item.title.trim()}\n'
+                                  'Data: ${_dateLabel(item.issueDate)} | Client: ${item.clientName.trim().isEmpty ? '-' : item.clientName.trim()} | Total: ${item.totalValue.toStringAsFixed(2)}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'Programari',
+                        icon: Icons.event_note_outlined,
+                        count: bundle.appointments.length,
+                        children: bundle.appointments
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: () => closeAndOpen(
+                                  () => _openAppointmentFromHistory(item),
+                                ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.title.trim().isEmpty
+                                      ? 'Programare ${_dateLabel(item.effectiveStartDateTime)}'
+                                      : item.title.trim(),
+                                ),
+                                subtitle: Text(
+                                  'Data: ${_dateLabel(item.effectiveStartDateTime)} | Status: ${_appointmentStatusLabel(item.status)} | Lucrare: ${item.jobId.trim().isEmpty ? '-' : item.jobId.trim()}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'Reclamatii',
+                        icon: Icons.support_agent_outlined,
+                        count: bundle.complaints.length,
+                        children: bundle.complaints
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: () => closeAndOpen(
+                                  () => _openComplaintFromHistory(item.id),
+                                ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.complaintNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.complaintNumber,
+                                ),
+                                subtitle: Text(
+                                  'Data: ${_dateLabel(item.complaintDate)} | Status: ${item.status.label} | Problema: ${item.problemDescription.trim().isEmpty ? '-' : item.problemDescription.trim()}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'Lucrari',
+                        icon: Icons.work_outline,
+                        count: bundle.jobs.length,
+                        children: bundle.jobs
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: () => closeAndOpen(
+                                  () => _openJobFromHistory(item, client),
+                                ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.jobCode.trim().isEmpty
+                                      ? item.title.trim()
+                                      : '${item.jobCode} • ${item.title.trim()}',
+                                ),
+                                subtitle: Text(
+                                  'Status: ${item.status.label} | Creat: ${_dateLabel(item.createdAt)}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'PV reparatie',
+                        icon: Icons.description_outlined,
+                        count: bundle.repairReports.length,
+                        children: bundle.repairReports
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: complaintForId(item.complaintId) == null
+                                    ? null
+                                    : () => closeAndOpen(
+                                          () => _openComplaintFromHistory(
+                                            item.complaintId,
+                                          ),
+                                        ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.reportNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.reportNumber,
+                                ),
+                                subtitle: Text(
+                                  'Data: ${_dateLabel(item.interventionDate)} | Beneficiar: ${item.beneficiaryName.trim().isEmpty ? '-' : item.beneficiaryName.trim()}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'PV garantie',
+                        icon: Icons.assignment_turned_in_outlined,
+                        count: bundle.warrantyReports.length,
+                        children: bundle.warrantyReports
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: complaintForId(item.complaintId) == null
+                                    ? null
+                                    : () => closeAndOpen(
+                                          () => _openComplaintFromHistory(
+                                            item.complaintId,
+                                          ),
+                                        ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.documentNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.documentNumber,
+                                ),
+                                subtitle: Text(
+                                  'Data: ${_dateLabel(item.documentDate ?? item.updatedAt)} | Client: ${item.clientName.trim().isEmpty ? '-' : item.clientName.trim()}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'Centralizatoare client',
+                        icon: Icons.table_chart_outlined,
+                        count: bundle.centralizers.length,
+                        children: bundle.centralizers
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: () => closeAndOpen(
+                                  () => _openCentralizerFromHistory(item),
+                                ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.documentNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.documentNumber,
+                                ),
+                                subtitle: Text(
+                                  '${item.title.trim().isEmpty ? 'Centralizator client' : item.title.trim()}\n'
+                                  'Perioada: ${_dateLabel(item.periodStart)} - ${_dateLabel(item.periodEnd)} | Total: ${item.totalValue.toStringAsFixed(2)}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'Comenzi lucrari',
+                        icon: Icons.receipt_long_outlined,
+                        count: bundle.workOrders.length,
+                        children: bundle.workOrders
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                onTap: () => closeAndOpen(
+                                  () => _openWorkOrderFromHistory(item),
+                                ),
+                                trailing:
+                                    const Icon(Icons.open_in_new_outlined),
+                                title: Text(
+                                  item.documentNumber.trim().isEmpty
+                                      ? item.id
+                                      : item.documentNumber,
+                                ),
+                                subtitle: Text(
+                                  '${item.subject.trim().isEmpty ? 'Comanda lucrari' : item.subject.trim()}\n'
+                                  'Data: ${_dateLabel(item.issueDate)} | Total: ${item.totalValue.toStringAsFixed(2)}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                      _buildActivitySection(
+                        title: 'Echipamente HVAC instalate',
+                        icon: Icons.air_outlined,
+                        count: bundle.agfrEquipments.length,
+                        children: bundle.agfrEquipments
+                            .map(
+                              (item) => ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: CircleAvatar(
+                                  backgroundColor: Theme.of(context)
+                                      .colorScheme
+                                      .primaryContainer,
+                                  child: Icon(
+                                    Icons.hvac_outlined,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onPrimaryContainer,
+                                    size: 18,
+                                  ),
+                                ),
+                                title: Text(
+                                  [item.brand.trim(), item.model.trim()]
+                                          .where((s) => s.isNotEmpty)
+                                          .join(' ')
+                                          .trim()
+                                          .isEmpty
+                                      ? 'Echipament HVAC'
+                                      : [item.brand.trim(), item.model.trim()]
+                                          .where((s) => s.isNotEmpty)
+                                          .join(' '),
+                                ),
+                                subtitle: Text(
+                                  '${item.equipmentCategory.label} | '
+                                  'Freon: ${item.refrigerantType.isEmpty ? '-' : item.refrigerantType}, '
+                                  '${item.totalChargeKg.toStringAsFixed(2)} kg | '
+                                  'Locație: ${item.location.isEmpty ? '-' : item.location}\n'
+                                  'Nr. serie: ${item.serialNumber.isEmpty ? '-' : item.serialNumber} | '
+                                  'Înregistrat: ${_dateLabel(item.createdAt)}',
+                                ),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Închide'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final items = _filtered;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Clienți'),
+        actions: [
+          HelpButton(content: AppHelp.clienti),
+        ],
+      ),
+      floatingActionButton: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'csv_import',
+            onPressed: _importCsv,
+            icon: const Icon(Icons.upload_file_outlined),
+            label: const Text('Import CSV'),
+          ),
+          const SizedBox(width: 12),
+          FloatingActionButton.extended(
+            heroTag: 'add_client',
+            onPressed: () => _openForm(),
+            icon: const Icon(Icons.add),
+            label: const Text('Adaugă client'),
+          ),
+        ],
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      body: Column(
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Pe ecrane largi (Windows/tablet ≥600px) filtrele sunt mereu vizibile
+              final isWide = constraints.maxWidth >= 600;
+              final showFilters = isWide || _filtersVisible;
+              final cs = Theme.of(context).colorScheme;
+              final hasFilters = _activeFilterCount > 0;
+
+              return Card(
+                margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Rândul 1: search + buton filtre (DOAR pe mobil)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _search,
+                              onChanged: (_) => setState(() {}),
+                              decoration: InputDecoration(
+                                hintText:
+                                    'Caută după nume, telefon, email, CUI...',
+                                prefixIcon: const Icon(Icons.search),
+                                suffixIcon: _search.text.trim().isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear),
+                                        onPressed: () {
+                                          _search.clear();
+                                          setState(() {});
+                                        },
+                                      )
+                                    : null,
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                  horizontal: 12,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                            ),
+                          ),
+                          // Buton filtre: DOAR pe mobil
+                          if (!isWide) ...[
+                            const SizedBox(width: 8),
+                            Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                OutlinedButton.icon(
+                                  onPressed: () => setState(() =>
+                                      _filtersVisible = !_filtersVisible),
+                                  icon: Icon(
+                                    _filtersVisible
+                                        ? Icons.filter_list_off
+                                        : Icons.filter_list,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                      _filtersVisible ? 'Ascunde' : 'Filtre'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor:
+                                        hasFilters ? cs.primary : null,
+                                    side: hasFilters
+                                        ? BorderSide(
+                                            color: cs.primary, width: 1.5)
+                                        : null,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                  ),
+                                ),
+                                if (hasFilters)
+                                  Positioned(
+                                    top: -4,
+                                    right: -4,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(4),
+                                      decoration: BoxDecoration(
+                                        color: cs.primary,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Text(
+                                        '$_activeFilterCount',
+                                        style: TextStyle(
+                                          color: cs.onPrimary,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                      // Rândul 2: filtre (mereu pe desktop, colapsabile pe mobil)
+                      if (showFilters) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 200,
+                              child: DropdownButtonFormField<ClientType>(
+                                initialValue: _typeFilter,
+                                items: ClientType.values
+                                    .map(
+                                      (item) => DropdownMenuItem<ClientType>(
+                                        value: item,
+                                        child: Text(item.label),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) =>
+                                    setState(() => _typeFilter = value),
+                                decoration: const InputDecoration(
+                                    labelText: 'Tip client'),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 180,
+                              child: DropdownButtonFormField<bool>(
+                                initialValue: _activeFilter,
+                                items: const [
+                                  DropdownMenuItem<bool>(
+                                    value: true,
+                                    child: Text('Activ'),
+                                  ),
+                                  DropdownMenuItem<bool>(
+                                    value: false,
+                                    child: Text('Inactiv'),
+                                  ),
+                                ],
+                                onChanged: (value) =>
+                                    setState(() => _activeFilter = value),
+                                decoration: const InputDecoration(
+                                  labelText: 'Status',
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                _search.clear();
+                                setState(() {
+                                  _typeFilter = null;
+                                  _activeFilter = null;
+                                  _filtersVisible = false;
+                                });
+                              },
+                              child: const Text('Resetează'),
+                            ),
+                            Chip(
+                              label: Text('Sursă: $_dataSourceLabel'),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            if ((_cloudFallbackReason ?? '').trim().isNotEmpty)
+                              Text(
+                                'Fallback: ${_shortCloudError(_cloudFallbackReason!)}',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          Expanded(
+            child: items.isEmpty
+                ? const Center(child: Text('Nu există clienți salvați.'))
+                : ListView.separated(
+                    padding: AppViewportGuard.scrollablePadding(
+                      top: 8,
+                      reserveForFab: true,
+                    ),
+                    itemCount: items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      final item = items[i];
+                      final externalCodeLabel =
+                          item.externalClientCode.trim().isEmpty
+                              ? '-'
+                              : item.externalClientCode.trim();
+                      final externalSourceLabel =
+                          item.externalClientSource.trim().isEmpty
+                              ? '-'
+                              : item.externalClientSource.trim();
+                      return Card(
+                        child: ListTile(
+                          onTap: () => _openClientHistory(item),
+                          title: Text('${item.clientCode} • ${item.name}'),
+                          subtitle: Text(
+                            'Contact: ${item.contactPerson.isEmpty ? '-' : item.contactPerson} | '
+                            'Tel: ${item.phone.isEmpty ? '-' : item.phone}'
+                            '${item.phone2.isEmpty ? '' : ' / ${item.phone2}'}'
+                            '${item.phone3.isEmpty ? '' : ' / ${item.phone3}'} | '
+                            'Email: ${item.email.isEmpty ? '-' : item.email}\n'
+                            'Cod extern: $externalCodeLabel | '
+                            'Partener: $externalSourceLabel\n'
+                            'Oras: ${item.city.isEmpty ? '-' : item.city} | '
+                            'Tip: ${item.type.label} | '
+                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'} | '
+                            'Departamente: ${item.departments.length} | '
+                            'Contacte: ${item.contactPeople.length}',
+                          ),
+                          trailing: Wrap(
+                            spacing: 4,
+                            children: [
+                              IconButton(
+                                onPressed: () => _openClientHistory(item),
+                                icon: const Icon(Icons.history_outlined),
+                                tooltip: 'Istoric client',
+                              ),
+                              IconButton(
+                                onPressed: () =>
+                                    _openCentralizerGeneratorForClient(item),
+                                icon: const Icon(Icons.post_add_outlined),
+                                tooltip: 'Centralizator selectiv',
+                              ),
+                              IconButton(
+                                onPressed: () => _openForm(current: item),
+                                icon: const Icon(Icons.edit_outlined),
+                                tooltip: 'Editează',
+                              ),
+                              IconButton(
+                                onPressed: () => _delete(item),
+                                icon: const Icon(Icons.delete_outline),
+                                tooltip: 'Șterge',
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ClientActivityBundle {
+  const _ClientActivityBundle({
+    required this.offers,
+    required this.appointments,
+    required this.complaints,
+    required this.jobs,
+    required this.repairReports,
+    required this.warrantyReports,
+    required this.centralizers,
+    required this.workOrders,
+    required this.agfrEquipments,
+  });
+
+  final List<OfferRecord> offers;
+  final List<Appointment> appointments;
+  final List<ComplaintRecord> complaints;
+  final List<JobRecord> jobs;
+  final List<RepairReportRecord> repairReports;
+  final List<WarrantyInterventionReportRecord> warrantyReports;
+  final List<ComplaintClientCentralizerRecord> centralizers;
+  final List<ComplaintWorkOrderRecord> workOrders;
+  final List<AgfrEquipmentRecord> agfrEquipments;
+}
+
+class _CentralizerSourceSelection {
+  const _CentralizerSourceSelection({
+    required this.complaintIds,
+    required this.offerIds,
+  });
+
+  final Set<String> complaintIds;
+  final Set<String> offerIds;
+}

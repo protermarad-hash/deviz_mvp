@@ -1,0 +1,213 @@
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../core/pdf/pdf_font_helper.dart';
+import '../../core/pdf_document_branding.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'monthly_timesheet_models.dart';
+
+class MonthlyTimesheetPdfService {
+  const MonthlyTimesheetPdfService._();
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required MonthlyTimesheetRecord record,
+    String outputDirectory = '',
+    bool saveAs = false,
+  }) async {
+    await PdfFontHelper.initialize();
+    final doc = pw.Document(theme: PdfFontHelper.theme);
+    final companyProfile = await repository.loadCompanyProfile();
+    final branding = DocumentBrandingData.fromCompanyProfile(companyProfile);
+    final generatedAt = DateTime.now();
+    final days = List<int>.generate(record.daysInMonth, (index) => index + 1);
+    final dayChunks = <List<int>>[];
+    for (var start = 0; start < days.length; start += 16) {
+      final end = (start + 16) > days.length ? days.length : start + 16;
+      dayChunks.add(days.sublist(start, end));
+    }
+
+    String dateLabel(DateTime value) {
+      final d = value.day.toString().padLeft(2, '0');
+      final m = value.month.toString().padLeft(2, '0');
+      return '$d.$m.${value.year}';
+    }
+
+    String monthLabel() =>
+        '${record.month.toString().padLeft(2, '0')}.${record.year}';
+
+    String textOrDash(String value) {
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? '-' : trimmed;
+    }
+
+    String money(double value) => value.toStringAsFixed(2);
+
+    pw.Widget summaryBox(String label, String value) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(8),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey400),
+          borderRadius: pw.BorderRadius.circular(6),
+        ),
+        child: pw.Text('$label: $value'),
+      );
+    }
+
+    for (var chunkIndex = 0; chunkIndex < dayChunks.length; chunkIndex++) {
+      final chunk = dayChunks[chunkIndex];
+      final headers = <String>[
+        'Angajat',
+        'Echipa',
+        'TM buget',
+        'TM RON/zi',
+        ...chunk.map((day) => day.toString()),
+        'Ore',
+        ...MonthlyTimesheetCodeOption.defaults.map((option) => option.code),
+      ];
+      final data = record.rows.map((row) {
+        final eligibleDays = _eligibleDays(record, row);
+        final tmPerDay = (row.mealTicketBudgetRon > 0 && eligibleDays > 0)
+            ? row.mealTicketBudgetRon / eligibleDays
+            : 0.0;
+        return <String>[
+          textOrDash(row.employeeName),
+          textOrDash(row.teamName),
+          money(row.mealTicketBudgetRon),
+          money(tmPerDay),
+          ...chunk.map((day) => textOrDash(row.dayValues['$day'] ?? '')),
+          row.totalWorkedHours.toStringAsFixed(0),
+          ...MonthlyTimesheetCodeOption.defaults
+              .map((option) => row.countCode(option.code).toString()),
+        ];
+      }).toList(growable: false);
+
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a3.landscape,
+          margin: const pw.EdgeInsets.all(18),
+          build: (_) => [
+            if (chunkIndex == 0) ...[
+              buildClassicDocumentHeader(
+                branding: branding,
+                documentTitle: 'PONTAJ LUNAR TABELAR',
+                template: companyProfile.pdfExportSettings.visualTemplate,
+                metadata: <MapEntry<String, String>>[
+                  MapEntry<String, String>('Luna', monthLabel()),
+                  MapEntry<String, String>(
+                    'Data generare',
+                    dateLabel(generatedAt),
+                  ),
+                  MapEntry<String, String>(
+                    'Angajati',
+                    '${record.rows.length}',
+                  ),
+                  MapEntry<String, String>(
+                    'Total ore',
+                    record.totalWorkedHours.toStringAsFixed(0),
+                  ),
+                ],
+              ),
+              pw.SizedBox(height: 10),
+            ],
+            pw.Text(
+              'Interval zile: ${chunk.first}-${chunk.last}',
+              style: pw.TextStyle(
+                fontSize: 12,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 8),
+            if (data.isEmpty)
+              pw.Text('Nu exista randuri de pontaj pentru luna selectata.')
+            else
+              pw.TableHelper.fromTextArray(
+                border:
+                    pw.TableBorder.all(color: PdfColors.grey400, width: 0.4),
+                headerStyle: pw.TextStyle(
+                  fontSize: 7,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+                cellStyle: const pw.TextStyle(fontSize: 6.6),
+                headerDecoration: const pw.BoxDecoration(
+                  color: PdfColors.grey300,
+                ),
+                cellAlignment: pw.Alignment.center,
+                headers: headers,
+                data: data,
+                columnWidths: <int, pw.TableColumnWidth>{
+                  0: const pw.FixedColumnWidth(90),
+                  1: const pw.FixedColumnWidth(58),
+                  2: const pw.FixedColumnWidth(38),
+                  3: const pw.FixedColumnWidth(34),
+                  for (var i = 4; i < 4 + chunk.length; i++)
+                    i: const pw.FixedColumnWidth(18),
+                  4 + chunk.length: const pw.FixedColumnWidth(28),
+                  for (var i = 5 + chunk.length; i < headers.length; i++)
+                    i: const pw.FixedColumnWidth(18),
+                },
+              ),
+            if (chunkIndex == dayChunks.length - 1) ...[
+              pw.SizedBox(height: 12),
+              pw.Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  summaryBox(
+                    'Total ore luna',
+                    record.totalWorkedHours.toStringAsFixed(0),
+                  ),
+                  summaryBox(
+                    'Total TM buget',
+                    '${money(record.rows.fold<double>(0, (sum, row) => sum + row.mealTicketBudgetRon))} RON',
+                  ),
+                  ...MonthlyTimesheetCodeOption.defaults.map(
+                    (option) => summaryBox(
+                      'Total ${option.code}',
+                      record.totalCodeCount(option.code).toString(),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    final fileName =
+        'pontaj_lunar_${record.year}_${record.month.toString().padLeft(2, '0')}.pdf';
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: await doc.save(),
+      fileName: fileName,
+      category: PdfDocumentCategory.attendanceReports,
+      outputDirectory: outputDirectory,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static int _eligibleDays(
+    MonthlyTimesheetRecord record,
+    MonthlyTimesheetEmployeeRow row,
+  ) {
+    var count = 0;
+    for (var day = 1; day <= record.daysInMonth; day++) {
+      if (_isWeekend(record.year, record.month, day)) {
+        continue;
+      }
+      final value = row.dayValues['$day'] ?? '';
+      if (MonthlyTimesheetValueParser.hoursFromValue(value) > 0) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  static bool _isWeekend(int year, int month, int day) {
+    final date = DateTime(year, month, day);
+    return date.weekday == DateTime.saturday || date.weekday == DateTime.sunday;
+  }
+}

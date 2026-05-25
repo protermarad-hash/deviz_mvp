@@ -1,0 +1,1275 @@
+import 'package:flutter/material.dart';
+
+import '../../core/app_theme_preset.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/company_profile.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/widgets/anaf_company_autofill_section.dart';
+import '../jobs/job_models.dart';
+import '../jobs/job_partner_models.dart';
+import 'partner_models.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
+import '../partner_financial/partner_financial_page.dart';
+import '../partner_financial/partner_sale_form.dart';
+import '../partner_financial/partner_purchase_form.dart';
+
+class PartnersPage extends StatefulWidget {
+  const PartnersPage({
+    super.key,
+    required this.repository,
+  });
+
+  final AppDataRepository repository;
+
+  @override
+  State<PartnersPage> createState() => _PartnersPageState();
+}
+
+class _PartnersPageState extends State<PartnersPage> {
+  bool _loading = true;
+  List<PartnerRecord> _partners = const <PartnerRecord>[];
+  List<PartnerWorkerRecord> _workers = const <PartnerWorkerRecord>[];
+  List<PartnerVehicleRecord> _vehicles = const <PartnerVehicleRecord>[];
+  List<JobRecord> _jobs = const <JobRecord>[];
+  double _corporateTaxPercent = 16.0;
+  String _dataSourceLabel = 'local_cache';
+  String? _fallbackReason;
+
+  @override
+  void initState() {
+    super.initState();
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+    Future.microtask(_load);
+  }
+
+  @override
+  void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
+    super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    if (FirebaseBootstrap.onlineNotifier.value && _partners.isEmpty && !_loading) {
+      _load();
+    }
+  }
+
+  void _syncDataSourceLabel() {
+    final repository = widget.repository;
+    if (repository is LocalAppDataRepository) {
+      _dataSourceLabel = repository.lastPartnersDataSourceLabel;
+      final reason = repository.lastPartnersFallbackReason.trim();
+      _fallbackReason = reason.isEmpty ? null : reason;
+      return;
+    }
+    _dataSourceLabel = 'cloud';
+    _fallbackReason = null;
+  }
+
+  Future<void> _load() async {
+    final results = await Future.wait<dynamic>([
+      widget.repository.listPartners(),
+      widget.repository.listPartnerWorkers(),
+      widget.repository.listPartnerVehicles(),
+      widget.repository.listJobs(),
+      widget.repository.loadCompanyProfile(),
+    ]);
+    _syncDataSourceLabel();
+    if (!mounted) return;
+    setState(() {
+      _partners = results[0] as List<PartnerRecord>;
+      _workers = results[1] as List<PartnerWorkerRecord>;
+      _vehicles = results[2] as List<PartnerVehicleRecord>;
+      _jobs = results[3] as List<JobRecord>;
+      _corporateTaxPercent = (results[4] as CompanyProfile).corporateTaxPercent;
+      _loading = false;
+    });
+  }
+
+  List<PartnerWorkerRecord> _workersFor(String partnerId) {
+    return _workers
+        .where((item) => item.partnerId == partnerId)
+        .toList(growable: false);
+  }
+
+  List<PartnerVehicleRecord> _vehiclesFor(String partnerId) {
+    return _vehicles
+        .where((item) => item.partnerId == partnerId)
+        .toList(growable: false);
+  }
+
+  /// Returns all jobs where [partnerId] appears as a sub-contractor (via masterPartnerId).
+  List<JobRecord> _jobsForPartner(String partnerId) {
+    return _jobs.where((job) {
+      for (final p in job.jobPartners) {
+        final mid =
+            '${p['masterPartnerId'] ?? p['master_partner_id'] ?? ''}'.trim();
+        if (mid == partnerId) return true;
+      }
+      return false;
+    }).toList(growable: false);
+  }
+
+  /// Computes simple material + labor cost from stored raw map lists on a job.
+  static double _jobCost(JobRecord job) {
+    double asD(dynamic v) {
+      if (v is num) return v.toDouble();
+      return double.tryParse('${v ?? ''}'.replaceAll(',', '.')) ?? 0;
+    }
+
+    double matTotal = 0;
+    for (final row in job.materials) {
+      final explicit = asD(row['total']);
+      matTotal += explicit > 0 ? explicit : asD(row['qty']) * asD(row['price']);
+    }
+    double laborTotal = 0;
+    for (final row in job.laborEntries) {
+      final explicit = asD(row['totalCost'] ?? row['total']);
+      laborTotal +=
+          explicit > 0 ? explicit : asD(row['hours']) * asD(row['rate']);
+    }
+    return matTotal + laborTotal;
+  }
+
+  /// Returns the set of job-specific JobPartner IDs that link [masterPartnerId] in [job].
+  Set<String> _jobPartnerIds(String masterPartnerId, JobRecord job) {
+    return job.jobPartners
+        .map(JobPartner.fromMap)
+        .where((p) => p.masterPartnerId == masterPartnerId && p.id.isNotEmpty)
+        .map((p) => p.id)
+        .toSet();
+  }
+
+  /// Returns the cost of partner resources (workers + vehicles) for a single job.
+  double _partnerResourcesCost(String masterPartnerId, JobRecord job) {
+    final ids = _jobPartnerIds(masterPartnerId, job);
+    if (ids.isEmpty) return 0;
+    final workersCost = job.jobPartnerWorkers
+        .map(JobPartnerWorker.fromMap)
+        .where((w) => ids.contains(w.partnerId))
+        .fold<double>(0, (sum, w) => sum + w.total);
+    final vehiclesCost = job.jobPartnerVehicles
+        .map(JobPartnerVehicle.fromMap)
+        .where((v) => ids.contains(v.partnerId))
+        .fold<double>(0, (sum, v) => sum + v.total);
+    return workersCost + vehiclesCost;
+  }
+
+  /// Calculates the partner's profit share for a single job.
+  double _partnerProfitShare(JobRecord job) {
+    final contractVal = job.estimatedValue ?? 0;
+    if (contractVal <= 0) return 0;
+    final cost = _jobCost(job);
+    final grossProfit = contractVal - cost;
+    if (grossProfit <= 0) return 0;
+    final taxValue = grossProfit * _corporateTaxPercent / 100;
+    final netProfit = grossProfit - taxValue;
+    final partnerShare = 100 - job.profitSharingPercent;
+    return netProfit * partnerShare / 100;
+  }
+
+  /// Total due to partner for a single job = profit share + resources cost.
+  double _partnerTotalForJob(String masterPartnerId, JobRecord job) {
+    return _partnerProfitShare(job) +
+        _partnerResourcesCost(masterPartnerId, job);
+  }
+
+  Future<PartnerRecord?> _showPartnerDialog({PartnerRecord? existing}) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final cuiCtrl = TextEditingController(text: existing?.cui ?? '');
+    final regCtrl =
+        TextEditingController(text: existing?.tradeRegisterNumber ?? '');
+    final contactCtrl =
+        TextEditingController(text: existing?.contactPerson ?? '');
+    final phoneCtrl = TextEditingController(text: existing?.phone ?? '');
+    final emailCtrl = TextEditingController(text: existing?.email ?? '');
+    final addressCtrl = TextEditingController(text: existing?.address ?? '');
+    final cityCtrl = TextEditingController(text: existing?.city ?? '');
+    final countyCtrl = TextEditingController(text: existing?.county ?? '');
+    final ibanCtrl = TextEditingController(text: existing?.iban ?? '');
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    try {
+      return await showDialog<PartnerRecord>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title:
+              Text(existing == null ? 'Adauga partener' : 'Editeaza partener'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnafCompanyAutofillSection(
+                    cuiController: cuiCtrl,
+                    nameController: nameCtrl,
+                    tradeRegisterController: regCtrl,
+                    phoneController: phoneCtrl,
+                    ibanController: ibanCtrl,
+                    addressController: addressCtrl,
+                    cityController: cityCtrl,
+                    countyController: countyCtrl,
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Partener / companie',
+                    ),
+                  ),
+                  TextField(
+                    controller: regCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Nr. Reg. Com.',
+                    ),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: contactCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Persoana contact',
+                    ),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: phoneCtrl,
+                    decoration: const InputDecoration(labelText: 'Telefon'),
+                  ),
+                  TextField(
+                    controller: emailCtrl,
+                    decoration: const InputDecoration(labelText: 'Email'),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: addressCtrl,
+                    decoration: const InputDecoration(labelText: 'Adresa'),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: cityCtrl,
+                          decoration:
+                              const InputDecoration(labelText: 'Localitate'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: countyCtrl,
+                          decoration: const InputDecoration(labelText: 'Judet'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  TextField(
+                    controller: ibanCtrl,
+                    decoration: const InputDecoration(labelText: 'IBAN'),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: notesCtrl,
+                    decoration: const InputDecoration(labelText: 'Observatii'),
+                    minLines: 2,
+                    maxLines: 4,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final dlgCtx = context;
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(dlgCtx).showSnackBar(
+                    const SnackBar(
+                      content: Text('Completeaza numele partenerului.'),
+                    ),
+                  );
+                  return;
+                }
+                // ── Detecție duplicate după NUME ──────────────────────────
+                final nameLow = name.toLowerCase();
+                final dupByName = _partners.where(
+                  (p) =>
+                      p.name.trim().toLowerCase() == nameLow &&
+                      p.id != (existing?.id ?? ''),
+                ).firstOrNull;
+                if (dupByName != null && dlgCtx.mounted) {
+                  final proceed = await showDialog<bool>(
+                    context: dlgCtx,
+                    builder: (alertCtx) => AlertDialog(
+                      title: const Text('Partener similar existent'),
+                      content: Text(
+                        'Există deja un partener cu același nume:\n\n'
+                        '• ${dupByName.name}'
+                        '${dupByName.city.trim().isNotEmpty ? " · ${dupByName.city.trim()}" : ""}'
+                        '${dupByName.cui.trim().isNotEmpty ? " · CUI: ${dupByName.cui.trim()}" : ""}\n\n'
+                        'Doriți să adăugați un partener nou oricum?',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(alertCtx).pop(false),
+                          child: const Text('Anulează'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.of(alertCtx).pop(true),
+                          child: const Text('Adaugă oricum'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (proceed != true) return;
+                }
+                // ── Detecție duplicate după CUI ───────────────────────────
+                final cuiValue = cuiCtrl.text.trim();
+                if (cuiValue.isNotEmpty) {
+                  final dupByCui = _partners.where(
+                    (p) =>
+                        p.cui.trim().toLowerCase() == cuiValue.toLowerCase() &&
+                        p.id != (existing?.id ?? ''),
+                  ).firstOrNull;
+                  if (dupByCui != null && dlgCtx.mounted) {
+                    final proceed = await showDialog<bool>(
+                      context: dlgCtx,
+                      builder: (alertCtx) => AlertDialog(
+                        title: const Text('CUI duplicat detectat'),
+                        content: Text(
+                          'Există deja un partener cu CUI "$cuiValue":\n\n'
+                          '• ${dupByCui.name}\n\n'
+                          'Doriți să salvați oricum?',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(alertCtx).pop(false),
+                            child: const Text('Anulează'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.of(alertCtx).pop(true),
+                            child: const Text('Salvează oricum'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (proceed != true) return;
+                  }
+                }
+                if (!dlgCtx.mounted) return;
+                final now = DateTime.now();
+                Navigator.of(dlgCtx).pop(
+                  PartnerRecord(
+                    id: existing?.id ??
+                        'partner-${DateTime.now().microsecondsSinceEpoch}',
+                    name: name,
+                    cui: cuiCtrl.text.trim(),
+                    tradeRegisterNumber: regCtrl.text.trim(),
+                    contactPerson: contactCtrl.text.trim(),
+                    phone: phoneCtrl.text.trim(),
+                    email: emailCtrl.text.trim(),
+                    address: addressCtrl.text.trim(),
+                    city: cityCtrl.text.trim(),
+                    county: countyCtrl.text.trim(),
+                    iban: ibanCtrl.text.trim(),
+                    notes: notesCtrl.text.trim(),
+                    createdAt: existing?.createdAt ?? now,
+                    updatedAt: now,
+                  ),
+                );
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      nameCtrl.dispose();
+      cuiCtrl.dispose();
+      regCtrl.dispose();
+      contactCtrl.dispose();
+      phoneCtrl.dispose();
+      emailCtrl.dispose();
+      addressCtrl.dispose();
+      cityCtrl.dispose();
+      countyCtrl.dispose();
+      ibanCtrl.dispose();
+      notesCtrl.dispose();
+    }
+  }
+
+  Future<PartnerWorkerRecord?> _showWorkerDialog({
+    required PartnerRecord partner,
+    PartnerWorkerRecord? existing,
+  }) async {
+    final nameCtrl = TextEditingController(text: existing?.fullName ?? '');
+    final roleCtrl = TextEditingController(text: existing?.role ?? '');
+    final rateCtrl =
+        TextEditingController(text: '${existing?.hourlyRate ?? 0}');
+    final currencyCtrl =
+        TextEditingController(text: existing?.currency ?? 'RON');
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    try {
+      return await showDialog<PartnerWorkerRecord>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(
+            existing == null
+                ? 'Adauga personal partener'
+                : 'Editeaza personal partener',
+          ),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      partner.name,
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: nameCtrl,
+                    decoration:
+                        const InputDecoration(labelText: 'Nume complet'),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: roleCtrl,
+                    decoration: const InputDecoration(labelText: 'Rol'),
+                  ),
+                  TextField(
+                    controller: rateCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Tarif orar negociat',
+                    ),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: currencyCtrl,
+                    decoration: const InputDecoration(labelText: 'Moneda'),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: notesCtrl,
+                    decoration: const InputDecoration(labelText: 'Observatii'),
+                    minLines: 2,
+                    maxLines: 4,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final fullName = nameCtrl.text.trim();
+                if (fullName.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Completeaza numele persoanei.'),
+                    ),
+                  );
+                  return;
+                }
+                final now = DateTime.now();
+                Navigator.of(context).pop(
+                  PartnerWorkerRecord(
+                    id: existing?.id ??
+                        'partner-worker-${DateTime.now().microsecondsSinceEpoch}',
+                    partnerId: partner.id,
+                    fullName: fullName,
+                    role: roleCtrl.text.trim(),
+                    hourlyRate: double.tryParse(
+                          rateCtrl.text.replaceAll(',', '.').trim(),
+                        ) ??
+                        0,
+                    currency: currencyCtrl.text.trim().isEmpty
+                        ? 'RON'
+                        : currencyCtrl.text.trim().toUpperCase(),
+                    notes: notesCtrl.text.trim(),
+                    createdAt: existing?.createdAt ?? now,
+                    updatedAt: now,
+                  ),
+                );
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      nameCtrl.dispose();
+      roleCtrl.dispose();
+      rateCtrl.dispose();
+      currencyCtrl.dispose();
+      notesCtrl.dispose();
+    }
+  }
+
+  Future<PartnerVehicleRecord?> _showVehicleDialog({
+    required PartnerRecord partner,
+    PartnerVehicleRecord? existing,
+  }) async {
+    final nameCtrl = TextEditingController(text: existing?.vehicleName ?? '');
+    final registrationCtrl =
+        TextEditingController(text: existing?.registrationNumber ?? '');
+    final consumptionCtrl = TextEditingController(
+      text: '${existing?.fuelConsumptionPer100Km ?? 0}',
+    );
+    final priceCtrl =
+        TextEditingController(text: '${existing?.fuelPricePerLiter ?? 0}');
+    final currencyCtrl =
+        TextEditingController(text: existing?.currency ?? 'RON');
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    try {
+      return await showDialog<PartnerVehicleRecord>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(
+            existing == null
+                ? 'Adauga autoturism partener'
+                : 'Editeaza autoturism partener',
+          ),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      partner.name,
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Denumire'),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: registrationCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Numar inmatriculare',
+                    ),
+                  ),
+                  TextField(
+                    controller: consumptionCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Consum / 100 km',
+                    ),
+                  ),
+                  TextField(
+                    controller: priceCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Pret combustibil',
+                    ),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: currencyCtrl,
+                    decoration: const InputDecoration(labelText: 'Moneda'),
+                  ),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: notesCtrl,
+                    decoration: const InputDecoration(labelText: 'Observatii'),
+                    minLines: 2,
+                    maxLines: 4,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final vehicleName = nameCtrl.text.trim();
+                if (vehicleName.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Completeaza denumirea autoturismului.'),
+                    ),
+                  );
+                  return;
+                }
+                final now = DateTime.now();
+                Navigator.of(context).pop(
+                  PartnerVehicleRecord(
+                    id: existing?.id ??
+                        'partner-vehicle-${DateTime.now().microsecondsSinceEpoch}',
+                    partnerId: partner.id,
+                    vehicleName: vehicleName,
+                    registrationNumber: registrationCtrl.text.trim(),
+                    fuelConsumptionPer100Km: double.tryParse(
+                          consumptionCtrl.text.replaceAll(',', '.').trim(),
+                        ) ??
+                        0,
+                    fuelPricePerLiter: double.tryParse(
+                          priceCtrl.text.replaceAll(',', '.').trim(),
+                        ) ??
+                        0,
+                    currency: currencyCtrl.text.trim().isEmpty
+                        ? 'RON'
+                        : currencyCtrl.text.trim().toUpperCase(),
+                    notes: notesCtrl.text.trim(),
+                    createdAt: existing?.createdAt ?? now,
+                    updatedAt: now,
+                  ),
+                );
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      nameCtrl.dispose();
+      registrationCtrl.dispose();
+      consumptionCtrl.dispose();
+      priceCtrl.dispose();
+      currencyCtrl.dispose();
+      notesCtrl.dispose();
+    }
+  }
+
+  Future<void> _addPartner() async {
+    final created = await _showPartnerDialog();
+    if (created == null) return;
+    await widget.repository.savePartner(created);
+    await _load();
+  }
+
+  Widget _buildPartnerBillingPanel(String partnerId) {
+    final allJobs = _jobsForPartner(partnerId);
+    // Include jobs with profit share OR with partner resources.
+    final billingJobs = allJobs.where((job) {
+      final hasProfitShare =
+          job.profitSharingPercent < 100 && (job.estimatedValue ?? 0) > 0;
+      final hasResources = _partnerResourcesCost(partnerId, job) > 0;
+      return hasProfitShare || hasResources;
+    }).toList(growable: false);
+
+    if (billingJobs.isEmpty) return const SizedBox.shrink();
+
+    double grandTotal = 0;
+    for (final job in billingJobs) {
+      grandTotal += _partnerTotalForJob(partnerId, job);
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.handshake_outlined, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                'Parte de facturat de partener',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ...billingJobs.map((job) {
+            final resources = _partnerResourcesCost(partnerId, job);
+            final profitShare = _partnerProfitShare(job);
+            final jobTotal = resources + profitShare;
+            final sharingPct =
+                (100 - job.profitSharingPercent).toStringAsFixed(0);
+            final jobLabel = job.jobCode.isEmpty ? job.id : job.jobCode;
+            return Card(
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$jobLabel — ${job.title}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 6),
+                    if (resources > 0)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Resurse (muncitori + vehicule)',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          Text(
+                            '${resources.toStringAsFixed(2)} RON',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    if (profitShare > 0)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Cotă profit net ($sharingPct%)',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          Text(
+                            '${profitShare.toStringAsFixed(2)} RON',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    if (resources > 0 && profitShare > 0) ...[
+                      const Divider(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Subtotal lucrare',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            '${jobTotal.toStringAsFixed(2)} RON',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          }),
+          const Divider(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              const Icon(Icons.account_balance_wallet_outlined, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                'Total de facturat: ${grandTotal.toStringAsFixed(2)} RON',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: grandTotal > 0
+                      ? Theme.of(context).colorScheme.primary
+                      : Colors.grey,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editPartner(PartnerRecord partner) async {
+    final updated = await _showPartnerDialog(existing: partner);
+    if (updated == null) return;
+    await widget.repository.savePartner(updated);
+    await _load();
+  }
+
+  Future<void> _deletePartner(PartnerRecord partner) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Șterge partener'),
+        content: Text(
+          'Partenerul "${partner.name}" va fi sters impreuna cu personalul si autoturismele asociate.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    if (!mounted) return;
+
+    // Capturează listele înainte de setState (pentru operația în fundal)
+    final workersToDelete = _workers.where((w) => w.partnerId == partner.id).toList();
+    final vehiclesToDelete = _vehicles.where((v) => v.partnerId == partner.id).toList();
+
+    // Optimistic UI — actualizare imediată (BUG 9)
+    setState(() {
+      _partners = _partners.where((p) => p.id != partner.id).toList(growable: false);
+      _workers = _workers.where((w) => w.partnerId != partner.id).toList(growable: false);
+      _vehicles = _vehicles.where((v) => v.partnerId != partner.id).toList(growable: false);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Partenerul "${partner.name}" a fost sters.')),
+    );
+
+    // Operația efectivă în fundal
+    () async {
+      for (final worker in workersToDelete) {
+        await widget.repository.deletePartnerWorker(worker.id);
+      }
+      for (final vehicle in vehiclesToDelete) {
+        await widget.repository.deletePartnerVehicle(vehicle.id);
+      }
+      await widget.repository.deletePartner(partner.id);
+    }().catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la ștergere: $e')),
+        );
+        _load();
+      }
+    });
+  }
+
+  Future<void> _addWorker(PartnerRecord partner) async {
+    final created = await _showWorkerDialog(partner: partner);
+    if (created == null) return;
+    await widget.repository.savePartnerWorker(created);
+    await _load();
+  }
+
+  Future<void> _editWorker(
+    PartnerRecord partner,
+    PartnerWorkerRecord worker,
+  ) async {
+    final updated = await _showWorkerDialog(partner: partner, existing: worker);
+    if (updated == null) return;
+    await widget.repository.savePartnerWorker(updated);
+    await _load();
+  }
+
+  Future<void> _deleteWorker(PartnerWorkerRecord worker) async {
+    await widget.repository.deletePartnerWorker(worker.id);
+    await _load();
+  }
+
+  Future<void> _addVehicle(PartnerRecord partner) async {
+    final created = await _showVehicleDialog(partner: partner);
+    if (created == null) return;
+    await widget.repository.savePartnerVehicle(created);
+    await _load();
+  }
+
+  Future<void> _editVehicle(
+    PartnerRecord partner,
+    PartnerVehicleRecord vehicle,
+  ) async {
+    final updated =
+        await _showVehicleDialog(partner: partner, existing: vehicle);
+    if (updated == null) return;
+    await widget.repository.savePartnerVehicle(updated);
+    await _load();
+  }
+
+  Future<void> _deleteVehicle(PartnerVehicleRecord vehicle) async {
+    await widget.repository.deletePartnerVehicle(vehicle.id);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final cs = Theme.of(context).colorScheme;
+    final brand = Theme.of(context).extension<AppBrandTheme>();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Parteneri'),
+        actions: [
+          HelpButton(content: AppHelp.parteneri),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addPartner,
+        icon: const Icon(Icons.add),
+        label: const Text('Adaugă partener'),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: brand?.shellHeaderGradient ??
+                    LinearGradient(
+                      colors: [cs.secondaryContainer, cs.tertiaryContainer],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: brand?.shellGlow ?? cs.primary.withValues(alpha: 0.1),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.handshake_outlined, size: 24, color: cs.primary),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Parteneri',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: cs.onSecondaryContainer,
+                          ),
+                        ),
+                        Text(
+                          '${_partners.length} parteneri · ${_workers.length} personal · ${_vehicles.length} vehicule'
+                          ' · $_dataSourceLabel'
+                          '${(_fallbackReason ?? '').isNotEmpty ? ' ⚠' : ''}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onSecondaryContainer.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Expanded(
+            child: _partners.isEmpty
+                ? RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
+                      children: [
+                        const SizedBox(height: 32),
+                        const Center(child: Text('Nu exista parteneri salvati.')),
+                        const SizedBox(height: 16),
+                        Center(
+                          child: Card(
+                            margin: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Firebase: init=${FirebaseBootstrap.isInitialized} online=${FirebaseBootstrap.isOnline}',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  if (_fallbackReason != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Eroare: $_fallbackReason',
+                                      style: const TextStyle(fontSize: 11, color: Colors.red),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 8),
+                                  FilledButton.icon(
+                                    onPressed: _loading ? null : _load,
+                                    icon: const Icon(Icons.refresh, size: 16),
+                                    label: const Text('Reîncarcă din cloud'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    itemCount: _partners.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final partner = _partners[index];
+                      final workers = _workersFor(partner.id);
+                      final vehicles = _vehiclesFor(partner.id);
+                      return Card(
+                        child: ExpansionTile(
+                          title: Text(partner.name),
+                          subtitle: Text(
+                            'Contact: ${partner.contactPerson.isEmpty ? '-' : partner.contactPerson} | '
+                            'Tel: ${partner.phone.isEmpty ? '-' : partner.phone} | '
+                            'Email: ${partner.email.isEmpty ? '-' : partner.email}\n'
+                            'Personal: ${workers.length} | Autoturisme: ${vehicles.length}',
+                          ),
+                          childrenPadding:
+                              const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert),
+                            tooltip: 'Acțiuni',
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
+                                value: 'sale',
+                                child: ListTile(
+                                  leading: Icon(Icons.sell_outlined),
+                                  title: Text('Vânzare catalog'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'financial',
+                                child: ListTile(
+                                  leading: Icon(Icons.account_balance_wallet_outlined),
+                                  title: Text('Financiar'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: ListTile(
+                                  leading: Icon(Icons.edit_outlined),
+                                  title: Text('Editează'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: ListTile(
+                                  leading: Icon(Icons.delete_outline),
+                                  title: Text('Șterge'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                            ],
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'sale':
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => PartnerSaleForm(
+                                        partnerId: partner.id,
+                                        partnerName: partner.name,
+                                      ),
+                                    ),
+                                  );
+                                case 'financial':
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => PartnerFinancialPage(
+                                        partnerId: partner.id,
+                                        partnerName: partner.name,
+                                      ),
+                                    ),
+                                  );
+                                case 'edit':
+                                  _editPartner(partner);
+                                case 'delete':
+                                  _deletePartner(partner);
+                              }
+                            },
+                          ),
+                          children: [
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: () => Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder: (_) => PartnerSaleForm(
+                                          partnerId: partner.id,
+                                          partnerName: partner.name,
+                                        ),
+                                      ),
+                                    ),
+                                    icon: const Icon(Icons.sell_outlined),
+                                    label: const Text('Vânzare catalog'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder: (_) => PartnerPurchaseForm(
+                                          partnerId: partner.id,
+                                          partnerName: partner.name,
+                                        ),
+                                      ),
+                                    ),
+                                    icon: const Icon(Icons.shopping_cart_outlined),
+                                    label: const Text('Achiziție'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => Navigator.of(context).push(
+                                      MaterialPageRoute<void>(
+                                        builder: (_) => PartnerFinancialPage(
+                                          partnerId: partner.id,
+                                          partnerName: partner.name,
+                                        ),
+                                      ),
+                                    ),
+                                    icon: const Icon(Icons.account_balance_wallet_outlined),
+                                    label: const Text('Financiar'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _addWorker(partner),
+                                    icon: const Icon(Icons.person_add_alt_1),
+                                    label: const Text('Adauga personal'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _addVehicle(partner),
+                                    icon: const Icon(Icons.directions_car),
+                                    label: const Text('Adauga autoturism'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (partner.notes.trim().isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child:
+                                    Text('Observatii: ${partner.notes.trim()}'),
+                              ),
+                            ],
+                            _buildPartnerBillingPanel(partner.id),
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Personal partener',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            if (workers.isEmpty)
+                              const Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text('Nu exista personal salvat.'),
+                              )
+                            else
+                              ...workers.map((worker) {
+                                return ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(worker.fullName),
+                                  subtitle: Text(
+                                    '${worker.role.isEmpty ? '-' : worker.role} | '
+                                    '${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency}',
+                                  ),
+                                  trailing: Wrap(
+                                    spacing: 4,
+                                    children: [
+                                      IconButton(
+                                        onPressed: () =>
+                                            _editWorker(partner, worker),
+                                        icon: const Icon(Icons.edit_outlined),
+                                      ),
+                                      IconButton(
+                                        onPressed: () => _deleteWorker(worker),
+                                        icon: const Icon(Icons.delete_outline),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Autoturisme partener',
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            if (vehicles.isEmpty)
+                              const Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text('Nu exista autoturisme salvate.'),
+                              )
+                            else
+                              ...vehicles.map((vehicle) {
+                                return ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(vehicle.vehicleName),
+                                  subtitle: Text(
+                                    '${vehicle.registrationNumber.isEmpty ? '-' : vehicle.registrationNumber} | '
+                                    'Consum ${vehicle.fuelConsumptionPer100Km.toStringAsFixed(2)} | '
+                                    'Combustibil ${vehicle.fuelPricePerLiter.toStringAsFixed(2)} ${vehicle.currency}',
+                                  ),
+                                  trailing: Wrap(
+                                    spacing: 4,
+                                    children: [
+                                      IconButton(
+                                        onPressed: () =>
+                                            _editVehicle(partner, vehicle),
+                                        icon: const Icon(Icons.edit_outlined),
+                                      ),
+                                      IconButton(
+                                        onPressed: () =>
+                                            _deleteVehicle(vehicle),
+                                        icon: const Icon(Icons.delete_outline),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}

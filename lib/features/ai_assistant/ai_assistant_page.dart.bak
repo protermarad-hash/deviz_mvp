@@ -1,0 +1,540 @@
+import 'package:flutter/material.dart';
+
+import '../../core/app_config.dart';
+import '../../core/app_theme_preset.dart';
+
+// ── Pagina hub Asistent AI ─────────────────────────────────────────────────────
+// Prezintă statusul configurării AI, modulele unde este disponibil și
+// instrucțiunile de utilizare. Nu necesită cheie API pentru afișare.
+
+class AiAssistantPage extends StatelessWidget {
+  const AiAssistantPage({super.key});
+
+  static const _kModules = [
+    _AiModuleEntry(
+      icon: Icons.request_quote_outlined,
+      label: 'Oferte',
+      color: Color(0xFF1565C0),
+      features: [
+        'Ofertă din cerința clientului',
+        'Descriere comercială',
+        'Reformulare ofertă',
+        'Email de trimitere',
+        'Chat liber contextual',
+      ],
+    ),
+    _AiModuleEntry(
+      icon: Icons.assignment_outlined,
+      label: 'Lucrări / PV / PIF',
+      color: Color(0xFF2E7D32),
+      features: [
+        'Rezumat lucrare',
+        'Redactare PV recepție',
+        'Text raport tehnic',
+        'Chat liber contextual',
+      ],
+    ),
+    _AiModuleEntry(
+      icon: Icons.report_problem_outlined,
+      label: 'Reclamații / Garanție',
+      color: Color(0xFFB71C1C),
+      features: [
+        'Constatare profesională',
+        'Răspuns diplomatic client',
+        'Chat liber contextual',
+      ],
+    ),
+    _AiModuleEntry(
+      icon: Icons.point_of_sale_outlined,
+      label: 'Agent teren',
+      color: Color(0xFF6A1B9A),
+      features: [
+        'Mini-ofertă rapidă',
+        'Explicație produs pentru client',
+      ],
+    ),
+  ];
+
+  static const _kHowItWorks = [
+    _HowItWorksStep(
+      step: '1',
+      title: 'Deschide modulul dorit',
+      body:
+          'Navighează la Oferte, Lucrări, Reclamații sau Agent teren și deschide un document.',
+    ),
+    _HowItWorksStep(
+      step: '2',
+      title: 'Apasă butonul AI',
+      body:
+          'În pagina documentului vei găsi butonul „Asistent AI" (iconița robot). Apasă-l pentru a deschide panoul AI.',
+    ),
+    _HowItWorksStep(
+      step: '3',
+      title: 'Alege acțiunea și generează',
+      body:
+          'Selectează tipul de draft dorit, adaugă opțional instrucțiuni suplimentare și apasă „Generează draft".',
+    ),
+    _HowItWorksStep(
+      step: '4',
+      title: 'Verifică și inserează',
+      body:
+          'Citește textul generat, modifică dacă e necesar, apoi apasă „Inserează în document" sau „Copiază".',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final configured = AppConfig.isAiAssistantConfigured;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Asistent AI')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildHeroHeader(context, cs, configured),
+          const SizedBox(height: 16),
+          if (!configured) ...[
+            _buildConfigCard(cs),
+            const SizedBox(height: 16),
+          ],
+          _buildSectionTitle('Module cu AI integrat', Icons.smart_toy_outlined, cs),
+          const SizedBox(height: 10),
+          ..._kModules.map((m) => _ModuleCard(entry: m, cs: cs)),
+          const SizedBox(height: 16),
+          _buildSectionTitle('Cum funcționează', Icons.help_outline, cs),
+          const SizedBox(height: 10),
+          ..._kHowItWorks.map((s) => _HowItWorksCard(step: s, cs: cs)),
+          const SizedBox(height: 16),
+          _buildNoticeCard(cs),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeroHeader(
+      BuildContext context, ColorScheme cs, bool configured) {
+    final brand = Theme.of(context).extension<AppBrandTheme>();
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: brand?.shellHeaderGradient ??
+            LinearGradient(
+              colors: [cs.primaryContainer, cs.tertiaryContainer],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: brand?.shellGlow ?? cs.primary.withValues(alpha: 0.12),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -16,
+            top: -16,
+            child: Container(
+              width: 90,
+              height: 90,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: cs.onPrimaryContainer.withValues(alpha: 0.06),
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(Icons.smart_toy_outlined,
+                        size: 28, color: cs.primary),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Asistent AI',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: cs.onPrimaryContainer,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        Text(
+                          'Redactare documente asistată de inteligență artificială',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onPrimaryContainer.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  _chip(
+                    configured ? 'AI configurat' : 'API Key lipsă',
+                    configured
+                        ? Icons.check_circle_outline
+                        : Icons.warning_amber_rounded,
+                    cs.surface,
+                    configured ? Colors.green.shade700 : Colors.orange.shade800,
+                  ),
+                  const SizedBox(width: 8),
+                  _chip(
+                    '${_kModules.length} module',
+                    Icons.extension_outlined,
+                    cs.surface,
+                    cs.primary,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(String label, IconData icon, Color bg, Color fg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: fg),
+          const SizedBox(width: 5),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w600, color: fg)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfigCard(ColorScheme cs) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.orange.shade200, width: 1.5),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.settings_outlined,
+              color: Colors.orange.shade800, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Configurare necesară',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Colors.orange.shade900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Asistentul AI necesită o cheie API OpenAI. '
+                  'Contactează administratorul tehnic pentru configurare: '
+                  'OPENAI_API_KEY, OPENAI_RESPONSES_ENDPOINT, OPENAI_MODEL.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.orange.shade900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Model implicit: ${AppConfig.openAiModel.isEmpty ? "gpt-4.1-mini" : AppConfig.openAiModel}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.orange.shade700,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(String title, IconData icon, ColorScheme cs) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: cs.primary),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: cs.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNoticeCard(ColorScheme cs) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.gavel_outlined, size: 16, color: cs.onSurfaceVariant),
+              const SizedBox(width: 8),
+              Text(
+                'Notă importantă',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Textul generat de AI necesită verificare umană. '
+            'Asistentul nu aprobă financiar, nu decide juridic și nu trimite '
+            'automat documente. Revizuiește întotdeauna conținutul înainte de '
+            'a-l folosi în comunicarea cu clienții.',
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Module card ───────────────────────────────────────────────────────────────
+
+class _AiModuleEntry {
+  const _AiModuleEntry({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.features,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final List<String> features;
+}
+
+class _ModuleCard extends StatelessWidget {
+  const _ModuleCard({required this.entry, required this.cs});
+
+  final _AiModuleEntry entry;
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          color: cs.surface,
+          border: Border.all(
+              color: entry.color.withValues(alpha: 0.2), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: entry.color.withValues(alpha: 0.06),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(13),
+          child: Column(
+            children: [
+              Container(
+                height: 3,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [entry.color, entry.color.withValues(alpha: 0.4)],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: entry.color.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(entry.icon, size: 22, color: entry.color),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            entry.label,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: entry.features
+                                .map(
+                                  (f) => Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 3),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          entry.color.withValues(alpha: 0.08),
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: entry.color
+                                            .withValues(alpha: 0.18),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      f,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: entry.color,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── How it works card ─────────────────────────────────────────────────────────
+
+class _HowItWorksStep {
+  const _HowItWorksStep({
+    required this.step,
+    required this.title,
+    required this.body,
+  });
+
+  final String step;
+  final String title;
+  final String body;
+}
+
+class _HowItWorksCard extends StatelessWidget {
+  const _HowItWorksCard({required this.step, required this.cs});
+
+  final _HowItWorksStep step;
+  final ColorScheme cs;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: cs.primaryContainer,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              step.step,
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: 14,
+                color: cs.onPrimaryContainer,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    step.title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    step.body,
+                    style:
+                        TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

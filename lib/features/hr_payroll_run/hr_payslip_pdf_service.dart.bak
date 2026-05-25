@@ -1,0 +1,324 @@
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import 'hr_payroll_run_models.dart';
+
+class HrPayslipPdfService {
+  const HrPayslipPdfService._();
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required HrPayslip payslip,
+    String employeeName = '',
+    String outputDirectory = '',
+    bool saveAs = false,
+  }) async {
+    final doc = pw.Document();
+    final grossComponents = (payslip.breakdown['gross_components'] as Map?)
+            ?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+    final contract =
+        (payslip.breakdown['contract'] as Map?)?.cast<String, dynamic>() ??
+            const <String, dynamic>{};
+    final mealTickets =
+        (payslip.breakdown['meal_tickets'] as Map?)?.cast<String, dynamic>() ??
+            const <String, dynamic>{};
+
+    String textOrDash(String value) {
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? '-' : trimmed;
+    }
+
+    String dateTimeLabel(DateTime? value) {
+      if (value == null) return '-';
+      final d = value.day.toString().padLeft(2, '0');
+      final m = value.month.toString().padLeft(2, '0');
+      final y = value.year.toString().padLeft(4, '0');
+      final hh = value.hour.toString().padLeft(2, '0');
+      final mm = value.minute.toString().padLeft(2, '0');
+      return '$d.$m.$y $hh:$mm';
+    }
+
+    String monthLabel(DateTime value) =>
+        '${value.month.toString().padLeft(2, '0')}.${value.year.toString().padLeft(4, '0')}';
+
+    String money(double value) =>
+        '${value.toStringAsFixed(2)} ${payslip.currency}';
+
+    double asDouble(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      return double.tryParse((raw ?? '').toString().replaceAll(',', '.')) ?? 0;
+    }
+
+    Map<String, bool> boolMap(dynamic raw) {
+      if (raw is! Map) return const <String, bool>{};
+      return <String, bool>{
+        for (final entry in raw.entries)
+          entry.key.toString(): entry.value == true,
+      };
+    }
+
+    Map<String, double> doubleMap(dynamic raw) {
+      if (raw is! Map) return const <String, double>{};
+      return <String, double>{
+        for (final entry in raw.entries)
+          entry.key.toString(): asDouble(entry.value),
+      };
+    }
+
+    String ticketRuleLabel(String code) {
+      switch (code) {
+        case 'worked_hours':
+          return 'zile lucrate';
+        case 'CO':
+        case 'CM':
+        case 'INV':
+        case 'ABS':
+        case 'MAT':
+        case 'ST':
+        case 'ALT':
+        case 'CCC':
+          return code;
+        default:
+          return code;
+      }
+    }
+
+    String ticketRulesSummary(Map<String, bool> rules) {
+      if (rules.isEmpty) return '-';
+      final included = rules.entries
+          .where((entry) => entry.value)
+          .map((entry) => ticketRuleLabel(entry.key))
+          .toList(growable: false);
+      final excluded = rules.entries
+          .where((entry) => !entry.value)
+          .map((entry) => ticketRuleLabel(entry.key))
+          .toList(growable: false);
+      final includeText = included.isEmpty ? '-' : included.join(', ');
+      final excludeText = excluded.isEmpty ? '-' : excluded.join(', ');
+      return 'Include: $includeText | Exclude: $excludeText';
+    }
+
+    String ticketBreakdownSummary(Map<String, double> breakdown) {
+      final parts = breakdown.entries
+          .where((entry) => entry.value > 0)
+          .map(
+            (entry) =>
+                '${ticketRuleLabel(entry.key)} ${entry.value.toStringAsFixed(0)}',
+          )
+          .toList(growable: false);
+      return parts.isEmpty ? '-' : parts.join(', ');
+    }
+
+    pw.Widget infoLine(String label, String value) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 4),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: 180,
+              child: pw.Text(
+                label,
+                style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+              ),
+            ),
+            pw.Expanded(child: pw.Text(textOrDash(value))),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget section(String title, List<pw.Widget> children) {
+      return pw.Container(
+        margin: const pw.EdgeInsets.only(bottom: 12),
+        padding: const pw.EdgeInsets.all(10),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: PdfColors.grey400),
+          borderRadius: pw.BorderRadius.circular(6),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              title,
+              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 6),
+            ...children,
+          ],
+        ),
+      );
+    }
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(24),
+        build: (_) {
+          final resolvedBaseSalary = () {
+            final fromGross = asDouble(grossComponents['base_salary_gross']);
+            if (fromGross > 0) return fromGross;
+            final fromContract = asDouble(contract['base_salary_gross']);
+            if (fromContract > 0) return fromContract;
+            return payslip.grossTotal;
+          }();
+          return [
+            pw.Text(
+              'Fluturas salariu',
+              style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 12),
+            section('Date generale', [
+              infoLine('Angajat', textOrDash(employeeName)),
+              infoLine('Luna salarizare', monthLabel(payslip.payrollMonth)),
+              infoLine(
+                'Functie / contract',
+                textOrDash(
+                  '${contract['job_title'] ?? ''}'.trim().isEmpty
+                      ? '${contract['contract_type'] ?? ''}'
+                      : '${contract['job_title'] ?? ''} / ${contract['contract_type'] ?? ''}',
+                ),
+              ),
+              infoLine('Status', textOrDash(payslip.status)),
+              infoLine('Data generarii', dateTimeLabel(payslip.generatedAt)),
+            ]),
+            section('Venituri', [
+              infoLine(
+                'Salariu brut',
+                money(resolvedBaseSalary),
+              ),
+              infoLine(
+                'Bonusuri taxabile',
+                money(asDouble(grossComponents['bonuses_taxable'])),
+              ),
+              infoLine(
+                'Indemnizatii taxabile',
+                money(asDouble(grossComponents['allowances_taxable'])),
+              ),
+              infoLine(
+                'Indemnizatii netaxabile',
+                money(asDouble(grossComponents['allowances_non_taxable'])),
+              ),
+              infoLine('Brut total', money(payslip.grossTotal)),
+            ]),
+            section('Contributii si taxe', [
+              infoLine('CAS', money(payslip.casAmount)),
+              infoLine('CASS', money(payslip.cassAmount)),
+              infoLine('Impozit', money(payslip.incomeTaxAmount)),
+            ]),
+            section('Tichete de masa', [
+              infoLine(
+                'Activ',
+                (mealTickets['enabled'] ?? false) == true ? 'da' : 'nu',
+              ),
+              infoLine(
+                'Zile eligibile',
+                asDouble(mealTickets['eligible_days']).toStringAsFixed(0),
+              ),
+              infoLine(
+                'Valoare / zi',
+                money(asDouble(mealTickets['value_per_day'])),
+              ),
+              infoLine(
+                'Total tichete',
+                money(asDouble(mealTickets['total_value'])),
+              ),
+              infoLine(
+                'Regula eligibilitate',
+                ticketRulesSummary(
+                  boolMap(mealTickets['eligibility_rules']),
+                ),
+              ),
+              infoLine(
+                'Detaliere coduri',
+                ticketBreakdownSummary(
+                  doubleMap(mealTickets['eligibility_breakdown']),
+                ),
+              ),
+              infoLine(
+                'Tratament fiscal',
+                textOrDash((mealTickets['fiscal_treatment'] ?? '').toString()),
+              ),
+            ]),
+            section('Retineri', [
+              infoLine(
+                'Impozit tichete masa',
+                money(
+                  asDouble(
+                    (((payslip.breakdown['withholdings'] as Map?)
+                                ?.cast<String, dynamic>() ??
+                            const <String, dynamic>{})[
+                        'meal_ticket_income_tax_amount']),
+                  ),
+                ),
+              ),
+              infoLine(
+                'CASS tichete masa',
+                money(
+                  asDouble(
+                    (((payslip.breakdown['withholdings'] as Map?)
+                            ?.cast<String, dynamic>() ??
+                        const <String, dynamic>{})['meal_ticket_cass_amount']),
+                  ),
+                ),
+              ),
+              infoLine('Retineri', money(payslip.deductionTotal)),
+              infoLine(
+                'Recuperari avans',
+                money(payslip.advanceRecoveryTotal),
+              ),
+              infoLine(
+                'Popriri rezervate',
+                money(payslip.garnishmentReservedTotal),
+              ),
+            ]),
+            section('Net final', [
+              infoLine('Net final', money(payslip.netFinal)),
+            ]),
+            section('Referinte', [
+              infoLine(
+                'Rulare salarizare',
+                textOrDash(
+                    (payslip.sourceRefs['payroll_run_id'] ?? '').toString()),
+              ),
+              infoLine(
+                'Rezultat calcul',
+                textOrDash(
+                  (payslip.sourceRefs['calculation_result_id'] ?? '')
+                      .toString(),
+                ),
+              ),
+            ]),
+          ];
+        },
+      ),
+    );
+
+    final bytes = await doc.save();
+    final fileName = _fileName(employeeName, payslip.payrollMonth);
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: bytes,
+      fileName: fileName,
+      category: PdfDocumentCategory.hrPayslips,
+      outputDirectory: outputDirectory,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static String _fileName(String employeeName, DateTime payrollMonth) {
+    final safeEmployee = employeeName
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9_\-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    final namePart = safeEmployee.isEmpty ? 'angajat' : safeEmployee;
+    final monthKey =
+        '${payrollMonth.year.toString().padLeft(4, '0')}-${payrollMonth.month.toString().padLeft(2, '0')}';
+    return 'fluturas_salariu_${namePart}_$monthKey.pdf';
+  }
+}

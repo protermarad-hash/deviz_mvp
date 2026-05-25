@@ -1,0 +1,1181 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../materials/materials_catalog_service.dart';
+import '../master/master_local_store.dart';
+import 'deviz_articol_template_models.dart';
+import 'deviz_articol_template_repository.dart';
+import 'offer_labor_calculator.dart';
+import 'offer_labor_resources_catalog_service.dart';
+import 'offer_models.dart';
+
+class OfferLineResourceDialog extends StatefulWidget {
+  const OfferLineResourceDialog({
+    super.key,
+    this.existing,
+    required this.initialSortOrder,
+    required this.personnelOptions,
+    required this.teamOptions,
+    required this.vehicleOptions,
+    required this.toolPackageOptions,
+  });
+
+  final OfferLineItem? existing;
+  final int initialSortOrder;
+  final List<OfferLaborResourceOption> personnelOptions;
+  final List<OfferLaborTeamOption> teamOptions;
+  final List<OfferLaborResourceOption> vehicleOptions;
+  final List<OfferLaborResourceOption> toolPackageOptions;
+
+  @override
+  State<OfferLineResourceDialog> createState() =>
+      _OfferLineResourceDialogState();
+}
+
+class _OfferLineResourceDialogState extends State<OfferLineResourceDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _unitController = TextEditingController();
+  final _qtyController = TextEditingController();
+  final _priceController = TextEditingController();
+  final _laborDaysController = TextEditingController();
+  final _laborPerDiemController = TextEditingController();
+  final _laborNightsController = TextEditingController();
+  final _laborLodgingController = TextEditingController();
+  final MaterialsCatalogService _materialsCatalogService =
+      MaterialsCatalogService();
+
+  OfferLineType _lineType = OfferLineType.material;
+  String _materialId = '';
+  List<OfferLaborResourceUsage> _personalResources =
+      const <OfferLaborResourceUsage>[];
+  List<OfferLaborResourceUsage> _vehicleResources =
+      const <OfferLaborResourceUsage>[];
+  List<OfferLaborResourceUsage> _toolResources =
+      const <OfferLaborResourceUsage>[];
+  String? _selectedPersonalId;
+  String? _selectedTeamId;
+  String? _selectedVehicleId;
+  String? _selectedToolId;
+  List<MasterMaterial> _materialCatalog = const <MasterMaterial>[];
+  String _materialsDataSourceLabel = 'local';
+  String? _materialsFallbackReason;
+  Map<String, String> _personalSourceById = <String, String>{};
+
+  // Baza proprie de norme
+  final DevizArticolTemplateRepository _templateRepo =
+      DevizArticolTemplateRepository();
+  List<DevizArticolTemplate> _templates = const [];
+  DevizArticolTemplate? _foundTemplate;
+
+  List<OfferLaborResourceUsage> _normalizeToolResources(
+    List<OfferLaborResourceUsage> rows,
+  ) {
+    return rows
+        .map(
+          (row) => row.copyWith(
+            days: 0,
+            dailyRate: 0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<OfferLaborResourceUsage> _normalizeVehicleResources(
+    List<OfferLaborResourceUsage> rows,
+  ) {
+    return rows
+        .map(
+          (row) => row.copyWith(
+            days: row.days < 0 ? 0 : row.days,
+            dailyRate: row.dailyRate < 0 ? 0 : row.dailyRate,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _lineType = existing.lineType;
+      _materialId = existing.materialId;
+      _nameController.text = existing.name;
+      _descriptionController.text = existing.description;
+      _unitController.text = existing.unit;
+      _qtyController.text = existing.quantity.toStringAsFixed(2);
+      _priceController.text = existing.unitPrice.toStringAsFixed(2);
+      _laborDaysController.text = existing.laborPerDiemDays.toStringAsFixed(2);
+      _laborPerDiemController.text =
+          existing.laborPerDiemPerDay.toStringAsFixed(2);
+      _laborNightsController.text =
+          existing.laborLodgingNights.toStringAsFixed(2);
+      _laborLodgingController.text =
+          existing.laborLodgingPerNight.toStringAsFixed(2);
+      _personalResources = existing.laborPersonal;
+      _vehicleResources = _normalizeVehicleResources(existing.laborVehicles);
+      _toolResources = _normalizeToolResources(existing.laborToolPackages);
+      if (_lineType == OfferLineType.manopera &&
+          _personalResources.isEmpty &&
+          _vehicleResources.isEmpty &&
+          _toolResources.isEmpty &&
+          (existing.laborHours > 0 || existing.laborHourlyRate > 0)) {
+        _personalResources = <OfferLaborResourceUsage>[
+          OfferLaborResourceUsage(
+            resourceId: '',
+            name: 'Resursa manopera',
+            hours: existing.laborHours,
+            days: 0,
+            hourlyRate: existing.laborHourlyRate,
+            dailyRate: 0,
+          ),
+        ];
+      }
+      _personalSourceById = {
+        for (final row in _personalResources)
+          if (row.resourceId.trim().isNotEmpty) row.resourceId: 'manual',
+      };
+    } else {
+      _lineType = OfferLineType.material;
+      _unitController.text = 'buc';
+      _qtyController.text = '1';
+      _priceController.text = '0';
+      _laborDaysController.text = '0';
+      _laborPerDiemController.text = '0';
+      _laborNightsController.text = '0';
+      _laborLodgingController.text = '0';
+    }
+    _selectedPersonalId = widget.personnelOptions.isNotEmpty
+        ? widget.personnelOptions.first.id
+        : null;
+    _selectedTeamId =
+        widget.teamOptions.isNotEmpty ? widget.teamOptions.first.id : null;
+    _selectedVehicleId = widget.vehicleOptions.isNotEmpty
+        ? widget.vehicleOptions.first.id
+        : null;
+    _selectedToolId = widget.toolPackageOptions.isNotEmpty
+        ? widget.toolPackageOptions.first.id
+        : null;
+    _loadMaterialsCatalog();
+    _loadTemplates();
+  }
+
+  Future<void> _loadTemplates() async {
+    final templates = await _templateRepo.listLocal();
+    if (!mounted) return;
+    setState(() {
+      _templates = templates;
+    });
+    _searchTemplate(_nameController.text);
+  }
+
+  void _searchTemplate(String name) {
+    final found = _templateRepo.findByName(name, _templates);
+    if (found?.id == _foundTemplate?.id) return;
+    setState(() {
+      _foundTemplate = found;
+      // Auto-completare prețuri doar pentru articole noi
+      if (found != null && widget.existing == null) {
+        _applyTemplatePrice(found);
+      }
+    });
+  }
+
+  void _applyTemplatePrice(DevizArticolTemplate t) {
+    if (t.um.trim().isNotEmpty &&
+        _unitController.text.trim().isEmpty) {
+      _unitController.text = t.um.trim();
+    }
+    if (_lineType == OfferLineType.material && t.pretUnitarMat > 0) {
+      _priceController.text = t.pretUnitarMat.toStringAsFixed(2);
+    } else if (_lineType == OfferLineType.manopera && t.pretUnitarMan > 0) {
+      _priceController.text = t.pretUnitarMan.toStringAsFixed(2);
+    }
+  }
+
+  Widget _buildTemplatePreview(BuildContext context) {
+    final t = _foundTemplate;
+    if (t == null) return const SizedBox.shrink();
+    final cs = Theme.of(context).colorScheme;
+    final dateFmt = DateFormat('dd.MM.yy');
+    final prices = <String>[];
+    if (t.pretUnitarMat > 0) {
+      prices.add('Mat: ${t.pretUnitarMat.toStringAsFixed(2)} RON/u');
+    }
+    if (t.pretUnitarMan > 0) {
+      prices.add('Man: ${t.pretUnitarMan.toStringAsFixed(2)} RON/u');
+    }
+    if (t.pretUnitarUtilaj > 0) {
+      prices.add('Utilaj: ${t.pretUnitarUtilaj.toStringAsFixed(2)} RON/u');
+    }
+    if (t.pretUnitarTransport > 0) {
+      prices
+          .add('Transport: ${t.pretUnitarTransport.toStringAsFixed(2)} RON/u');
+    }
+    return Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        border: Border.all(color: Colors.amber.shade300),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_fix_high,
+                  size: 15, color: Colors.amber.shade800),
+              const SizedBox(width: 5),
+              Text(
+                'Găsit în baza proprie:',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                  color: Colors.amber.shade900,
+                ),
+              ),
+            ],
+          ),
+          if (prices.isNotEmpty) ...[
+            const SizedBox(height: 5),
+            Wrap(
+              spacing: 10,
+              runSpacing: 2,
+              children: prices
+                  .map((p) => Text(p,
+                      style: TextStyle(
+                          fontSize: 12, color: cs.onSurface)))
+                  .toList(),
+            ),
+          ],
+          const SizedBox(height: 4),
+          Text(
+            'Folosit de ${t.folositDeCateOri} ori • '
+            'ultima: ${dateFmt.format(t.lastUpdated)}',
+            style: TextStyle(
+              fontSize: 11,
+              color: cs.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadMaterialsCatalog() async {
+    final rows = await _materialsCatalogService.listMaterials();
+    if (!mounted) return;
+    setState(() {
+      _materialCatalog = rows;
+      _materialsDataSourceLabel = _materialsCatalogService.dataSourceLabel;
+      _materialsFallbackReason = _materialsCatalogService.fallbackReason;
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    _unitController.dispose();
+    _qtyController.dispose();
+    _priceController.dispose();
+    _laborDaysController.dispose();
+    _laborPerDiemController.dispose();
+    _laborNightsController.dispose();
+    _laborLodgingController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? 0;
+  }
+
+  OfferLaborResourceOption? _personById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.personnelOptions) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  OfferLaborTeamOption? _teamById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.teamOptions) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  OfferLaborResourceOption? _vehicleById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.vehicleOptions) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  OfferLaborResourceOption? _toolById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.toolPackageOptions) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  String _vehicleCostSourceLabel(OfferLaborResourceUsage row) {
+    final option = _vehicleById(row.resourceId);
+    final label = (option?.metaLabel ?? '').trim();
+    return label.isEmpty ? 'necunoscut' : label;
+  }
+
+  bool _personalExists(String resourceId) {
+    final id = resourceId.trim();
+    if (id.isEmpty) return false;
+    return _personalResources.any((row) => row.resourceId == id);
+  }
+
+  void _showLocalInfo(String text) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  void _addSelectedPersonal() {
+    final selected = _personById(_selectedPersonalId);
+    if (selected == null) return;
+    if (_personalExists(selected.id)) {
+      _showLocalInfo('Angajatul este deja adăugat la personal.');
+      return;
+    }
+    setState(() {
+      _personalResources = [
+        ..._personalResources,
+        OfferLaborResourceUsage(
+          resourceId: selected.id,
+          name: selected.name,
+          hours: 0,
+          days: 0,
+          hourlyRate: selected.defaultHourlyRate,
+          dailyRate: 0,
+        ),
+      ];
+      _personalSourceById[selected.id] = 'manual';
+    });
+  }
+
+  void _addSelectedTeamMembers() {
+    final team = _teamById(_selectedTeamId);
+    if (team == null) return;
+    final additions = <OfferLaborResourceUsage>[];
+    final nextSource = Map<String, String>.from(_personalSourceById);
+    for (final memberId in team.memberIds) {
+      final person = _personById(memberId);
+      if (person == null) continue;
+      if (_personalExists(person.id) ||
+          additions.any((row) => row.resourceId == person.id)) {
+        continue;
+      }
+      additions.add(
+        OfferLaborResourceUsage(
+          resourceId: person.id,
+          name: person.name,
+          hours: 0,
+          days: 0,
+          hourlyRate: person.defaultHourlyRate,
+          dailyRate: 0,
+        ),
+      );
+      nextSource[person.id] = 'echipa ${team.name}';
+    }
+    if (additions.isEmpty) {
+      _showLocalInfo('Nu există membri noi de adăugat din echipa selectată.');
+      return;
+    }
+    setState(() {
+      _personalResources = [..._personalResources, ...additions];
+      _personalSourceById = nextSource;
+    });
+  }
+
+  void _applyCatalogMaterial(MasterMaterial selected) {
+    _searchTemplate(selected.name);
+    setState(() {
+      _materialId = selected.id;
+      _nameController.text = selected.name;
+      if (selected.unit.trim().isNotEmpty) {
+        _unitController.text = selected.unit.trim();
+      }
+      if (selected.price > 0) {
+        _priceController.text = selected.price.toStringAsFixed(2);
+      }
+      if (_descriptionController.text.trim().isEmpty &&
+          selected.notes.trim().isNotEmpty) {
+        _descriptionController.text = selected.notes.trim();
+      }
+    });
+  }
+
+  OfferLaborBreakdown get _laborBreakdown {
+    final laborDays = _asDouble(_laborDaysController.text);
+    final laborPerDiem = _asDouble(_laborPerDiemController.text);
+    final laborNights = _asDouble(_laborNightsController.text);
+    final laborLodging = _asDouble(_laborLodgingController.text);
+    return OfferLaborCalculator.computeFromResources(
+      personal: _personalResources,
+      autoturisme: _vehicleResources,
+      pacheteScule: _toolResources,
+      perDiemDays: laborDays,
+      perDiemPerDay: laborPerDiem,
+      lodgingNights: laborNights,
+      lodgingPerNight: laborLodging,
+    );
+  }
+
+  double get _lineTotal {
+    if (_lineType == OfferLineType.manopera) {
+      return _laborBreakdown.total;
+    }
+    final qty = _asDouble(_qtyController.text);
+    final price = _asDouble(_priceController.text);
+    return qty * price;
+  }
+
+  void _addResource({
+    required OfferLaborResourceOption? selected,
+    required List<OfferLaborResourceUsage> source,
+    required void Function(List<OfferLaborResourceUsage>) update,
+    bool hoursOnly = false,
+  }) {
+    if (selected == null) return;
+    final next = [...source];
+    next.add(
+      OfferLaborResourceUsage(
+        resourceId: selected.id,
+        name: selected.name,
+        hours: 0,
+        days: 0,
+        hourlyRate: selected.defaultHourlyRate,
+        dailyRate: hoursOnly ? 0 : selected.defaultDailyRate,
+      ),
+    );
+    setState(() => update(next));
+  }
+
+  void _updateResource(
+    List<OfferLaborResourceUsage> source,
+    int index,
+    OfferLaborResourceUsage nextRow,
+    void Function(List<OfferLaborResourceUsage>) update,
+  ) {
+    if (index < 0 || index >= source.length) return;
+    final next = [...source];
+    next[index] = nextRow;
+    setState(() => update(next));
+  }
+
+  void _deleteResource(
+    List<OfferLaborResourceUsage> source,
+    int index,
+    void Function(List<OfferLaborResourceUsage>) update,
+  ) {
+    if (index < 0 || index >= source.length) return;
+    final removed = source[index];
+    final next = [...source]..removeAt(index);
+    final isPersonalList = identical(source, _personalResources);
+    setState(() {
+      update(next);
+      if (isPersonalList) {
+        _personalSourceById.remove(removed.resourceId);
+      }
+    });
+  }
+
+  Widget _resourceSection({
+    required String title,
+    required List<OfferLaborResourceOption> options,
+    required List<OfferLaborResourceUsage> rows,
+    required String? selectedId,
+    required ValueChanged<String?> onSelectedChanged,
+    required void Function(List<OfferLaborResourceUsage>) onRowsChanged,
+    bool hoursOnly = false,
+    bool readOnlyHourlyRate = false,
+    bool readOnlySecondaryRate = false,
+    String addButtonLabel = 'Adaugă',
+    VoidCallback? onAddPressed,
+    String Function(OfferLaborResourceUsage row)? sourceLabelBuilder,
+    String? emptyRateMessage,
+    String hoursLabel = 'Ore',
+    String secondaryUsageLabel = 'Zile',
+    String hourlyRateLabel = 'Cost/ora',
+    String secondaryRateLabel = 'Cost/zi',
+    String Function(OfferLaborResourceUsage row)? metadataLabelBuilder,
+    String? metadataFieldLabel,
+  }) {
+    final selected = options
+        .where((item) => item.id == selectedId)
+        .fold<OfferLaborResourceOption?>(null, (prev, item) => prev ?? item);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: selectedId,
+                decoration:
+                    const InputDecoration(labelText: 'Selectează resursa'),
+                items: options
+                    .map(
+                      (item) => DropdownMenuItem<String>(
+                        value: item.id,
+                        child: Text(item.name),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: onSelectedChanged,
+              ),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: options.isEmpty
+                  ? null
+                  : (onAddPressed ??
+                      () => _addResource(
+                            selected: selected,
+                            source: rows,
+                            update: onRowsChanged,
+                            hoursOnly: hoursOnly,
+                          )),
+              icon: const Icon(Icons.add),
+              label: Text(addButtonLabel),
+            ),
+          ],
+        ),
+        if (rows.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 4, bottom: 4),
+            child: Text('Nu există resurse selectate.'),
+          ),
+        ...List.generate(rows.length, (index) {
+          final row = rows[index];
+          return Card(
+            margin: const EdgeInsets.only(top: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(row.name),
+                            if (sourceLabelBuilder != null)
+                              Text(
+                                'Sursa: ${sourceLabelBuilder(row)}',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            if (metadataLabelBuilder != null &&
+                                (metadataFieldLabel ?? '').trim().isNotEmpty)
+                              Text(
+                                '${metadataFieldLabel!.trim()}: ${metadataLabelBuilder(row)}',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => _deleteResource(
+                          rows,
+                          index,
+                          onRowsChanged,
+                        ),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: row.hours.toStringAsFixed(2),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: InputDecoration(labelText: hoursLabel),
+                          onChanged: (value) => _updateResource(
+                            rows,
+                            index,
+                            row.copyWith(hours: _asDouble(value)),
+                            onRowsChanged,
+                          ),
+                        ),
+                      ),
+                      if (!hoursOnly) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextFormField(
+                            initialValue: row.days.toStringAsFixed(2),
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: InputDecoration(
+                              labelText: secondaryUsageLabel,
+                            ),
+                            onChanged: (value) => _updateResource(
+                              rows,
+                              index,
+                              row.copyWith(days: _asDouble(value)),
+                              onRowsChanged,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: readOnlyHourlyRate
+                            ? TextFormField(
+                              textCapitalization: TextCapitalization.sentences,
+                                initialValue: row.hourlyRate.toStringAsFixed(2),
+                                readOnly: true,
+                                decoration: InputDecoration(
+                                  labelText: hourlyRateLabel,
+                                ),
+                              )
+                            : TextFormField(
+                                initialValue: row.hourlyRate.toStringAsFixed(2),
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                  decimal: true,
+                                ),
+                                decoration: InputDecoration(
+                                  labelText: hourlyRateLabel,
+                                ),
+                                onChanged: (value) => _updateResource(
+                                  rows,
+                                  index,
+                                  row.copyWith(
+                                    hourlyRate: _asDouble(value),
+                                    dailyRate: hoursOnly ? 0 : row.dailyRate,
+                                    days: hoursOnly ? 0 : row.days,
+                                  ),
+                                  onRowsChanged,
+                                ),
+                              ),
+                      ),
+                      if (!hoursOnly) ...[
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: readOnlySecondaryRate
+                              ? TextFormField(
+                                textCapitalization: TextCapitalization.sentences,
+                                  initialValue:
+                                      row.dailyRate.toStringAsFixed(2),
+                                  readOnly: true,
+                                  decoration: InputDecoration(
+                                    labelText: secondaryRateLabel,
+                                  ),
+                                )
+                              : TextFormField(
+                                  initialValue:
+                                      row.dailyRate.toStringAsFixed(2),
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                                  decoration: InputDecoration(
+                                    labelText: secondaryRateLabel,
+                                  ),
+                                  onChanged: (value) => _updateResource(
+                                    rows,
+                                    index,
+                                    row.copyWith(dailyRate: _asDouble(value)),
+                                    onRowsChanged,
+                                  ),
+                                ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  if ((hoursOnly && row.hourlyRate <= 0) ||
+                      (!hoursOnly && row.hourlyRate <= 0 && row.dailyRate <= 0))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        emptyRateMessage ??
+                            'Costul/ora nu este disponibil in datele curente.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      'Total resursa: ${(hoursOnly ? (row.hours * row.hourlyRate) : row.total).toStringAsFixed(2)}',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final total = _lineTotal;
+    final laborBreakdown = _laborBreakdown;
+    return AlertDialog(
+      title:
+          Text(widget.existing == null ? 'Adaugă poziție' : 'Editează poziție'),
+      content: SizedBox(
+        width: 760,
+        child: SingleChildScrollView(
+          primary: false,
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_lineType == OfferLineType.material)
+                  Autocomplete<MasterMaterial>(
+                    displayStringForOption: (item) =>
+                        '${item.name} (${item.unit})',
+                    optionsBuilder: (textEditingValue) {
+                      return _materialsCatalogService.suggestByName(
+                        _materialCatalog,
+                        textEditingValue.text,
+                        minChars: 1,
+                        maxItems: 10,
+                      );
+                    },
+                    onSelected: _applyCatalogMaterial,
+                    fieldViewBuilder:
+                        (context, controller, focusNode, onFieldSubmitted) {
+                      if (_nameController.text.trim().isNotEmpty &&
+                          controller.text.trim().isEmpty) {
+                        controller.text = _nameController.text.trim();
+                      }
+                      return TextFormField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: controller,
+                        focusNode: focusNode,
+                        decoration: const InputDecoration(
+                          labelText: 'Denumire (nomenclator + produs nou)',
+                          hintText:
+                              'Tastează pentru sugestii sau continuă pentru produs nou',
+                        ),
+                        validator: (value) {
+                          if ((value ?? '').trim().isEmpty) {
+                            return 'Completează denumirea poziției.';
+                          }
+                          return null;
+                        },
+                        onChanged: (value) {
+                          _nameController.text = value;
+                          _searchTemplate(value);
+                          _materialId = '';
+                        },
+                        onFieldSubmitted: (_) => onFieldSubmitted(),
+                      );
+                    },
+                    optionsViewBuilder: (context, onSelected, options) {
+                      final rows = options.toList(growable: false);
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(8),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxHeight: 280,
+                              minWidth: 420,
+                              maxWidth: 640,
+                            ),
+                            child: ListView.builder(
+                              shrinkWrap: true,
+                              padding: EdgeInsets.zero,
+                              itemCount: rows.length,
+                              itemBuilder: (context, index) {
+                                final item = rows[index];
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(item.name),
+                                  subtitle: Text(
+                                    'UM: ${item.unit} • Preț: ${item.price.toStringAsFixed(2)}',
+                                  ),
+                                  onTap: () => onSelected(item),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  )
+                else
+                  TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _nameController,
+                    decoration: const InputDecoration(labelText: 'Denumire'),
+                    validator: (value) {
+                      if ((value ?? '').trim().isEmpty) {
+                        return 'Completează denumirea poziției.';
+                      }
+                      return null;
+                    },
+                    onChanged: (value) => _searchTemplate(value),
+                  ),
+                _buildTemplatePreview(context),
+                const SizedBox(height: 4),
+                DropdownButtonFormField<OfferLineType>(
+                  initialValue: _lineType,
+                  items: OfferLineType.values
+                      .where((item) => item != OfferLineType.text)
+                      .map(
+                        (item) => DropdownMenuItem<OfferLineType>(
+                          value: item,
+                          child: Text(item.label),
+                        ),
+                      )
+                      .toList(growable: false),
+                  decoration: const InputDecoration(labelText: 'Tip linie'),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _lineType = value;
+                      _unitController.text = value == OfferLineType.manopera
+                          ? 'poz'
+                          : (_unitController.text.trim().isEmpty
+                              ? 'buc'
+                              : _unitController.text.trim());
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _descriptionController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Descriere'),
+                ),
+                const SizedBox(height: 8),
+                if (_lineType == OfferLineType.material)
+                  Column(
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Sursa materiale: $_materialsDataSourceLabel'
+                          '${(_materialsDataSourceLabel == 'local' && (_materialsFallbackReason ?? '').trim().isNotEmpty) ? ' • fallback cloud' : ''}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextFormField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: _unitController,
+                              decoration:
+                                  const InputDecoration(labelText: 'UM'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _qtyController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                              decoration:
+                                  const InputDecoration(labelText: 'Cantitate'),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              controller: _priceController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                decimal: true,
+                              ),
+                              decoration: const InputDecoration(
+                                  labelText: 'Preț unitar'),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                if (_lineType == OfferLineType.manopera) ...[
+                  _resourceSection(
+                    title: 'Personal',
+                    options: widget.personnelOptions,
+                    rows: _personalResources,
+                    selectedId: _selectedPersonalId,
+                    onSelectedChanged: (value) =>
+                        setState(() => _selectedPersonalId = value),
+                    onRowsChanged: (rows) => _personalResources = rows,
+                    hoursOnly: true,
+                    addButtonLabel: 'Adaugă angajat',
+                    onAddPressed: _addSelectedPersonal,
+                    sourceLabelBuilder: (row) =>
+                        _personalSourceById[row.resourceId] ?? 'manual',
+                    metadataFieldLabel: 'Sursa cost',
+                    metadataLabelBuilder: (row) =>
+                        _personById(row.resourceId)?.metaLabel.trim().isEmpty ??
+                                true
+                            ? '-'
+                            : _personById(row.resourceId)!.metaLabel.trim(),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _selectedTeamId,
+                          decoration: const InputDecoration(
+                            labelText: 'Echipe',
+                          ),
+                          items: widget.teamOptions
+                              .map(
+                                (team) => DropdownMenuItem<String>(
+                                  value: team.id,
+                                  child: Text(team.name),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) =>
+                              setState(() => _selectedTeamId = value),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: widget.teamOptions.isEmpty
+                            ? null
+                            : _addSelectedTeamMembers,
+                        icon: const Icon(Icons.group_add_outlined),
+                        label: const Text('Adaugă echipă'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _resourceSection(
+                    title: 'Autoturisme',
+                    options: widget.vehicleOptions,
+                    rows: _vehicleResources,
+                    selectedId: _selectedVehicleId,
+                    onSelectedChanged: (value) =>
+                        setState(() => _selectedVehicleId = value),
+                    onRowsChanged: (rows) =>
+                        _vehicleResources = _normalizeVehicleResources(rows),
+                    readOnlyHourlyRate: true,
+                    readOnlySecondaryRate: true,
+                    hoursLabel: 'Ore utilizare',
+                    secondaryUsageLabel: 'Km utilizare',
+                    hourlyRateLabel: 'Cost/ora',
+                    secondaryRateLabel: 'Cost/km',
+                    metadataFieldLabel: 'Sursa cost',
+                    metadataLabelBuilder: _vehicleCostSourceLabel,
+                    emptyRateMessage:
+                        'Nu există cost valid pentru autoturism în datele curente. Valorile lipsă rămân 0.00 până la completarea datelor sursă.',
+                  ),
+                  const SizedBox(height: 10),
+                  _resourceSection(
+                    title: 'Pachete scule',
+                    options: widget.toolPackageOptions,
+                    rows: _toolResources,
+                    selectedId: _selectedToolId,
+                    onSelectedChanged: (value) =>
+                        setState(() => _selectedToolId = value),
+                    onRowsChanged: (rows) =>
+                        _toolResources = _normalizeToolResources(rows),
+                    hoursOnly: true,
+                    readOnlyHourlyRate: true,
+                    metadataFieldLabel: 'Sursa cost',
+                    metadataLabelBuilder: (row) =>
+                        (_toolById(row.resourceId)?.metaLabel ?? '')
+                                .trim()
+                                .isEmpty
+                            ? '-'
+                            : _toolById(row.resourceId)!.metaLabel.trim(),
+                    emptyRateMessage:
+                        'Nu există cost/oră valid în modulul Scule/Pachete scule pentru acest pachet. Totalul rămâne 0.00 până la completarea datelor sursă.',
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _laborDaysController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration:
+                              const InputDecoration(labelText: 'Zile diurna'),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _laborPerDiemController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                              labelText: 'Valoare diurna/zi'),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _laborNightsController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration:
+                              const InputDecoration(labelText: 'Nopti cazare'),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _laborLodgingController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration:
+                              const InputDecoration(labelText: 'Cazare/noapte'),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Subtotal personal: ${laborBreakdown.costPersonal.toStringAsFixed(2)} | '
+                      'Autoturisme: ${laborBreakdown.costAutoturisme.toStringAsFixed(2)} | '
+                      'Scule: ${laborBreakdown.costScule.toStringAsFixed(2)}\n'
+                      'Diurna: ${laborBreakdown.costDiurna.toStringAsFixed(2)} | '
+                      'Cazare: ${laborBreakdown.costCazare.toStringAsFixed(2)}',
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Total linie: ${total.toStringAsFixed(2)}'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) return;
+            final quantity = _asDouble(_qtyController.text);
+            final unitPrice = _asDouble(_priceController.text);
+            final laborDays = _asDouble(_laborDaysController.text);
+            final laborPerDiem = _asDouble(_laborPerDiemController.text);
+            final laborNights = _asDouble(_laborNightsController.text);
+            final laborLodging = _asDouble(_laborLodgingController.text);
+            final breakdown = _laborBreakdown;
+            final personalHours = _personalResources.fold<double>(
+              0,
+              (sum, item) => sum + item.hours,
+            );
+            final avgPersonalRate = personalHours > 0
+                ? _personalResources.fold<double>(
+                      0,
+                      (sum, item) => sum + (item.hours * item.hourlyRate),
+                    ) /
+                    personalHours
+                : 0.0;
+
+            final item = OfferLineItem(
+              id: widget.existing?.id ??
+                  'line-${DateTime.now().microsecondsSinceEpoch}',
+              name: _nameController.text.trim(),
+              description: _descriptionController.text.trim(),
+              unit: _unitController.text.trim().isEmpty
+                  ? (_lineType == OfferLineType.manopera ? 'poz' : '-')
+                  : _unitController.text.trim(),
+              quantity: _lineType == OfferLineType.manopera ? 1 : quantity,
+              unitPrice: _lineType == OfferLineType.manopera
+                  ? breakdown.total
+                  : unitPrice,
+              lineTotal: _lineType == OfferLineType.manopera
+                  ? breakdown.total
+                  : (quantity * unitPrice),
+              sortOrder: widget.existing?.sortOrder ?? widget.initialSortOrder,
+              lineType: _lineType,
+              materialId:
+                  _lineType == OfferLineType.material ? _materialId : '',
+              laborHours:
+                  _lineType == OfferLineType.manopera ? personalHours : 0,
+              laborHourlyRate:
+                  _lineType == OfferLineType.manopera ? avgPersonalRate : 0,
+              laborPerDiemDays:
+                  _lineType == OfferLineType.manopera ? laborDays : 0,
+              laborPerDiemPerDay:
+                  _lineType == OfferLineType.manopera ? laborPerDiem : 0,
+              laborLodgingNights:
+                  _lineType == OfferLineType.manopera ? laborNights : 0,
+              laborLodgingPerNight:
+                  _lineType == OfferLineType.manopera ? laborLodging : 0,
+              laborPersonal: _lineType == OfferLineType.manopera
+                  ? _personalResources
+                  : const <OfferLaborResourceUsage>[],
+              laborVehicles: _lineType == OfferLineType.manopera
+                  ? _vehicleResources
+                  : const <OfferLaborResourceUsage>[],
+              laborToolPackages: _lineType == OfferLineType.manopera
+                  ? _toolResources
+                  : const <OfferLaborResourceUsage>[],
+            );
+            Navigator.of(context).pop(item);
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}

@@ -1,0 +1,3191 @@
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../core/document_file_service.dart';
+import '../../core/lookup_models.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/widgets/adaptive_side_panel_layout.dart';
+import '../../core/team_models.dart';
+import '../clients/add_client_quick_dialog.dart';
+import '../jobs/job_models.dart';
+import '../programari/appointment_models.dart';
+import '../registratura/registry_models.dart';
+import '../registratura/registry_service.dart';
+import '../../core/pdf_export_settings.dart';
+import 'travel_order_pdf_service.dart';
+import 'trip_models.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
+
+class HrDeplasariPage extends StatefulWidget {
+  const HrDeplasariPage({super.key, required this.repository});
+  final AppDataRepository repository;
+
+  @override
+  State<HrDeplasariPage> createState() => _HrDeplasariPageState();
+}
+
+class _HrDeplasariPageState extends State<HrDeplasariPage>
+    with SingleTickerProviderStateMixin {
+  // Chei SharedPreferences pentru persistența filtrelor
+  static const String _prefTripStatus = 'deplasari_trip_status_v1';
+  static const String _prefTripClient = 'deplasari_trip_client_v1';
+  static const String _prefTripTeam = 'deplasari_trip_team_v1';
+  static const String _prefTripFrom = 'deplasari_trip_from_v1';
+  static const String _prefTripTo = 'deplasari_trip_to_v1';
+  static const String _prefOrderStatus = 'deplasari_order_status_v1';
+  static const String _prefOrderFrom = 'deplasari_order_from_v1';
+  static const String _prefOrderTo = 'deplasari_order_to_v1';
+
+  RegistryService get _registryService => RegistryService(widget.repository);
+  late final TabController _tabs = TabController(length: 2, vsync: this);
+  bool _loading = true;
+
+  List<Trip> _trips = const [];
+  List<TravelOrder> _orders = const [];
+  List<LookupItem> _clients = const [];
+  List<EmployeeLookup> _employees = const [];
+  List<LookupItem> _vehicles = const [];
+  List<Team> _teams = const [];
+  List<Appointment> _appointments = const [];
+  List<_SourceRef> _jobs = const [];
+  List<_SourceRef> _tickets = const [];
+  String _tripDataSourceLabel = 'local_cache';
+  String _tripFallbackReason = '';
+  String _orderDataSourceLabel = 'local_cache';
+  String _orderFallbackReason = '';
+
+  TripStatus? _tripStatus;
+  String _tripClient = '';
+  String _tripTeam = '';
+  DateTime? _tripFrom;
+  DateTime? _tripTo;
+  TravelOrderStatus? _orderStatus;
+  DateTime? _orderFrom;
+  DateTime? _orderTo;
+  String _orderQuery = '';
+
+  String _companyName = '';
+  String _companyAddress = '';
+  String _companyPhone = '';
+  String _companyEmail = '';
+  String _companyCui = '';
+  String _companyTradeRegister = '';
+  String _companyBank = '';
+  String _companyIban = '';
+  String _companyContactName = '';
+  String _companyLogoBase64 = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs.addListener(() => mounted ? setState(() {}) : null);
+    _loadFilterPreferences();
+    _load();
+  }
+
+  Future<void> _loadFilterPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      final tripStatusName = prefs.getString(_prefTripStatus);
+      if (tripStatusName != null) {
+        try {
+          _tripStatus = TripStatus.values.firstWhere(
+            (e) => e.name == tripStatusName,
+          );
+        } catch (_) {}
+      }
+      _tripClient = prefs.getString(_prefTripClient) ?? '';
+      _tripTeam = prefs.getString(_prefTripTeam) ?? '';
+      final tripFromMs = prefs.getInt(_prefTripFrom);
+      if (tripFromMs != null) {
+        _tripFrom = DateTime.fromMillisecondsSinceEpoch(tripFromMs);
+      }
+      final tripToMs = prefs.getInt(_prefTripTo);
+      if (tripToMs != null) {
+        _tripTo = DateTime.fromMillisecondsSinceEpoch(tripToMs);
+      }
+      final orderStatusName = prefs.getString(_prefOrderStatus);
+      if (orderStatusName != null) {
+        try {
+          _orderStatus = TravelOrderStatus.values.firstWhere(
+            (e) => e.name == orderStatusName,
+          );
+        } catch (_) {}
+      }
+      final orderFromMs = prefs.getInt(_prefOrderFrom);
+      if (orderFromMs != null) {
+        _orderFrom = DateTime.fromMillisecondsSinceEpoch(orderFromMs);
+      }
+      final orderToMs = prefs.getInt(_prefOrderTo);
+      if (orderToMs != null) {
+        _orderTo = DateTime.fromMillisecondsSinceEpoch(orderToMs);
+      }
+    });
+  }
+
+  Future<void> _persistFilterPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      _tripStatus == null
+          ? prefs.remove(_prefTripStatus)
+          : prefs.setString(_prefTripStatus, _tripStatus!.name),
+      prefs.setString(_prefTripClient, _tripClient),
+      prefs.setString(_prefTripTeam, _tripTeam),
+      _tripFrom == null
+          ? prefs.remove(_prefTripFrom)
+          : prefs.setInt(_prefTripFrom, _tripFrom!.millisecondsSinceEpoch),
+      _tripTo == null
+          ? prefs.remove(_prefTripTo)
+          : prefs.setInt(_prefTripTo, _tripTo!.millisecondsSinceEpoch),
+      _orderStatus == null
+          ? prefs.remove(_prefOrderStatus)
+          : prefs.setString(_prefOrderStatus, _orderStatus!.name),
+      _orderFrom == null
+          ? prefs.remove(_prefOrderFrom)
+          : prefs.setInt(_prefOrderFrom, _orderFrom!.millisecondsSinceEpoch),
+      _orderTo == null
+          ? prefs.remove(_prefOrderTo)
+          : prefs.setInt(_prefOrderTo, _orderTo!.millisecondsSinceEpoch),
+    ]);
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final repo = widget.repository;
+    final trips = await repo.listTrips();
+    final orders = await repo.listTravelOrders();
+    final results = await Future.wait<Object>([
+      repo.listClientsLookup(),
+      repo.listEmployeesLookup(),
+      repo.listVehiclesLookup(),
+      repo.listTeams(),
+      repo.listAppointments(),
+      repo.listJobs(),
+      repo.listRegistryEntries(),
+      repo.loadCompanyProfile(),
+    ]);
+    final clients = results[0] as List<LookupItem>;
+    final employees = results[1] as List<EmployeeLookup>;
+    final vehicles = results[2] as List<LookupItem>;
+    final teams = results[3] as List<Team>;
+    final appointments = results[4] as List<Appointment>;
+    final jobs = results[5] as List<JobRecord>;
+    final registry = results[6] as List<RegistryEntry>;
+    final profile = results[7] as dynamic;
+    final localRepo = repo is LocalAppDataRepository ? repo : null;
+    if (!mounted) return;
+    setState(() {
+      _trips = trips;
+      _orders = orders;
+      _clients = clients;
+      _employees = employees;
+      _vehicles = vehicles;
+      _teams = teams;
+      _appointments = appointments;
+      _jobs = _buildJobRefs(jobs, registry, trips);
+      _tickets = _buildRefs(registry, trips, false);
+      _companyName = profile.companyName;
+      _companyAddress = profile.address;
+      _companyPhone = profile.phone;
+      _companyEmail = profile.email;
+      _companyCui = profile.cui;
+      _companyTradeRegister = profile.tradeRegister;
+      _companyBank = profile.bank;
+      _companyIban = profile.iban;
+      _companyContactName = profile.contactName;
+      _companyLogoBase64 = profile.logoBase64;
+      _tripDataSourceLabel =
+          localRepo?.lastTripsDataSourceLabel ?? _tripDataSourceLabel;
+      _tripFallbackReason =
+          localRepo?.lastTripsFallbackReason ?? _tripFallbackReason;
+      _orderDataSourceLabel =
+          localRepo?.lastTravelOrdersDataSourceLabel ?? _orderDataSourceLabel;
+      _orderFallbackReason =
+          localRepo?.lastTravelOrdersFallbackReason ?? _orderFallbackReason;
+      _loading = false;
+    });
+  }
+
+  List<_SourceRef> _buildRefs(
+      List<RegistryEntry> entries, List<Trip> trips, bool jobs) {
+    final map = <String, _SourceRef>{};
+    for (final e in entries) {
+      final id = jobs ? e.jobId : e.ticketId;
+      if (id.trim().isEmpty) continue;
+      map[id] = _SourceRef(id, e.documentTitle.isEmpty ? id : e.documentTitle,
+          e.clientId, e.recipientName, e.documentTitle);
+    }
+    for (final t in trips) {
+      final id = jobs ? t.jobId : t.ticketId;
+      if (id.trim().isEmpty) continue;
+      map[id] = _SourceRef(id, t.purpose.isEmpty ? id : t.purpose, t.clientId,
+          t.destinationLocation, t.purpose);
+    }
+    return map.values.toList()
+      ..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+  }
+
+  List<_SourceRef> _buildJobRefs(
+    List<JobRecord> jobs,
+    List<RegistryEntry> entries,
+    List<Trip> trips,
+  ) {
+    final map = <String, _SourceRef>{};
+    for (final job in jobs) {
+      final id = job.id.trim();
+      if (id.isEmpty) continue;
+      final code = job.jobCode.trim();
+      final title = job.title.trim();
+      final label = code.isEmpty
+          ? (title.isEmpty ? id : title)
+          : (title.isEmpty ? code : '$code - $title');
+      map[id] = _SourceRef(
+        id,
+        label,
+        job.clientId.trim(),
+        job.location.trim(),
+        title,
+      );
+    }
+    for (final fallback in _buildRefs(entries, trips, true)) {
+      map.putIfAbsent(fallback.id, () => fallback);
+    }
+    final rows = map.values.toList();
+    rows.sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+    return rows;
+  }
+
+  List<_SourceRef> _jobOptionsForClient(String clientId) {
+    final normalizedClientId = clientId.trim();
+    if (normalizedClientId.isEmpty) {
+      return _jobs;
+    }
+    return _jobs
+        .where((job) => job.clientId.trim() == normalizedClientId)
+        .toList(growable: false);
+  }
+
+  Team? _team(String id) =>
+      _teams.where((t) => t.id == id).fold<Team?>(null, (p, e) => p ?? e);
+  EmployeeLookup? _employee(String id) => _employees
+      .where((e) => e.id == id)
+      .fold<EmployeeLookup?>(null, (p, e) => p ?? e);
+  LookupItem? _vehicle(String id) => _vehicles
+      .where((v) => v.id == id)
+      .fold<LookupItem?>(null, (p, e) => p ?? e);
+  LookupItem? _client(String id) => _clients
+      .where((v) => v.id == id)
+      .fold<LookupItem?>(null, (p, e) => p ?? e);
+
+  List<String> _tripVehicleIds(Trip trip) {
+    if (trip.vehicleIds.isNotEmpty) {
+      return trip.vehicleIds
+          .map((id) => id.trim())
+          .where((id) => id.isNotEmpty)
+          .toList(growable: false);
+    }
+    final legacy = trip.vehicleId.trim();
+    if (legacy.isEmpty) {
+      return const <String>[];
+    }
+    return <String>[legacy];
+  }
+
+  List<String> _vehicleNames(List<String> vehicleIds) {
+    return vehicleIds
+        .map((id) => _vehicle(id)?.name ?? id)
+        .where((name) => name.trim().isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<void> _openTripForm([Trip? current]) async {
+    final source = ValueNotifier<TripSourceType>(
+        current?.sourceType ?? TripSourceType.manual);
+    final client = ValueNotifier<String>(current?.clientId ?? '');
+    final appointment = ValueNotifier<String>(current?.appointmentId ?? '');
+    final job = ValueNotifier<String>(current?.jobId ?? '');
+    final ticket = ValueNotifier<String>(current?.ticketId ?? '');
+    final team = ValueNotifier<String>(current?.teamId ?? '');
+    final selectedVehicles = ValueNotifier<List<String>>(
+      current == null ? const <String>[] : _tripVehicleIds(current),
+    );
+    final status =
+        ValueNotifier<TripStatus>(current?.status ?? TripStatus.draft);
+    final selectedEmployees =
+        ValueNotifier<List<String>>([...?current?.assignedEmployeeIds]);
+    final origin = TextEditingController(text: current?.originLocation ?? '');
+    final destination =
+        TextEditingController(text: current?.destinationLocation ?? '');
+    final purpose = TextEditingController(text: current?.purpose ?? '');
+    final estKm = TextEditingController(
+        text: (current?.estimatedKm ?? 0).toStringAsFixed(2));
+    final realKm = TextEditingController(
+        text: current?.actualKm == null
+            ? ''
+            : current!.actualKm!.toStringAsFixed(2));
+    final notes = TextEditingController(text: current?.notes ?? '');
+    DateTime dep = current?.departureDate ?? DateTime.now();
+    DateTime ret = current?.returnDateEstimated ?? DateTime.now();
+    DateTime? realRet = current?.returnDateActual;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title:
+              Text(current == null ? 'Adauga deplasare' : 'Editeaza deplasare'),
+          content: SizedBox(
+            width: 760,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _formSection(
+                    context,
+                    title: 'Context si legaturi',
+                    child: Column(
+                      children: [
+                        _enumField(
+                          'Sursa',
+                          source.value,
+                          TripSourceType.values,
+                          (v) => v.label,
+                          (v) {
+                            if (v != null) {
+                              setDialog(() => source.value = v);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        _lookupFieldWithAddButton(
+                          'Client',
+                          client.value,
+                          _clients.map((e) => MapEntry(e.id, e.name)).toList(),
+                          (v) => setDialog(() {
+                            client.value = v;
+                            final availableJobs = _jobOptionsForClient(v);
+                            if (job.value.trim().isNotEmpty &&
+                                !availableJobs
+                                    .any((item) => item.id == job.value)) {
+                              job.value = '';
+                            }
+                          }),
+                          isClientField: true,
+                          onAddPressed: () async {
+                            final newClient = await AddClientQuickDialog.show(
+                              context: context,
+                              repository: widget.repository,
+                            );
+                            if (newClient != null && mounted) {
+                              await _load();
+                              if (mounted) {
+                                setDialog(() {
+                                  client.value = newClient.id;
+                                });
+                              }
+                            }
+                          },
+                        ),
+                        if (source.value == TripSourceType.appointment) ...[
+                          const SizedBox(height: 12),
+                          _lookupField(
+                            'Programare',
+                            appointment.value,
+                            _appointments
+                                .map((a) => MapEntry(
+                                    a.id, a.title.isEmpty ? a.id : a.title))
+                                .toList(),
+                            (id) {
+                              Appointment? a;
+                              for (final item in _appointments) {
+                                if (item.id == id) {
+                                  a = item;
+                                  break;
+                                }
+                              }
+                              setDialog(() {
+                                appointment.value = id;
+                                if (a != null) {
+                                  if (a.clientId.isNotEmpty) {
+                                    client.value = a.clientId;
+                                  }
+                                  if (destination.text.trim().isEmpty) {
+                                    destination.text = a.location;
+                                  }
+                                  if (purpose.text.trim().isEmpty) {
+                                    purpose.text = a.title;
+                                  }
+                                }
+                              });
+                            },
+                          ),
+                        ],
+                        if (source.value == TripSourceType.job) ...[
+                          const SizedBox(height: 12),
+                          Builder(
+                            builder: (_) {
+                              final availableJobs =
+                                  _jobOptionsForClient(client.value);
+                              final helperText = client.value.trim().isEmpty
+                                  ? (_jobs.isEmpty
+                                      ? 'Nu exista lucrari disponibile momentan.'
+                                      : 'Poti selecta o lucrare din toata lista sau poti alege mai intai clientul pentru filtrare.')
+                                  : (availableJobs.isEmpty
+                                      ? 'Nu exista lucrari pentru clientul selectat.'
+                                      : 'Sunt afisate lucrarile relevante pentru clientul selectat.');
+                              return DropdownButtonFormField<String>(
+                                initialValue: job.value.trim().isNotEmpty &&
+                                        availableJobs
+                                            .any((item) => item.id == job.value)
+                                    ? job.value
+                                    : null,
+                                items: availableJobs
+                                    .map(
+                                      (item) => DropdownMenuItem<String>(
+                                        value: item.id,
+                                        child: Text(item.label),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: availableJobs.isEmpty
+                                    ? null
+                                    : (id) {
+                                        final selectedId = (id ?? '').trim();
+                                        final ref = availableJobs
+                                            .where((x) => x.id == selectedId)
+                                            .fold<_SourceRef?>(
+                                                null, (p, e) => p ?? e);
+                                        setDialog(() {
+                                          job.value = selectedId;
+                                          if (ref != null) {
+                                            if (ref.clientId.isNotEmpty) {
+                                              client.value = ref.clientId;
+                                            }
+                                            if (destination.text
+                                                .trim()
+                                                .isEmpty) {
+                                              destination.text =
+                                                  ref.destination;
+                                            }
+                                            if (purpose.text.trim().isEmpty) {
+                                              purpose.text = ref.purpose;
+                                            }
+                                          }
+                                        });
+                                      },
+                                decoration: InputDecoration(
+                                  labelText: 'Lucrare',
+                                  helperText: helperText,
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                        if (source.value == TripSourceType.ticket) ...[
+                          const SizedBox(height: 12),
+                          _lookupField(
+                            'Reclamatie',
+                            ticket.value,
+                            _tickets
+                                .map((e) => MapEntry(e.id, e.label))
+                                .toList(),
+                            (id) {
+                              final ref = _tickets
+                                  .where((x) => x.id == id)
+                                  .fold<_SourceRef?>(null, (p, e) => p ?? e);
+                              setDialog(() {
+                                ticket.value = id;
+                                if (ref != null) {
+                                  if (ref.clientId.isNotEmpty) {
+                                    client.value = ref.clientId;
+                                  }
+                                  if (destination.text.trim().isEmpty) {
+                                    destination.text = ref.destination;
+                                  }
+                                  if (purpose.text.trim().isEmpty) {
+                                    purpose.text = ref.purpose;
+                                  }
+                                }
+                              });
+                            },
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _formSection(
+                    context,
+                    title: 'Alocare si perioada',
+                    child: Column(
+                      children: [
+                        _lookupField(
+                          'Echipa',
+                          team.value,
+                          _teams.map((e) => MapEntry(e.id, e.name)).toList(),
+                          (id) {
+                            setDialog(() => team.value = id);
+                            final t = _team(id);
+                            if (t != null && t.memberEmployeeIds.isNotEmpty) {
+                              selectedEmployees.value = t.memberEmployeeIds
+                                  .where((eid) => _employee(eid) != null)
+                                  .toList();
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final picked =
+                                  await _pickEmployees(selectedEmployees.value);
+                              if (picked != null) {
+                                setDialog(
+                                  () => selectedEmployees.value = picked,
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.groups_2_outlined),
+                            label: Text(
+                              selectedEmployees.value.isEmpty
+                                  ? 'Selecteaza angajatii participanti'
+                                  : 'Angajati selectati: ${selectedEmployees.value.length}',
+                            ),
+                          ),
+                        ),
+                        if (selectedEmployees.value.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: selectedEmployees.value
+                                  .map(
+                                    (id) => Chip(
+                                      label: Text(_employee(id)?.name ?? id),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final picked =
+                                  await _pickVehicles(selectedVehicles.value);
+                              if (picked != null) {
+                                setDialog(
+                                  () => selectedVehicles.value = picked,
+                                );
+                              }
+                            },
+                            icon: const Icon(Icons.directions_car_outlined),
+                            label: Text(
+                              selectedVehicles.value.isEmpty
+                                  ? 'Selecteaza autoturisme'
+                                  : 'Autoturisme selectate: ${selectedVehicles.value.length}',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            selectedVehicles.value.isEmpty
+                                ? 'Nu este selectat niciun autoturism.'
+                                : 'Autoturisme selectate:',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                        if (selectedVehicles.value.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: selectedVehicles.value
+                                  .map(
+                                    (id) => InputChip(
+                                      label: Text(_vehicle(id)?.name ?? id),
+                                      onDeleted: () => setDialog(
+                                        () => selectedVehicles.value =
+                                            selectedVehicles.value
+                                                .where((item) => item != id)
+                                                .toList(growable: false),
+                                      ),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            SizedBox(
+                              width: 320,
+                              child: _dateBtn(
+                                'Plecare',
+                                dep,
+                                (d) => setDialog(() => dep = d),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 320,
+                              child: _dateBtn(
+                                'Retur estimat',
+                                ret,
+                                (d) => setDialog(() => ret = d),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 320,
+                              child: _dateBtn(
+                                'Retur real',
+                                realRet,
+                                (d) => setDialog(() => realRet = d),
+                                optional: true,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Perioada estimata: ${_days(dep, ret)} zile',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _formSection(
+                    context,
+                    title: 'Locatie, costuri si status',
+                    child: Column(
+                      children: [
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: origin,
+                          decoration: const InputDecoration(
+                            labelText: 'Locatie plecare',
+                            helperText: 'Punctul de plecare al echipei',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: destination,
+                          decoration: const InputDecoration(
+                            labelText: 'Locatie destinatie',
+                            helperText: 'Adresa sau locatia deplasarii',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: purpose,
+                          decoration: const InputDecoration(
+                            labelText: 'Scop',
+                            helperText:
+                                'Lucrare, programare sau context operational',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            SizedBox(
+                              width: 220,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: estKm,
+                                decoration: const InputDecoration(
+                                  labelText: 'Km estimati',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 220,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: realKm,
+                                decoration: const InputDecoration(
+                                  labelText: 'Km reali',
+                                  helperText: 'Opțional, după închidere',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 220,
+                              child: _enumField(
+                                'Status',
+                                status.value,
+                                TripStatus.values,
+                                (v) => v.label,
+                                (v) {
+                                  if (v != null) {
+                                    setDialog(() => status.value = v);
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _formSection(
+                    context,
+                    title: 'Observatii',
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: notes,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Observatii',
+                        helperText:
+                            'Informatii utile pentru deplasare, echipa sau documente',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(dialogCtx).pop(),
+                child: const Text('Renunță')),
+            FilledButton(
+              onPressed: () async {
+                final src = source.value;
+                final trip = Trip(
+                  id: current?.id ??
+                      DateTime.now().microsecondsSinceEpoch.toString(),
+                  tripNumber: current?.tripNumber ?? '',
+                  sourceType: src,
+                  sourceId: src == TripSourceType.appointment
+                      ? appointment.value
+                      : (src == TripSourceType.job
+                          ? job.value
+                          : (src == TripSourceType.ticket ? ticket.value : '')),
+                  clientId: client.value,
+                  jobId: src == TripSourceType.job ? job.value : '',
+                  appointmentId: src == TripSourceType.appointment
+                      ? appointment.value
+                      : '',
+                  ticketId: src == TripSourceType.ticket ? ticket.value : '',
+                  originLocation: origin.text.trim(),
+                  destinationLocation: destination.text.trim(),
+                  departureDate: dep,
+                  returnDateEstimated: ret,
+                  returnDateActual: realRet,
+                  purpose: purpose.text.trim(),
+                  teamId: team.value,
+                  assignedEmployeeIds: selectedEmployees.value,
+                  vehicleId: selectedVehicles.value.isEmpty
+                      ? ''
+                      : selectedVehicles.value.first,
+                  vehicleIds: selectedVehicles.value,
+                  estimatedKm: _num(estKm.text),
+                  actualKm:
+                      realKm.text.trim().isEmpty ? null : _num(realKm.text),
+                  status: status.value,
+                  notes: notes.text.trim(),
+                );
+                await widget.repository.saveTrip(trip);
+                if (!mounted || !dialogCtx.mounted) return;
+                Navigator.of(dialogCtx).pop();
+                await _load();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Deplasarea a fost salvata.')));
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<List<String>?> _pickEmployees(List<String> selectedNow) =>
+      showDialog<List<String>>(
+        context: context,
+        builder: (dialogCtx) {
+          final selected = <String>{...selectedNow};
+          return StatefulBuilder(
+            builder: (context, setDialog) => AlertDialog(
+              title: const Text('Selecteaza angajati'),
+              content: SizedBox(
+                width: 420,
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _employees
+                      .map((e) => CheckboxListTile(
+                            value: selected.contains(e.id),
+                            onChanged: (v) => setDialog(() => v == true
+                                ? selected.add(e.id)
+                                : selected.remove(e.id)),
+                            title: Text(e.name),
+                            subtitle: Text(e.role),
+                          ))
+                      .toList(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.of(dialogCtx).pop(),
+                    child: const Text('Renunță')),
+                FilledButton(
+                    onPressed: () =>
+                        Navigator.of(dialogCtx).pop(selected.toList()),
+                    child: const Text('OK')),
+              ],
+            ),
+          );
+        },
+      );
+
+  Future<List<String>?> _pickVehicles(List<String> selectedNow) =>
+      showDialog<List<String>>(
+        context: context,
+        builder: (dialogCtx) {
+          final selected = <String>{...selectedNow};
+          return StatefulBuilder(
+            builder: (context, setDialog) => AlertDialog(
+              title: const Text('Selecteaza autoturisme'),
+              content: SizedBox(
+                width: 420,
+                child: _vehicles.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Text(
+                          'Nu exista autoturisme disponibile pentru selectare.',
+                        ),
+                      )
+                    : ListView(
+                        shrinkWrap: true,
+                        children: _vehicles
+                            .map(
+                              (vehicle) => CheckboxListTile(
+                                value: selected.contains(vehicle.id),
+                                onChanged: (checked) => setDialog(
+                                  () => checked == true
+                                      ? selected.add(vehicle.id)
+                                      : selected.remove(vehicle.id),
+                                ),
+                                title: Text(vehicle.name),
+                              ),
+                            )
+                            .toList(growable: false),
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Renunță'),
+                ),
+                FilledButton(
+                  onPressed: () =>
+                      Navigator.of(dialogCtx).pop(selected.toList()),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+
+  Future<void> _openOrderPicker() async {
+    String tripId = '';
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: const Text('Genereaza ordin din deplasare'),
+          content: SizedBox(
+            width: 520,
+            child: _lookupField(
+                'Deplasare',
+                tripId,
+                _trips
+                    .map((t) => MapEntry(t.id,
+                        '${t.tripNumber.isEmpty ? 'TRIP' : t.tripNumber} - ${t.destinationLocation}'))
+                    .toList(),
+                (v) => setDialog(() => tripId = v)),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(dialogCtx).pop(),
+                child: const Text('Renunță')),
+            FilledButton(
+              onPressed: tripId.isEmpty
+                  ? null
+                  : () async {
+                      final trip = _trips.where((t) => t.id == tripId).first;
+                      await _generateOrder(trip);
+                      if (!mounted || !dialogCtx.mounted) return;
+                      Navigator.of(dialogCtx).pop();
+                    },
+              child: const Text('Genereaza'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _generateOrder(Trip trip, {String employeeId = ''}) async {
+    final defaults = _orderRateDefaults(trip, employeeId: employeeId);
+    final periodStart = trip.departureDate;
+    final periodEnd = _normalizeOrderEnd(periodStart, trip.returnDateEstimated);
+    final companyLocation = _companyTravelLocation;
+    final order = TravelOrder(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      orderNumber: '',
+      issueDate: DateTime.now(),
+      tripId: trip.id,
+      employeeId: employeeId,
+      teamId: employeeId.isEmpty ? trip.teamId : '',
+      clientId: trip.clientId,
+      jobId: trip.jobId,
+      appointmentId: trip.appointmentId,
+      ticketId: trip.ticketId,
+      originLocation: trip.originLocation.trim().isEmpty
+          ? companyLocation
+          : trip.originLocation,
+      destinationLocation: trip.destinationLocation,
+      returnLocation: companyLocation,
+      periodStart: periodStart,
+      periodEnd: periodEnd,
+      purpose: trip.purpose,
+      transportType: 'Auto',
+      vehicleId: trip.vehicleId,
+      estimatedKm: trip.estimatedKm,
+      perDiemPerDay: defaults.$1,
+      lodgingPerDay: defaults.$2,
+      lodgingNightsCount: _lodgingNights(periodStart, periodEnd),
+      lodgings: const <TravelOrderLodging>[],
+      daysCount: _delegationDays(periodStart, periodEnd),
+      advanceAmount: 0,
+      issuedBy: kDefaultTravelOrderSigner,
+      approvedBy: kDefaultTravelOrderSigner,
+      status: TravelOrderStatus.emis,
+    );
+    await widget.repository.saveTravelOrder(order);
+    await _load();
+    if (!mounted) return;
+    _tabs.animateTo(1);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Ordinul a fost generat.')));
+  }
+
+  Future<void> _generateOrderForEmployee(Trip trip, String employeeId) {
+    return _generateOrder(trip, employeeId: employeeId);
+  }
+
+  Future<void> _quickUpdateTripStatus(Trip trip, TripStatus nextStatus) async {
+    if (trip.status == nextStatus) {
+      return;
+    }
+    await widget.repository.saveTrip(
+      trip.copyWith(status: nextStatus),
+    );
+    await _load();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text('Status deplasare actualizat: ${nextStatus.label}')),
+    );
+  }
+
+  Future<void> _quickUpdateOrderStatus(
+    TravelOrder order,
+    TravelOrderStatus nextStatus,
+  ) async {
+    if (order.status == nextStatus) {
+      return;
+    }
+    await widget.repository.saveTravelOrder(
+      order.copyWith(status: nextStatus),
+    );
+    await _load();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Status ordin actualizat: ${nextStatus.label}')),
+    );
+  }
+
+  PopupMenuButton<TripStatus> _buildTripStatusMenu(Trip trip) {
+    return PopupMenuButton<TripStatus>(
+      tooltip: 'Status deplasare',
+      onSelected: (value) => _quickUpdateTripStatus(trip, value),
+      itemBuilder: (_) {
+        return TripStatus.values
+            .map(
+              (status) => PopupMenuItem<TripStatus>(
+                value: status,
+                enabled: status != trip.status,
+                child: Row(
+                  children: [
+                    Icon(Icons.flag_outlined, color: _tripStatusColor(status)),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(status.label)),
+                  ],
+                ),
+              ),
+            )
+            .toList(growable: false);
+      },
+      icon: const Icon(Icons.flag_outlined),
+    );
+  }
+
+  PopupMenuButton<TravelOrderStatus> _buildOrderStatusMenu(TravelOrder order) {
+    return PopupMenuButton<TravelOrderStatus>(
+      tooltip: 'Status ordin',
+      onSelected: (value) => _quickUpdateOrderStatus(order, value),
+      itemBuilder: (_) {
+        return TravelOrderStatus.values
+            .map(
+              (status) => PopupMenuItem<TravelOrderStatus>(
+                value: status,
+                enabled: status != order.status,
+                child: Row(
+                  children: [
+                    Icon(Icons.flag_outlined, color: _orderStatusColor(status)),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(status.label)),
+                  ],
+                ),
+              ),
+            )
+            .toList(growable: false);
+      },
+      icon: const Icon(Icons.flag_outlined),
+    );
+  }
+
+  (double, double) _orderRateDefaults(
+    Trip trip, {
+    String employeeId = '',
+  }) {
+    final employeeIds = employeeId.trim().isNotEmpty
+        ? <String>[employeeId.trim()]
+        : (trip.assignedEmployeeIds
+                .map((id) => id.trim())
+                .where((id) => id.isNotEmpty)
+                .toList(growable: false)
+                .isNotEmpty
+            ? trip.assignedEmployeeIds
+                .map((id) => id.trim())
+                .where((id) => id.isNotEmpty)
+                .toList(growable: false)
+            : (_team(trip.teamId)?.memberEmployeeIds ?? const <String>[]));
+    if (employeeIds.isEmpty) {
+      return (0, 0);
+    }
+    double perDiem = 0;
+    double lodging = 0;
+    for (final id in employeeIds) {
+      final e = _employee(id);
+      if (e == null) continue;
+      perDiem += e.perDiemPerDay;
+      lodging += e.lodgingPerDay;
+    }
+    return (perDiem, lodging);
+  }
+
+  String get _companyTravelLocation => _companyAddress.trim().isNotEmpty
+      ? _companyAddress.trim()
+      : _companyName.trim();
+
+  String _resolveOrderLocation(
+    String value, {
+    String fallback = '-',
+  }) {
+    final trimmed = value.trim();
+    if (trimmed.isNotEmpty) {
+      return trimmed;
+    }
+    final fallbackTrimmed = fallback.trim();
+    return fallbackTrimmed.isEmpty ? '-' : fallbackTrimmed;
+  }
+
+  Future<TravelOrderLodging?> _showLodgingDialog({
+    TravelOrderLodging? current,
+  }) async {
+    final location = TextEditingController(text: current?.location ?? '');
+    final nights = TextEditingController(
+      text: current == null || current.nights == 0
+          ? ''
+          : current.nights.toString(),
+    );
+    final pricePerNight = TextEditingController(
+      text: current == null || current.pricePerNight == 0
+          ? ''
+          : current.pricePerNight.toStringAsFixed(2),
+    );
+    final totalCost = TextEditingController(
+      text: current == null || current.totalCost == 0
+          ? ''
+          : current.totalCost.toStringAsFixed(2),
+    );
+    final notes = TextEditingController(text: current?.notes ?? '');
+    DateTime? startDate = current?.startDate;
+    DateTime? endDate = current?.endDate;
+
+    void syncAutoNights() {
+      if (startDate == null || endDate == null) {
+        return;
+      }
+      final resolved = calculateTravelOrderLodgingNights(startDate!, endDate!);
+      nights.text = resolved.toString();
+    }
+
+    final result = await showDialog<TravelOrderLodging>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: Text(current == null ? 'Adauga cazare' : 'Editeaza cazare'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: location,
+                    decoration: const InputDecoration(
+                      labelText: 'Locatie cazare',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      SizedBox(
+                        width: 220,
+                        child: _dateBtn(
+                          'Inceput',
+                          startDate,
+                          (value) => setDialog(() {
+                            startDate = value;
+                            syncAutoNights();
+                          }),
+                          optional: true,
+                        ),
+                      ),
+                      SizedBox(
+                        width: 220,
+                        child: _dateBtn(
+                          'Sfarsit',
+                          endDate,
+                          (value) => setDialog(() {
+                            endDate = value;
+                            syncAutoNights();
+                          }),
+                          optional: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      SizedBox(
+                        width: 150,
+                        child: TextField(
+                          controller: nights,
+                          decoration: const InputDecoration(
+                            labelText: 'Numar nopti',
+                            helperText:
+                                'Calculat automat din perioada, dar editabil.',
+                          ),
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
+                      SizedBox(
+                        width: 150,
+                        child: TextField(
+                          controller: pricePerNight,
+                          decoration: const InputDecoration(
+                            labelText: 'Pret / noapte',
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 150,
+                        child: TextField(
+                          controller: totalCost,
+                          decoration: const InputDecoration(
+                            labelText: 'Cost total',
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: notes,
+                    minLines: 2,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Observatii',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (location.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text('Completeaza locatia cazarii.')),
+                  );
+                  return;
+                }
+                Navigator.of(dialogCtx).pop(
+                  TravelOrderLodging(
+                    location: location.text.trim(),
+                    startDate: startDate,
+                    endDate: endDate,
+                    nights: _num(nights.text).round(),
+                    pricePerNight: _num(pricePerNight.text),
+                    totalCost: _num(totalCost.text),
+                    notes: notes.text.trim(),
+                  ),
+                );
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    location.dispose();
+    nights.dispose();
+    pricePerNight.dispose();
+    totalCost.dispose();
+    notes.dispose();
+    return result;
+  }
+
+  Future<PdfVisualTemplate?> _pickPdfTemplate() {
+    final templates = [
+      (PdfVisualTemplate.classic, 'Clasic Business',
+          'Secțiuni cu bordură, header sobru în albastru închis.'),
+      (PdfVisualTemplate.modern, 'Modern',
+          'Header navy închis cu logo, secțiuni cu accent lateral albastru.'),
+      (PdfVisualTemplate.minimal, 'Minimal',
+          'Design aerisit, linii subțiri, grilă de câmpuri clară.'),
+    ];
+
+    return showDialog<PdfVisualTemplate>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Alege template PDF'),
+        contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        content: SizedBox(
+          width: 340,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: templates
+                .map((t) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.picture_as_pdf_outlined),
+                      title: Text(t.$2,
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      subtitle: Text(t.$3,
+                          style: const TextStyle(fontSize: 12)),
+                      onTap: () => Navigator.pop(ctx, t.$1),
+                    ))
+                .toList(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Anulează'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _exportOrder(TravelOrder order) async {
+    final template = await _pickPdfTemplate();
+    if (template == null) return;
+
+    final team = order.teamId.isEmpty
+        ? null
+        : LookupItem(id: order.teamId, name: _team(order.teamId)?.name ?? '');
+    final trip = _trips
+        .where((t) => t.id == order.tripId)
+        .fold<Trip?>(null, (p, e) => p ?? e);
+    final employee = _employee(order.employeeId);
+    final vehicle = _vehicle(order.vehicleId);
+    final clientName = _client(order.clientId)?.name ?? '';
+
+    String assigneeName = '';
+    if (employee != null) {
+      assigneeName = employee.name;
+    } else if (team != null && team.name.trim().isNotEmpty) {
+      assigneeName = 'Echipa: ${team.name}';
+    } else if (trip != null && trip.assignedEmployeeIds.isNotEmpty) {
+      final names = trip.assignedEmployeeIds
+          .map((id) => _employee(id)?.name ?? '')
+          .where((name) => name.trim().isNotEmpty)
+          .toList();
+      if (names.isNotEmpty) {
+        assigneeName = names.join(', ');
+      }
+    }
+
+    String sourceLabel = '';
+    if (trip != null) {
+      if (trip.sourceType == TripSourceType.appointment &&
+          trip.appointmentId.trim().isNotEmpty) {
+        final appointment = _appointments
+            .where((a) => a.id == trip.appointmentId)
+            .fold<Appointment?>(null, (p, e) => p ?? e);
+        sourceLabel = appointment?.title.trim() ?? '';
+      } else if (trip.sourceType == TripSourceType.job &&
+          trip.jobId.trim().isNotEmpty) {
+        sourceLabel = _jobs
+                .where((x) => x.id == trip.jobId)
+                .fold<_SourceRef?>(null, (p, e) => p ?? e)
+                ?.label
+                .trim() ??
+            '';
+      } else if (trip.sourceType == TripSourceType.ticket &&
+          trip.ticketId.trim().isNotEmpty) {
+        sourceLabel = _tickets
+                .where((x) => x.id == trip.ticketId)
+                .fold<_SourceRef?>(null, (p, e) => p ?? e)
+                ?.label
+                .trim() ??
+            '';
+      }
+      if (sourceLabel.isEmpty && trip.purpose.trim().isNotEmpty) {
+        sourceLabel = trip.purpose.trim();
+      }
+    }
+
+    final path = await TravelOrderPdfService.export(
+      repository: widget.repository,
+      order: order,
+      trip: trip,
+      companyName: _companyName,
+      companyAddress: _companyAddress,
+      companyPhone: _companyPhone,
+      companyEmail: _companyEmail,
+      companyCui: _companyCui,
+      companyTradeRegister: _companyTradeRegister,
+      companyBank: _companyBank,
+      companyIban: _companyIban,
+      companyContactName: _companyContactName,
+      companyLogoBase64: _companyLogoBase64,
+      employee: employee,
+      team: team,
+      vehicle: vehicle,
+      assigneeName: assigneeName,
+      vehicleName: vehicle?.name ?? '',
+      clientName: clientName,
+      sourceLabel: sourceLabel,
+      template: template,
+    );
+    var savedOrder = order.copyWith(pdfPath: path);
+    await widget.repository.saveTravelOrder(savedOrder);
+    var message = 'PDF ordin exportat: $path';
+    if (savedOrder.registryEntryId.trim().isEmpty) {
+      try {
+        final entry = await _registryService.registerTravelOrder(
+          documentNumber: savedOrder.orderNumber.trim().isEmpty
+              ? savedOrder.id
+              : savedOrder.orderNumber,
+          title:
+              'Ordin deplasare ${savedOrder.orderNumber.trim().isEmpty ? savedOrder.id : savedOrder.orderNumber}',
+          jobId: savedOrder.jobId,
+          recipientName: assigneeName,
+          documentDate: savedOrder.issueDate,
+          filePath: path,
+          fileName: path.split('\\').last,
+          notes: 'Ordin de deplasare inregistrat automat la primul export PDF.',
+        );
+        savedOrder = savedOrder.copyWith(
+          registryEntryId: entry.id,
+          registryNumber: entry.registryNumber,
+          registeredAt: entry.registeredAt,
+        );
+        await widget.repository.saveTravelOrder(savedOrder);
+        message =
+            'PDF ordin exportat si inregistrat in Registratura (${entry.registryNumber}): $path';
+      } catch (error) {
+        message =
+            'PDF ordin exportat, dar inregistrarea in Registratura a esuat: $error';
+      }
+    }
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+    await _showGeneratedPdfActions(savedOrder.pdfPath);
+  }
+
+  Future<void> _showGeneratedPdfActions(String filePath) async {
+    final normalizedPath = filePath.trim();
+    if (!mounted || normalizedPath.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'PDF ordin generat',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  normalizedPath,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: () async {
+                        Navigator.of(sheetContext).pop();
+                        final result =
+                            await DocumentFileService.openFile(normalizedPath);
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(result.message)),
+                        );
+                        if (result.shouldOfferShare && mounted) {
+                          await _shareGeneratedPdf(normalizedPath);
+                        }
+                      },
+                      icon: const Icon(Icons.picture_as_pdf_outlined),
+                      label: const Text('Deschide'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        Navigator.of(sheetContext).pop();
+                        await _shareGeneratedPdf(normalizedPath);
+                      },
+                      icon: const Icon(Icons.share_outlined),
+                      label: const Text('Partajeaza'),
+                    ),
+                    if (!DocumentFileService.isMobilePlatform)
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.of(sheetContext).pop();
+                          final opened =
+                              await DocumentFileService.openFolderForFile(
+                                  normalizedPath);
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                opened
+                                    ? 'Folder deschis.'
+                                    : 'Nu am putut deschide folderul.',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.folder_open_outlined),
+                        label: const Text('Deschide folderul'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _shareGeneratedPdf(String filePath) async {
+    try {
+      await DocumentFileService.shareFile(
+        filePath,
+        subject: 'Ordin deplasare',
+        text: 'PDF ordin de deplasare generat din aplicatie.',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Partajare deschisa pentru PDF.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nu am putut trimite PDF-ul: $error')),
+      );
+    }
+  }
+
+  Future<void> _editOrder(TravelOrder current) async {
+    final status = ValueNotifier<TravelOrderStatus>(current.status);
+    final origin = TextEditingController(
+      text: _resolveOrderLocation(
+        current.originLocation,
+        fallback: _companyTravelLocation,
+      ),
+    );
+    final destination =
+        TextEditingController(text: current.destinationLocation.trim());
+    final returnLocation = TextEditingController(
+      text: _resolveOrderLocation(
+        current.returnLocation,
+        fallback: _companyTravelLocation,
+      ),
+    );
+    final transport = TextEditingController(text: current.transportType);
+    final km =
+        TextEditingController(text: current.estimatedKm.toStringAsFixed(2));
+    final perDiem =
+        TextEditingController(text: current.perDiemPerDay.toStringAsFixed(2));
+    final lodging =
+        TextEditingController(text: current.lodgingPerDay.toStringAsFixed(2));
+    final perDiemDays =
+        TextEditingController(text: current.resolvedPerDiemDays.toString());
+    final lodgingNights = TextEditingController(
+      text: current.resolvedLodgingNights.toString(),
+    );
+    final lodgings = current.lodgings.toList(growable: true);
+    final advance =
+        TextEditingController(text: current.advanceAmount.toStringAsFixed(2));
+    final issuedBy = TextEditingController(text: current.resolvedIssuedBy);
+    final approvedBy = TextEditingController(text: current.resolvedApprovedBy);
+    DateTime start = current.periodStart;
+    DateTime end = _normalizeOrderEnd(current.periodStart, current.periodEnd);
+
+    void syncAutoAllowances() {
+      perDiemDays.text = _delegationDays(start, end).toString();
+      if (lodgings.isEmpty) {
+        lodgingNights.text = _lodgingNights(start, end).toString();
+      }
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setDialog) => AlertDialog(
+          title: const Text('Editeaza ordin de deplasare'),
+          content: SizedBox(
+            width: 620,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _formSection(
+                    context,
+                    title: 'Ruta, perioada si status',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            SizedBox(
+                              width: 180,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: origin,
+                                decoration: InputDecoration(
+                                  labelText: 'Punct plecare',
+                                  helperText: _companyTravelLocation.isEmpty
+                                      ? null
+                                      : 'Implicit: $_companyTravelLocation',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 180,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: destination,
+                                decoration: const InputDecoration(
+                                  labelText: 'Punct destinatie',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 180,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: returnLocation,
+                                decoration: InputDecoration(
+                                  labelText: 'Punct revenire',
+                                  helperText: _companyTravelLocation.isEmpty
+                                      ? null
+                                      : 'Implicit: $_companyTravelLocation',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            SizedBox(
+                              width: 260,
+                              child: _dateTimeField(
+                                'Plecare',
+                                start,
+                                onDatePicked: (d) => setDialog(() {
+                                  start = _mergeDateAndTime(start, date: d);
+                                  end = _normalizeOrderEnd(start, end);
+                                  syncAutoAllowances();
+                                }),
+                                onTimePicked: (t) => setDialog(() {
+                                  start = _mergeDateAndTime(start, time: t);
+                                  end = _normalizeOrderEnd(start, end);
+                                  syncAutoAllowances();
+                                }),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 260,
+                              child: _dateTimeField(
+                                'Revenire',
+                                end,
+                                onDatePicked: (d) => setDialog(() {
+                                  end = _normalizeOrderEnd(
+                                    start,
+                                    _mergeDateAndTime(end, date: d),
+                                  );
+                                  syncAutoAllowances();
+                                }),
+                                onTimePicked: (t) => setDialog(() {
+                                  end = _normalizeOrderEnd(
+                                    start,
+                                    _mergeDateAndTime(end, time: t),
+                                  );
+                                  syncAutoAllowances();
+                                }),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Diurna legala: ${_delegationDays(start, end)} zile | Cazare automata: ${_lodgingNights(start, end)} nopti | Durata totala: ${_durationLabel(start, end)}',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _enumField(
+                          'Status',
+                          status.value,
+                          TravelOrderStatus.values,
+                          (v) => v.label,
+                          (v) {
+                            if (v != null) {
+                              setDialog(() => status.value = v);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _formSection(
+                    context,
+                    title: 'Transport si costuri',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: transport,
+                          decoration: const InputDecoration(
+                            labelText: 'Tip transport',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: [
+                            SizedBox(
+                              width: 200,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: km,
+                                decoration: const InputDecoration(
+                                  labelText: 'Km estimati',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 200,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: advance,
+                                decoration: const InputDecoration(
+                                  labelText: 'Avans',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 200,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: perDiem,
+                                decoration: const InputDecoration(
+                                  labelText: 'Diurna / zi',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 200,
+                              child: TextField(
+                                controller: perDiemDays,
+                                decoration: const InputDecoration(
+                                  labelText: 'Zile diurna',
+                                  helperText:
+                                      'Calcul automat legal, dar editabil.',
+                                ),
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            SizedBox(
+                              width: 240,
+                              child: Text(
+                                'Total diurna: ${(_num(perDiemDays.text) * _num(perDiem.text)).toStringAsFixed(2)} lei',
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _formSection(
+                    context,
+                    title: 'Cazari',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 220,
+                              child: TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: lodging,
+                                decoration: const InputDecoration(
+                                  labelText: 'Cazare fallback / zi',
+                                  helperText:
+                                      'Folosit doar daca nu exista cazari detaliate.',
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 220,
+                              child: TextField(
+                                controller: lodgingNights,
+                                decoration: const InputDecoration(
+                                  labelText: 'Nopti cazare fallback',
+                                  helperText:
+                                      'Calcul automat din perioada, dar editabil.',
+                                ),
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            FilledButton.icon(
+                              onPressed: () async {
+                                final item = await _showLodgingDialog();
+                                if (item == null) return;
+                                setDialog(() {
+                                  lodgings.add(item);
+                                  lodgingNights.text = lodgings
+                                      .fold<int>(
+                                          0,
+                                          (sum, row) =>
+                                              sum + row.resolvedNights)
+                                      .toString();
+                                });
+                              },
+                              icon: const Icon(Icons.add),
+                              label: const Text('Adauga cazare'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          lodgings.isEmpty
+                              ? 'Nu exista cazari detaliate. Totalul ramane ${(_num(lodging.text) * _num(lodgingNights.text)).toStringAsFixed(2)} lei din fallback.'
+                              : 'Total cazari: ${lodgings.fold<double>(0, (sum, item) => sum + item.resolvedTotalCost).toStringAsFixed(2)} lei',
+                        ),
+                        const SizedBox(height: 12),
+                        if (lodgings.isEmpty)
+                          const Text(
+                            'Adauga una sau mai multe cazari pentru costuri reale pe locatie / perioada.',
+                          )
+                        else
+                          Column(
+                            children: [
+                              for (var index = 0;
+                                  index < lodgings.length;
+                                  index++)
+                                Card(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  child: ListTile(
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 4,
+                                    ),
+                                    title: Text(lodgings[index].location),
+                                    subtitle: Text(
+                                      [
+                                        if (lodgings[index].startDate != null)
+                                          'Inceput: ${_date(lodgings[index].startDate!)}',
+                                        if (lodgings[index].endDate != null)
+                                          'Sfarsit: ${_date(lodgings[index].endDate!)}',
+                                        if (lodgings[index].nights > 0)
+                                          'Nopti: ${lodgings[index].nights}',
+                                        if (lodgings[index].pricePerNight > 0)
+                                          'Pret/noapte: ${lodgings[index].pricePerNight.toStringAsFixed(2)} lei',
+                                        'Total: ${lodgings[index].resolvedTotalCost.toStringAsFixed(2)} lei',
+                                        if (lodgings[index]
+                                            .notes
+                                            .trim()
+                                            .isNotEmpty)
+                                          'Obs: ${lodgings[index].notes.trim()}',
+                                      ].join(' | '),
+                                    ),
+                                    trailing: Wrap(
+                                      spacing: 4,
+                                      children: [
+                                        IconButton(
+                                          onPressed: () async {
+                                            final updated =
+                                                await _showLodgingDialog(
+                                              current: lodgings[index],
+                                            );
+                                            if (updated == null) return;
+                                            setDialog(() {
+                                              lodgings[index] = updated;
+                                              lodgingNights.text = lodgings
+                                                  .fold<int>(
+                                                      0,
+                                                      (sum, row) =>
+                                                          sum +
+                                                          row.resolvedNights)
+                                                  .toString();
+                                            });
+                                          },
+                                          tooltip: 'Editeaza cazare',
+                                          icon: const Icon(Icons.edit_outlined),
+                                        ),
+                                        IconButton(
+                                          onPressed: () => setDialog(() {
+                                            lodgings.removeAt(index);
+                                            lodgingNights.text = lodgings
+                                                    .isEmpty
+                                                ? _lodgingNights(start, end)
+                                                    .toString()
+                                                : lodgings
+                                                    .fold<int>(
+                                                        0,
+                                                        (sum, row) =>
+                                                            sum +
+                                                            row.resolvedNights)
+                                                    .toString();
+                                          }),
+                                          tooltip: 'Șterge cazare',
+                                          icon:
+                                              const Icon(Icons.delete_outline),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _formSection(
+                    context,
+                    title: 'Aprobari si emitere',
+                    child: Column(
+                      children: [
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: issuedBy,
+                          decoration: const InputDecoration(
+                            labelText: 'Emis de',
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: approvedBy,
+                          decoration: const InputDecoration(
+                            labelText: 'Aprobat de',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(dialogCtx).pop(),
+                child: const Text('Renunță')),
+            FilledButton(
+              onPressed: () async {
+                final next = current.copyWith(
+                  originLocation: origin.text.trim(),
+                  destinationLocation: destination.text.trim(),
+                  returnLocation: returnLocation.text.trim(),
+                  periodStart: start,
+                  periodEnd: end,
+                  daysCount: _num(perDiemDays.text).round(),
+                  transportType: transport.text.trim(),
+                  estimatedKm: _num(km.text),
+                  perDiemPerDay: _num(perDiem.text),
+                  lodgingPerDay: _num(lodging.text),
+                  lodgingNightsCount: _num(lodgingNights.text).round(),
+                  lodgings: List<TravelOrderLodging>.unmodifiable(lodgings),
+                  advanceAmount: _num(advance.text),
+                  issuedBy: _resolvedSigner(issuedBy.text),
+                  approvedBy: _resolvedSigner(approvedBy.text),
+                  status: status.value,
+                );
+                await widget.repository.saveTravelOrder(next);
+                if (!mounted || !dialogCtx.mounted) return;
+                Navigator.of(dialogCtx).pop();
+                await _load();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Ordinul a fost actualizat.')));
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final showInlineFilters = screenWidth >= 1280;
+    final filterDrawerWidth = screenWidth < 560 ? screenWidth * 0.92 : 360.0;
+    final trips = _trips.where((t) {
+      if (_tripStatus != null && t.status != _tripStatus) return false;
+      if (_tripClient.isNotEmpty && t.clientId != _tripClient) return false;
+      if (_tripTeam.isNotEmpty && t.teamId != _tripTeam) return false;
+      if (_tripFrom != null &&
+          t.departureDate.isBefore(
+              DateTime(_tripFrom!.year, _tripFrom!.month, _tripFrom!.day))) {
+        return false;
+      }
+      if (_tripTo != null &&
+          t.departureDate.isAfter(DateTime(
+              _tripTo!.year, _tripTo!.month, _tripTo!.day, 23, 59, 59))) {
+        return false;
+      }
+      return true;
+    }).toList();
+    final orders = _orders.where((o) {
+      if (_orderStatus != null && o.status != _orderStatus) return false;
+      if (_orderFrom != null &&
+          o.issueDate.isBefore(
+              DateTime(_orderFrom!.year, _orderFrom!.month, _orderFrom!.day))) {
+        return false;
+      }
+      if (_orderTo != null &&
+          o.issueDate.isAfter(DateTime(
+              _orderTo!.year, _orderTo!.month, _orderTo!.day, 23, 59, 59))) {
+        return false;
+      }
+      if (_orderQuery.trim().isNotEmpty) {
+        final q = _orderQuery.toLowerCase();
+        return o.orderNumber.toLowerCase().contains(q) ||
+            o.purpose.toLowerCase().contains(q);
+      }
+      return true;
+    }).toList();
+    final tripIdsWithOrders = orders.map((item) => item.tripId).toSet();
+    final registeredOrdersCount =
+        orders.where((item) => item.registryNumber.trim().isNotEmpty).length;
+    final estimatedOrderCost = orders.fold<double>(
+      0,
+      (sum, item) => sum + item.totalEstimatedCost,
+    );
+
+    return Scaffold(
+      endDrawer: showInlineFilters
+          ? null
+          : Drawer(
+              width: filterDrawerWidth,
+              child: SafeArea(
+                child: _buildActiveFilterPanel(drawerMode: true),
+              ),
+            ),
+      appBar: AppBar(
+        title: const Text('HR / Deplasari'),
+        actions: [
+          if (!showInlineFilters)
+            Builder(
+              builder: (context) => IconButton(
+                tooltip: 'Filtre',
+                onPressed: () => Scaffold.of(context).openEndDrawer(),
+                icon: const Icon(Icons.tune_outlined),
+              ),
+            ),
+          IconButton(
+            tooltip: 'Reincarca',
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_outlined),
+          ),
+          HelpButton(content: AppHelp.hrDeplasari),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: const [
+            Tab(text: 'Deplasari'),
+            Tab(text: 'Ordine de deplasare'),
+          ],
+        ),
+      ),
+      floatingActionButton: _tabs.index == 0
+          ? FloatingActionButton.extended(
+              onPressed: () => _openTripForm(),
+              icon: const Icon(Icons.add),
+              label: const Text('Adauga deplasare'),
+            )
+          : null,
+      body: TabBarView(
+        controller: _tabs,
+        children: [
+          AdaptiveSidePanelLayout(
+            showSidePanel: showInlineFilters,
+            sidePanelWidth: 344,
+            mainContent: Column(
+              children: [
+                _buildSourceBanner(
+                  dataSourceLabel: _tripDataSourceLabel,
+                  fallbackReason: _tripFallbackReason,
+                ),
+                _buildSummaryWrap([
+                  _summaryChip('Total filtrate', trips.length.toString()),
+                  _summaryChip(
+                    'Cu ordin generat',
+                    trips
+                        .where((item) => tripIdsWithOrders.contains(item.id))
+                        .length
+                        .toString(),
+                  ),
+                  _summaryChip(
+                    'Cu echipa',
+                    trips
+                        .where((item) => item.teamId.trim().isNotEmpty)
+                        .length
+                        .toString(),
+                  ),
+                ]),
+                if (!showInlineFilters)
+                  Builder(
+                    builder: (context) => _buildFilterLauncher(
+                      label: 'Filtre deplasari',
+                      onPressed: () => Scaffold.of(context).openEndDrawer(),
+                    ),
+                  ),
+                Expanded(
+                  child: trips.isEmpty
+                      ? _emptyState(
+                          title: 'Nu exista deplasari pe filtrul curent',
+                          subtitle:
+                              'Verifica intervalul, statusul sau adauga o deplasare noua.',
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          itemCount: trips.length,
+                          itemBuilder: (_, i) => _buildTripCard(trips[i]),
+                        ),
+                ),
+              ],
+            ),
+            sidePanel: Padding(
+              padding: const EdgeInsets.fromLTRB(0, 12, 16, 16),
+              child: _buildTripFilterPanel(drawerMode: false),
+            ),
+          ),
+          AdaptiveSidePanelLayout(
+            showSidePanel: showInlineFilters,
+            sidePanelWidth: 344,
+            mainContent: Column(
+              children: [
+                _buildSourceBanner(
+                  dataSourceLabel: _orderDataSourceLabel,
+                  fallbackReason: _orderFallbackReason,
+                ),
+                _buildSummaryWrap([
+                  _summaryChip('Total filtrate', orders.length.toString()),
+                  _summaryChip(
+                    'Cu registratura',
+                    registeredOrdersCount.toString(),
+                  ),
+                  _summaryChip(
+                    'PDF exportat',
+                    orders
+                        .where((item) => item.pdfPath.trim().isNotEmpty)
+                        .length
+                        .toString(),
+                  ),
+                  _summaryChip(
+                    'Cost estimat',
+                    '${estimatedOrderCost.toStringAsFixed(2)} lei',
+                  ),
+                ]),
+                if (!showInlineFilters)
+                  Builder(
+                    builder: (context) => _buildFilterLauncher(
+                      label: 'Filtre ordine',
+                      onPressed: () => Scaffold.of(context).openEndDrawer(),
+                    ),
+                  ),
+                Expanded(
+                  child: orders.isEmpty
+                      ? _emptyState(
+                          title:
+                              'Nu exista ordine de deplasare pe filtrul curent',
+                          subtitle:
+                              'Genereaza un ordin dintr-o deplasare sau relaxeaza filtrele.',
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          itemCount: orders.length,
+                          itemBuilder: (_, i) => _buildOrderCard(orders[i]),
+                        ),
+                ),
+              ],
+            ),
+            sidePanel: Padding(
+              padding: const EdgeInsets.fromLTRB(0, 12, 16, 16),
+              child: _buildOrderFilterPanel(drawerMode: false),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTripCard(Trip trip) {
+    final clientName = _client(trip.clientId)?.name ?? '-';
+    final teamName = _team(trip.teamId)?.name ?? '-';
+    final vehicleNames = _vehicleNames(_tripVehicleIds(trip));
+    final vehicleLabel = vehicleNames.isEmpty
+        ? '-'
+        : (vehicleNames.length == 1
+            ? vehicleNames.first
+            : '${vehicleNames.first} +${vehicleNames.length - 1}');
+    final assignees = trip.assignedEmployeeIds
+        .map((id) => _employee(id)?.name ?? '')
+        .where((item) => item.trim().isNotEmpty)
+        .toList();
+    final orderCount = _orders.where((item) => item.tripId == trip.id).length;
+    final statusColor = _tripStatusColor(trip.status);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: statusColor.withValues(alpha: 0.55),
+          width: 1.5,
+        ),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(
+              color: statusColor,
+              width: 5,
+            ),
+          ),
+          color: Color.alphaBlend(
+            statusColor.withValues(alpha: 0.08),
+            Theme.of(context).colorScheme.surface,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          trip.tripNumber.isEmpty
+                              ? 'Deplasare'
+                              : trip.tripNumber,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${trip.originLocation.isEmpty ? '-' : trip.originLocation} -> ${trip.destinationLocation.isEmpty ? '-' : trip.destinationLocation}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  _statusChip(trip.status.label, statusColor),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _infoChip(Icons.calendar_today_outlined,
+                      _dateRange(trip.departureDate, trip.returnDateEstimated)),
+                  _infoChip(Icons.business_outlined, 'Client: $clientName'),
+                  _infoChip(Icons.groups_2_outlined, 'Echipa: $teamName'),
+                  _infoChip(
+                    Icons.person_outline,
+                    assignees.isEmpty
+                        ? 'Persoana: nealocata'
+                        : 'Persoana: ${assignees.join(', ')}',
+                  ),
+                  _infoChip(Icons.route_outlined,
+                      'Scop: ${trip.purpose.isEmpty ? '-' : trip.purpose}'),
+                  _infoChip(
+                    Icons.directions_car_outlined,
+                    vehicleNames.length <= 1
+                        ? 'Autoturism: $vehicleLabel'
+                        : 'Autoturisme: $vehicleLabel',
+                  ),
+                  _infoChip(
+                    Icons.pin_drop_outlined,
+                    'Locatie: ${trip.destinationLocation.isEmpty ? '-' : trip.destinationLocation}',
+                  ),
+                  if (trip.estimatedKm > 0)
+                    _infoChip(Icons.speed_outlined,
+                        'Km estimati: ${trip.estimatedKm.toStringAsFixed(2)}'),
+                  if (orderCount > 0)
+                    _infoChip(Icons.assignment_outlined,
+                        'Ordine generate: $orderCount'),
+                ],
+              ),
+              if (trip.notes.trim().isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  trip.notes,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              if (vehicleNames.length > 1) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Autoturisme: ${vehicleNames.join(', ')}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (trip.status != TripStatus.activa &&
+                      trip.status != TripStatus.anulata)
+                    FilledButton.tonalIcon(
+                      onPressed: () =>
+                          _quickUpdateTripStatus(trip, TripStatus.activa),
+                      icon: const Icon(Icons.play_arrow, size: 16),
+                      label: const Text('Inceput'),
+                    ),
+                  if (trip.status != TripStatus.finalizata &&
+                      trip.status != TripStatus.anulata)
+                    FilledButton.tonalIcon(
+                      onPressed: () =>
+                          _quickUpdateTripStatus(trip, TripStatus.finalizata),
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text('Finalizata'),
+                    ),
+                  if (trip.status != TripStatus.anulata)
+                    OutlinedButton.icon(
+                      onPressed: () =>
+                          _quickUpdateTripStatus(trip, TripStatus.anulata),
+                      icon: const Icon(Icons.block_outlined, size: 16),
+                      label: const Text('Anuleaza'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                alignment: WrapAlignment.end,
+                children: [
+                  IconButton(
+                    onPressed: () => _generateOrder(trip),
+                    tooltip: 'Genereaza ordin',
+                    icon: const Icon(Icons.assignment_add),
+                  ),
+                  _buildTripStatusMenu(trip),
+                  PopupMenuButton<String>(
+                    tooltip: 'Ordin individual',
+                    onSelected: (employeeId) =>
+                        _generateOrderForEmployee(trip, employeeId),
+                    itemBuilder: (_) {
+                      final ids = trip.assignedEmployeeIds
+                          .where((id) => _employee(id) != null)
+                          .toList();
+                      if (ids.isEmpty) {
+                        return const [
+                          PopupMenuItem<String>(
+                            value: '',
+                            enabled: false,
+                            child: Text('Fara angajati asignati'),
+                          ),
+                        ];
+                      }
+                      return ids
+                          .map((id) => PopupMenuItem<String>(
+                                value: id,
+                                child: Text(_employee(id)!.name),
+                              ))
+                          .toList();
+                    },
+                    icon: const Icon(Icons.person_add_alt_1_outlined),
+                  ),
+                  IconButton(
+                    onPressed: () => _openTripForm(trip),
+                    tooltip: 'Editeaza',
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      await widget.repository.deleteTrip(trip.id);
+                      await _load();
+                    },
+                    tooltip: 'Șterge',
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOrderCard(TravelOrder order) {
+    final holderName = order.employeeId.isNotEmpty
+        ? (_employee(order.employeeId)?.name ?? order.employeeId)
+        : (_team(order.teamId)?.name ?? '-');
+    final clientName = _client(order.clientId)?.name ?? '';
+    final estimatedCost =
+        order.advanceAmount + order.totalPerDiemCost + order.totalLodgingCost;
+    final origin = _resolveOrderLocation(order.originLocation,
+        fallback: _companyTravelLocation);
+    final returnLocation = _resolveOrderLocation(
+      order.returnLocation,
+      fallback: _companyTravelLocation,
+    );
+    final destination = _resolveOrderLocation(order.destinationLocation);
+    final statusColor = _orderStatusColor(order.status);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: statusColor.withValues(alpha: 0.55),
+          width: 1.5,
+        ),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(
+              color: statusColor,
+              width: 5,
+            ),
+          ),
+          color: Color.alphaBlend(
+            statusColor.withValues(alpha: 0.08),
+            Theme.of(context).colorScheme.surface,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          order.orderNumber.isEmpty
+                              ? 'Ordin deplasare'
+                              : order.orderNumber,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Emis la ${_date(order.issueDate)}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  _statusChip(order.status.label, statusColor),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _infoChip(Icons.person_outline, 'Titular: $holderName'),
+                  if (clientName.trim().isNotEmpty)
+                    _infoChip(Icons.business_outlined, 'Client: $clientName'),
+                  _infoChip(Icons.calendar_today_outlined,
+                      _dateRange(order.periodStart, order.periodEnd)),
+                  _infoChip(
+                    Icons.event_available_outlined,
+                    'Diurna: ${order.resolvedPerDiemDays} zile | ${order.totalPerDiemCost.toStringAsFixed(2)} lei',
+                  ),
+                  _infoChip(Icons.pin_drop_outlined,
+                      'Ruta: $origin -> $destination -> $returnLocation'),
+                  _infoChip(Icons.route_outlined,
+                      'Scop: ${order.purpose.isEmpty ? '-' : order.purpose}'),
+                  _infoChip(
+                    Icons.hotel_outlined,
+                    order.hasDetailedLodgings
+                        ? 'Cazari: ${order.lodgings.length} | ${order.resolvedLodgingNights} nopti | Total: ${order.totalLodgingCost.toStringAsFixed(2)} lei'
+                        : 'Cazare fallback: ${order.resolvedLodgingNights} nopti | ${order.totalLodgingCost.toStringAsFixed(2)} lei',
+                  ),
+                  _infoChip(Icons.attach_money_outlined,
+                      'Cost estimat: ${estimatedCost.toStringAsFixed(2)} lei'),
+                  _infoChip(
+                    Icons.picture_as_pdf_outlined,
+                    order.pdfPath.trim().isEmpty
+                        ? 'PDF negenerat'
+                        : 'PDF exportat',
+                  ),
+                  _infoChip(
+                    Icons.inventory_2_outlined,
+                    order.registryNumber.trim().isEmpty
+                        ? 'Registratura: neinregistrat'
+                        : 'Registratura: ${order.registryNumber}',
+                  ),
+                  if (order.registeredAt != null)
+                    _infoChip(Icons.event_note_outlined,
+                        'Inregistrat: ${_date(order.registeredAt!)}'),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  if (order.status != TravelOrderStatus.trimis &&
+                      order.status != TravelOrderStatus.inchis)
+                    FilledButton.tonalIcon(
+                      onPressed: () => _quickUpdateOrderStatus(
+                          order, TravelOrderStatus.trimis),
+                      icon: const Icon(Icons.send, size: 16),
+                      label: const Text('Trimite'),
+                    ),
+                  if (order.status != TravelOrderStatus.inchis)
+                    FilledButton.tonalIcon(
+                      onPressed: () => _quickUpdateOrderStatus(
+                          order, TravelOrderStatus.inchis),
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text('Inchide'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                alignment: WrapAlignment.end,
+                children: [
+                  if (order.registryNumber.trim().isNotEmpty)
+                    Chip(label: Text(order.registryNumber.trim())),
+                  _buildOrderStatusMenu(order),
+                  IconButton(
+                    onPressed: () => _exportOrder(order),
+                    tooltip: 'Exporta PDF',
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                  ),
+                  IconButton(
+                    onPressed: () => _editOrder(order),
+                    tooltip: 'Editeaza ordin',
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                  IconButton(
+                    onPressed: () async {
+                      await widget.repository.deleteTravelOrder(order.id);
+                      await _load();
+                    },
+                    tooltip: 'Șterge ordin',
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSourceBanner({
+    required String dataSourceLabel,
+    required String fallbackReason,
+  }) {
+    final label =
+        dataSourceLabel.trim().isEmpty ? 'local_cache' : dataSourceLabel;
+    final hasFallback = fallbackReason.trim().isNotEmpty;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Chip(label: Text('Sursa date: $label')),
+          if (hasFallback) Chip(label: Text('Motiv fallback: $fallbackReason')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryWrap(List<Widget> chips) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: chips,
+        ),
+      ),
+    );
+  }
+
+  Widget _summaryChip(String label, String value) {
+    return Chip(
+      avatar: const Icon(Icons.insights_outlined, size: 18),
+      label: Text('$label: $value'),
+    );
+  }
+
+  Widget _emptyState({required String title, required String subtitle}) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.inbox_outlined,
+                size: 42,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterLauncher({
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: FilledButton.tonalIcon(
+          onPressed: onPressed,
+          icon: const Icon(Icons.tune_outlined),
+          label: Text(label),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveFilterPanel({required bool drawerMode}) {
+    return _tabs.index == 0
+        ? _buildTripFilterPanel(drawerMode: drawerMode)
+        : _buildOrderFilterPanel(drawerMode: drawerMode);
+  }
+
+  Widget _buildTripFilterPanel({required bool drawerMode}) {
+    final panel = SidePanelCard(
+      title: 'Filtre deplasari',
+      footer: Align(
+        alignment: Alignment.centerRight,
+        child: TextButton(
+          onPressed: () {
+            setState(() {
+              _tripStatus = null;
+              _tripClient = '';
+              _tripTeam = '';
+              _tripFrom = null;
+              _tripTo = null;
+            });
+            _persistFilterPreferences();
+          },
+          child: const Text('Reseteaza filtrele'),
+        ),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _enumField(
+              'Status',
+              _tripStatus,
+              TripStatus.values,
+              (v) => v.label,
+              (v) {
+                setState(() => _tripStatus = v);
+                _persistFilterPreferences();
+              },
+            ),
+            const SizedBox(height: 12),
+            _lookupField(
+              'Client',
+              _tripClient,
+              _clients.map((e) => MapEntry(e.id, e.name)).toList(),
+              (v) {
+                setState(() => _tripClient = v);
+                _persistFilterPreferences();
+              },
+            ),
+            const SizedBox(height: 12),
+            _lookupField(
+              'Echipa',
+              _tripTeam,
+              _teams.map((e) => MapEntry(e.id, e.name)).toList(),
+              (v) {
+                setState(() => _tripTeam = v);
+                _persistFilterPreferences();
+              },
+            ),
+            const SizedBox(height: 12),
+            _dateBtn(
+              'De la',
+              _tripFrom,
+              (d) {
+                setState(() => _tripFrom = d);
+                _persistFilterPreferences();
+              },
+              optional: true,
+            ),
+            const SizedBox(height: 12),
+            _dateBtn(
+              'Pana la',
+              _tripTo,
+              (d) {
+                setState(() => _tripTo = d);
+                _persistFilterPreferences();
+              },
+              optional: true,
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!drawerMode) return panel;
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: panel,
+    );
+  }
+
+  Widget _buildOrderFilterPanel({required bool drawerMode}) {
+    final panel = SidePanelCard(
+      title: 'Filtre ordine',
+      footer: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.end,
+        children: [
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _orderStatus = null;
+                _orderFrom = null;
+                _orderTo = null;
+                _orderQuery = '';
+              });
+              _persistFilterPreferences();
+            },
+            child: const Text('Reseteaza filtrele'),
+          ),
+          FilledButton.icon(
+            onPressed: _openOrderPicker,
+            icon: const Icon(Icons.add),
+            label: const Text('Creeaza ordin'),
+          ),
+        ],
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _enumField(
+              'Status ordin',
+              _orderStatus,
+              TravelOrderStatus.values,
+              (v) => v.label,
+              (v) {
+                setState(() => _orderStatus = v);
+                _persistFilterPreferences();
+              },
+            ),
+            const SizedBox(height: 12),
+            _dateBtn(
+              'De la',
+              _orderFrom,
+              (d) {
+                setState(() => _orderFrom = d);
+                _persistFilterPreferences();
+              },
+              optional: true,
+            ),
+            const SizedBox(height: 12),
+            _dateBtn(
+              'Pana la',
+              _orderTo,
+              (d) {
+                setState(() => _orderTo = d);
+                _persistFilterPreferences();
+              },
+              optional: true,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              textCapitalization: TextCapitalization.sentences,
+              key: ValueKey(_orderQuery),
+              initialValue: _orderQuery,
+              decoration: const InputDecoration(
+                labelText: 'Cauta dupa numar sau scop',
+              ),
+              onChanged: (v) => setState(() => _orderQuery = v),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!drawerMode) return panel;
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: panel,
+    );
+  }
+
+  Widget _formSection(BuildContext context,
+      {required String title, required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _infoChip(IconData icon, String text) {
+    return Chip(
+      avatar: Icon(icon, size: 18),
+      label: Text(text),
+    );
+  }
+
+  Widget _statusChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Color _tripStatusColor(TripStatus status) {
+    switch (status) {
+      case TripStatus.draft:
+        return Colors.blueGrey;
+      case TripStatus.aprobata:
+        return Colors.indigo;
+      case TripStatus.activa:
+        return Colors.green;
+      case TripStatus.finalizata:
+        return Colors.teal;
+      case TripStatus.anulata:
+        return Colors.red;
+    }
+  }
+
+  Color _orderStatusColor(TravelOrderStatus status) {
+    switch (status) {
+      case TravelOrderStatus.draft:
+        return Colors.blueGrey;
+      case TravelOrderStatus.emis:
+        return Colors.indigo;
+      case TravelOrderStatus.trimis:
+        return Colors.orange;
+      case TravelOrderStatus.inchis:
+        return Colors.green;
+    }
+  }
+
+  String _dateRange(DateTime start, DateTime end) {
+    return '${_dateTime(start)} - ${_dateTime(end)} (${_delegationDays(start, end)} zile, ${_durationLabel(start, end)})';
+  }
+
+  Widget _enumField<T>(String label, T? value, List<T> values,
+      String Function(T) title, ValueChanged<T?> onChanged) {
+    return DropdownButtonFormField<T>(
+      initialValue: value,
+      items: values
+          .map((e) => DropdownMenuItem<T>(value: e, child: Text(title(e))))
+          .toList(),
+      onChanged: onChanged,
+      decoration: InputDecoration(labelText: label),
+    );
+  }
+
+  Widget _lookupField(String label, String value,
+      List<MapEntry<String, String>> values, ValueChanged<String> onChanged) {
+    final ok = value.trim().isNotEmpty && values.any((e) => e.key == value);
+    return DropdownButtonFormField<String>(
+      initialValue: ok ? value : null,
+      items: values
+          .map((e) =>
+              DropdownMenuItem<String>(value: e.key, child: Text(e.value)))
+          .toList(),
+      onChanged: (v) => onChanged(v ?? ''),
+      decoration: InputDecoration(labelText: label),
+    );
+  }
+
+  /// Lookup field cu buton de adăugare client (doar pentru clienti)
+  Widget _lookupFieldWithAddButton(
+    String label,
+    String value,
+    List<MapEntry<String, String>> values,
+    ValueChanged<String> onChanged, {
+    bool isClientField = false,
+    VoidCallback? onAddPressed,
+  }) {
+    final ok = value.trim().isNotEmpty && values.any((e) => e.key == value);
+
+    if (!isClientField || onAddPressed == null) {
+      return _lookupField(label, value, values, onChanged);
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            initialValue: ok ? value : null,
+            items: values
+                .map((e) => DropdownMenuItem<String>(
+                    value: e.key, child: Text(e.value)))
+                .toList(),
+            onChanged: (v) => onChanged(v ?? ''),
+            decoration: InputDecoration(labelText: label),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: FilledButton.tonalIcon(
+            onPressed: onAddPressed,
+            icon: const Icon(Icons.add_outlined),
+            label: const Text('Adaugă'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _dateBtn(
+      String label, DateTime? value, ValueChanged<DateTime> onPicked,
+      {bool optional = false}) {
+    return OutlinedButton(
+      onPressed: () async {
+        final d = await showDatePicker(
+            context: context,
+            initialDate: value ?? DateTime.now(),
+            firstDate: DateTime(2020),
+            lastDate: DateTime(2100));
+        if (d != null) onPicked(d);
+      },
+      child: Text(
+          '$label: ${value == null ? (optional ? '-' : _date(DateTime.now())) : _date(value)}'),
+    );
+  }
+
+  Widget _dateTimeField(
+    String label,
+    DateTime value, {
+    required ValueChanged<DateTime> onDatePicked,
+    required ValueChanged<TimeOfDay> onTimePicked,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.labelLarge,
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            SizedBox(
+              width: 150,
+              child: _dateBtn(
+                'Data',
+                value,
+                onDatePicked,
+              ),
+            ),
+            OutlinedButton(
+              onPressed: () async {
+                final picked = await showTimePicker(
+                  context: context,
+                  initialTime: TimeOfDay.fromDateTime(value),
+                );
+                if (picked != null) {
+                  onTimePicked(picked);
+                }
+              },
+              child: Text(
+                'Ora: ${_time(value)}',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  String _date(DateTime v) =>
+      '${v.day.toString().padLeft(2, '0')}.${v.month.toString().padLeft(2, '0')}.${v.year}';
+
+  String _time(DateTime v) =>
+      '${v.hour.toString().padLeft(2, '0')}:${v.minute.toString().padLeft(2, '0')}';
+
+  String _dateTime(DateTime v) => '${_date(v)} ${_time(v)}';
+}
+
+double _num(String raw) =>
+    double.tryParse(raw.replaceAll(',', '.').trim()) ?? 0;
+
+String _resolvedSigner(String raw) {
+  final value = raw.trim();
+  return value.isEmpty ? kDefaultTravelOrderSigner : value;
+}
+
+DateTime _mergeDateAndTime(
+  DateTime current, {
+  DateTime? date,
+  TimeOfDay? time,
+}) {
+  final nextDate = date ?? current;
+  final nextTime = time ?? TimeOfDay.fromDateTime(current);
+  return DateTime(
+    nextDate.year,
+    nextDate.month,
+    nextDate.day,
+    nextTime.hour,
+    nextTime.minute,
+  );
+}
+
+DateTime _normalizeOrderEnd(DateTime start, DateTime end) {
+  return normalizeTravelOrderEnd(start, end);
+}
+
+int _days(DateTime s, DateTime e) {
+  final safeEnd = _normalizeOrderEnd(s, e);
+  final d = DateTime(safeEnd.year, safeEnd.month, safeEnd.day)
+          .difference(DateTime(s.year, s.month, s.day))
+          .inDays +
+      1;
+  return d < 1 ? 1 : d;
+}
+
+int _delegationDays(DateTime start, DateTime end) {
+  return calculateTravelOrderPerDiemDays(start, end);
+}
+
+int _lodgingNights(DateTime start, DateTime end) {
+  return calculateTravelOrderLodgingNights(start, end);
+}
+
+String _durationLabel(DateTime start, DateTime end) {
+  final safeEnd = _normalizeOrderEnd(start, end);
+  final diff = safeEnd.difference(start);
+  final totalHours = diff.inMinutes / 60;
+  final days = diff.inDays;
+  final hours = diff.inHours.remainder(24);
+  final minutes = diff.inMinutes.remainder(60);
+  final parts = <String>[];
+  parts.add('${totalHours.toStringAsFixed(2)} ore');
+  if (days > 0) {
+    parts.add(days == 1 ? '1 zi' : '$days zile');
+  }
+  if (hours > 0) {
+    parts.add(hours == 1 ? '1 ora' : '$hours ore');
+  }
+  if (minutes > 0) {
+    parts.add(minutes == 1 ? '1 minut' : '$minutes minute');
+  }
+  return parts.join(', ');
+}
+
+class _SourceRef {
+  const _SourceRef(
+      this.id, this.label, this.clientId, this.destination, this.purpose);
+  final String id;
+  final String label;
+  final String clientId;
+  final String destination;
+  final String purpose;
+}

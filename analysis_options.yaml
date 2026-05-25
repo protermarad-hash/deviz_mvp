@@ -1,0 +1,5 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - snapshot_baza_2026-04-06_01-19-15/**

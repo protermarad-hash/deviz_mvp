@@ -1,0 +1,2246 @@
+import 'dart:convert';
+
+import '../../core/pdf_document_branding.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_font_bundle.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+
+import 'offer_currency_converter.dart';
+import 'offer_models.dart';
+import 'offer_partner_models.dart';
+import '../reclamatii/complaint_models.dart';
+
+class OfferPdfService {
+  const OfferPdfService._();
+
+  static final PdfColor _primaryColor = PdfColor.fromHex('#1F3A5F');
+  static final PdfColor _secondaryColor = PdfColor.fromHex('#516B84');
+  static final PdfColor _accentColor = PdfColor.fromHex('#B8863B');
+  static final PdfColor _panelColor = PdfColor.fromHex('#F4F7FA');
+  static final PdfColor _panelBorderColor = PdfColor.fromHex('#D8E0E8');
+  static final PdfColor _noteColor = PdfColor.fromHex('#FAF5EA');
+
+  static String exportFileName(OfferRecord offer) {
+    return _fileName(offer.offerNumber, offer.title);
+  }
+
+  /// Prefix comun al fișierelor PDF pentru o ofertă (fără timestamp și extensie).
+  /// Folosit pentru a identifica și șterge generările anterioare din același director.
+  static String exportFilePrefix(OfferRecord offer) {
+    final numberPart = _sanitizeFilePart(offer.offerNumber);
+    final base = numberPart.isEmpty ? 'OFR' : numberPart;
+    return 'oferta_$base';
+  }
+
+  static double _amountWithVat(OfferRecord offer, double amountWithoutVat) {
+    return amountWithoutVat * (1 + (offer.vatPercent / 100));
+  }
+
+  static String _priceDisplayNote(OfferRecord offer) {
+    switch (offer.priceDisplayMode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return 'Oferta nu conține TVA. Prețurile afișate sunt fără TVA.';
+      case OfferPriceDisplayMode.withVat:
+        return 'Oferta conține TVA. Prețurile afișate includ TVA.';
+      case OfferPriceDisplayMode.both:
+        return 'Pozițiile sunt afișate fără TVA, iar în rezumat sunt evidențiate TVA-ul, totalul fără TVA și totalul final cu TVA.';
+    }
+  }
+
+  static String _priceDisplayValue(
+    OfferRecord offer,
+    double amountWithoutVat,
+    String currencyLabel, {
+    bool labeled = false,
+  }) {
+    final withoutVat = OfferCurrencyConverter.convertRonToOfferCurrency(
+      ronAmount: amountWithoutVat,
+      currency: offer.currency,
+      effectiveRate: offer.effectiveExchangeRate,
+    ).toStringAsFixed(2);
+    final withVat = OfferCurrencyConverter.convertRonToOfferCurrency(
+      ronAmount: _amountWithVat(offer, amountWithoutVat),
+      currency: offer.currency,
+      effectiveRate: offer.effectiveExchangeRate,
+    ).toStringAsFixed(2);
+    switch (offer.priceDisplayMode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return '$withoutVat $currencyLabel';
+      case OfferPriceDisplayMode.withVat:
+        return '$withVat $currencyLabel';
+      case OfferPriceDisplayMode.both:
+        return '$withoutVat $currencyLabel';
+    }
+  }
+
+  static String _priceColumnLabel(
+    OfferPriceDisplayMode mode,
+    String baseLabel,
+  ) {
+    switch (mode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return baseLabel;
+      case OfferPriceDisplayMode.withVat:
+        return baseLabel;
+      case OfferPriceDisplayMode.both:
+        return baseLabel;
+    }
+  }
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required OfferRecord offer,
+    required String clientLabel,
+    required String jobLabel,
+    required String issuerLabel,
+    required DocumentBrandingData branding,
+    required PdfVisualTemplate template,
+    String outputDirectory = '',
+    bool saveAs = false,
+  }) async {
+    final pdfFonts = await PdfFontBundle.load();
+    final doc = pw.Document(theme: pdfFonts.theme);
+    if (template == PdfVisualTemplate.joyson) {
+      _buildJoysonOfferDocument(
+        doc: doc,
+        offer: offer,
+        clientLabel: clientLabel,
+        jobLabel: jobLabel,
+        issuerLabel: issuerLabel,
+        branding: branding,
+      );
+      final bytes = await doc.save();
+      final fileName = exportFileName(offer);
+      return PdfSaveService.savePdf(
+        repository: repository,
+        bytes: bytes,
+        fileName: fileName,
+        category: PdfDocumentCategory.offers,
+        outputDirectory: outputDirectory,
+        forceSaveAs: saveAs,
+      );
+    }
+    final commercialLines = buildCommercialOfferLines(offer.lines);
+    final partnerCurrency = OfferCurrencyConverter.normalizeCurrency(
+      offer.currency,
+    );
+
+    List<OfferPartnerWorker> workersFor(String partnerId) =>
+        offer.partnerWorkers
+            .where((worker) => worker.partnerId == partnerId)
+            .toList(growable: false);
+
+    List<OfferPartnerVehicle> vehiclesFor(String partnerId) =>
+        offer.partnerVehicles
+            .where((vehicle) => vehicle.partnerId == partnerId)
+            .toList(growable: false);
+
+    double workersTotalFor(String partnerId) => workersFor(partnerId).fold(
+          0.0,
+          (sum, worker) => sum + worker.total,
+        );
+
+    double vehiclesTotalFor(String partnerId) => vehiclesFor(partnerId).fold(
+          0.0,
+          (sum, vehicle) => sum + vehicle.total,
+        );
+
+    final partnerWorkersTotal = offer.partnerWorkers.fold<double>(
+      0.0,
+      (sum, worker) => sum + worker.total,
+    );
+    final partnerVehiclesTotal = offer.partnerVehicles.fold<double>(
+      0.0,
+      (sum, vehicle) => sum + vehicle.total,
+    );
+    final partnersTotal = partnerWorkersTotal + partnerVehiclesTotal;
+
+    String dateLabel(DateTime? value) {
+      if (value == null) return '-';
+      final d = value.day.toString().padLeft(2, '0');
+      final m = value.month.toString().padLeft(2, '0');
+      return '$d.$m.${value.year}';
+    }
+
+    String money(double value) {
+      final converted = OfferCurrencyConverter.convertRonToOfferCurrency(
+        ronAmount: value,
+        currency: offer.currency,
+        effectiveRate: offer.effectiveExchangeRate,
+      );
+      return converted.toStringAsFixed(2);
+    }
+
+    String currencyLabel() => OfferCurrencyConverter.normalizeCurrency(
+          offer.currency,
+        );
+
+    String rateSummary() {
+      if (currencyLabel() != 'EUR') return '-';
+      final source = offer.exchangeRateSource.label;
+      final base = offer.exchangeRateSource == OfferExchangeRateSource.bnr
+          ? offer.bnrRate
+          : offer.manualRate;
+      final baseLabel = base > 0 ? base.toStringAsFixed(4) : '-';
+      final effective = offer.effectiveExchangeRate > 0
+          ? offer.effectiveExchangeRate.toStringAsFixed(4)
+          : '-';
+      final commission = offer.exchangeCommissionPercent.toStringAsFixed(2);
+      return '$source | baza $baseLabel | comision $commission% | efectiv $effective';
+    }
+
+    pw.Widget infoLine(
+      String label,
+      String value, {
+      double labelWidth = 96,
+      pw.TextStyle? valueStyle,
+    }) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 2),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: labelWidth,
+              child: pw.Text(
+                label,
+                style: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: 8.8,
+                  color: PdfColors.grey800,
+                ),
+              ),
+            ),
+            pw.Expanded(
+              child: pw.Text(
+                value.trim().isEmpty ? '-' : value.trim(),
+                style: valueStyle ?? const pw.TextStyle(fontSize: 8.8),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget sectionHeader(String title) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: pw.BoxDecoration(
+          color: _panelColor,
+          border: pw.Border.all(color: _panelBorderColor),
+          borderRadius: pw.BorderRadius.circular(6),
+        ),
+        child: pw.Text(
+          title,
+          style: pw.TextStyle(
+            fontSize: 11,
+            fontWeight: pw.FontWeight.bold,
+            color: _primaryColor,
+          ),
+        ),
+      );
+    }
+
+    pw.Widget infoPanel(String title, List<MapEntry<String, String>> entries) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(6),
+        decoration: pw.BoxDecoration(
+          color: PdfColors.white,
+          border: pw.Border.all(color: _panelBorderColor),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              title,
+              style: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 10.5,
+                color: _primaryColor,
+              ),
+            ),
+            pw.SizedBox(height: 3),
+            ...entries.map((entry) => infoLine(entry.key, entry.value)),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget noteBanner(String text) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: pw.BoxDecoration(
+          color: _noteColor,
+          border: pw.Border.all(color: _accentColor),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Text(
+          text,
+          style: pw.TextStyle(
+            fontSize: 8.3,
+            color: _secondaryColor,
+          ),
+        ),
+      );
+    }
+
+    pw.Widget totalLine(
+      String label,
+      String value, {
+      bool emphasize = false,
+    }) {
+      final style = pw.TextStyle(
+        fontSize: emphasize ? 10 : 8.6,
+        fontWeight: emphasize ? pw.FontWeight.bold : pw.FontWeight.normal,
+      );
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 2),
+        child: pw.Row(
+          children: [
+            pw.Expanded(child: pw.Text(label, style: style)),
+            pw.SizedBox(width: 12),
+            pw.Text(value, style: style),
+          ],
+        ),
+      );
+    }
+
+    final offerInfoEntries = <MapEntry<String, String>>[
+      MapEntry('Numar oferta', offer.offerNumber),
+      MapEntry('Data emitere', dateLabel(offer.issueDate)),
+      MapEntry('Valabil pana la', dateLabel(offer.validUntil)),
+      MapEntry('Status', offer.lifecycleLabel),
+      MapEntry('Emitent', issuerLabel),
+      MapEntry('Moneda', currencyLabel()),
+      if (currencyLabel() == 'EUR') MapEntry('Rezumat curs', rateSummary()),
+    ];
+
+    final clientInfoEntries = <MapEntry<String, String>>[
+      MapEntry('Client', clientLabel),
+      if (offer.commercialRecipientName.trim().isNotEmpty)
+        MapEntry(
+          'Destinatar comercial / platitor',
+          offer.commercialRecipientName.trim(),
+        ),
+      if (offer.beneficiaryName.trim().isNotEmpty)
+        MapEntry('Beneficiar real interventie', offer.beneficiaryName.trim()),
+      if (offer.departmentName.trim().isNotEmpty)
+        MapEntry('Departament', offer.departmentName.trim()),
+      if (offer.contactPersonName.trim().isNotEmpty)
+        MapEntry('Persoana contact', offer.contactPersonName.trim()),
+      if (offer.contactPersonEmail.trim().isNotEmpty)
+        MapEntry('Email', offer.contactPersonEmail.trim()),
+      if (offer.contactPersonPhone.trim().isNotEmpty)
+        MapEntry('Telefon', offer.contactPersonPhone.trim()),
+      if (offer.complaintNumber.trim().isNotEmpty)
+        MapEntry('Reclamatie sursa', offer.complaintNumber.trim()),
+      if (offer.appointmentId.trim().isNotEmpty)
+        MapEntry('Programare sursa', offer.appointmentId.trim()),
+      MapEntry('Lucrare', jobLabel),
+    ];
+    final equipmentEntries = _equipmentEntries(offer);
+    final clientSignature = _tryDecodeBase64(offer.clientSignatureBase64);
+    final issuerSignature = _tryDecodeBase64(offer.issuerSignatureBase64);
+    final showAgreementSection = offer.complaintId.trim().isNotEmpty ||
+        clientSignature != null ||
+        issuerSignature != null;
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.fromLTRB(18, 12, 18, 20),
+        footer: (ctx) => _buildPageFooter(ctx, branding),
+        build: (_) => [
+          buildClassicDocumentHeader(
+            branding: branding,
+            documentTitle: 'OFERTĂ COMERCIALĂ',
+            documentSubtitle: offer.title.trim(),
+            template: template,
+            metadata: <MapEntry<String, String>>[
+              MapEntry('Numar', offer.offerNumber),
+              MapEntry('Data emitere', dateLabel(offer.issueDate)),
+              MapEntry('Valabil pana la', dateLabel(offer.validUntil)),
+              MapEntry('Status', offer.lifecycleLabel),
+              MapEntry('Emitent', issuerLabel),
+              MapEntry('Moneda', currencyLabel()),
+            ],
+          ),
+          pw.SizedBox(height: 6),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Expanded(child: infoPanel('Date oferta', offerInfoEntries)),
+              pw.SizedBox(width: 10),
+              pw.Expanded(
+                child: infoPanel('Client / Lucrare', clientInfoEntries),
+              ),
+            ],
+          ),
+          if (equipmentEntries.isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            infoPanel('Echipament / Utilaj', equipmentEntries),
+          ],
+          pw.SizedBox(height: 6),
+          sectionHeader('Pozitii comerciale'),
+          pw.SizedBox(height: 4),
+          noteBanner(_priceDisplayNote(offer)),
+          pw.SizedBox(height: 6),
+          pw.TableHelper.fromTextArray(
+            headerStyle: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 8.4,
+              color: PdfColors.white,
+            ),
+            cellStyle: const pw.TextStyle(fontSize: 8.2),
+            headerDecoration: pw.BoxDecoration(color: _primaryColor),
+            rowDecoration: const pw.BoxDecoration(color: PdfColors.white),
+            oddRowDecoration: pw.BoxDecoration(color: _panelColor),
+            cellPadding: const pw.EdgeInsets.symmetric(
+              horizontal: 6,
+              vertical: 3,
+            ),
+            headers: <String>[
+              'Nr.',
+              'Produs / manopera',
+              'UM',
+              'Cantitate',
+              _priceColumnLabel(offer.priceDisplayMode, 'Pret unitar'),
+              _priceColumnLabel(offer.priceDisplayMode, 'Total'),
+            ],
+            columnWidths: <int, pw.TableColumnWidth>{
+              0: const pw.FixedColumnWidth(24),
+              1: const pw.FlexColumnWidth(6.2),
+              2: const pw.FixedColumnWidth(38),
+              3: const pw.FixedColumnWidth(56),
+              4: const pw.FixedColumnWidth(74),
+              5: const pw.FixedColumnWidth(78),
+            },
+            headerAlignments: <int, pw.Alignment>{
+              0: pw.Alignment.center,
+              1: pw.Alignment.centerLeft,
+              2: pw.Alignment.center,
+              3: pw.Alignment.centerRight,
+              4: pw.Alignment.centerRight,
+              5: pw.Alignment.centerRight,
+            },
+            cellAlignments: <int, pw.Alignment>{
+              0: pw.Alignment.center,
+              1: pw.Alignment.centerLeft,
+              2: pw.Alignment.center,
+              3: pw.Alignment.centerRight,
+              4: pw.Alignment.centerRight,
+              5: pw.Alignment.centerRight,
+            },
+            data: commercialLines
+                .map(
+                  (line) => [
+                    line.sortOrder.toString(),
+                    line.description.trim().isEmpty
+                        ? line.name
+                        : '${line.name}\n${line.description.trim()}',
+                    line.unit,
+                    line.quantity.toStringAsFixed(2),
+                    _priceDisplayValue(
+                      offer,
+                      line.unitPrice,
+                      currencyLabel(),
+                      labeled:
+                          offer.priceDisplayMode == OfferPriceDisplayMode.both,
+                    ),
+                    _priceDisplayValue(
+                      offer,
+                      line.effectiveLineTotal,
+                      currencyLabel(),
+                      labeled:
+                          offer.priceDisplayMode == OfferPriceDisplayMode.both,
+                    ),
+                  ],
+                )
+                .toList(growable: false),
+          ),
+          pw.SizedBox(height: 8),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Spacer(),
+              pw.Container(
+                width: 272,
+                padding: const pw.EdgeInsets.fromLTRB(10, 8, 10, 8),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: _panelBorderColor),
+                  borderRadius: pw.BorderRadius.circular(8),
+                  color: _panelColor,
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      'Rezumat comercial',
+                      style: pw.TextStyle(
+                        fontSize: 10,
+                        fontWeight: pw.FontWeight.bold,
+                        color: _primaryColor,
+                      ),
+                    ),
+                    pw.SizedBox(height: 4),
+                    totalLine(
+                      'Subtotal materiale',
+                      _priceDisplayValue(
+                        offer,
+                        offer.materialSubtotal,
+                        currencyLabel(),
+                      ),
+                    ),
+                    totalLine(
+                      'Manopera',
+                      _priceDisplayValue(
+                        offer,
+                        offer.laborSubtotal,
+                        currencyLabel(),
+                      ),
+                    ),
+                    totalLine(
+                      'Cost estimat',
+                      _priceDisplayValue(
+                        offer,
+                        offer.subtotalDirect,
+                        currencyLabel(),
+                      ),
+                    ),
+                    totalLine(
+                      'Regie (${offer.regiePercent.toStringAsFixed(2)}%)',
+                      _priceDisplayValue(
+                          offer, offer.regieValue, currencyLabel()),
+                    ),
+                    totalLine(
+                      'Profit (${offer.profitPercent.toStringAsFixed(2)}%)',
+                      _priceDisplayValue(
+                        offer,
+                        offer.profitValue,
+                        currencyLabel(),
+                      ),
+                    ),
+                    totalLine(
+                      offer.priceDisplayMode == OfferPriceDisplayMode.both
+                          ? 'Total fără TVA'
+                          : 'Preț ofertat',
+                      '${money(offer.subtotalComercial)} ${currencyLabel()}',
+                    ),
+                    if (offer.priceDisplayMode == OfferPriceDisplayMode.both)
+                      totalLine(
+                        'TVA (${offer.vatPercent.toStringAsFixed(2)}%)',
+                        '${money(offer.vatValue)} ${currencyLabel()}',
+                      ),
+                    pw.SizedBox(height: 2),
+                    pw.Divider(color: PdfColors.grey400, height: 8),
+                    totalLine(
+                      offer.priceDisplayMode == OfferPriceDisplayMode.withoutVat
+                          ? 'Total fără TVA'
+                          : offer.priceDisplayMode ==
+                                  OfferPriceDisplayMode.withVat
+                              ? 'Total'
+                              : 'Total cu TVA',
+                      offer.priceDisplayMode == OfferPriceDisplayMode.withoutVat
+                          ? '${money(offer.subtotalComercial)} ${currencyLabel()}'
+                          : '${money(offer.totalValue)} ${currencyLabel()}',
+                      emphasize: true,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (offer.partners.isNotEmpty ||
+              offer.partnerWorkers.isNotEmpty ||
+              offer.partnerVehicles.isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Resurse partener'),
+            pw.SizedBox(height: 6),
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey300),
+                borderRadius: pw.BorderRadius.circular(8),
+                color: PdfColors.grey50,
+              ),
+              child: pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Expanded(
+                    child: totalLine(
+                      'Total personal partener',
+                      '${money(partnerWorkersTotal)} $partnerCurrency',
+                    ),
+                  ),
+                  pw.SizedBox(width: 10),
+                  pw.Expanded(
+                    child: totalLine(
+                      'Total autovehicule partener',
+                      '${money(partnerVehiclesTotal)} $partnerCurrency',
+                    ),
+                  ),
+                  pw.SizedBox(width: 10),
+                  pw.Expanded(
+                    child: totalLine(
+                      'Total general parteneri',
+                      '${money(partnersTotal)} $partnerCurrency',
+                      emphasize: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 6),
+            ...offer.partners.map(
+              (partner) {
+                final partnerWorkers = workersFor(partner.id);
+                final partnerVehicles = vehiclesFor(partner.id);
+                final workerTotal = workersTotalFor(partner.id);
+                final vehicleTotal = vehiclesTotalFor(partner.id);
+                final partnerTotal = workerTotal + vehicleTotal;
+                return pw.Container(
+                  width: double.infinity,
+                  margin: const pw.EdgeInsets.only(bottom: 6),
+                  padding: const pw.EdgeInsets.all(8),
+                  decoration: pw.BoxDecoration(
+                    border: pw.Border.all(color: PdfColors.grey300),
+                    borderRadius: pw.BorderRadius.circular(8),
+                  ),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        partner.name.trim().isEmpty
+                            ? 'Partener'
+                            : partner.name.trim(),
+                        style: pw.TextStyle(
+                          fontSize: 10,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                      if (partner.contactPerson.trim().isNotEmpty ||
+                          partner.phone.trim().isNotEmpty ||
+                          partner.email.trim().isNotEmpty)
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.only(top: 2, bottom: 4),
+                          child: pw.Text(
+                            [
+                              if (partner.contactPerson.trim().isNotEmpty)
+                                'Contact: ${partner.contactPerson.trim()}',
+                              if (partner.phone.trim().isNotEmpty)
+                                'Tel: ${partner.phone.trim()}',
+                              if (partner.email.trim().isNotEmpty)
+                                'Email: ${partner.email.trim()}',
+                            ].join(' | '),
+                            style: const pw.TextStyle(fontSize: 8.4),
+                          ),
+                        ),
+                      if (partnerWorkers.isNotEmpty) ...[
+                        pw.Text(
+                          'Personal partener',
+                          style: pw.TextStyle(
+                            fontSize: 8.8,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        pw.SizedBox(height: 3),
+                        pw.TableHelper.fromTextArray(
+                          headerStyle: pw.TextStyle(
+                            fontWeight: pw.FontWeight.bold,
+                            fontSize: 7.8,
+                          ),
+                          cellStyle: const pw.TextStyle(fontSize: 7.6),
+                          headerDecoration:
+                              const pw.BoxDecoration(color: PdfColors.grey200),
+                          rowDecoration:
+                              const pw.BoxDecoration(color: PdfColors.white),
+                          oddRowDecoration:
+                              pw.BoxDecoration(color: _panelColor),
+                          cellPadding: const pw.EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          headers: const [
+                            'Nume',
+                            'Rol',
+                            'Ore',
+                            'Tarif/ora',
+                            'Total',
+                          ],
+                          columnWidths: <int, pw.TableColumnWidth>{
+                            0: const pw.FlexColumnWidth(2.2),
+                            1: const pw.FlexColumnWidth(1.5),
+                            2: const pw.FixedColumnWidth(42),
+                            3: const pw.FixedColumnWidth(62),
+                            4: const pw.FixedColumnWidth(66),
+                          },
+                          data: partnerWorkers
+                              .map(
+                                (worker) => [
+                                  worker.fullName.trim().isEmpty
+                                      ? '-'
+                                      : worker.fullName.trim(),
+                                  worker.role.trim().isEmpty
+                                      ? '-'
+                                      : worker.role.trim(),
+                                  worker.hours.toStringAsFixed(2),
+                                  '${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency.trim().isEmpty ? partnerCurrency : worker.currency.trim()}',
+                                  '${worker.total.toStringAsFixed(2)} ${worker.currency.trim().isEmpty ? partnerCurrency : worker.currency.trim()}',
+                                ],
+                              )
+                              .toList(growable: false),
+                        ),
+                        pw.SizedBox(height: 3),
+                      ],
+                      if (partnerVehicles.isNotEmpty) ...[
+                        pw.Text(
+                          'Autovehicule partener',
+                          style: pw.TextStyle(
+                            fontSize: 8.8,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                        ),
+                        pw.SizedBox(height: 3),
+                        pw.TableHelper.fromTextArray(
+                          headerStyle: pw.TextStyle(
+                            fontWeight: pw.FontWeight.bold,
+                            fontSize: 7.8,
+                          ),
+                          cellStyle: const pw.TextStyle(fontSize: 7.6),
+                          headerDecoration:
+                              const pw.BoxDecoration(color: PdfColors.grey200),
+                          rowDecoration:
+                              const pw.BoxDecoration(color: PdfColors.white),
+                          oddRowDecoration:
+                              pw.BoxDecoration(color: _panelColor),
+                          cellPadding: const pw.EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          headers: const [
+                            'Vehicul',
+                            'Nr. inm.',
+                            'Km',
+                            'Consum',
+                            'Pret combustibil',
+                            'Total',
+                          ],
+                          columnWidths: <int, pw.TableColumnWidth>{
+                            0: const pw.FlexColumnWidth(2.0),
+                            1: const pw.FixedColumnWidth(58),
+                            2: const pw.FixedColumnWidth(42),
+                            3: const pw.FixedColumnWidth(46),
+                            4: const pw.FixedColumnWidth(72),
+                            5: const pw.FixedColumnWidth(66),
+                          },
+                          data: partnerVehicles
+                              .map(
+                                (vehicle) => [
+                                  vehicle.vehicleName.trim().isEmpty
+                                      ? '-'
+                                      : vehicle.vehicleName.trim(),
+                                  vehicle.registrationNumber.trim().isEmpty
+                                      ? '-'
+                                      : vehicle.registrationNumber.trim(),
+                                  vehicle.km.toStringAsFixed(2),
+                                  vehicle.fuelConsumptionPer100Km
+                                      .toStringAsFixed(2),
+                                  '${vehicle.fuelPricePerLiter.toStringAsFixed(2)} ${vehicle.currency.trim().isEmpty ? partnerCurrency : vehicle.currency.trim()}',
+                                  '${vehicle.total.toStringAsFixed(2)} ${vehicle.currency.trim().isEmpty ? partnerCurrency : vehicle.currency.trim()}',
+                                ],
+                              )
+                              .toList(growable: false),
+                        ),
+                        pw.SizedBox(height: 3),
+                      ],
+                      totalLine(
+                        'Total partener',
+                        '${money(partnerTotal)} $partnerCurrency',
+                        emphasize: true,
+                      ),
+                      if (partner.notes.trim().isNotEmpty)
+                        pw.Padding(
+                          padding: const pw.EdgeInsets.only(top: 3),
+                          child: pw.Text(
+                            'Observații: ${partner.notes.trim()}',
+                            style: const pw.TextStyle(fontSize: 8.2),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+          if (offer.commercialClauses.isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Servicii incluse / Condiții comerciale'),
+            pw.SizedBox(height: 6),
+            ...offer.commercialClauses.map(
+              (clause) => pw.Container(
+                width: double.infinity,
+                margin: const pw.EdgeInsets.only(bottom: 5),
+                padding: const pw.EdgeInsets.all(7),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: PdfColors.grey300),
+                  borderRadius: pw.BorderRadius.circular(4),
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      clause.title.trim().isEmpty
+                          ? 'Condiție comercială'
+                          : clause.title.trim(),
+                      style: pw.TextStyle(
+                        fontWeight: pw.FontWeight.bold,
+                        fontSize: 9.5,
+                      ),
+                    ),
+                    pw.SizedBox(height: 3),
+                    pw.Text(
+                      clause.content.trim().isEmpty
+                          ? '-'
+                          : clause.content.trim(),
+                      style: const pw.TextStyle(fontSize: 8.8),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          ],
+          if (showAgreementSection) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Acord client / beneficiar'),
+            pw.SizedBox(height: 6),
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey300),
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Text(
+                'Prin semnare, beneficiarul și/sau destinatarul comercial confirmă primirea devizului / ofertei și își exprimă acordul pentru efectuarea intervenției în condițiile comerciale menționate în document.',
+                style: const pw.TextStyle(fontSize: 8.7),
+              ),
+            ),
+          ],
+          if (offer.notes.trim().isNotEmpty ||
+              offer.registryNumber.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Observații / Registratură'),
+            pw.SizedBox(height: 6),
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey300),
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  if (offer.notes.trim().isNotEmpty)
+                    infoLine('Observații', offer.notes.trim(), labelWidth: 90),
+                  if (offer.registryNumber.trim().isNotEmpty)
+                    infoLine(
+                      'Registratură',
+                      offer.registryNumber.trim(),
+                      labelWidth: 90,
+                    ),
+                ],
+              ),
+            ),
+          ],
+          if (clientSignature != null || issuerSignature != null) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Semnături'),
+            pw.SizedBox(height: 6),
+            pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Expanded(
+                  child: _signatureBox(
+                    title: 'Semnătură client / beneficiar',
+                    image: clientSignature,
+                    subtitle: offer.agreementAcceptedAt == null
+                        ? ''
+                        : 'Acord la data ${dateLabel(offer.agreementAcceptedAt)}',
+                  ),
+                ),
+                pw.SizedBox(width: 12),
+                pw.Expanded(
+                  child: _signatureBox(
+                    title: 'Semnătură emitent / reprezentant firmă',
+                    image: issuerSignature,
+                    subtitle: offer.commercialRecipientName.trim().isNotEmpty
+                        ? 'Destinatar comercial: ${offer.commercialRecipientName.trim()}'
+                        : '',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+
+    final bytes = await doc.save();
+    final fileName = exportFileName(offer);
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: bytes,
+      fileName: fileName,
+      category: PdfDocumentCategory.offers,
+      outputDirectory: outputDirectory,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static Future<void> share({
+    required OfferRecord offer,
+    required String clientLabel,
+    required String jobLabel,
+    required String issuerLabel,
+    required DocumentBrandingData branding,
+    required PdfVisualTemplate template,
+  }) async {
+    final pdfFonts = await PdfFontBundle.load();
+    final doc = pw.Document(theme: pdfFonts.theme);
+    if (template == PdfVisualTemplate.joyson) {
+      _buildJoysonOfferDocument(
+        doc: doc,
+        offer: offer,
+        clientLabel: clientLabel,
+        jobLabel: jobLabel,
+        issuerLabel: issuerLabel,
+        branding: branding,
+      );
+      final bytes = await doc.save();
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: _fileName(offer.offerNumber),
+      );
+      return;
+    }
+    final commercialLines = buildCommercialOfferLines(offer.lines);
+    final partnerCurrency = OfferCurrencyConverter.normalizeCurrency(
+      offer.currency,
+    );
+
+    List<OfferPartnerWorker> workersFor(String partnerId) =>
+        offer.partnerWorkers
+            .where((worker) => worker.partnerId == partnerId)
+            .toList(growable: false);
+
+    List<OfferPartnerVehicle> vehiclesFor(String partnerId) =>
+        offer.partnerVehicles
+            .where((vehicle) => vehicle.partnerId == partnerId)
+            .toList(growable: false);
+
+    double workersTotalFor(String partnerId) => workersFor(partnerId).fold(
+          0.0,
+          (sum, worker) => sum + worker.total,
+        );
+
+    double vehiclesTotalFor(String partnerId) => vehiclesFor(partnerId).fold(
+          0.0,
+          (sum, vehicle) => sum + vehicle.total,
+        );
+
+    final partnerWorkersTotal = offer.partnerWorkers.fold<double>(
+      0.0,
+      (sum, worker) => sum + worker.total,
+    );
+    final partnerVehiclesTotal = offer.partnerVehicles.fold<double>(
+      0.0,
+      (sum, vehicle) => sum + vehicle.total,
+    );
+    final partnersTotal = partnerWorkersTotal + partnerVehiclesTotal;
+
+    String dateLabel(DateTime? value) {
+      if (value == null) return '-';
+      final d = value.day.toString().padLeft(2, '0');
+      final m = value.month.toString().padLeft(2, '0');
+      return '$d.$m.${value.year}';
+    }
+
+    String money(double value) {
+      final converted = OfferCurrencyConverter.convertRonToOfferCurrency(
+        ronAmount: value,
+        currency: offer.currency,
+        effectiveRate: offer.effectiveExchangeRate,
+      );
+      return converted.toStringAsFixed(2);
+    }
+
+    String currencyLabel() => OfferCurrencyConverter.normalizeCurrency(
+          offer.currency,
+        );
+
+    String rateSummary() {
+      if (currencyLabel() != 'EUR') return '-';
+      final source = offer.exchangeRateSource.label;
+      final base = offer.exchangeRateSource == OfferExchangeRateSource.bnr
+          ? offer.bnrRate
+          : offer.manualRate;
+      final baseLabel = base > 0 ? base.toStringAsFixed(4) : '-';
+      final effective = offer.effectiveExchangeRate > 0
+          ? offer.effectiveExchangeRate.toStringAsFixed(4)
+          : '-';
+      final commission = offer.exchangeCommissionPercent.toStringAsFixed(2);
+      return '$source | baza $baseLabel | comision $commission% | efectiv $effective';
+    }
+
+    pw.Widget infoLine(
+      String label,
+      String value, {
+      double labelWidth = 96,
+      pw.TextStyle? valueStyle,
+    }) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 3),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: labelWidth,
+              child: pw.Text(
+                label,
+                style: pw.TextStyle(
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: 8.8,
+                  color: PdfColors.grey800,
+                ),
+              ),
+            ),
+            pw.Expanded(
+              child: pw.Text(
+                value.trim().isEmpty ? '-' : value.trim(),
+                style: valueStyle ?? const pw.TextStyle(fontSize: 8.8),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget sectionHeader(String text) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: pw.BoxDecoration(
+          color: _panelColor,
+          border: pw.Border.all(color: _panelBorderColor),
+          borderRadius: pw.BorderRadius.circular(6),
+        ),
+        child: pw.Text(
+          text,
+          style: pw.TextStyle(
+            fontWeight: pw.FontWeight.bold,
+            fontSize: 10,
+            color: _primaryColor,
+          ),
+        ),
+      );
+    }
+
+    pw.Widget infoPanel(String title, List<MapEntry<String, String>> entries) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(6),
+        decoration: pw.BoxDecoration(
+          color: PdfColors.white,
+          border: pw.Border.all(color: _panelBorderColor),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              title,
+              style: pw.TextStyle(
+                fontSize: 9.5,
+                fontWeight: pw.FontWeight.bold,
+                color: _primaryColor,
+              ),
+            ),
+            pw.SizedBox(height: 4),
+            ...entries.map((entry) => infoLine(entry.key, entry.value)),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget noteBanner(String text) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: pw.BoxDecoration(
+          color: _noteColor,
+          border: pw.Border.all(color: _accentColor),
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Text(
+          text,
+          style: pw.TextStyle(
+            fontSize: 8.3,
+            color: _secondaryColor,
+          ),
+        ),
+      );
+    }
+
+    pw.Widget valueCell(
+      String value, {
+      pw.TextAlign align = pw.TextAlign.left,
+      pw.TextStyle? style,
+    }) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+        child: pw.Text(
+          value,
+          textAlign: align,
+          style: style ?? const pw.TextStyle(fontSize: 8.3),
+        ),
+      );
+    }
+
+    final offerInfoEntries = <MapEntry<String, String>>[
+      MapEntry('Numar oferta', offer.offerNumber),
+      MapEntry('Data emitere', dateLabel(offer.issueDate)),
+      MapEntry('Valabil pana la', dateLabel(offer.validUntil)),
+      MapEntry('Status', offer.lifecycleLabel),
+      MapEntry('Emitent', issuerLabel),
+      MapEntry('Moneda', currencyLabel()),
+      if (currencyLabel() == 'EUR') MapEntry('Rezumat curs', rateSummary()),
+    ];
+
+    final clientInfoEntries = <MapEntry<String, String>>[
+      MapEntry('Client', clientLabel),
+      if (offer.commercialRecipientName.trim().isNotEmpty)
+        MapEntry(
+          'Destinatar comercial / platitor',
+          offer.commercialRecipientName.trim(),
+        ),
+      if (offer.beneficiaryName.trim().isNotEmpty)
+        MapEntry('Beneficiar real interventie', offer.beneficiaryName.trim()),
+      if (offer.departmentName.trim().isNotEmpty)
+        MapEntry('Departament', offer.departmentName.trim()),
+      if (offer.contactPersonName.trim().isNotEmpty)
+        MapEntry('Persoana contact', offer.contactPersonName.trim()),
+      if (offer.contactPersonEmail.trim().isNotEmpty)
+        MapEntry('Email', offer.contactPersonEmail.trim()),
+      if (offer.contactPersonPhone.trim().isNotEmpty)
+        MapEntry('Telefon', offer.contactPersonPhone.trim()),
+      if (offer.complaintNumber.trim().isNotEmpty)
+        MapEntry('Reclamatie sursa', offer.complaintNumber.trim()),
+      if (offer.appointmentId.trim().isNotEmpty)
+        MapEntry('Programare sursa', offer.appointmentId.trim()),
+      MapEntry('Lucrare', jobLabel),
+    ];
+    final equipmentEntries = _equipmentEntries(offer);
+    final clientSignature = _tryDecodeBase64(offer.clientSignatureBase64);
+    final issuerSignature = _tryDecodeBase64(offer.issuerSignatureBase64);
+    final showAgreementSection = offer.complaintId.trim().isNotEmpty ||
+        clientSignature != null ||
+        issuerSignature != null;
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4.landscape,
+        margin: const pw.EdgeInsets.fromLTRB(18, 12, 18, 20),
+        footer: (ctx) => _buildPageFooter(ctx, branding),
+        build: (_) => [
+          buildClassicDocumentHeader(
+            branding: branding,
+            documentTitle: offer.tipDocument.pdfTitle,
+            documentSubtitle: offer.title.trim(),
+            template: template,
+            metadata: <MapEntry<String, String>>[
+              MapEntry('Numar', offer.offerNumber),
+              MapEntry('Data emitere', dateLabel(offer.issueDate)),
+              MapEntry('Valabil pana la', dateLabel(offer.validUntil)),
+              MapEntry('Status', offer.lifecycleLabel),
+              MapEntry('Emitent', issuerLabel),
+              MapEntry('Moneda', currencyLabel()),
+            ],
+          ),
+          pw.SizedBox(height: 6),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Expanded(child: infoPanel('Date document', offerInfoEntries)),
+              pw.SizedBox(width: 10),
+              pw.Expanded(
+                  child: infoPanel('Client / Context', clientInfoEntries)),
+            ],
+          ),
+          if (equipmentEntries.isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            infoPanel('Echipament / Utilaj', equipmentEntries),
+          ],
+          pw.SizedBox(height: 6),
+          sectionHeader('Pozitii comerciale'),
+          pw.SizedBox(height: 4),
+          noteBanner(_priceDisplayNote(offer)),
+          pw.SizedBox(height: 6),
+          pw.Table(
+            border: pw.TableBorder.all(color: _panelBorderColor, width: 0.6),
+            columnWidths: const {
+              0: pw.FixedColumnWidth(26),
+              1: pw.FlexColumnWidth(4.6),
+              2: pw.FlexColumnWidth(0.9),
+              3: pw.FlexColumnWidth(0.9),
+              4: pw.FlexColumnWidth(1.3),
+              5: pw.FlexColumnWidth(1.4),
+            },
+            children: [
+              pw.TableRow(
+                decoration: pw.BoxDecoration(color: _primaryColor),
+                children: [
+                  valueCell(
+                    '#',
+                    align: pw.TextAlign.center,
+                    style: pw.TextStyle(
+                      fontSize: 8.2,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                  valueCell(
+                    'Produs / manopera',
+                    style: pw.TextStyle(
+                      fontSize: 8.2,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                  valueCell(
+                    'UM',
+                    align: pw.TextAlign.center,
+                    style: pw.TextStyle(
+                      fontSize: 8.2,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                  valueCell(
+                    'Cant.',
+                    align: pw.TextAlign.center,
+                    style: pw.TextStyle(
+                      fontSize: 8.2,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                  valueCell(
+                    _priceColumnLabel(offer.priceDisplayMode, 'Pret unitar'),
+                    align: pw.TextAlign.right,
+                    style: pw.TextStyle(
+                      fontSize: 8.2,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                  valueCell(
+                    _priceColumnLabel(offer.priceDisplayMode, 'Total'),
+                    align: pw.TextAlign.right,
+                    style: pw.TextStyle(
+                      fontSize: 8.2,
+                      fontWeight: pw.FontWeight.bold,
+                      color: PdfColors.white,
+                    ),
+                  ),
+                ],
+              ),
+              ...commercialLines.asMap().entries.map(
+                    (entry) => pw.TableRow(
+                      decoration: pw.BoxDecoration(
+                        color: entry.key.isEven ? PdfColors.white : _panelColor,
+                      ),
+                      children: [
+                        valueCell(entry.value.sortOrder.toString(),
+                            align: pw.TextAlign.center),
+                        valueCell(
+                          entry.value.description.trim().isEmpty
+                              ? entry.value.name
+                              : '${entry.value.name}\n${entry.value.description.trim()}',
+                        ),
+                        valueCell(entry.value.unit, align: pw.TextAlign.center),
+                        valueCell(
+                          entry.value.quantity.toStringAsFixed(2),
+                          align: pw.TextAlign.center,
+                        ),
+                        valueCell(
+                          _priceDisplayValue(
+                            offer,
+                            entry.value.unitPrice,
+                            partnerCurrency,
+                            labeled: offer.priceDisplayMode ==
+                                OfferPriceDisplayMode.both,
+                          ),
+                          align: pw.TextAlign.right,
+                        ),
+                        valueCell(
+                          _priceDisplayValue(
+                            offer,
+                            entry.value.effectiveLineTotal,
+                            partnerCurrency,
+                            labeled: offer.priceDisplayMode ==
+                                OfferPriceDisplayMode.both,
+                          ),
+                          align: pw.TextAlign.right,
+                        ),
+                      ],
+                    ),
+                  ),
+            ],
+          ),
+          pw.SizedBox(height: 10),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Expanded(
+                flex: 3,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    if (offer.partners.isNotEmpty ||
+                        offer.partnerWorkers.isNotEmpty ||
+                        offer.partnerVehicles.isNotEmpty) ...[
+                      sectionHeader('Resurse parteneri'),
+                      pw.SizedBox(height: 6),
+                      ...offer.partners.map(
+                        (partner) => pw.Container(
+                          width: double.infinity,
+                          margin: const pw.EdgeInsets.only(bottom: 6),
+                          padding: const pw.EdgeInsets.all(8),
+                          decoration: pw.BoxDecoration(
+                            border: pw.Border.all(color: PdfColors.grey300),
+                            borderRadius: pw.BorderRadius.circular(8),
+                          ),
+                          child: pw.Column(
+                            crossAxisAlignment: pw.CrossAxisAlignment.start,
+                            children: [
+                              pw.Text(
+                                partner.name.trim().isEmpty
+                                    ? '-'
+                                    : partner.name.trim(),
+                                style: pw.TextStyle(
+                                  fontWeight: pw.FontWeight.bold,
+                                  fontSize: 9.2,
+                                ),
+                              ),
+                              if (partner.contactPerson.trim().isNotEmpty)
+                                pw.Padding(
+                                  padding: const pw.EdgeInsets.only(top: 2),
+                                  child: pw.Text(
+                                    'Contact: ${partner.contactPerson.trim()}',
+                                    style: const pw.TextStyle(fontSize: 8.5),
+                                  ),
+                                ),
+                              pw.Padding(
+                                padding: const pw.EdgeInsets.only(top: 3),
+                                child: pw.Text(
+                                  'Total personal: ${workersTotalFor(partner.id).toStringAsFixed(2)} $partnerCurrency | Total vehicule: ${vehiclesTotalFor(partner.id).toStringAsFixed(2)} $partnerCurrency',
+                                  style: const pw.TextStyle(fontSize: 8.5),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      pw.SizedBox(height: 4),
+                    ],
+                    if (showAgreementSection) ...[
+                      sectionHeader('Acord client / beneficiar'),
+                      pw.SizedBox(height: 6),
+                      pw.Container(
+                        width: double.infinity,
+                        padding: const pw.EdgeInsets.all(8),
+                        decoration: pw.BoxDecoration(
+                          border: pw.Border.all(color: PdfColors.grey300),
+                          borderRadius: pw.BorderRadius.circular(8),
+                        ),
+                        child: pw.Text(
+                          'Prin semnare, beneficiarul și/sau destinatarul comercial confirmă primirea devizului / ofertei și își exprimă acordul pentru efectuarea intervenției în condițiile comerciale menționate în document.',
+                          style: const pw.TextStyle(fontSize: 8.7),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              pw.SizedBox(width: 10),
+              pw.Expanded(
+                flex: 2,
+                child: pw.Container(
+                  padding: const pw.EdgeInsets.all(8),
+                  decoration: pw.BoxDecoration(
+                    color: _panelColor,
+                    border: pw.Border.all(color: _panelBorderColor),
+                    borderRadius: pw.BorderRadius.circular(8),
+                  ),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        'Sinteză comercială',
+                        style: pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 9.5,
+                          color: _primaryColor,
+                        ),
+                      ),
+                      pw.SizedBox(height: 6),
+                      infoLine(
+                        'Materiale',
+                        _priceDisplayValue(
+                          offer,
+                          offer.materialSubtotal,
+                          partnerCurrency,
+                        ),
+                        labelWidth: 92,
+                      ),
+                      infoLine(
+                        'Manopera',
+                        _priceDisplayValue(
+                          offer,
+                          offer.laborSubtotal,
+                          partnerCurrency,
+                        ),
+                        labelWidth: 92,
+                      ),
+                      infoLine(
+                        'Cost estimat',
+                        _priceDisplayValue(
+                          offer,
+                          offer.subtotalDirect,
+                          partnerCurrency,
+                        ),
+                        labelWidth: 92,
+                      ),
+                      infoLine(
+                        'Regie',
+                        '${offer.regiePercent.toStringAsFixed(2)}% | ${_priceDisplayValue(offer, offer.regieValue, partnerCurrency)}',
+                        labelWidth: 92,
+                      ),
+                      infoLine(
+                        'Profit',
+                        '${offer.profitPercent.toStringAsFixed(2)}% | ${_priceDisplayValue(offer, offer.profitValue, partnerCurrency)}',
+                        labelWidth: 92,
+                      ),
+                      infoLine(
+                        offer.priceDisplayMode == OfferPriceDisplayMode.both
+                            ? 'Total fără TVA'
+                            : 'Preț ofertat',
+                        '${money(offer.subtotalComercial)} $partnerCurrency',
+                        labelWidth: 92,
+                      ),
+                      if (offer.priceDisplayMode == OfferPriceDisplayMode.both)
+                        infoLine(
+                          'TVA',
+                          '${offer.vatPercent.toStringAsFixed(2)}% | ${money(offer.vatValue)} $partnerCurrency',
+                          labelWidth: 92,
+                        ),
+                      pw.Divider(color: PdfColors.grey400),
+                      infoLine(
+                        offer.priceDisplayMode ==
+                                OfferPriceDisplayMode.withoutVat
+                            ? 'Total fără TVA'
+                            : offer.priceDisplayMode ==
+                                    OfferPriceDisplayMode.withVat
+                                ? 'Total'
+                                : 'Total cu TVA',
+                        offer.priceDisplayMode ==
+                                OfferPriceDisplayMode.withoutVat
+                            ? '${money(offer.subtotalComercial)} $partnerCurrency'
+                            : '${money(offer.totalValue)} $partnerCurrency',
+                        labelWidth: 92,
+                        valueStyle: pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 9.5,
+                        ),
+                      ),
+                      if (partnersTotal > 0) ...[
+                        pw.SizedBox(height: 6),
+                        infoLine(
+                          'Total parteneri',
+                          '${partnersTotal.toStringAsFixed(2)} $partnerCurrency',
+                          labelWidth: 92,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (offer.commercialClauses.isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Servicii incluse / Condiții comerciale'),
+            pw.SizedBox(height: 6),
+            ...offer.commercialClauses.map(
+              (clause) => pw.Container(
+                width: double.infinity,
+                margin: const pw.EdgeInsets.only(bottom: 5),
+                padding: const pw.EdgeInsets.all(7),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: PdfColors.grey300),
+                  borderRadius: pw.BorderRadius.circular(4),
+                ),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      clause.title.trim().isEmpty
+                          ? 'Condiție comercială'
+                          : clause.title.trim(),
+                      style: pw.TextStyle(
+                        fontWeight: pw.FontWeight.bold,
+                        fontSize: 9.5,
+                      ),
+                    ),
+                    pw.SizedBox(height: 3),
+                    pw.Text(
+                      clause.content.trim().isEmpty
+                          ? '-'
+                          : clause.content.trim(),
+                      style: const pw.TextStyle(fontSize: 8.8),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          if (offer.notes.trim().isNotEmpty ||
+              offer.registryNumber.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Observații / Registratură'),
+            pw.SizedBox(height: 6),
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                border: pw.Border.all(color: PdfColors.grey300),
+                borderRadius: pw.BorderRadius.circular(8),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  if (offer.notes.trim().isNotEmpty)
+                    infoLine('Observații', offer.notes.trim(), labelWidth: 90),
+                  if (offer.registryNumber.trim().isNotEmpty)
+                    infoLine(
+                      'Registratură',
+                      offer.registryNumber.trim(),
+                      labelWidth: 90,
+                    ),
+                ],
+              ),
+            ),
+          ],
+          if (clientSignature != null || issuerSignature != null) ...[
+            pw.SizedBox(height: 8),
+            sectionHeader('Semnături'),
+            pw.SizedBox(height: 6),
+            pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Expanded(
+                  child: _signatureBox(
+                    title: 'Semnătură client / beneficiar',
+                    image: clientSignature,
+                    subtitle: offer.agreementAcceptedAt == null
+                        ? ''
+                        : 'Acord la data ${dateLabel(offer.agreementAcceptedAt)}',
+                  ),
+                ),
+                pw.SizedBox(width: 12),
+                pw.Expanded(
+                  child: _signatureBox(
+                    title: 'Semnătură emitent / reprezentant firmă',
+                    image: issuerSignature,
+                    subtitle: offer.commercialRecipientName.trim().isNotEmpty
+                        ? 'Destinatar comercial: ${offer.commercialRecipientName.trim()}'
+                        : '',
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+
+    final bytes = await doc.save();
+    await Printing.sharePdf(
+      bytes: bytes,
+      filename: exportFileName(offer),
+    );
+  }
+
+  static pw.Widget _buildPageFooter(
+    pw.Context ctx,
+    DocumentBrandingData b,
+  ) {
+    final parts = <String>[
+      if (b.companyName.isNotEmpty) b.companyName,
+      if (b.phone.isNotEmpty) 'Tel: ${b.phone}',
+      if (b.email.isNotEmpty) 'Email: ${b.email}',
+      if (b.website.isNotEmpty) b.website,
+    ];
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border(
+          top: pw.BorderSide(color: _panelBorderColor, width: 0.5),
+        ),
+      ),
+      padding: const pw.EdgeInsets.only(top: 4),
+      child: pw.Row(
+        children: [
+          pw.Expanded(
+            child: pw.Text(
+              parts.join('  |  '),
+              style: pw.TextStyle(fontSize: 7, color: _secondaryColor),
+            ),
+          ),
+          pw.Text(
+            'Pagina ${ctx.pageNumber} din ${ctx.pagesCount}',
+            style: pw.TextStyle(fontSize: 7, color: _secondaryColor),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static void _buildJoysonOfferDocument({
+    required pw.Document doc,
+    required OfferRecord offer,
+    required String clientLabel,
+    required String jobLabel,
+    required String issuerLabel,
+    required DocumentBrandingData branding,
+  }) {
+    final palette = resolvePdfTemplatePalette(PdfVisualTemplate.joyson);
+    final commercialLines = buildCommercialOfferLines(offer.lines);
+    final materialLines = commercialLines
+        .where((line) => line.lineType == OfferLineType.material)
+        .toList(growable: false);
+    final serviceLines = commercialLines
+        .where((line) => line.lineType != OfferLineType.material)
+        .toList(growable: false);
+    final clientSignature = _tryDecodeBase64(offer.clientSignatureBase64);
+    final issuerSignature = _tryDecodeBase64(offer.issuerSignatureBase64);
+
+    String dateLabel(DateTime? value) {
+      if (value == null) return '-';
+      final day = value.day.toString().padLeft(2, '0');
+      final month = value.month.toString().padLeft(2, '0');
+      return '$day.$month.${value.year}';
+    }
+
+    String money(double value) {
+      final converted = OfferCurrencyConverter.convertRonToOfferCurrency(
+        ronAmount: value,
+        currency: offer.currency,
+        effectiveRate: offer.effectiveExchangeRate,
+      );
+      return '${converted.toStringAsFixed(2)} ${OfferCurrencyConverter.normalizeCurrency(offer.currency)}';
+    }
+
+    String quantityLabel(double value) {
+      return value.toStringAsFixed(value == value.roundToDouble() ? 0 : 2);
+    }
+
+    String validityDaysLabel() {
+      final validUntil = offer.validUntil;
+      if (validUntil == null) return '-';
+      final issue = DateTime(
+          offer.issueDate.year, offer.issueDate.month, offer.issueDate.day);
+      final end = DateTime(validUntil.year, validUntil.month, validUntil.day);
+      return '${end.difference(issue).inDays.clamp(0, 9999)}';
+    }
+
+    pw.Widget valueRow(String label, String value) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(bottom: 3),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: 94,
+              child: pw.Text(
+                label,
+                style: pw.TextStyle(
+                  fontSize: 8.4,
+                  fontWeight: pw.FontWeight.bold,
+                  color: palette.secondary,
+                ),
+              ),
+            ),
+            pw.Expanded(
+              child: pw.Text(
+                value.trim().isEmpty ? '-' : value.trim(),
+                style: const pw.TextStyle(fontSize: 8.5),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget borderedBlock(String title, List<pw.Widget> children) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.all(10),
+        decoration: pw.BoxDecoration(
+          color: PdfColors.white,
+          border: pw.Border.all(color: palette.border, width: 0.9),
+          borderRadius: pw.BorderRadius.circular(4),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              title,
+              style: pw.TextStyle(
+                fontSize: 10,
+                fontWeight: pw.FontWeight.bold,
+                color: palette.primary,
+              ),
+            ),
+            pw.SizedBox(height: 6),
+            ...children,
+          ],
+        ),
+      );
+    }
+
+    pw.Widget summaryCell(String label, String value) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: palette.border, width: 0.6),
+          color: PdfColors.white,
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              label,
+              style: pw.TextStyle(
+                fontSize: 7.1,
+                color: palette.secondary,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 1.5),
+            pw.Text(
+              value,
+              style: pw.TextStyle(
+                fontSize: 8.1,
+                fontWeight: pw.FontWeight.bold,
+                color: palette.primary,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    pw.Widget linesTable({
+      required String title,
+      required List<OfferLineItem> lines,
+      required String totalColumnLabel,
+    }) {
+      return borderedBlock(
+        title,
+        [
+          if (lines.isEmpty)
+            pw.Text(
+              'Nu există poziții pentru această secțiune.',
+              style: pw.TextStyle(fontSize: 8.5, color: palette.secondary),
+            )
+          else
+            pw.Table(
+              border: pw.TableBorder.all(color: palette.border, width: 0.7),
+              columnWidths: const <int, pw.TableColumnWidth>{
+                0: pw.FixedColumnWidth(28),
+                1: pw.FlexColumnWidth(4.8),
+                2: pw.FixedColumnWidth(42),
+                3: pw.FixedColumnWidth(58),
+                4: pw.FixedColumnWidth(86),
+              },
+              children: [
+                pw.TableRow(
+                  decoration: pw.BoxDecoration(color: palette.primary),
+                  children: [
+                    _joysonHeaderCell('Poz.'),
+                    _joysonHeaderCell(title == 'Lista simplificata materiale'
+                        ? 'Material'
+                        : 'Serviciu / manopera'),
+                    _joysonHeaderCell('UM'),
+                    _joysonHeaderCell('Cantitate'),
+                    _joysonHeaderCell(totalColumnLabel),
+                  ],
+                ),
+                ...lines.asMap().entries.map(
+                      (entry) => pw.TableRow(
+                        decoration: pw.BoxDecoration(
+                          color: entry.key.isEven
+                              ? PdfColors.white
+                              : palette.surfaceAlt,
+                        ),
+                        children: [
+                          _joysonCell(entry.value.sortOrder.toString(),
+                              align: pw.TextAlign.center),
+                          _joysonCell(
+                            entry.value.description.trim().isEmpty
+                                ? entry.value.name
+                                : '${entry.value.name}\n${entry.value.description.trim()}',
+                          ),
+                          _joysonCell(entry.value.unit,
+                              align: pw.TextAlign.center),
+                          _joysonCell(quantityLabel(entry.value.quantity),
+                              align: pw.TextAlign.center),
+                          _joysonCell(money(entry.value.effectiveLineTotal),
+                              align: pw.TextAlign.right),
+                        ],
+                      ),
+                    ),
+              ],
+            ),
+        ],
+      );
+    }
+
+    final detailsLeft = <pw.Widget>[
+      valueRow('Nr. oferta', offer.offerNumber),
+      valueRow('Data', dateLabel(offer.issueDate)),
+      valueRow('Valabilitate (zile)', validityDaysLabel()),
+      valueRow('Durata estimata (zile)', '-'),
+      valueRow('Regie inclusa', '${offer.regiePercent.toStringAsFixed(1)}%'),
+      valueRow('Valoare regie', money(offer.regieValue)),
+      valueRow('Profit inclus', '${offer.profitPercent.toStringAsFixed(1)}%'),
+      valueRow('Valoare profit', money(offer.profitValue)),
+      valueRow('TVA aplicat', '${offer.vatPercent.toStringAsFixed(1)}%'),
+      valueRow('Pret total fara TVA', money(offer.subtotalComercial)),
+      valueRow('Valoare materiale', money(offer.materialSubtotal)),
+      valueRow('TVA', money(offer.vatValue)),
+      valueRow('Valoare manopera', money(offer.laborSubtotal)),
+      valueRow('Pret total cu TVA', money(offer.totalValue)),
+    ];
+
+    final detailsRight = <pw.Widget>[
+      valueRow('Beneficiar', clientLabel),
+      valueRow(
+        'Persoana contact',
+        offer.contactPersonName.trim().isNotEmpty
+            ? offer.contactPersonName.trim()
+            : offer.commercialRecipientName.trim(),
+      ),
+      valueRow('Telefon', offer.contactPersonPhone.trim()),
+      valueRow('Email', offer.contactPersonEmail.trim()),
+      valueRow('Emitent', issuerLabel),
+      valueRow('Lucrare', jobLabel),
+      if (offer.complaintNumber.trim().isNotEmpty)
+        valueRow('Reclamatie', offer.complaintNumber.trim()),
+    ];
+
+    final conditionsText = [
+      ...offer.commercialClauses.map(
+        (clause) => clause.title.trim().isEmpty
+            ? clause.content.trim()
+            : '${clause.title.trim()}\n${clause.content.trim()}',
+      ),
+      if (offer.notes.trim().isNotEmpty) offer.notes.trim(),
+      'Oferta include o structură internă de cost cu regie și profit calculate procentual.',
+    ].where((item) => item.trim().isNotEmpty).join('\n\n');
+
+    final companyDetails = <String>[
+      branding.address.trim(),
+      [
+        branding.cui.trim(),
+        branding.tradeRegister.trim(),
+        branding.phone.trim(),
+        branding.email.trim()
+      ].where((item) => item.isNotEmpty).join(' | '),
+      if (branding.bank.trim().isNotEmpty || branding.iban.trim().isNotEmpty)
+        [branding.bank.trim(), branding.iban.trim()]
+            .where((item) => item.isNotEmpty)
+            .join(' | '),
+    ].where((item) => item.trim().isNotEmpty).toList(growable: false);
+
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.fromLTRB(20, 18, 20, 20),
+        footer: (ctx) => _buildPageFooter(ctx, branding),
+        build: (_) => [
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              if (branding.logoBytes != null)
+                pw.Container(
+                  width: 68,
+                  height: 68,
+                  margin: const pw.EdgeInsets.only(right: 12),
+                  child: pw.Image(
+                    pw.MemoryImage(branding.logoBytes!),
+                    fit: pw.BoxFit.contain,
+                  ),
+                ),
+              pw.Expanded(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      branding.companyName.trim().isEmpty
+                          ? issuerLabel
+                          : branding.companyName.trim(),
+                      style: pw.TextStyle(
+                        fontSize: 16,
+                        fontWeight: pw.FontWeight.bold,
+                        color: palette.primary,
+                      ),
+                    ),
+                    pw.SizedBox(height: 4),
+                    ...companyDetails.map(
+                      (line) => pw.Padding(
+                        padding: const pw.EdgeInsets.only(bottom: 2),
+                        child: pw.Text(
+                          line,
+                          style: pw.TextStyle(
+                            fontSize: 8.4,
+                            color: palette.secondary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 10),
+          pw.Center(
+            child: pw.Text(
+              'OFERTĂ COMERCIALĂ',
+              style: pw.TextStyle(
+                fontSize: 16,
+                fontWeight: pw.FontWeight.bold,
+                color: palette.primary,
+              ),
+            ),
+          ),
+          if (offer.title.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 4),
+            pw.Center(
+              child: pw.Text(
+                offer.title.trim(),
+                style: pw.TextStyle(
+                  fontSize: 9.2,
+                  fontWeight: pw.FontWeight.bold,
+                  color: palette.secondary,
+                ),
+                textAlign: pw.TextAlign.center,
+              ),
+            ),
+          ],
+          pw.SizedBox(height: 10),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Expanded(child: borderedBlock('Date oferta', detailsLeft)),
+              pw.SizedBox(width: 10),
+              pw.Expanded(child: borderedBlock('Beneficiar', detailsRight)),
+            ],
+          ),
+          pw.SizedBox(height: 10),
+          borderedBlock(
+            'Rezumat comercial',
+            [
+              pw.Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: [
+                  pw.SizedBox(
+                    width: 164,
+                    child: summaryCell(
+                      'Pret total fara TVA',
+                      money(offer.subtotalComercial),
+                    ),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child: summaryCell('TVA', money(offer.vatValue)),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child: summaryCell(
+                      'Pret total cu TVA',
+                      money(offer.totalValue),
+                    ),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child: summaryCell(
+                      'Regie inclusa',
+                      '${offer.regiePercent.toStringAsFixed(1)}%',
+                    ),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child:
+                        summaryCell('Valoare regie', money(offer.regieValue)),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child: summaryCell(
+                      'Profit inclus',
+                      '${offer.profitPercent.toStringAsFixed(1)}%',
+                    ),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child:
+                        summaryCell('Valoare profit', money(offer.profitValue)),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child: summaryCell(
+                      'TVA aplicat',
+                      '${offer.vatPercent.toStringAsFixed(1)}%',
+                    ),
+                  ),
+                  pw.SizedBox(
+                    child: summaryCell(
+                      'Valoare materiale',
+                      money(offer.materialSubtotal),
+                    ),
+                  ),
+                  pw.SizedBox(
+                    width: 164,
+                    child: summaryCell(
+                      'Valoare manopera',
+                      money(offer.laborSubtotal),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          pw.SizedBox(height: 10),
+          if (materialLines.isNotEmpty) ...[
+            linesTable(
+              title: 'Lista simplificata materiale',
+              lines: materialLines,
+              totalColumnLabel: 'Total material',
+            ),
+          ],
+          if (serviceLines.isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            linesTable(
+              title: 'Manopera / servicii',
+              lines: serviceLines,
+              totalColumnLabel: 'Total serviciu',
+            ),
+          ],
+          if (conditionsText.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            borderedBlock(
+              'Observații / condiții comerciale',
+              [
+                pw.Text(
+                  conditionsText,
+                  style: const pw.TextStyle(fontSize: 8.7),
+                ),
+              ],
+            ),
+          ],
+          pw.SizedBox(height: 10),
+          borderedBlock(
+            'Semnătură / validare',
+            [
+              pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Expanded(
+                    child: _signatureBox(
+                      title:
+                          'Emitent: ${issuerLabel.trim().isEmpty ? branding.companyName.trim() : issuerLabel.trim()}',
+                      image: issuerSignature,
+                      subtitle: branding.contactName.trim(),
+                    ),
+                  ),
+                  pw.SizedBox(width: 12),
+                  pw.Expanded(
+                    child: _signatureBox(
+                      title: 'Beneficiar',
+                      image: clientSignature,
+                      subtitle: offer.contactPersonName.trim().isEmpty
+                          ? clientLabel
+                          : '$clientLabel | ${offer.contactPersonName.trim()}',
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _joysonHeaderCell(String text) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: pw.Text(
+        text,
+        textAlign: pw.TextAlign.center,
+        style: pw.TextStyle(
+          fontSize: 8.1,
+          fontWeight: pw.FontWeight.bold,
+          color: PdfColors.white,
+        ),
+      ),
+    );
+  }
+
+  static pw.Widget _joysonCell(
+    String text, {
+    pw.TextAlign align = pw.TextAlign.left,
+  }) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      child: pw.Text(
+        text.trim().isEmpty ? '-' : text.trim(),
+        textAlign: align,
+        style: const pw.TextStyle(fontSize: 8.3),
+      ),
+    );
+  }
+
+  static String _sanitizeFilePart(String raw) {
+    final normalized = raw
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9_\-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return normalized;
+  }
+
+  static String _fileName(String offerNumber, [String offerTitle = '']) {
+    final numberPart = _sanitizeFilePart(offerNumber);
+    final titlePart = _sanitizeFilePart(offerTitle);
+    final base = numberPart.isEmpty ? 'OFR' : numberPart;
+    // Adăugăm timestamp pentru a forța un fișier nou la fiecare generare.
+    // Previne problema de caching pe Android unde viewer-ul arată versiunea anterioară
+    // a fișierului chiar dacă bytes-urile au fost suprascrise.
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    if (titlePart.isEmpty) {
+      return 'oferta_${base}_$ts.pdf';
+    }
+    return 'oferta_${base}_${titlePart}_$ts.pdf';
+  }
+
+  static pw.MemoryImage? _tryDecodeBase64(String raw) {
+    final normalized = raw.trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+    try {
+      return pw.MemoryImage(base64Decode(normalized));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<MapEntry<String, String>> _equipmentEntries(OfferRecord offer) {
+    final entries = <MapEntry<String, String>>[];
+    final typeLabel =
+        ComplaintEquipmentType.fromValue(offer.equipmentType)?.label ??
+            offer.equipmentType.trim();
+    if (typeLabel.trim().isNotEmpty) {
+      entries.add(MapEntry('Tip echipament', typeLabel.trim()));
+    }
+    if (offer.equipmentBrand.trim().isNotEmpty) {
+      entries.add(MapEntry('Brand', offer.equipmentBrand.trim()));
+    }
+    if (offer.equipmentModel.trim().isNotEmpty) {
+      entries.add(MapEntry('Model', offer.equipmentModel.trim()));
+    }
+    if (offer.outdoorUnitSerial.trim().isNotEmpty) {
+      entries.add(
+        MapEntry('Serie unitate exterioara', offer.outdoorUnitSerial.trim()),
+      );
+    }
+    if (offer.indoorUnitSerials.trim().isNotEmpty) {
+      entries.add(
+        MapEntry('Serii unitati interioare', offer.indoorUnitSerials.trim()),
+      );
+    }
+    if (offer.equipmentDetails.trim().isNotEmpty) {
+      entries.add(MapEntry('Detalii tehnice', offer.equipmentDetails.trim()));
+    }
+    return entries;
+  }
+
+  static pw.Widget _signatureBox({
+    required String title,
+    required pw.MemoryImage? image,
+    String subtitle = '',
+  }) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(8),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            title,
+            style: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 9,
+            ),
+          ),
+          if (subtitle.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 4),
+            pw.Text(subtitle.trim(), style: const pw.TextStyle(fontSize: 8.2)),
+          ],
+          pw.SizedBox(height: 8),
+          pw.Container(
+            height: 90,
+            width: double.infinity,
+            alignment: pw.Alignment.center,
+            decoration: pw.BoxDecoration(
+              color: PdfColors.grey50,
+              border: pw.Border.all(color: PdfColors.grey300),
+              borderRadius: pw.BorderRadius.circular(6),
+            ),
+            child: image == null
+                ? pw.Text(
+                    'Fara semnatura',
+                    style: const pw.TextStyle(fontSize: 8.5),
+                  )
+                : pw.Image(image, fit: pw.BoxFit.contain),
+          ),
+        ],
+      ),
+    );
+  }
+}

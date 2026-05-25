@@ -1,0 +1,435 @@
+import 'package:flutter/material.dart';
+
+import '../../core/repositories/app_data_repository.dart';
+import '../field_sales/field_sales_page.dart';
+import '../lucrari/lucrari_page.dart';
+import '../oferte/oferte_page.dart';
+import '../product_catalog/product_catalog_page.dart';
+import '../programari/programari_page.dart';
+import '../reclamatii/reclamatii_page.dart';
+import '../tools/scule_page.dart';
+import 'notification_models.dart';
+import 'notification_service.dart';
+
+class NotificationCenterPage extends StatefulWidget {
+  const NotificationCenterPage({
+    super.key,
+    required this.repository,
+    this.fieldAuthRoleKey,
+    this.fieldAuthUserId,
+    this.fieldAuthUserEmail,
+    this.fieldAuthTeamId,
+  });
+
+  final AppDataRepository repository;
+  final String? fieldAuthRoleKey;
+  final String? fieldAuthUserId;
+  final String? fieldAuthUserEmail;
+  final String? fieldAuthTeamId;
+
+  @override
+  State<NotificationCenterPage> createState() => _NotificationCenterPageState();
+}
+
+class _NotificationCenterPageState extends State<NotificationCenterPage> {
+  final NotificationCenterService _service = NotificationCenterService();
+  bool _loading = true;
+  String? _message;
+  List<AppNotificationRecord> _items = const <AppNotificationRecord>[];
+  bool? _unreadOnly = true;
+  NotificationEventType? _eventFilter;
+
+  String get _currentUserId => (widget.fieldAuthUserId ?? '').trim();
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (_currentUserId.isEmpty) {
+      setState(() {
+        _loading = false;
+        _items = const <AppNotificationRecord>[];
+        _message = 'Nu exista utilizator autentificat pentru notificari.';
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
+    try {
+      final rows = await _service.listNotificationsForUser(
+        recipientUserId: _currentUserId,
+        includeRead: _unreadOnly != true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _items = rows;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Nu am putut incarca notificarile: $error';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  List<AppNotificationRecord> get _filteredItems {
+    return _items.where((item) {
+      if (_eventFilter != null && item.eventType != _eventFilter) {
+        return false;
+      }
+      if (_unreadOnly == true && item.isRead) {
+        return false;
+      }
+      if (_unreadOnly == false && !item.isRead) {
+        return false;
+      }
+      return true;
+    }).toList(growable: false);
+  }
+
+  String _formatDateTime(DateTime value) {
+    final date =
+        '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year.toString().padLeft(4, '0')}';
+    final time =
+        '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+    return '$date $time';
+  }
+
+  String _deliveryLabel(String status) {
+    switch (status.trim().toLowerCase()) {
+      case 'queued':
+        return 'In coada';
+      case 'sending':
+        return 'In trimitere';
+      case 'sent':
+        return 'Trimisa';
+      case 'failed':
+        return 'Eroare';
+      case 'not_requested':
+        return 'Neceruta';
+      case 'skipped':
+        return 'Sarita';
+      default:
+        return status.trim().isEmpty ? '-' : status.trim();
+    }
+  }
+
+  Color _eventColor(NotificationEventType eventType, BuildContext context) {
+    switch (eventType) {
+      case NotificationEventType.appointmentCreated:
+      case NotificationEventType.appointmentUpdated:
+      case NotificationEventType.appointmentPostponed:
+      case NotificationEventType.appointmentCancelled:
+        return Colors.blue.shade700;
+      case NotificationEventType.complaintCreated:
+      case NotificationEventType.complaintAssigned:
+      case NotificationEventType.complaintStatusChanged:
+      case NotificationEventType.fieldLeadCreated:
+        return Colors.deepOrange.shade700;
+      case NotificationEventType.toolTransferCreated:
+      case NotificationEventType.toolTransferReceived:
+        return Colors.green.shade700;
+      case NotificationEventType.jobAssigned:
+      case NotificationEventType.jobStatusChanged:
+        return Colors.teal.shade700;
+      case NotificationEventType.documentGenerated:
+        return Colors.indigo.shade700;
+      case NotificationEventType.approvalRequested:
+      case NotificationEventType.approvalApproved:
+      case NotificationEventType.approvalRejected:
+        return Colors.purple.shade700;
+      case NotificationEventType.requestConverted:
+        return Colors.amber.shade800;
+    }
+  }
+
+  Future<void> _markRead(AppNotificationRecord item) async {
+    await _service.markNotificationRead(item.id);
+    await _load();
+  }
+
+  Future<void> _markAllRead() async {
+    await _service.markAllReadForUser(_currentUserId);
+    await _load();
+  }
+
+  Future<void> _openSource(AppNotificationRecord item) async {
+    await _markRead(item);
+    if (!mounted) return;
+    final module = item.sourceModule.trim().toLowerCase();
+    Widget? page;
+    if (module == 'programari') {
+      page = ProgramariPage(
+        repository: widget.repository,
+        fieldAuthRoleKey: widget.fieldAuthRoleKey,
+        fieldAuthUserEmail: widget.fieldAuthUserEmail,
+        fieldAuthUserId: widget.fieldAuthUserId,
+        fieldAuthTeamId: widget.fieldAuthTeamId,
+        initialFocusAppointmentId: item.sourceEntityId.trim(),
+      );
+    } else if (module == 'reclamatii') {
+      page = ReclamatiiPage(
+        repository: widget.repository,
+        fieldAuthRoleKey: widget.fieldAuthRoleKey,
+        fieldAuthUserId: widget.fieldAuthUserId,
+        fieldAuthUserLabel: widget.fieldAuthUserEmail,
+        fieldAuthTeamId: widget.fieldAuthTeamId,
+      );
+    } else if (module == 'tools') {
+      page = SculePage(
+        repository: widget.repository,
+        currentUserId: widget.fieldAuthUserId,
+        currentUserEmail: widget.fieldAuthUserEmail,
+      );
+    } else if (module == 'lucrari' || module == 'jobs') {
+      page = LucrariPage(repository: widget.repository);
+    } else if (module == 'field_sales') {
+      page = FieldSalesPage(
+        repository: widget.repository,
+        fieldAuthRoleKey: widget.fieldAuthRoleKey,
+        fieldAuthUserEmail: widget.fieldAuthUserEmail,
+        fieldAuthUserId: widget.fieldAuthUserId,
+        fieldAuthTeamId: widget.fieldAuthTeamId,
+      );
+    } else if (module == 'oferte') {
+      page = OfertePage(
+        repository: widget.repository,
+        currentUserId: widget.fieldAuthUserId,
+        currentUserEmail: widget.fieldAuthUserEmail,
+        initialFocusOfferId: item.sourceEntityId.trim(),
+      );
+    } else if (module == 'product_catalog') {
+      page = ProductCatalogPage(repository: widget.repository);
+    }
+    if (page == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sursa notificarii nu are inca deschidere directa.'),
+        ),
+      );
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => page!),
+    );
+    if (!mounted) return;
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _filteredItems;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Centru notificari'),
+        actions: [
+          IconButton(
+            tooltip: 'Marcheaza tot ca citit',
+            onPressed: _loading || _currentUserId.isEmpty ? null : _markAllRead,
+            icon: const Icon(Icons.mark_email_read_outlined),
+          ),
+          IconButton(
+            tooltip: 'Reincarca',
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SegmentedButton<bool?>(
+                  segments: const [
+                    ButtonSegment<bool?>(value: true, label: Text('Necitite')),
+                    ButtonSegment<bool?>(value: false, label: Text('Citite')),
+                    ButtonSegment<bool?>(value: null, label: Text('Toate')),
+                  ],
+                  selected: <bool?>{_unreadOnly},
+                  onSelectionChanged: (selection) {
+                    final next = selection.isEmpty ? null : selection.first;
+                    setState(() {
+                      _unreadOnly = next;
+                    });
+                    _load();
+                  },
+                ),
+                SizedBox(
+                  width: 280,
+                  child: DropdownButtonFormField<NotificationEventType?>(
+                    initialValue: _eventFilter,
+                    decoration: const InputDecoration(
+                      labelText: 'Filtru eveniment',
+                    ),
+                    items: [
+                      const DropdownMenuItem<NotificationEventType?>(
+                        value: null,
+                        child: Text('Toate evenimentele'),
+                      ),
+                      ...NotificationEventType.values.map(
+                        (item) => DropdownMenuItem<NotificationEventType?>(
+                          value: item,
+                          child: Text(item.label),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        _eventFilter = value;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_message != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(_message!),
+                ),
+              ),
+            ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : items.isEmpty
+                    ? const Center(
+                        child: Text('Nu exista notificari pentru filtrul ales.'),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          final accent = _eventColor(item.eventType, context);
+                          return Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                    children: [
+                                      Chip(
+                                        avatar: Icon(
+                                          item.isRead
+                                              ? Icons.drafts_outlined
+                                              : Icons.mark_email_unread_outlined,
+                                          size: 16,
+                                          color: accent,
+                                        ),
+                                        label: Text(item.eventType.label),
+                                      ),
+                                      Chip(
+                                        label: Text(item.isRead ? 'Citita' : 'Necitita'),
+                                      ),
+                                      Chip(
+                                        label: Text(_formatDateTime(item.createdAt)),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    item.title,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(item.message),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Sursa: ${item.sourceLabel.isEmpty ? item.sourceModule : item.sourceLabel}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      Chip(
+                                        label: Text(
+                                          'In-app ${item.sentInApp ? 'activ' : 'oprit'}',
+                                        ),
+                                      ),
+                                      Chip(
+                                        label: Text(
+                                          'Email ${_deliveryLabel(item.emailStatus)}',
+                                        ),
+                                      ),
+                                      Chip(
+                                        label: Text(
+                                          'Push ${_deliveryLabel(item.pushStatus)}',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (item.emailErrorMessage.trim().isNotEmpty ||
+                                      item.pushErrorMessage.trim().isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      [
+                                        if (item.emailErrorMessage.trim().isNotEmpty)
+                                          'Email: ${item.emailErrorMessage.trim()}',
+                                        if (item.pushErrorMessage.trim().isNotEmpty)
+                                          'Push: ${item.pushErrorMessage.trim()}',
+                                      ].join(' | '),
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                  const SizedBox(height: 10),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      if (!item.isRead)
+                                        OutlinedButton.icon(
+                                          onPressed: () => _markRead(item),
+                                          icon: const Icon(Icons.done_outlined),
+                                          label: const Text('Marcheaza citita'),
+                                        ),
+                                      FilledButton.icon(
+                                        onPressed: () => _openSource(item),
+                                        icon: const Icon(Icons.open_in_new_outlined),
+                                        label: const Text('Deschide sursa'),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+}

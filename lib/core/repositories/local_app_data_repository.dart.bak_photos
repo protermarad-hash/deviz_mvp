@@ -1,0 +1,4424 @@
+import 'dart:convert';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../app_theme_preset.dart';
+import '../auth_models.dart';
+import '../app_models.dart';
+import '../cloud/firebase_bootstrap.dart';
+import '../cloud/firebase_collections.dart';
+import '../cloud/offline_sync_runtime.dart';
+import '../company_profile.dart';
+import '../lookup_models.dart';
+import '../pdf_export_settings.dart';
+import '../team_models.dart';
+import '../../features/agfr/agfr_models.dart';
+import '../../features/clients/client_models.dart';
+import '../../features/field_photos/field_photo_models.dart';
+import '../../features/hr_monthly_timesheet/monthly_timesheet_models.dart';
+import '../../features/hr_deplasari/trip_models.dart';
+import '../../features/jobs/job_models.dart';
+import '../../features/master/master_local_store.dart';
+import '../../features/oferte/local_oferte_repository.dart';
+import '../../features/partners/partner_models.dart';
+import '../../features/programari/appointment_models.dart';
+import '../../features/reclamatii/complaint_document_models.dart';
+import '../../features/reclamatii/complaint_models.dart';
+import '../../features/reclamatii/repair_report_models.dart';
+import '../../features/reclamatii/warranty_intervention_report_models.dart';
+import '../../features/refrigerant_reporting/refrigerant_reporting_models.dart';
+import '../../features/registratura/registry_models.dart';
+import 'app_data_repository.dart';
+import '../../features/registratura/registry_store.dart';
+
+class LocalAppDataRepository implements AppDataRepository {
+  static const String _currentUserKey = 'ultra_current_user_v1';
+  static const String _companySettingsKey = 'company_settings_v1';
+  static const String _companyPdfExportSettingsKey =
+      'company_pdf_export_settings_v1';
+  static const String _clientsKey = 'ultra_clients_v1';
+  static const String _partnersKey = 'ultra_partners_v1';
+  static const String _partnerWorkersKey = 'ultra_partner_workers_v1';
+  static const String _partnerVehiclesKey = 'ultra_partner_vehicles_v1';
+  static const String _jobsKey = 'ultra_jobs_v1';
+  static const String _appointmentsKey = 'ultra_appointments_v1';
+  static const String _deletedAppointmentIdsKey =
+      'ultra_appointments_deleted_ids_v1';
+  static const String _agfrEquipmentsKey = 'ultra_agfr_equipments_v1';
+  static const String _agfrInterventionsKey = 'ultra_agfr_interventions_v1';
+  static const String _agfrReportsKey = 'ultra_agfr_reports_v1';
+  static const String _agfrWeighingReportsKey =
+      'ultra_agfr_weighing_reports_v1';
+  static const String _refrigerantReportingRecordsKey =
+      'ultra_refrigerant_reporting_records_v1';
+  static const String _teamsKey = 'ultra_teams_v1';
+  static const String _tripsKey = 'ultra_trips_v1';
+  static const String _travelOrdersKey = 'ultra_travel_orders_v1';
+  static const String _complaintsKey = 'ultra_complaints_v1';
+  static const String _repairReportsKey = 'ultra_repair_reports_v1';
+  static const String _warrantyInterventionReportsKey =
+      'ultra_warranty_intervention_reports_v1';
+  static const String _complaintClientCentralizersKey =
+      'ultra_complaint_client_centralizers_v1';
+  static const String _complaintWorkOrdersKey =
+      'ultra_complaint_work_orders_v1';
+  static const String _fieldPhotosKey = 'ultra_field_photos_v1';
+  static const String _monthlyTimesheetsKey = 'ultra_hr_monthly_timesheets_v1';
+  static const String _registryEntriesKey = 'ultra_registry_entries_v1';
+  static const String _registrySettingsKey = 'ultra_registry_settings_v1';
+  static const String _tombstoneCacheKey = 'ultra_tombstone_ids_cache_v1';
+  static const String _tombstoneCacheTsKey = 'ultra_tombstone_ids_cache_ts_v1';
+  static const Duration _tombstoneCacheTtl = Duration(minutes: 60);
+  final LocalOferteRepository _localOferteRepository = LocalOferteRepository();
+  String _lastClientsDataSourceLabel = 'local_cache';
+  String _lastClientsFallbackReason = '';
+  String _lastPartnersDataSourceLabel = 'local_cache';
+  String _lastPartnersFallbackReason = '';
+  String _lastCompanyProfileDataSourceLabel = 'local_cache';
+  String _lastCompanyProfileFallbackReason = '';
+  String _lastRegistryDataSourceLabel = 'local_cache';
+  String _lastRegistryFallbackReason = '';
+  String _lastAppointmentsDataSourceLabel = 'local_cache';
+  String _lastAppointmentsFallbackReason = '';
+  String _lastAgfrEquipmentsDataSourceLabel = 'local_cache';
+  String _lastAgfrEquipmentsFallbackReason = '';
+  String _lastAgfrInterventionsDataSourceLabel = 'local_cache';
+  String _lastAgfrInterventionsFallbackReason = '';
+  String _lastAgfrReportsDataSourceLabel = 'local_cache';
+  String _lastAgfrReportsFallbackReason = '';
+  String _lastAgfrWeighingReportsDataSourceLabel = 'local_cache';
+  String _lastAgfrWeighingReportsFallbackReason = '';
+  String _lastRefrigerantReportingDataSourceLabel = 'local_cache';
+  String _lastRefrigerantReportingFallbackReason = '';
+  String _lastVehiclesDataSourceLabel = 'local_cache';
+  String _lastVehiclesFallbackReason = '';
+  String _lastTripsDataSourceLabel = 'local_cache';
+  String _lastTripsFallbackReason = '';
+  String _lastTravelOrdersDataSourceLabel = 'local_cache';
+  String _lastTravelOrdersFallbackReason = '';
+  String _lastComplaintsDataSourceLabel = 'local_cache';
+  String _lastComplaintsFallbackReason = '';
+  String _lastRepairReportsDataSourceLabel = 'local_cache';
+  String _lastRepairReportsFallbackReason = '';
+
+  String get lastClientsDataSourceLabel => _lastClientsDataSourceLabel;
+  String get lastClientsFallbackReason => _lastClientsFallbackReason;
+  String get lastPartnersDataSourceLabel => _lastPartnersDataSourceLabel;
+  String get lastPartnersFallbackReason => _lastPartnersFallbackReason;
+  String get lastCompanyProfileDataSourceLabel =>
+      _lastCompanyProfileDataSourceLabel;
+  String get lastCompanyProfileFallbackReason =>
+      _lastCompanyProfileFallbackReason;
+  String get lastRegistryDataSourceLabel => _lastRegistryDataSourceLabel;
+  String get lastRegistryFallbackReason => _lastRegistryFallbackReason;
+  String get lastAppointmentsDataSourceLabel =>
+      _lastAppointmentsDataSourceLabel;
+  String get lastAppointmentsFallbackReason => _lastAppointmentsFallbackReason;
+  String get lastAgfrEquipmentsDataSourceLabel =>
+      _lastAgfrEquipmentsDataSourceLabel;
+  String get lastAgfrEquipmentsFallbackReason =>
+      _lastAgfrEquipmentsFallbackReason;
+  String get lastAgfrInterventionsDataSourceLabel =>
+      _lastAgfrInterventionsDataSourceLabel;
+  String get lastAgfrInterventionsFallbackReason =>
+      _lastAgfrInterventionsFallbackReason;
+  String get lastAgfrReportsDataSourceLabel => _lastAgfrReportsDataSourceLabel;
+  String get lastAgfrReportsFallbackReason => _lastAgfrReportsFallbackReason;
+  String get lastAgfrWeighingReportsDataSourceLabel =>
+      _lastAgfrWeighingReportsDataSourceLabel;
+  String get lastAgfrWeighingReportsFallbackReason =>
+      _lastAgfrWeighingReportsFallbackReason;
+  String get lastRefrigerantReportingDataSourceLabel =>
+      _lastRefrigerantReportingDataSourceLabel;
+  String get lastRefrigerantReportingFallbackReason =>
+      _lastRefrigerantReportingFallbackReason;
+  String get lastVehiclesDataSourceLabel => _lastVehiclesDataSourceLabel;
+  String get lastVehiclesFallbackReason => _lastVehiclesFallbackReason;
+  String get lastTripsDataSourceLabel => _lastTripsDataSourceLabel;
+  String get lastTripsFallbackReason => _lastTripsFallbackReason;
+  String get lastTravelOrdersDataSourceLabel =>
+      _lastTravelOrdersDataSourceLabel;
+  String get lastTravelOrdersFallbackReason => _lastTravelOrdersFallbackReason;
+  String get lastComplaintsDataSourceLabel => _lastComplaintsDataSourceLabel;
+  String get lastComplaintsFallbackReason => _lastComplaintsFallbackReason;
+  String get lastRepairReportsDataSourceLabel =>
+      _lastRepairReportsDataSourceLabel;
+  String get lastRepairReportsFallbackReason =>
+      _lastRepairReportsFallbackReason;
+
+  bool get _isClientsCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isPartnersCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isCompanyProfileCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isRegistryCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isAppointmentsCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isAgfrCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isVehiclesCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isTripsCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isTravelOrdersCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isComplaintsCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isRepairReportsCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isFieldPhotosCloudAvailable => FirebaseBootstrap.isOnline;
+  bool get _isMonthlyTimesheetsCloudAvailable =>
+      FirebaseBootstrap.isOnline;
+
+  CollectionReference<Map<String, dynamic>> get _clientsCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.clients);
+  CollectionReference<Map<String, dynamic>> get _partnersCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.partners);
+  CollectionReference<Map<String, dynamic>> get _partnerWorkersCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.partnerWorkers);
+  CollectionReference<Map<String, dynamic>> get _partnerVehiclesCollection =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.partnerVehicles);
+  DocumentReference<Map<String, dynamic>> get _companyProfileDocument =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.companyProfiles)
+          .doc('default');
+  CollectionReference<Map<String, dynamic>> get _registryEntriesCollection =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.registryEntries);
+  CollectionReference<Map<String, dynamic>> get _appointmentsCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.appointments);
+  CollectionReference<Map<String, dynamic>>
+      get _deletedAppointmentsCollection => FirebaseFirestore.instance
+          .collection(FirebaseCollections.deletedAppointments);
+  CollectionReference<Map<String, dynamic>> get _appointmentHistoryCollection =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.appointmentHistory);
+  CollectionReference<Map<String, dynamic>> get _agfrEquipmentsCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.agfrEquipments);
+  CollectionReference<Map<String, dynamic>> get _agfrInterventionsCollection =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.agfrInterventions);
+  CollectionReference<Map<String, dynamic>> get _agfrReportsCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.agfrReports);
+  CollectionReference<Map<String, dynamic>>
+      get _agfrWeighingReportsCollection => FirebaseFirestore.instance
+          .collection(FirebaseCollections.agfrWeighingReports);
+  CollectionReference<Map<String, dynamic>>
+      get _refrigerantReportingRecordsCollection => FirebaseFirestore.instance
+          .collection(FirebaseCollections.refrigerantReportingRecords);
+  CollectionReference<Map<String, dynamic>> get _vehiclesCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.vehicles);
+  CollectionReference<Map<String, dynamic>> get _tripsCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.hrTrips);
+  CollectionReference<Map<String, dynamic>> get _travelOrdersCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.hrTravelOrders);
+  CollectionReference<Map<String, dynamic>> get _complaintsCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.complaints);
+  CollectionReference<Map<String, dynamic>> get _repairReportsCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.repairReports);
+  CollectionReference<Map<String, dynamic>>
+      get _warrantyInterventionReportsCollection => FirebaseFirestore.instance
+          .collection(FirebaseCollections.warrantyInterventionReports);
+  CollectionReference<Map<String, dynamic>> get _fieldPhotosCollection =>
+      FirebaseFirestore.instance.collection(FirebaseCollections.fieldPhotos);
+  CollectionReference<Map<String, dynamic>> get _monthlyTimesheetsCollection =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.hrMonthlyTimesheets);
+  CollectionReference<Map<String, dynamic>>
+      get _complaintClientCentralizersCollection => FirebaseFirestore.instance
+          .collection(FirebaseCollections.complaintClientCentralizers);
+  CollectionReference<Map<String, dynamic>>
+      get _complaintWorkOrdersCollection => FirebaseFirestore.instance
+          .collection(FirebaseCollections.complaintWorkOrders);
+
+  DocumentReference<Map<String, dynamic>> get _registrySettingsDocument =>
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.registrySettings)
+          .doc('default');
+
+  @override
+  Future<AppUser?> loadCurrentUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_currentUserKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return null;
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) {
+      return null;
+    }
+    return AppUser.fromMap(decoded);
+  }
+
+  @override
+  Future<void> saveCurrentUser(AppUser? user) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (user == null) {
+      await prefs.remove(_currentUserKey);
+      return;
+    }
+    await prefs.setString(_currentUserKey, jsonEncode(user.toMap()));
+  }
+
+  @override
+  Future<List<Appointment>> listAppointments() async {
+    final localItems = await _readLocalAppointmentsOnly();
+    if (!_isAppointmentsCloudAvailable) {
+      _lastAppointmentsDataSourceLabel = 'local_cache';
+      _lastAppointmentsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      // Dacă cache-ul local e gol (instalare nouă sau date șterse),
+      // descarcă TOT istoricul din Firestore — indiferent de vârstă.
+      // Astfel datele din 10 ani sunt disponibile imediat pe orice dispozitiv.
+      if (localItems.isEmpty) {
+        return await listAllAppointments();
+      }
+
+      // Cache local există → fetch incremental: ultimele 14 luni din cloud
+      // + datele istorice din cache local (strategia normală de refresh rapid).
+      final windowStart = DateTime.now().subtract(const Duration(days: 425));
+      final windowStartStr = windowStart.toIso8601String().substring(0, 10);
+      final snapshot = await _appointmentsCollection
+          .where('scheduled_date', isGreaterThanOrEqualTo: windowStartStr)
+          .get();
+      var cloudItems = snapshot.docs
+          .map((doc) => Appointment.fromMap(doc.data()))
+          .where((item) => item.id.trim().isNotEmpty)
+          .toList(growable: false);
+
+      // Tombstone-uri din cache local (max 60 min) sau Firestore.
+      final serverTombstoneIds = await _getServerTombstoneIds();
+
+      // Retry pending deletions and filter them from cloud results
+      final pendingDeleteIds = await _readDeletedAppointmentIds();
+      if (pendingDeleteIds.isNotEmpty) {
+        final retried = <String>{};
+        for (final id in pendingDeleteIds) {
+          try {
+            await _appointmentsCollection.doc(id).delete();
+            // Also write tombstone on retry so other devices benefit immediately.
+            try {
+              await _deletedAppointmentsCollection
+                  .doc(id)
+                  .set({'deletedAt': FieldValue.serverTimestamp()});
+              await _invalidateTombstoneCache();
+            } catch (_) {}
+            retried.add(id);
+          } catch (_) {
+            // Will retry next time
+          }
+        }
+        if (retried.isNotEmpty) {
+          await _removeDeletedAppointmentIds(retried);
+          pendingDeleteIds.removeAll(retried);
+        }
+      }
+
+      // Filter out all deleted IDs (local pending + server tombstones)
+      final allDeletedIds = {
+        ...pendingDeleteIds,
+        ...serverTombstoneIds,
+      };
+      if (allDeletedIds.isNotEmpty) {
+        cloudItems = cloudItems
+            .where((item) => !allDeletedIds.contains(item.id))
+            .toList(growable: false);
+      }
+
+      // Combină: datele recente din cloud + datele istorice din cache-ul local
+      // (evită re-descărcarea întregului istoric la fiecare refresh).
+      final cloudIds = cloudItems.map((item) => item.id).toSet();
+      final historicLocalItems = localItems
+          .where((item) =>
+              item.scheduledDate.isBefore(windowStart) &&
+              !allDeletedIds.contains(item.id) &&
+              !cloudIds.contains(item.id))
+          .toList(growable: false);
+
+      final merged = _sortAppointments([...cloudItems, ...historicLocalItems]);
+      await _writeAppointments(merged);
+      _lastAppointmentsDataSourceLabel = 'cloud';
+      _lastAppointmentsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastAppointmentsDataSourceLabel = 'local_cache';
+      _lastAppointmentsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<List<Appointment>> listAllAppointments() async {
+    final localItems = await _readLocalAppointmentsOnly();
+    if (!_isAppointmentsCloudAvailable) {
+      return localItems;
+    }
+    try {
+      // Fetch complet din Firestore, fără filtru de dată
+      final snapshot = await _appointmentsCollection.get();
+      var cloudItems = snapshot.docs
+          .map((doc) => Appointment.fromMap(doc.data()))
+          .where((item) => item.id.trim().isNotEmpty)
+          .toList(growable: false);
+
+      final serverTombstoneIds = await _getServerTombstoneIds();
+      final pendingDeleteIds = await _readDeletedAppointmentIds();
+      final allDeletedIds = {...pendingDeleteIds, ...serverTombstoneIds};
+      if (allDeletedIds.isNotEmpty) {
+        cloudItems = cloudItems
+            .where((item) => !allDeletedIds.contains(item.id))
+            .toList(growable: false);
+      }
+      final merged = _sortAppointments(cloudItems);
+      await _writeAppointments(merged);
+      _lastAppointmentsDataSourceLabel = 'cloud';
+      _lastAppointmentsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastAppointmentsDataSourceLabel = 'local_cache';
+      _lastAppointmentsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveAppointment(Appointment appointment) async {
+    if (_isAppointmentsCloudAvailable) {
+      try {
+        await _appointmentsCollection.doc(appointment.id).set(
+              appointment.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastAppointmentsDataSourceLabel = 'cloud';
+        _lastAppointmentsFallbackReason = '';
+      } catch (error) {
+        _lastAppointmentsDataSourceLabel = 'local_cache';
+        _lastAppointmentsFallbackReason = error.toString();
+      }
+    } else {
+      _lastAppointmentsDataSourceLabel = 'local_cache';
+      _lastAppointmentsFallbackReason = 'cloud indisponibil';
+    }
+
+    final items = [...await _readLocalAppointmentsOnly()];
+    final index = items.indexWhere((item) => item.id == appointment.id);
+    if (index >= 0) {
+      items[index] = appointment;
+    } else {
+      items.add(appointment);
+    }
+    await _writeAppointments(_sortAppointments(items));
+  }
+
+  @override
+  Future<void> deleteAppointment(String appointmentId) async {
+    final trimmedId = appointmentId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isAppointmentsCloudAvailable) {
+      try {
+        await _appointmentsCollection.doc(trimmedId).delete();
+        // Write server-side tombstone so old app versions cannot restore this
+        // appointment when they come back online and re-upload their local cache.
+        try {
+          await _deletedAppointmentsCollection
+              .doc(trimmedId)
+              .set({'deletedAt': FieldValue.serverTimestamp()});
+          await _invalidateTombstoneCache();
+        } catch (_) {
+          // Tombstone write is best-effort; local queue is the backup.
+        }
+        _lastAppointmentsDataSourceLabel = 'cloud';
+        _lastAppointmentsFallbackReason = '';
+        // Successful cloud delete — ensure it's NOT in the pending set
+        await _removeDeletedAppointmentIds({trimmedId});
+      } catch (error) {
+        _lastAppointmentsDataSourceLabel = 'local_cache';
+        _lastAppointmentsFallbackReason = error.toString();
+        // Cloud delete failed — queue for retry on next sync
+        await _addDeletedAppointmentId(trimmedId);
+      }
+    } else {
+      _lastAppointmentsDataSourceLabel = 'local_cache';
+      _lastAppointmentsFallbackReason = 'cloud indisponibil';
+      // Cloud unavailable — queue for retry on next sync
+      await _addDeletedAppointmentId(trimmedId);
+    }
+
+    final items = [...await _readLocalAppointmentsOnly()]
+      ..removeWhere((item) => item.id == appointmentId);
+    await _writeAppointments(items);
+  }
+
+  // Returnează tombstone IDs din cache local (max 60 min vechi) sau Firestore.
+  Future<Set<String>> _getServerTombstoneIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final tsStr = prefs.getString(_tombstoneCacheTsKey);
+      Set<String>? cached;
+      final rawCached = prefs.getStringList(_tombstoneCacheKey);
+      if (rawCached != null) {
+        cached = Set<String>.from(rawCached);
+        if (tsStr != null) {
+          final ts = DateTime.tryParse(tsStr);
+          if (ts != null &&
+              DateTime.now().difference(ts) < _tombstoneCacheTtl) {
+            return cached; // cache proaspăt
+          }
+        }
+      }
+      // Refresh din Firestore
+      try {
+        final tombstones = await _deletedAppointmentsCollection.get();
+        final ids = tombstones.docs.map((d) => d.id).toSet();
+        await prefs.setStringList(_tombstoneCacheKey, ids.toList());
+        await prefs.setString(
+            _tombstoneCacheTsKey, DateTime.now().toIso8601String());
+        return ids;
+      } catch (_) {
+        return cached ?? {}; // cache vechi ca fallback
+      }
+    } catch (_) {
+      return {};
+    }
+  }
+
+  // Invalidează cache-ul de tombstone-uri (apelat după ce scriem un tombstone).
+  Future<void> _invalidateTombstoneCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_tombstoneCacheTsKey);
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> logAppointmentHistory({
+    required String appointmentId,
+    required String clientId,
+    required String action,
+    required String changedBy,
+    Map<String, dynamic>? before,
+    Map<String, dynamic>? after,
+  }) async {
+    if (!_isAppointmentsCloudAvailable) return;
+    try {
+      await _appointmentHistoryCollection.add(<String, dynamic>{
+        'appointment_id': appointmentId,
+        'client_id': clientId,
+        'action': action,
+        'changed_by': changedBy,
+        'changed_at': FieldValue.serverTimestamp(),
+        'before': before,
+        'after': after,
+      });
+    } catch (_) {
+      // History is best-effort — never block the main flow.
+    }
+  }
+
+  @override
+  Future<List<AgfrEquipmentRecord>> listAgfrEquipments() async {
+    final localItems = await _readLocalAgfrEquipmentsOnly();
+    if (!_isAgfrCloudAvailable) {
+      _lastAgfrEquipmentsDataSourceLabel = 'local_cache';
+      _lastAgfrEquipmentsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _agfrEquipmentsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => AgfrEquipmentRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _agfrEquipmentsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <AgfrEquipmentRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = _sortAgfrEquipments(cloudItems);
+      await _writeAgfrEquipments(merged);
+      _lastAgfrEquipmentsDataSourceLabel = 'cloud';
+      _lastAgfrEquipmentsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastAgfrEquipmentsDataSourceLabel = 'local_cache';
+      _lastAgfrEquipmentsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveAgfrEquipment(AgfrEquipmentRecord equipment) async {
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrEquipmentsCollection.doc(equipment.id).set(
+              equipment.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastAgfrEquipmentsDataSourceLabel = 'cloud';
+        _lastAgfrEquipmentsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrEquipmentsDataSourceLabel = 'local_cache';
+        _lastAgfrEquipmentsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrEquipmentsDataSourceLabel = 'local_cache';
+      _lastAgfrEquipmentsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueAgfrEquipment(equipment);
+    }
+
+    final items = [...await _readLocalAgfrEquipmentsOnly()];
+    final index = items.indexWhere((item) => item.id == equipment.id);
+    if (index >= 0) {
+      items[index] = equipment;
+    } else {
+      items.add(equipment);
+    }
+    await _writeAgfrEquipments(_sortAgfrEquipments(items));
+  }
+
+  @override
+  Future<void> deleteAgfrEquipment(String equipmentId) async {
+    final trimmedId = equipmentId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrEquipmentsCollection.doc(trimmedId).delete();
+        _lastAgfrEquipmentsDataSourceLabel = 'cloud';
+        _lastAgfrEquipmentsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrEquipmentsDataSourceLabel = 'local_cache';
+        _lastAgfrEquipmentsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrEquipmentsDataSourceLabel = 'local_cache';
+      _lastAgfrEquipmentsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueAgfrEquipmentDelete(trimmedId);
+    }
+
+    final items = [...await _readLocalAgfrEquipmentsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeAgfrEquipments(items);
+  }
+
+  @override
+  Future<List<AgfrInterventionRecord>> listAgfrInterventions() async {
+    final localItems = await _readLocalAgfrInterventionsOnly();
+    if (!_isAgfrCloudAvailable) {
+      _lastAgfrInterventionsDataSourceLabel = 'local_cache';
+      _lastAgfrInterventionsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _agfrInterventionsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => AgfrInterventionRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _agfrInterventionsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <AgfrInterventionRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = _sortAgfrInterventions(cloudItems);
+      await _writeAgfrInterventions(merged);
+      _lastAgfrInterventionsDataSourceLabel = 'cloud';
+      _lastAgfrInterventionsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastAgfrInterventionsDataSourceLabel = 'local_cache';
+      _lastAgfrInterventionsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveAgfrIntervention(
+    AgfrInterventionRecord intervention,
+  ) async {
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrInterventionsCollection.doc(intervention.id).set(
+              intervention.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastAgfrInterventionsDataSourceLabel = 'cloud';
+        _lastAgfrInterventionsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrInterventionsDataSourceLabel = 'local_cache';
+        _lastAgfrInterventionsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrInterventionsDataSourceLabel = 'local_cache';
+      _lastAgfrInterventionsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueAgfrIntervention(intervention);
+    }
+
+    final items = [...await _readLocalAgfrInterventionsOnly()];
+    final index = items.indexWhere((item) => item.id == intervention.id);
+    if (index >= 0) {
+      items[index] = intervention;
+    } else {
+      items.add(intervention);
+    }
+    await _writeAgfrInterventions(_sortAgfrInterventions(items));
+  }
+
+  @override
+  Future<void> deleteAgfrIntervention(String interventionId) async {
+    final trimmedId = interventionId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrInterventionsCollection.doc(trimmedId).delete();
+        _lastAgfrInterventionsDataSourceLabel = 'cloud';
+        _lastAgfrInterventionsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrInterventionsDataSourceLabel = 'local_cache';
+        _lastAgfrInterventionsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrInterventionsDataSourceLabel = 'local_cache';
+      _lastAgfrInterventionsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance
+          .queueAgfrInterventionDelete(trimmedId);
+    }
+
+    final items = [...await _readLocalAgfrInterventionsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeAgfrInterventions(items);
+  }
+
+  @override
+  Future<List<AgfrReportRecord>> listAgfrReports() async {
+    final localItems = await _readLocalAgfrReportsOnly();
+    if (!_isAgfrCloudAvailable) {
+      _lastAgfrReportsDataSourceLabel = 'local_cache';
+      _lastAgfrReportsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _agfrReportsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => AgfrReportRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _agfrReportsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <AgfrReportRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = _sortAgfrReports(cloudItems);
+      await _writeAgfrReports(merged);
+      _lastAgfrReportsDataSourceLabel = 'cloud';
+      _lastAgfrReportsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastAgfrReportsDataSourceLabel = 'local_cache';
+      _lastAgfrReportsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveAgfrReport(AgfrReportRecord report) async {
+    final items = [...await _readLocalAgfrReportsOnly()];
+    final index = items.indexWhere((item) => item.id == report.id);
+    final next = report.copyWith(
+      reportNumber: report.reportNumber.trim().isEmpty
+          ? await nextAgfrReportNumber(issueDate: report.operationDate)
+          : report.reportNumber.trim(),
+    );
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrReportsCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastAgfrReportsDataSourceLabel = 'cloud';
+        _lastAgfrReportsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrReportsDataSourceLabel = 'local_cache';
+        _lastAgfrReportsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrReportsDataSourceLabel = 'local_cache';
+      _lastAgfrReportsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueAgfrReport(next);
+    }
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    await _writeAgfrReports(_sortAgfrReports(items));
+  }
+
+  @override
+  Future<String> nextAgfrReportNumber({DateTime? issueDate}) async {
+    final items = await listAgfrReports();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.agfrReport,
+      date: issueDate ?? DateTime.now(),
+      items: items.map((item) => item.reportNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<void> deleteAgfrReport(String reportId) async {
+    final trimmedId = reportId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrReportsCollection.doc(trimmedId).delete();
+        _lastAgfrReportsDataSourceLabel = 'cloud';
+        _lastAgfrReportsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrReportsDataSourceLabel = 'local_cache';
+        _lastAgfrReportsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrReportsDataSourceLabel = 'local_cache';
+      _lastAgfrReportsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueAgfrReportDelete(trimmedId);
+    }
+
+    final items = [...await _readLocalAgfrReportsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeAgfrReports(items);
+  }
+
+  @override
+  Future<List<AgfrWeighingReportRecord>> listAgfrWeighingReports() async {
+    final localItems = await _readLocalAgfrWeighingReportsOnly();
+    if (!_isAgfrCloudAvailable) {
+      _lastAgfrWeighingReportsDataSourceLabel = 'local_cache';
+      _lastAgfrWeighingReportsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _agfrWeighingReportsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => AgfrWeighingReportRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _agfrWeighingReportsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <AgfrWeighingReportRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = _sortAgfrWeighingReports(cloudItems);
+      await _writeAgfrWeighingReports(merged);
+      _lastAgfrWeighingReportsDataSourceLabel = 'cloud';
+      _lastAgfrWeighingReportsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastAgfrWeighingReportsDataSourceLabel = 'local_cache';
+      _lastAgfrWeighingReportsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveAgfrWeighingReport(AgfrWeighingReportRecord report) async {
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrWeighingReportsCollection.doc(report.id).set(
+              report.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastAgfrWeighingReportsDataSourceLabel = 'cloud';
+        _lastAgfrWeighingReportsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrWeighingReportsDataSourceLabel = 'local_cache';
+        _lastAgfrWeighingReportsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrWeighingReportsDataSourceLabel = 'local_cache';
+      _lastAgfrWeighingReportsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueAgfrWeighingReport(report);
+    }
+
+    final items = [...await _readLocalAgfrWeighingReportsOnly()];
+    final index = items.indexWhere((item) => item.id == report.id);
+    if (index >= 0) {
+      items[index] = report;
+    } else {
+      items.add(report);
+    }
+    await _writeAgfrWeighingReports(_sortAgfrWeighingReports(items));
+  }
+
+  @override
+  Future<void> deleteAgfrWeighingReport(String reportId) async {
+    final trimmedId = reportId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    var queuedOffline = !_isAgfrCloudAvailable;
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _agfrWeighingReportsCollection.doc(trimmedId).delete();
+        _lastAgfrWeighingReportsDataSourceLabel = 'cloud';
+        _lastAgfrWeighingReportsFallbackReason = '';
+      } catch (error) {
+        _lastAgfrWeighingReportsDataSourceLabel = 'local_cache';
+        _lastAgfrWeighingReportsFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastAgfrWeighingReportsDataSourceLabel = 'local_cache';
+      _lastAgfrWeighingReportsFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance
+          .queueAgfrWeighingReportDelete(trimmedId);
+    }
+
+    final items = [...await _readLocalAgfrWeighingReportsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeAgfrWeighingReports(items);
+  }
+
+  @override
+  Future<List<RefrigerantReportingRecord>>
+      listRefrigerantReportingRecords() async {
+    final localItems = await _readLocalRefrigerantReportingRecordsOnly();
+    if (!_isAgfrCloudAvailable) {
+      _lastRefrigerantReportingDataSourceLabel = 'local_cache';
+      _lastRefrigerantReportingFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _refrigerantReportingRecordsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => RefrigerantReportingRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _refrigerantReportingRecordsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <RefrigerantReportingRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = _sortRefrigerantReportingRecords(cloudItems);
+      await _writeRefrigerantReportingRecords(merged);
+      _lastRefrigerantReportingDataSourceLabel = 'cloud';
+      _lastRefrigerantReportingFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastRefrigerantReportingDataSourceLabel = 'local_cache';
+      _lastRefrigerantReportingFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveRefrigerantReportingRecord(
+    RefrigerantReportingRecord record,
+  ) async {
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _refrigerantReportingRecordsCollection.doc(record.id).set(
+              record.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastRefrigerantReportingDataSourceLabel = 'cloud';
+        _lastRefrigerantReportingFallbackReason = '';
+      } catch (error) {
+        _lastRefrigerantReportingDataSourceLabel = 'local_cache';
+        _lastRefrigerantReportingFallbackReason = error.toString();
+      }
+    } else {
+      _lastRefrigerantReportingDataSourceLabel = 'local_cache';
+      _lastRefrigerantReportingFallbackReason = 'cloud indisponibil';
+    }
+
+    final items = [...await _readLocalRefrigerantReportingRecordsOnly()];
+    final index = items.indexWhere((item) => item.id == record.id);
+    if (index >= 0) {
+      items[index] = record;
+    } else {
+      items.add(record);
+    }
+    await _writeRefrigerantReportingRecords(
+      _sortRefrigerantReportingRecords(items),
+    );
+  }
+
+  @override
+  Future<void> deleteRefrigerantReportingRecord(String recordId) async {
+    final trimmedId = recordId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isAgfrCloudAvailable) {
+      try {
+        await _refrigerantReportingRecordsCollection.doc(trimmedId).delete();
+        _lastRefrigerantReportingDataSourceLabel = 'cloud';
+        _lastRefrigerantReportingFallbackReason = '';
+      } catch (error) {
+        _lastRefrigerantReportingDataSourceLabel = 'local_cache';
+        _lastRefrigerantReportingFallbackReason = error.toString();
+      }
+    } else {
+      _lastRefrigerantReportingDataSourceLabel = 'local_cache';
+      _lastRefrigerantReportingFallbackReason = 'cloud indisponibil';
+    }
+
+    final items = [...await _readLocalRefrigerantReportingRecordsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeRefrigerantReportingRecords(items);
+  }
+
+  @override
+  Future<List<Team>> listTeams() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_teamsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <Team>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <Team>[];
+    }
+
+    return decoded
+        .map((item) => Team.fromMap(Map<String, dynamic>.from(item as Map)))
+        .toList();
+  }
+
+  @override
+  Future<void> saveTeam(Team team) async {
+    final items = [...await listTeams()];
+    final index = items.indexWhere((item) => item.id == team.id);
+    if (index >= 0) {
+      items[index] = team;
+    } else {
+      items.add(team);
+    }
+    await _writeTeams(items);
+  }
+
+  @override
+  Future<void> deleteTeam(String teamId) async {
+    final items = [...await listTeams()]
+      ..removeWhere((item) => item.id == teamId);
+    await _writeTeams(items);
+  }
+
+  @override
+  Future<List<Trip>> listTrips() async {
+    final localItems = await _readLocalTripsOnly();
+    if (!_isTripsCloudAvailable) {
+      _lastTripsDataSourceLabel = 'local_cache';
+      _lastTripsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _tripsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => Trip.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _tripsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          knownIds.add(id);
+          cloudItems = <Trip>[...cloudItems, item];
+        }
+      }
+      final merged = [...cloudItems]
+        ..sort((a, b) => b.departureDate.compareTo(a.departureDate));
+      await _writeTrips(merged);
+      _lastTripsDataSourceLabel = 'cloud';
+      _lastTripsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastTripsDataSourceLabel = 'local_cache';
+      _lastTripsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveTrip(Trip trip) async {
+    final items = [...await _readLocalTripsOnly()];
+    final index = items.indexWhere((item) => item.id == trip.id);
+    final next = trip.tripNumber.trim().isEmpty
+        ? trip.copyWith(
+            tripNumber: await _nextSequenceNumber(
+              type: 'TRIP',
+              date: trip.departureDate,
+              items: items.map((item) => item.tripNumber).toList(),
+            ),
+          )
+        : trip;
+
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]
+      ..sort((a, b) => b.departureDate.compareTo(a.departureDate));
+    if (_isTripsCloudAvailable) {
+      try {
+        await _tripsCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastTripsDataSourceLabel = 'cloud';
+        _lastTripsFallbackReason = '';
+      } catch (error) {
+        _lastTripsDataSourceLabel = 'local_cache';
+        _lastTripsFallbackReason = error.toString();
+      }
+    } else {
+      _lastTripsDataSourceLabel = 'local_cache';
+      _lastTripsFallbackReason = 'cloud indisponibil';
+    }
+    await _writeTrips(sorted);
+  }
+
+  @override
+  Future<void> deleteTrip(String tripId) async {
+    final trimmedId = tripId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isTripsCloudAvailable) {
+      try {
+        await _tripsCollection.doc(trimmedId).delete();
+        _lastTripsDataSourceLabel = 'cloud';
+        _lastTripsFallbackReason = '';
+      } catch (error) {
+        _lastTripsDataSourceLabel = 'local_cache';
+        _lastTripsFallbackReason = error.toString();
+      }
+    } else {
+      _lastTripsDataSourceLabel = 'local_cache';
+      _lastTripsFallbackReason = 'cloud indisponibil';
+    }
+
+    final items = [...await _readLocalTripsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeTrips(items);
+  }
+
+  @override
+  Future<List<TravelOrder>> listTravelOrders() async {
+    final localItems = await _readLocalTravelOrdersOnly();
+    if (!_isTravelOrdersCloudAvailable) {
+      _lastTravelOrdersDataSourceLabel = 'local_cache';
+      _lastTravelOrdersFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _travelOrdersCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => TravelOrder.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _travelOrdersCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          knownIds.add(id);
+          cloudItems = <TravelOrder>[...cloudItems, item];
+        }
+      }
+      final merged = [...cloudItems]
+        ..sort((a, b) => b.issueDate.compareTo(a.issueDate));
+      await _writeTravelOrders(merged);
+      _lastTravelOrdersDataSourceLabel = 'cloud';
+      _lastTravelOrdersFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastTravelOrdersDataSourceLabel = 'local_cache';
+      _lastTravelOrdersFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveTravelOrder(TravelOrder order) async {
+    final items = [...await _readLocalTravelOrdersOnly()];
+    final index = items.indexWhere((item) => item.id == order.id);
+    final daysCount = _computeDaysCount(order.periodStart, order.periodEnd);
+    final next = order.copyWith(
+      orderNumber: order.orderNumber.trim().isEmpty
+          ? await nextTravelOrderNumber(issueDate: order.issueDate)
+          : order.orderNumber,
+      daysCount: daysCount,
+    );
+
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]
+      ..sort((a, b) => b.issueDate.compareTo(a.issueDate));
+    if (_isTravelOrdersCloudAvailable) {
+      try {
+        await _travelOrdersCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastTravelOrdersDataSourceLabel = 'cloud';
+        _lastTravelOrdersFallbackReason = '';
+      } catch (error) {
+        _lastTravelOrdersDataSourceLabel = 'local_cache';
+        _lastTravelOrdersFallbackReason = error.toString();
+      }
+    } else {
+      _lastTravelOrdersDataSourceLabel = 'local_cache';
+      _lastTravelOrdersFallbackReason = 'cloud indisponibil';
+    }
+    await _writeTravelOrders(sorted);
+  }
+
+  @override
+  Future<void> deleteTravelOrder(String orderId) async {
+    final trimmedId = orderId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isTravelOrdersCloudAvailable) {
+      try {
+        await _travelOrdersCollection.doc(trimmedId).delete();
+        _lastTravelOrdersDataSourceLabel = 'cloud';
+        _lastTravelOrdersFallbackReason = '';
+      } catch (error) {
+        _lastTravelOrdersDataSourceLabel = 'local_cache';
+        _lastTravelOrdersFallbackReason = error.toString();
+      }
+    } else {
+      _lastTravelOrdersDataSourceLabel = 'local_cache';
+      _lastTravelOrdersFallbackReason = 'cloud indisponibil';
+    }
+
+    final items = [...await _readLocalTravelOrdersOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeTravelOrders(items);
+  }
+
+  @override
+  Future<List<ComplaintRecord>> listComplaints() async {
+    final localItems = await _readLocalComplaintsOnly();
+    if (!_isComplaintsCloudAvailable) {
+      _lastComplaintsDataSourceLabel = 'local_cache';
+      _lastComplaintsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _complaintsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => ComplaintRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _complaintsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          knownIds.add(id);
+          cloudItems = <ComplaintRecord>[...cloudItems, item];
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareComplaints);
+      await _writeComplaints(merged);
+      _lastComplaintsDataSourceLabel = 'cloud';
+      _lastComplaintsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastComplaintsDataSourceLabel = 'local_cache';
+      _lastComplaintsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveComplaint(ComplaintRecord complaint) async {
+    final items = [...await _readLocalComplaintsOnly()];
+    final index = items.indexWhere((item) => item.id == complaint.id);
+    final now = DateTime.now();
+    final next = complaint.copyWith(
+      complaintNumber: complaint.complaintNumber.trim().isEmpty
+          ? await nextComplaintNumber()
+          : complaint.complaintNumber.trim(),
+      createdAt: index >= 0 ? items[index].createdAt : complaint.createdAt,
+      updatedAt: now,
+    );
+
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]..sort(_compareComplaints);
+    if (_isComplaintsCloudAvailable) {
+      try {
+        await _complaintsCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastComplaintsDataSourceLabel = 'cloud';
+        _lastComplaintsFallbackReason = '';
+      } catch (error) {
+        _lastComplaintsDataSourceLabel = 'local_cache';
+        _lastComplaintsFallbackReason = error.toString();
+      }
+    } else {
+      _lastComplaintsDataSourceLabel = 'local_cache';
+      _lastComplaintsFallbackReason = 'cloud indisponibil';
+    }
+    await _writeComplaints(sorted);
+  }
+
+  @override
+  Future<void> deleteComplaint(String complaintId) async {
+    final trimmedId = complaintId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isComplaintsCloudAvailable) {
+      try {
+        await _complaintsCollection.doc(trimmedId).delete();
+        _lastComplaintsDataSourceLabel = 'cloud';
+        _lastComplaintsFallbackReason = '';
+      } catch (error) {
+        _lastComplaintsDataSourceLabel = 'local_cache';
+        _lastComplaintsFallbackReason = error.toString();
+      }
+    } else {
+      _lastComplaintsDataSourceLabel = 'local_cache';
+      _lastComplaintsFallbackReason = 'cloud indisponibil';
+    }
+
+    final items = [...await _readLocalComplaintsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeComplaints(items);
+  }
+
+  @override
+  Future<String> nextComplaintNumber() async {
+    final items = await listComplaints();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.complaint,
+      date: DateTime.now(),
+      items: items.map((item) => item.complaintNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<String> nextOfferNumber() async {
+    final items = await _localOferteRepository.listOffers();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.offer,
+      date: DateTime.now(),
+      items: items.map((item) => item.offerNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<RepairReportRecord>> listRepairReports() async {
+    final localItems = await _readLocalRepairReportsOnly();
+    if (!_isRepairReportsCloudAvailable) {
+      _lastRepairReportsDataSourceLabel = 'local_cache';
+      _lastRepairReportsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+
+    try {
+      var cloudItems = await _repairReportsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => RepairReportRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _repairReportsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          knownIds.add(id);
+          cloudItems = <RepairReportRecord>[...cloudItems, item];
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareRepairReports);
+      await _writeRepairReports(merged);
+      _lastRepairReportsDataSourceLabel = 'cloud';
+      _lastRepairReportsFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastRepairReportsDataSourceLabel = 'local_cache';
+      _lastRepairReportsFallbackReason = error.toString();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveRepairReport(RepairReportRecord report) async {
+    final items = [...await _readLocalRepairReportsOnly()];
+    final index = items.indexWhere((item) => item.id == report.id);
+    final now = DateTime.now();
+    final next = report.copyWith(
+      reportNumber: report.reportNumber.trim().isEmpty
+          ? await nextRepairReportNumber()
+          : report.reportNumber.trim(),
+      createdAt: index >= 0 ? items[index].createdAt : report.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]..sort(_compareRepairReports);
+    if (_isRepairReportsCloudAvailable) {
+      try {
+        await _repairReportsCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+        _lastRepairReportsDataSourceLabel = 'cloud';
+        _lastRepairReportsFallbackReason = '';
+      } catch (error) {
+        _lastRepairReportsDataSourceLabel = 'local_cache';
+        _lastRepairReportsFallbackReason = error.toString();
+      }
+    } else {
+      _lastRepairReportsDataSourceLabel = 'local_cache';
+      _lastRepairReportsFallbackReason = 'cloud indisponibil';
+    }
+    await _writeRepairReports(sorted);
+  }
+
+  @override
+  Future<void> deleteRepairReport(String reportId) async {
+    final trimmedId = reportId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isRepairReportsCloudAvailable) {
+      try {
+        await _repairReportsCollection.doc(trimmedId).delete();
+        _lastRepairReportsDataSourceLabel = 'cloud';
+        _lastRepairReportsFallbackReason = '';
+      } catch (error) {
+        _lastRepairReportsDataSourceLabel = 'local_cache';
+        _lastRepairReportsFallbackReason = error.toString();
+      }
+    } else {
+      _lastRepairReportsDataSourceLabel = 'local_cache';
+      _lastRepairReportsFallbackReason = 'cloud indisponibil';
+    }
+
+    final items = [...await _readLocalRepairReportsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeRepairReports(items);
+  }
+
+  @override
+  Future<String> nextRepairReportNumber() async {
+    final items = await listRepairReports();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.repairReport,
+      date: DateTime.now(),
+      items: items.map((item) => item.reportNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<WarrantyInterventionReportRecord>>
+      listWarrantyInterventionReports() async {
+    final localItems = await _readLocalWarrantyInterventionReportsOnly();
+    if (!_isRepairReportsCloudAvailable) {
+      return localItems;
+    }
+    try {
+      var cloudItems = await _warrantyInterventionReportsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map(
+                  (doc) => WarrantyInterventionReportRecord.fromMap(doc.data()),
+                )
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _warrantyInterventionReportsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          knownIds.add(id);
+          cloudItems = <WarrantyInterventionReportRecord>[...cloudItems, item];
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareWarrantyInterventionReports);
+      await _writeWarrantyInterventionReports(merged);
+      return merged;
+    } catch (_) {
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveWarrantyInterventionReport(
+    WarrantyInterventionReportRecord report,
+  ) async {
+    final items = [...await _readLocalWarrantyInterventionReportsOnly()];
+    final index = items.indexWhere((item) => item.id == report.id);
+    final now = DateTime.now();
+    final next = report.copyWith(
+      documentNumber: report.documentNumber.trim().isEmpty
+          ? await nextWarrantyInterventionReportNumber()
+          : report.documentNumber.trim(),
+      createdAt: index >= 0 ? items[index].createdAt : report.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]..sort(_compareWarrantyInterventionReports);
+    if (_isRepairReportsCloudAvailable) {
+      try {
+        await _warrantyInterventionReportsCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeWarrantyInterventionReports(sorted);
+  }
+
+  @override
+  Future<void> deleteWarrantyInterventionReport(String reportId) async {
+    final trimmedId = reportId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isRepairReportsCloudAvailable) {
+      try {
+        await _warrantyInterventionReportsCollection.doc(trimmedId).delete();
+      } catch (_) {}
+    }
+    final items = [...await _readLocalWarrantyInterventionReportsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeWarrantyInterventionReports(items);
+  }
+
+  @override
+  Future<String> nextWarrantyInterventionReportNumber() async {
+    final items = await listWarrantyInterventionReports();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.warrantyReport,
+      date: DateTime.now(),
+      items: items.map((item) => item.documentNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<ComplaintClientCentralizerRecord>>
+      listComplaintClientCentralizers() async {
+    final localItems = await _readLocalComplaintClientCentralizersOnly();
+    if (!_isComplaintsCloudAvailable) {
+      return localItems;
+    }
+    try {
+      var cloudItems = await _complaintClientCentralizersCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) =>
+                    ComplaintClientCentralizerRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) continue;
+          await _complaintClientCentralizersCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <ComplaintClientCentralizerRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareComplaintClientCentralizers);
+      await _writeComplaintClientCentralizers(merged);
+      return merged;
+    } catch (_) {
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveComplaintClientCentralizer(
+    ComplaintClientCentralizerRecord record,
+  ) async {
+    final items = [...await _readLocalComplaintClientCentralizersOnly()];
+    final index = items.indexWhere((item) => item.id == record.id);
+    final now = DateTime.now();
+    final next = record.copyWith(
+      documentNumber: record.documentNumber.trim().isEmpty
+          ? await nextComplaintClientCentralizerNumber()
+          : record.documentNumber.trim(),
+      createdAt: index >= 0 ? items[index].createdAt : record.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]..sort(_compareComplaintClientCentralizers);
+    if (_isComplaintsCloudAvailable) {
+      try {
+        await _complaintClientCentralizersCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeComplaintClientCentralizers(sorted);
+  }
+
+  @override
+  Future<void> deleteComplaintClientCentralizer(String documentId) async {
+    final trimmedId = documentId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isComplaintsCloudAvailable) {
+      try {
+        await _complaintClientCentralizersCollection.doc(trimmedId).delete();
+      } catch (_) {}
+    }
+    final items = [...await _readLocalComplaintClientCentralizersOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeComplaintClientCentralizers(items);
+  }
+
+  @override
+  Future<String> nextComplaintClientCentralizerNumber() async {
+    final items = await listComplaintClientCentralizers();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.complaintCentralizer,
+      date: DateTime.now(),
+      items: items.map((item) => item.documentNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<ComplaintWorkOrderRecord>> listComplaintWorkOrders() async {
+    final localItems = await _readLocalComplaintWorkOrdersOnly();
+    if (!_isComplaintsCloudAvailable) {
+      return localItems;
+    }
+    try {
+      var cloudItems = await _complaintWorkOrdersCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => ComplaintWorkOrderRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) continue;
+          await _complaintWorkOrdersCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <ComplaintWorkOrderRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareComplaintWorkOrders);
+      await _writeComplaintWorkOrders(merged);
+      return merged;
+    } catch (_) {
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveComplaintWorkOrder(ComplaintWorkOrderRecord record) async {
+    final items = [...await _readLocalComplaintWorkOrdersOnly()];
+    final index = items.indexWhere((item) => item.id == record.id);
+    final now = DateTime.now();
+    final next = record.copyWith(
+      documentNumber: record.documentNumber.trim().isEmpty
+          ? await nextComplaintWorkOrderNumber()
+          : record.documentNumber.trim(),
+      createdAt: index >= 0 ? items[index].createdAt : record.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]..sort(_compareComplaintWorkOrders);
+    if (_isComplaintsCloudAvailable) {
+      try {
+        await _complaintWorkOrdersCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeComplaintWorkOrders(sorted);
+  }
+
+  @override
+  Future<void> deleteComplaintWorkOrder(String documentId) async {
+    final trimmedId = documentId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isComplaintsCloudAvailable) {
+      try {
+        await _complaintWorkOrdersCollection.doc(trimmedId).delete();
+      } catch (_) {}
+    }
+    final items = [...await _readLocalComplaintWorkOrdersOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeComplaintWorkOrders(items);
+  }
+
+  @override
+  Future<String> nextComplaintWorkOrderNumber() async {
+    final items = await listComplaintWorkOrders();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.complaintWorkOrder,
+      date: DateTime.now(),
+      items: items.map((item) => item.documentNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<String> nextTravelOrderNumber({DateTime? issueDate}) async {
+    final items = await listTravelOrders();
+    return _nextConfiguredDocumentNumber(
+      documentType: RegistryDocumentSeriesCatalog.travelOrder,
+      date: issueDate ?? DateTime.now(),
+      items: items.map((item) => item.orderNumber).toList(growable: false),
+    );
+  }
+
+  @override
+  Future<List<FieldPhotoRecord>> listFieldPhotos({
+    String sourceModule = '',
+    String sourceEntityId = '',
+    String documentId = '',
+  }) async {
+    final localItems = await _readLocalFieldPhotosOnly();
+    final normalizedModule = sourceModule.trim();
+    final normalizedEntityId = sourceEntityId.trim();
+    final normalizedDocumentId = documentId.trim();
+    if (!_isFieldPhotosCloudAvailable) {
+      return _filterFieldPhotos(
+        localItems,
+        sourceModule: normalizedModule,
+        sourceEntityId: normalizedEntityId,
+        documentId: normalizedDocumentId,
+      );
+    }
+    try {
+      var cloudItems = await _fieldPhotosCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => FieldPhotoRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _fieldPhotosCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <FieldPhotoRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareFieldPhotos);
+      await _writeFieldPhotos(merged);
+      return _filterFieldPhotos(
+        merged,
+        sourceModule: normalizedModule,
+        sourceEntityId: normalizedEntityId,
+        documentId: normalizedDocumentId,
+      );
+    } catch (_) {
+      return _filterFieldPhotos(
+        localItems,
+        sourceModule: normalizedModule,
+        sourceEntityId: normalizedEntityId,
+        documentId: normalizedDocumentId,
+      );
+    }
+  }
+
+  @override
+  Future<void> saveFieldPhoto(FieldPhotoRecord photo) async {
+    final items = [...await _readLocalFieldPhotosOnly()];
+    final index = items.indexWhere((item) => item.id == photo.id);
+    final now = DateTime.now();
+    final next = photo.copyWith(
+      createdAt: index >= 0 ? items[index].createdAt : photo.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]..sort(_compareFieldPhotos);
+    if (_isFieldPhotosCloudAvailable) {
+      try {
+        await _fieldPhotosCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeFieldPhotos(sorted);
+  }
+
+  @override
+  Future<void> deleteFieldPhoto(String photoId) async {
+    final trimmedId = photoId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isFieldPhotosCloudAvailable) {
+      try {
+        await _fieldPhotosCollection.doc(trimmedId).delete();
+      } catch (_) {}
+    }
+    final items = [...await _readLocalFieldPhotosOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeFieldPhotos(items);
+  }
+
+  @override
+  Future<List<MonthlyTimesheetRecord>> listMonthlyTimesheets() async {
+    final localItems = await _readLocalMonthlyTimesheetsOnly();
+    if (!_isMonthlyTimesheetsCloudAvailable) {
+      return localItems;
+    }
+    try {
+      var cloudItems = await _monthlyTimesheetsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => MonthlyTimesheetRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false),
+          );
+      if (localItems.isNotEmpty) {
+        final knownIds = cloudItems.map((item) => item.id).toSet();
+        for (final item in localItems) {
+          final id = item.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await _monthlyTimesheetsCollection.doc(id).set(
+                item.toMap(),
+                SetOptions(merge: true),
+              );
+          cloudItems = <MonthlyTimesheetRecord>[...cloudItems, item];
+          knownIds.add(id);
+        }
+      }
+      final merged = [...cloudItems]..sort(_compareMonthlyTimesheets);
+      await _writeMonthlyTimesheets(merged);
+      return merged;
+    } catch (_) {
+      return localItems;
+    }
+  }
+
+  @override
+  Future<void> saveMonthlyTimesheet(MonthlyTimesheetRecord record) async {
+    final items = [...await _readLocalMonthlyTimesheetsOnly()];
+    final index = items.indexWhere((item) => item.id == record.id);
+    final next = record.copyWith(
+      createdAt: index >= 0 ? items[index].createdAt : record.createdAt,
+      updatedAt: DateTime.now(),
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    final sorted = [...items]..sort(_compareMonthlyTimesheets);
+    if (_isMonthlyTimesheetsCloudAvailable) {
+      try {
+        await _monthlyTimesheetsCollection.doc(next.id).set(
+              next.toMap(),
+              SetOptions(merge: true),
+            );
+      } catch (_) {}
+    }
+    await _writeMonthlyTimesheets(sorted);
+  }
+
+  @override
+  Future<void> deleteMonthlyTimesheet(String recordId) async {
+    final trimmedId = recordId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    if (_isMonthlyTimesheetsCloudAvailable) {
+      try {
+        await _monthlyTimesheetsCollection.doc(trimmedId).delete();
+      } catch (_) {}
+    }
+    final items = [...await _readLocalMonthlyTimesheetsOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeMonthlyTimesheets(items);
+  }
+
+  @override
+  Future<List<ClientRecord>> listClients() async {
+    final localItems = await _readLocalClientsOnly();
+    if (!_isClientsCloudAvailable) {
+      _lastClientsDataSourceLabel = 'local_cache';
+      _lastClientsFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+    try {
+      var cloudItems = await _clientsCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => ClientRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false)
+              ..sort(
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+              ),
+          );
+      if (localItems.isNotEmpty) {
+        final cloudIds = cloudItems.map((item) => item.id).toSet();
+        final localOnly = localItems.where((l) => !cloudIds.contains(l.id)).toList();
+        if (localOnly.isNotEmpty) {
+          // Urcăm în Firebase itemii locali lipsă, fără a mai re-fetcha
+          await Future.wait(localOnly.map((item) => _clientsCollection.doc(item.id).set(
+            {
+              ...item.toMap(),
+              'updated_at': item.updatedAt.toIso8601String(),
+            },
+            SetOptions(merge: true),
+          )));
+          // Îmbinăm local, fără al doilea query Firebase
+          cloudItems = [...cloudItems, ...localOnly]
+            ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        }
+      }
+      await _writeClients(cloudItems);
+      _lastClientsDataSourceLabel = 'cloud';
+      _lastClientsFallbackReason = '';
+      return cloudItems;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _lastClientsDataSourceLabel = 'local_cache';
+      _lastClientsFallbackReason = error.toString().trim();
+      return localItems;
+    }
+  }
+
+  Future<List<ClientRecord>> _readLocalClientsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_clientsKey);
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List<dynamic>) {
+          final items = decoded
+              .whereType<Map>()
+              .map(
+                  (row) => ClientRecord.fromMap(Map<String, dynamic>.from(row)))
+              .where((item) => item.id.trim().isNotEmpty)
+              .toList()
+            ..sort(
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+          if (items.isNotEmpty) {
+            return items;
+          }
+        }
+      } catch (_) {}
+    }
+
+    final legacy = await _loadLegacyListRows(
+      priorityKeys: const <String>[
+        'clients_v1',
+        'deviz_clients_v1',
+        'clients',
+      ],
+      keyHints: const <String>['client', 'clients'],
+    );
+    final now = DateTime.now();
+    final converted = <ClientRecord>[];
+    for (var i = 0; i < legacy.length; i++) {
+      final row = legacy[i];
+      final mapped = ClientRecord.fromMap(row);
+      final id =
+          mapped.id.isEmpty ? '${now.microsecondsSinceEpoch + i}' : mapped.id;
+      converted.add(
+        mapped.copyWith(
+          id: id,
+          clientCode: mapped.clientCode.isEmpty
+              ? 'CL-${(i + 1).toString().padLeft(4, '0')}'
+              : mapped.clientCode,
+          createdAt: mapped.createdAt,
+          updatedAt: mapped.updatedAt,
+        ),
+      );
+    }
+    converted
+        .sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return converted;
+  }
+
+  @override
+  Future<ClientRecord> saveClient(ClientRecord client) async {
+    final now = DateTime.now();
+    final items = [...await listClients()];
+    final index = items.indexWhere((item) => item.id == client.id);
+    final next = client.copyWith(
+      clientCode: client.clientCode.trim().isEmpty
+          ? await nextClientCode()
+          : client.clientCode.trim(),
+      createdAt: client.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    if (_isClientsCloudAvailable) {
+      try {
+        await _clientsCollection.doc(next.id).set(
+          {
+            ...next.toMap(),
+            'updated_at': next.updatedAt.toIso8601String(),
+          },
+          SetOptions(merge: true),
+        );
+        _lastClientsDataSourceLabel = 'cloud';
+        _lastClientsFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastClientsDataSourceLabel = 'local_cache';
+        _lastClientsFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastClientsDataSourceLabel = 'local_cache';
+      _lastClientsFallbackReason = 'cloud indisponibil';
+    }
+    await _writeClients(items);
+    return next;
+  }
+
+  @override
+  Future<void> deleteClient(String clientId) async {
+    if (_isClientsCloudAvailable) {
+      try {
+        await _clientsCollection.doc(clientId).delete();
+        _lastClientsDataSourceLabel = 'cloud';
+        _lastClientsFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastClientsDataSourceLabel = 'local_cache';
+        _lastClientsFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastClientsDataSourceLabel = 'local_cache';
+      _lastClientsFallbackReason = 'cloud indisponibil';
+    }
+    final items = [...await listClients()]
+      ..removeWhere((item) => item.id == clientId);
+    await _writeClients(items);
+  }
+
+  @override
+  Future<String> nextClientCode() async {
+    final items = await listClients();
+    var max = 0;
+    for (final item in items) {
+      final raw = item.clientCode.trim().toUpperCase();
+      if (!raw.startsWith('CL-')) continue;
+      final seq = int.tryParse(raw.substring(3));
+      if (seq != null && seq > max) {
+        max = seq;
+      }
+    }
+    return 'CL-${(max + 1).toString().padLeft(4, '0')}';
+  }
+
+  @override
+  Future<List<PartnerRecord>> listPartners() async {
+    final localItems = await _readLocalPartnersOnly();
+    if (!_isPartnersCloudAvailable) {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+    try {
+      var cloudItems = await _partnersCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => PartnerRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false)
+              ..sort(
+                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+              ),
+          );
+      if (localItems.isNotEmpty) {
+        final cloudIds = cloudItems.map((item) => item.id).toSet();
+        final localOnly = localItems.where((l) => !cloudIds.contains(l.id)).toList();
+        if (localOnly.isNotEmpty) {
+          await Future.wait(localOnly.map((item) => _partnersCollection.doc(item.id).set(
+            {
+              ...item.toMap(),
+              'updated_at': item.updatedAt.toIso8601String(),
+            },
+            SetOptions(merge: true),
+          )));
+          cloudItems = [...cloudItems, ...localOnly]
+            ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        }
+      }
+      await _writePartners(cloudItems);
+      _lastPartnersDataSourceLabel = 'cloud';
+      _lastPartnersFallbackReason = '';
+      return cloudItems;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = error.toString().trim();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<PartnerRecord> savePartner(PartnerRecord partner) async {
+    final now = DateTime.now();
+    final items = [...await listPartners()];
+    final index = items.indexWhere((item) => item.id == partner.id);
+    final next = partner.copyWith(
+      createdAt: partner.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    if (_isPartnersCloudAvailable) {
+      try {
+        await _partnersCollection.doc(next.id).set(
+          {
+            ...next.toMap(),
+            'updated_at': next.updatedAt.toIso8601String(),
+          },
+          SetOptions(merge: true),
+        );
+        _lastPartnersDataSourceLabel = 'cloud';
+        _lastPartnersFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastPartnersDataSourceLabel = 'local_cache';
+        _lastPartnersFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+    }
+    await _writePartners(items);
+    return next;
+  }
+
+  @override
+  Future<void> deletePartner(String partnerId) async {
+    if (_isPartnersCloudAvailable) {
+      try {
+        await _partnersCollection.doc(partnerId).delete();
+        _lastPartnersDataSourceLabel = 'cloud';
+        _lastPartnersFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastPartnersDataSourceLabel = 'local_cache';
+        _lastPartnersFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+    }
+    final items = [...await listPartners()]
+      ..removeWhere((item) => item.id == partnerId);
+    await _writePartners(items);
+  }
+
+  @override
+  Future<List<PartnerWorkerRecord>> listPartnerWorkers() async {
+    final localItems = await _readLocalPartnerWorkersOnly();
+    if (!_isPartnersCloudAvailable) {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+    try {
+      var cloudItems = await _partnerWorkersCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => PartnerWorkerRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false)
+              ..sort(
+                (a, b) => a.fullName
+                    .toLowerCase()
+                    .compareTo(b.fullName.toLowerCase()),
+              ),
+          );
+      if (localItems.isNotEmpty) {
+        final cloudIds = cloudItems.map((item) => item.id).toSet();
+        final localOnly = localItems.where((l) => !cloudIds.contains(l.id)).toList();
+        if (localOnly.isNotEmpty) {
+          await Future.wait(localOnly.map((item) => _partnerWorkersCollection.doc(item.id).set(
+            {
+              ...item.toMap(),
+              'updated_at': item.updatedAt.toIso8601String(),
+            },
+            SetOptions(merge: true),
+          )));
+          cloudItems = [...cloudItems, ...localOnly]
+            ..sort((a, b) => a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()));
+        }
+      }
+      await _writePartnerWorkers(cloudItems);
+      _lastPartnersDataSourceLabel = 'cloud';
+      _lastPartnersFallbackReason = '';
+      return cloudItems;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = error.toString().trim();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<PartnerWorkerRecord> savePartnerWorker(
+    PartnerWorkerRecord worker,
+  ) async {
+    final now = DateTime.now();
+    final items = [...await listPartnerWorkers()];
+    final index = items.indexWhere((item) => item.id == worker.id);
+    final next = worker.copyWith(
+      createdAt: worker.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    if (_isPartnersCloudAvailable) {
+      try {
+        await _partnerWorkersCollection.doc(next.id).set(
+          {
+            ...next.toMap(),
+            'updated_at': next.updatedAt.toIso8601String(),
+          },
+          SetOptions(merge: true),
+        );
+        _lastPartnersDataSourceLabel = 'cloud';
+        _lastPartnersFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastPartnersDataSourceLabel = 'local_cache';
+        _lastPartnersFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+    }
+    await _writePartnerWorkers(items);
+    return next;
+  }
+
+  @override
+  Future<void> deletePartnerWorker(String workerId) async {
+    if (_isPartnersCloudAvailable) {
+      try {
+        await _partnerWorkersCollection.doc(workerId).delete();
+        _lastPartnersDataSourceLabel = 'cloud';
+        _lastPartnersFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastPartnersDataSourceLabel = 'local_cache';
+        _lastPartnersFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+    }
+    final items = [...await listPartnerWorkers()]
+      ..removeWhere((item) => item.id == workerId);
+    await _writePartnerWorkers(items);
+  }
+
+  @override
+  Future<List<PartnerVehicleRecord>> listPartnerVehicles() async {
+    final localItems = await _readLocalPartnerVehiclesOnly();
+    if (!_isPartnersCloudAvailable) {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+    try {
+      var cloudItems = await _partnerVehiclesCollection.get().then(
+            (snapshot) => snapshot.docs
+                .map((doc) => PartnerVehicleRecord.fromMap(doc.data()))
+                .where((item) => item.id.trim().isNotEmpty)
+                .toList(growable: false)
+              ..sort(
+                (a, b) => a.vehicleName
+                    .toLowerCase()
+                    .compareTo(b.vehicleName.toLowerCase()),
+              ),
+          );
+      if (localItems.isNotEmpty) {
+        final cloudIds = cloudItems.map((item) => item.id).toSet();
+        final localOnly = localItems.where((l) => !cloudIds.contains(l.id)).toList();
+        if (localOnly.isNotEmpty) {
+          await Future.wait(localOnly.map((item) => _partnerVehiclesCollection.doc(item.id).set(
+            {
+              ...item.toMap(),
+              'updated_at': item.updatedAt.toIso8601String(),
+            },
+            SetOptions(merge: true),
+          )));
+          cloudItems = [...cloudItems, ...localOnly]
+            ..sort((a, b) => a.vehicleName.toLowerCase().compareTo(b.vehicleName.toLowerCase()));
+        }
+      }
+      await _writePartnerVehicles(cloudItems);
+      _lastPartnersDataSourceLabel = 'cloud';
+      _lastPartnersFallbackReason = '';
+      return cloudItems;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = error.toString().trim();
+      return localItems;
+    }
+  }
+
+  @override
+  Future<PartnerVehicleRecord> savePartnerVehicle(
+    PartnerVehicleRecord vehicle,
+  ) async {
+    final now = DateTime.now();
+    final items = [...await listPartnerVehicles()];
+    final index = items.indexWhere((item) => item.id == vehicle.id);
+    final next = vehicle.copyWith(
+      createdAt: vehicle.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    if (_isPartnersCloudAvailable) {
+      try {
+        await _partnerVehiclesCollection.doc(next.id).set(
+          {
+            ...next.toMap(),
+            'updated_at': next.updatedAt.toIso8601String(),
+          },
+          SetOptions(merge: true),
+        );
+        _lastPartnersDataSourceLabel = 'cloud';
+        _lastPartnersFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastPartnersDataSourceLabel = 'local_cache';
+        _lastPartnersFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+    }
+    await _writePartnerVehicles(items);
+    return next;
+  }
+
+  @override
+  Future<void> deletePartnerVehicle(String vehicleId) async {
+    if (_isPartnersCloudAvailable) {
+      try {
+        await _partnerVehiclesCollection.doc(vehicleId).delete();
+        _lastPartnersDataSourceLabel = 'cloud';
+        _lastPartnersFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastPartnersDataSourceLabel = 'local_cache';
+        _lastPartnersFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastPartnersDataSourceLabel = 'local_cache';
+      _lastPartnersFallbackReason = 'cloud indisponibil';
+    }
+    final items = [...await listPartnerVehicles()]
+      ..removeWhere((item) => item.id == vehicleId);
+    await _writePartnerVehicles(items);
+  }
+
+  @override
+  Future<List<JobRecord>> listJobs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_jobsKey);
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List<dynamic>) {
+          return decoded
+              .whereType<Map>()
+              .map((row) => JobRecord.fromMap(Map<String, dynamic>.from(row)))
+              .where((item) => item.id.trim().isNotEmpty)
+              .toList()
+            ..sort((a, b) => b.updatedAt.millisecondsSinceEpoch
+                .compareTo(a.updatedAt.millisecondsSinceEpoch));
+        }
+      } catch (_) {}
+    }
+    return const <JobRecord>[];
+  }
+
+  @override
+  Future<JobRecord> saveJob(JobRecord job) async {
+    final items = [...await listJobs()];
+    final now = DateTime.now();
+    final index = items.indexWhere((item) => item.id == job.id);
+    final next = job.copyWith(
+      jobCode: job.jobCode.trim().isEmpty ? await nextJobCode() : job.jobCode,
+      createdAt: job.createdAt,
+      updatedAt: now,
+    );
+    if (index >= 0) {
+      items[index] = next;
+    } else {
+      items.add(next);
+    }
+    await _writeJobs(items);
+    return next;
+  }
+
+  @override
+  Future<void> deleteJob(String jobId) async {
+    final items = [...await listJobs()]
+      ..removeWhere((item) => item.id == jobId);
+    await _writeJobs(items);
+  }
+
+  @override
+  Future<String> nextJobCode() async {
+    final items = await listJobs();
+    var max = 0;
+    for (final item in items) {
+      final raw = item.jobCode.trim().toUpperCase();
+      if (!raw.startsWith('JOB-')) continue;
+      final seq = int.tryParse(raw.substring(4));
+      if (seq != null && seq > max) {
+        max = seq;
+      }
+    }
+    return 'JOB-${(max + 1).toString().padLeft(4, '0')}';
+  }
+
+  @override
+  Future<List<LookupItem>> listJobsLookup() async {
+    final jobs = await listJobs();
+    if (jobs.isNotEmpty) {
+      return jobs.where((item) => item.isActive).map((item) {
+        final label = item.jobCode.isEmpty
+            ? item.title
+            : '${item.jobCode} - ${item.title}';
+        return LookupItem(id: item.id, name: label);
+      }).toList();
+    }
+
+    final rows = await _loadLegacyListRows(
+      priorityKeys: const <String>[
+        'jobs_v1',
+        'deviz_jobs_v1',
+        'jobs',
+      ],
+      keyHints: const <String>['job', 'jobs', 'lucrare', 'lucrari'],
+    );
+    return rows
+        .map(
+          (row) => LookupItem(
+            id: _firstNonEmptyString(
+              row,
+              const <String>['id', 'job_id', 'uid', 'key'],
+              fallback: '',
+            ),
+            name: _firstNonEmptyString(
+              row,
+              const <String>['title', 'name', 'job_title'],
+              fallback: '',
+            ),
+          ),
+        )
+        .where(
+            (item) => item.id.trim().isNotEmpty && item.name.trim().isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Future<List<LookupItem>> listClientsLookup() async {
+    final fullClients = await listClients();
+    if (fullClients.isNotEmpty) {
+      return fullClients
+          .where((item) => item.isActive)
+          .map((item) => LookupItem(id: item.id, name: item.name))
+          .toList();
+    }
+
+    final rows = await _loadLegacyListRows(
+      priorityKeys: const <String>[
+        'clients_v1',
+        'deviz_clients_v1',
+        'clients',
+      ],
+      keyHints: const <String>['client', 'clients'],
+    );
+
+    final result = rows
+        .map(
+          (row) => LookupItem(
+            id: _firstNonEmptyString(
+              row,
+              const <String>['id', 'client_id', 'uid', 'key'],
+              fallback: DateTime.now().microsecondsSinceEpoch.toString(),
+            ),
+            name: _firstNonEmptyString(
+              row,
+              const <String>['name', 'client_name', 'company_name', 'nume'],
+              fallback: 'Client',
+            ),
+          ),
+        )
+        .where(
+            (item) => item.id.trim().isNotEmpty && item.name.trim().isNotEmpty)
+        .toList();
+    return _dedupeLookup(result);
+  }
+
+  @override
+  Future<List<EmployeeLookup>> listEmployeesLookup() async {
+    // Sursă unică: MasterLocalStore gestionează intern migrarea cheilor vechi.
+    final masterEmployees = await MasterLocalStore.readEmployees();
+    final seen = <String>{};
+    final result = <EmployeeLookup>[];
+    for (final employee in masterEmployees) {
+      final id = employee.id.trim();
+      if (id.isEmpty || seen.contains(id)) continue;
+      seen.add(id);
+      result.add(EmployeeLookup(
+        id: id,
+        name: employee.name,
+        role: employee.role,
+        perDiemPerDay: employee.dailyAllowance,
+        lodgingPerDay: employee.defaultLodgingCost,
+        laborCostType: employee.laborCostType,
+        requiresLodgingByDefault: employee.requiresLodgingByDefault,
+        costLunar: employee.costLunar,
+        tarifOrar: employee.tarifOrar,
+        oreLunareStandard:
+            employee.oreLunareStandard > 0 ? employee.oreLunareStandard : 168.0,
+        active: employee.active,
+      ));
+    }
+    return result;
+  }
+
+  @override
+  Future<List<LookupItem>> listVehiclesLookup() async {
+    if (_isVehiclesCloudAvailable) {
+      try {
+        final cloudItems = await _vehiclesCollection.get().then(
+              (snapshot) => snapshot.docs
+                  .map((doc) => VehicleRecord.fromMap(doc.data()))
+                  .where((item) => item.id.trim().isNotEmpty && item.active)
+                  .toList(growable: false)
+                ..sort(
+                  (a, b) =>
+                      a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+                ),
+            );
+        if (cloudItems.isNotEmpty) {
+          _lastVehiclesDataSourceLabel = 'cloud';
+          _lastVehiclesFallbackReason = '';
+          return cloudItems
+              .map((item) => LookupItem(id: item.id, name: item.name))
+              .toList(growable: false);
+        }
+        _lastVehiclesDataSourceLabel = 'cloud';
+        _lastVehiclesFallbackReason = '';
+        return const <LookupItem>[];
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastVehiclesDataSourceLabel = 'local_cache';
+        _lastVehiclesFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastVehiclesDataSourceLabel = 'local_cache';
+      _lastVehiclesFallbackReason = 'cloud indisponibil';
+    }
+
+    final rows = await _loadLegacyListRows(
+      priorityKeys: const <String>[
+        'vehicles_v1',
+        'deviz_vehicles_v1',
+        'vehicles',
+      ],
+      keyHints: const <String>['vehicle', 'vehicles', 'auto', 'car'],
+    );
+
+    final result = rows
+        .map(
+          (row) => LookupItem(
+            id: _firstNonEmptyString(
+              row,
+              const <String>['id', 'vehicle_id', 'uid', 'key'],
+              fallback: DateTime.now().microsecondsSinceEpoch.toString(),
+            ),
+            name: _firstNonEmptyString(
+              row,
+              const <String>[
+                'name',
+                'vehicle_name',
+                'plate_number',
+                'numar',
+                'nume'
+              ],
+              fallback: 'Autoturism',
+            ),
+          ),
+        )
+        .where(
+            (item) => item.id.trim().isNotEmpty && item.name.trim().isNotEmpty)
+        .toList();
+    return _dedupeLookup(result);
+  }
+
+  @override
+  Future<CompanyProfile> loadCompanyProfile() async {
+    final localProfile = await _readLocalCompanyProfileOnly();
+    final localPdfSettings = await _readLocalPdfExportSettings(
+      fallbackProfile: localProfile,
+    );
+    if (!_isCompanyProfileCloudAvailable) {
+      _lastCompanyProfileDataSourceLabel = 'local_cache';
+      _lastCompanyProfileFallbackReason = 'cloud indisponibil';
+      return localProfile.copyWith(pdfExportSettings: localPdfSettings);
+    }
+    try {
+      final snapshot = await _companyProfileDocument.get();
+      final raw = snapshot.data();
+      CompanyProfile cloudProfile;
+      if (snapshot.exists && raw != null && raw.isNotEmpty) {
+        cloudProfile = CompanyProfile.fromMap(raw);
+      } else if (_hasCompanyProfileGlobalData(localProfile)) {
+        await _companyProfileDocument.set(
+          _companyProfileToCloudMap(localProfile),
+          SetOptions(merge: true),
+        );
+        cloudProfile = localProfile.copyWith(
+          pdfExportSettings: const PdfExportSettings(),
+        );
+      } else {
+        cloudProfile = const CompanyProfile();
+      }
+      // Dacă cloud nu are token SmartBill (versiune veche fără câmpul salvat),
+      // folosim credențialele din cache-ul local care le-a păstrat.
+      final resolvedSmartBill =
+          cloudProfile.smartBillSettings.token.trim().isNotEmpty
+              ? cloudProfile.smartBillSettings
+              : localProfile.smartBillSettings;
+
+      // Fallback pentru câmpuri care lipseau din documentul Firebase vechi.
+      // Preferăm valoarea din cloud dacă există; altfel folosim cache-ul local.
+      // Acest fallback asigură compatibilitate cu versiunile anterioare ale app-ului
+      // care nu salvau aceste câmpuri în Firebase.
+      String resolveField(String cloudVal, String localVal) =>
+          cloudVal.trim().isNotEmpty ? cloudVal.trim() : localVal.trim();
+
+      final merged = cloudProfile.copyWith(
+        pdfExportSettings: localPdfSettings,
+        smartBillSettings: resolvedSmartBill,
+        contactEmail: resolveField(
+            cloudProfile.contactEmail, localProfile.contactEmail),
+        website: resolveField(cloudProfile.website, localProfile.website),
+        city: resolveField(cloudProfile.city, localProfile.city),
+        county: resolveField(cloudProfile.county, localProfile.county),
+        currency: resolveField(cloudProfile.currency, localProfile.currency),
+        language: resolveField(cloudProfile.language, localProfile.language),
+      );
+      await _writeCompanyProfileCache(merged);
+      _lastCompanyProfileDataSourceLabel = 'cloud';
+      _lastCompanyProfileFallbackReason = '';
+      return merged;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _lastCompanyProfileDataSourceLabel = 'local_cache';
+      _lastCompanyProfileFallbackReason = error.toString().trim();
+      return localProfile.copyWith(pdfExportSettings: localPdfSettings);
+    }
+  }
+
+  Future<CompanyProfile> _readLocalCompanyProfileOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    const keys = <String>[
+      _companySettingsKey,
+      'company_settings',
+      'deviz_company_settings_v1',
+    ];
+    for (final key in keys) {
+      final raw = prefs.getString(key);
+      if (raw == null || raw.trim().isEmpty) {
+        continue;
+      }
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          return CompanyProfile.fromMap(decoded);
+        }
+        if (decoded is Map) {
+          return CompanyProfile.fromMap(Map<String, dynamic>.from(decoded));
+        }
+      } catch (_) {
+        // Keep trying fallback keys.
+      }
+    }
+    return const CompanyProfile();
+  }
+
+  @override
+  Future<void> saveCompanyProfile(CompanyProfile profile) async {
+    if (_isCompanyProfileCloudAvailable) {
+      try {
+        await _companyProfileDocument.set(
+          _companyProfileToCloudMap(profile),
+          SetOptions(merge: true),
+        );
+        _lastCompanyProfileDataSourceLabel = 'cloud';
+        _lastCompanyProfileFallbackReason = '';
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _lastCompanyProfileDataSourceLabel = 'local_cache';
+        _lastCompanyProfileFallbackReason = error.toString().trim();
+      }
+    } else {
+      _lastCompanyProfileDataSourceLabel = 'local_cache';
+      _lastCompanyProfileFallbackReason = 'cloud indisponibil';
+    }
+    await _writeLocalPdfExportSettings(profile.pdfExportSettings);
+    await _writeCompanyProfileCache(profile);
+  }
+
+  @override
+  Future<List<RegistryEntry>> listRegistryEntries() async {
+    final localEntries = await _readMergedLocalRegistryEntries();
+    if (!_isRegistryCloudAvailable) {
+      _lastRegistryDataSourceLabel = 'local_cache';
+      _lastRegistryFallbackReason = 'cloud indisponibil';
+      return localEntries;
+    }
+
+    try {
+      final snapshot = await _registryEntriesCollection.get();
+      final cloudEntriesBuffer = <RegistryEntry>[];
+      for (final doc in snapshot.docs) {
+        final rawEntry = RegistryEntry.fromMap(<String, dynamic>{
+          ...doc.data(),
+          'id': (doc.data()['id'] ?? doc.id).toString(),
+        });
+        final normalizedEntry = _normalizeRegistryEntry(rawEntry);
+        if (!_sameRegistryEntry(rawEntry, normalizedEntry)) {
+          await _registryEntriesCollection.doc(normalizedEntry.id).set(
+                _registryEntryToCloudMap(normalizedEntry),
+                SetOptions(merge: true),
+              );
+        }
+        if (normalizedEntry.id.trim().isNotEmpty) {
+          cloudEntriesBuffer.add(normalizedEntry);
+        }
+      }
+      var cloudEntries = cloudEntriesBuffer.toList(growable: false);
+
+      if (localEntries.isNotEmpty) {
+        final knownKeys = cloudEntries
+            .map(_registryEntryIdentityKey)
+            .where((key) => key.isNotEmpty)
+            .toSet();
+        for (final localEntry in localEntries) {
+          final normalizedLocalEntry = _ensureRegistryEntryId(localEntry);
+          final key = _registryEntryIdentityKey(normalizedLocalEntry);
+          if (key.isEmpty || knownKeys.contains(key)) {
+            continue;
+          }
+          await _registryEntriesCollection.doc(normalizedLocalEntry.id).set(
+                _registryEntryToCloudMap(normalizedLocalEntry),
+                SetOptions(merge: true),
+              );
+          cloudEntries = <RegistryEntry>[
+            ...cloudEntries,
+            normalizedLocalEntry,
+          ];
+          knownKeys.add(key);
+        }
+      }
+
+      final merged = _sortRegistryEntries(
+        _mergeRegistryEntries(cloudEntries, const <RegistryEntry>[]),
+      );
+      await _writeRegistryEntries(merged);
+      _lastRegistryDataSourceLabel = 'cloud';
+      _lastRegistryFallbackReason = '';
+      return merged;
+    } catch (error) {
+      _lastRegistryDataSourceLabel = 'local_cache';
+      _lastRegistryFallbackReason = error.toString();
+      return localEntries;
+    }
+  }
+
+  @override
+  Future<void> saveRegistryEntry(RegistryEntry entry) async {
+    final normalizedEntry =
+        _normalizeRegistryEntry(_ensureRegistryEntryId(entry));
+    var queuedOffline = !_isRegistryCloudAvailable;
+    if (_isRegistryCloudAvailable) {
+      try {
+        await _registryEntriesCollection.doc(normalizedEntry.id).set(
+              _registryEntryToCloudMap(normalizedEntry),
+              SetOptions(merge: true),
+            );
+        _lastRegistryDataSourceLabel = 'cloud';
+        _lastRegistryFallbackReason = '';
+      } catch (error) {
+        _lastRegistryDataSourceLabel = 'local_cache';
+        _lastRegistryFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastRegistryDataSourceLabel = 'local_cache';
+      _lastRegistryFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance
+          .queueRegistryEntryUpsert(_registryEntryToCloudMap(normalizedEntry));
+    }
+
+    await _upsertLocalRegistryEntry(normalizedEntry);
+    await _mirrorRegistryEntryToLegacyStore(normalizedEntry);
+  }
+
+  @override
+  Future<void> deleteRegistryEntry(String entryId) async {
+    final trimmedId = entryId.trim();
+    if (trimmedId.isEmpty) {
+      return;
+    }
+    var queuedOffline = !_isRegistryCloudAvailable;
+    if (_isRegistryCloudAvailable) {
+      try {
+        await _registryEntriesCollection.doc(trimmedId).delete();
+        _lastRegistryDataSourceLabel = 'cloud';
+        _lastRegistryFallbackReason = '';
+      } catch (error) {
+        _lastRegistryDataSourceLabel = 'local_cache';
+        _lastRegistryFallbackReason = error.toString();
+        queuedOffline = true;
+      }
+    } else {
+      _lastRegistryDataSourceLabel = 'local_cache';
+      _lastRegistryFallbackReason = 'cloud indisponibil';
+    }
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueRegistryEntryDelete(trimmedId);
+    }
+
+    final items = [...await _readLocalRegistryEntriesOnly()]
+      ..removeWhere((item) => item.id == trimmedId);
+    await _writeRegistryEntries(items);
+    await RegistryStore.removeByReferenceId(trimmedId);
+  }
+
+  @override
+  Future<RegistrySettings> loadRegistrySettings() async {
+    final localSettings = await _readLocalRegistrySettingsOnly();
+    if (!_isRegistryCloudAvailable) {
+      return localSettings;
+    }
+
+    try {
+      final snapshot = await _registrySettingsDocument.get();
+      final raw = snapshot.data();
+      if (raw != null && raw.isNotEmpty) {
+        final settings = RegistrySettings.fromMap(raw);
+        await _writeLocalRegistrySettings(settings);
+        return settings;
+      }
+      if (!_isDefaultRegistrySettings(localSettings)) {
+        await _registrySettingsDocument.set(
+          localSettings.toMap(),
+          SetOptions(merge: true),
+        );
+      }
+      return localSettings;
+    } catch (_) {
+      return localSettings;
+    }
+  }
+
+  @override
+  Future<void> saveRegistrySettings(RegistrySettings settings) async {
+    if (_isRegistryCloudAvailable) {
+      try {
+        await _registrySettingsDocument.set(
+          settings.toMap(),
+          SetOptions(merge: true),
+        );
+      } catch (_) {}
+    }
+    await _writeLocalRegistrySettings(settings);
+  }
+
+  @override
+  Future<RegistryEntry> registerGeneratedDocument({
+    required RegistryType registryType,
+    required String documentCategory,
+    required String documentTitle,
+    required String documentNumber,
+    DateTime? documentDate,
+    String issuerName = '',
+    String recipientName = '',
+    String clientId = '',
+    String jobId = '',
+    String offerId = '',
+    String estimateId = '',
+    String contractId = '',
+    String ticketId = '',
+    String filePath = '',
+    String fileName = '',
+    String notes = '',
+    String status = '',
+  }) async {
+    final settings = await loadRegistrySettings();
+    final items = await listRegistryEntries();
+    final now = DateTime.now();
+    final year = now.year;
+    final prefix = registryType == RegistryType.intrare
+        ? settings.incomingPrefix.trim().isEmpty
+            ? registryType.defaultPrefix
+            : settings.incomingPrefix.trim().toUpperCase()
+        : settings.outgoingPrefix.trim().isEmpty
+            ? registryType.defaultPrefix
+            : settings.outgoingPrefix.trim().toUpperCase();
+
+    final filtered = items.where((item) {
+      if (item.registryType != registryType) {
+        return false;
+      }
+      if (!settings.resetSequenceYearly) {
+        return true;
+      }
+      return item.year == year;
+    }).toList();
+
+    final sequenceNumber = filtered.isEmpty
+        ? 1
+        : filtered
+                .map((item) => item.sequenceNumber)
+                .reduce((a, b) => a > b ? a : b) +
+            1;
+    final normalizedDocumentNumber = documentNumber.trim();
+    final registryNumber = normalizedDocumentNumber.isNotEmpty
+        ? normalizedDocumentNumber
+        : '$prefix-$year-${sequenceNumber.toString().padLeft(4, '0')}';
+
+    final entry = RegistryEntry(
+      id: now.microsecondsSinceEpoch.toString(),
+      registryNumber: registryNumber,
+      registryType: registryType,
+      sequenceNumber: sequenceNumber,
+      year: year,
+      registeredAt: now,
+      documentNumber: documentNumber,
+      documentDate: documentDate,
+      documentTitle: documentTitle,
+      documentCategory: documentCategory,
+      issuerName: issuerName,
+      recipientName: recipientName,
+      clientId: clientId,
+      jobId: jobId,
+      offerId: offerId,
+      estimateId: estimateId,
+      contractId: contractId,
+      ticketId: ticketId,
+      filePath: filePath,
+      fileName: fileName,
+      notes: notes,
+      status: status.isEmpty
+          ? (registryType == RegistryType.intrare
+              ? settings.defaultIncomingStatus
+              : settings.defaultOutgoingStatus)
+          : status,
+    );
+
+    await saveRegistryEntry(entry);
+    return entry;
+  }
+
+  Future<List<RegistryEntry>> _readLocalRegistryEntriesOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_registryEntriesKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <RegistryEntry>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <RegistryEntry>[];
+    }
+
+    final entries = decoded
+        .map(
+          (item) => RegistryEntry.fromMap(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .toList(growable: false);
+    final normalizedEntries =
+        entries.map(_normalizeRegistryEntry).toList(growable: false);
+    if (_sameRegistryEntryLists(entries, normalizedEntries)) {
+      return normalizedEntries;
+    }
+    final sortedNormalizedEntries = _sortRegistryEntries(normalizedEntries);
+    await _writeRegistryEntries(sortedNormalizedEntries);
+    return sortedNormalizedEntries;
+  }
+
+  Future<List<RegistryEntry>> _readMergedLocalRegistryEntries() async {
+    final storedEntries = await _readLocalRegistryEntriesOnly();
+    final legacyRows = await RegistryStore.readEntries();
+    final legacyEntries = legacyRows
+        .map(_legacyRegistryEntryFromRow)
+        .where((item) => item.id.trim().isNotEmpty)
+        .toList(growable: false);
+    final merged = _sortRegistryEntries(
+      _mergeRegistryEntries(storedEntries, legacyEntries),
+    );
+    if (!_sameRegistryEntryLists(storedEntries, merged)) {
+      await _writeRegistryEntries(merged);
+    }
+    return merged;
+  }
+
+  Future<void> _upsertLocalRegistryEntry(RegistryEntry entry) async {
+    final items = [...await _readLocalRegistryEntriesOnly()];
+    final key = _registryEntryIdentityKey(entry);
+    final index = items.indexWhere(
+      (item) =>
+          item.id == entry.id ||
+          (key.isNotEmpty && _registryEntryIdentityKey(item) == key),
+    );
+    if (index >= 0) {
+      items[index] = entry;
+    } else {
+      items.add(entry);
+    }
+    await _writeRegistryEntries(_sortRegistryEntries(items));
+  }
+
+  Future<RegistrySettings> _readLocalRegistrySettingsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_registrySettingsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const RegistrySettings();
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) {
+      return const RegistrySettings();
+    }
+
+    return RegistrySettings.fromMap(decoded);
+  }
+
+  Future<void> _writeLocalRegistrySettings(RegistrySettings settings) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_registrySettingsKey, jsonEncode(settings.toMap()));
+  }
+
+  RegistryEntry _legacyRegistryEntryFromRow(Map<String, dynamic> row) {
+    final number =
+        (row['number'] ?? row['numarDocument'] ?? '').toString().trim();
+    final type =
+        RegistryStore.normalizeDocumentType(row['type'] ?? row['source']);
+    final registeredAt = _parseRegistryDateTime(
+      (row['updatedAt'] ?? row['createdAt'] ?? row['date'] ?? '').toString(),
+    );
+    final effectiveId =
+        (row['referenceId'] ?? row['id'] ?? '').toString().trim();
+    return RegistryEntry(
+      id: effectiveId.isEmpty
+          ? _registryStableId(
+              type: type,
+              primaryNumber: number,
+            )
+          : effectiveId,
+      registryNumber: number,
+      registryType: RegistryType.iesire,
+      sequenceNumber: _extractRegistrySequence(number),
+      year: registeredAt.year,
+      registeredAt: registeredAt,
+      documentNumber: number,
+      documentDate: _parseRegistryDate(
+        (row['date'] ?? row['documentDate'] ?? '').toString(),
+      ),
+      documentTitle: (row['title'] ?? '').toString().trim(),
+      documentCategory: RegistryStore.documentTypeLabelUi(type),
+      issuerName: '',
+      recipientName: (row['client'] ?? '').toString().trim(),
+      clientId: '',
+      jobId: (row['jobId'] ?? row['jobCode'] ?? '').toString().trim(),
+      offerId: '',
+      estimateId: '',
+      contractId: '',
+      ticketId: '',
+      filePath: (row['filePath'] ?? '').toString().trim(),
+      fileName: '',
+      notes: '',
+      status: (row['status'] ?? '').toString().trim(),
+    );
+  }
+
+  Map<String, dynamic> _registryEntryToCloudMap(RegistryEntry entry) {
+    return <String, dynamic>{
+      ...entry.toMap(),
+      'id': entry.id,
+      'registered_at': entry.registeredAt.toIso8601String(),
+      'document_date': entry.documentDate?.toIso8601String(),
+    };
+  }
+
+  RegistryEntry _ensureRegistryEntryId(RegistryEntry entry) {
+    final currentId = entry.id.trim();
+    if (currentId.isNotEmpty) {
+      return entry;
+    }
+    return entry.copyWith(
+      id: _registryStableId(
+        type: RegistryStore.normalizeDocumentType(entry.documentCategory),
+        primaryNumber: entry.registryNumber.isNotEmpty
+            ? entry.registryNumber
+            : entry.documentNumber,
+      ),
+    );
+  }
+
+  RegistryEntry _normalizeRegistryEntry(RegistryEntry entry) {
+    final normalizedDocumentNumber = entry.documentNumber.trim();
+    if (normalizedDocumentNumber.isEmpty ||
+        entry.registryNumber.trim() == normalizedDocumentNumber) {
+      return entry;
+    }
+    return entry.copyWith(registryNumber: normalizedDocumentNumber);
+  }
+
+  bool _sameRegistryEntryLists(
+    List<RegistryEntry> left,
+    List<RegistryEntry> right,
+  ) {
+    if (left.length != right.length) {
+      return false;
+    }
+    for (var index = 0; index < left.length; index++) {
+      if (!_sameRegistryEntry(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _sameRegistryEntry(RegistryEntry left, RegistryEntry right) {
+    return jsonEncode(left.toMap()) == jsonEncode(right.toMap());
+  }
+
+  List<RegistryEntry> _mergeRegistryEntries(
+    List<RegistryEntry> primary,
+    List<RegistryEntry> secondary,
+  ) {
+    final byKey = <String, RegistryEntry>{};
+    for (final item in <RegistryEntry>[...primary, ...secondary]) {
+      final normalized = _ensureRegistryEntryId(item);
+      final key = _registryEntryIdentityKey(normalized);
+      if (key.isEmpty) {
+        continue;
+      }
+      byKey[key] = normalized;
+    }
+    return byKey.values.toList(growable: false);
+  }
+
+  List<RegistryEntry> _sortRegistryEntries(List<RegistryEntry> entries) {
+    final items = [...entries];
+    items.sort((a, b) => b.registeredAt.compareTo(a.registeredAt));
+    return items;
+  }
+
+  String _registryEntryIdentityKey(RegistryEntry entry) {
+    final id = entry.id.trim();
+    if (id.isNotEmpty) {
+      return 'id:$id';
+    }
+    final registryNumber = entry.registryNumber.trim();
+    final documentNumber = entry.documentNumber.trim();
+    if (registryNumber.isEmpty && documentNumber.isEmpty) {
+      return '';
+    }
+    return 'doc:$registryNumber|$documentNumber|${entry.documentCategory.trim().toLowerCase()}';
+  }
+
+  String _registryStableId({
+    required String type,
+    required String primaryNumber,
+  }) {
+    final normalizedType = type.trim().isEmpty ? 'document' : type.trim();
+    final normalizedNumber = primaryNumber.trim().isEmpty
+        ? DateTime.now().microsecondsSinceEpoch.toString()
+        : primaryNumber.trim();
+    final sanitized =
+        normalizedNumber.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    return 'registry_${normalizedType}_$sanitized';
+  }
+
+  int _extractRegistrySequence(String raw) {
+    final match = RegExp(r'(\d+)(?!.*\d)').firstMatch(raw);
+    return int.tryParse(match?.group(1) ?? '') ?? 0;
+  }
+
+  DateTime _parseRegistryDateTime(String raw) {
+    return DateTime.tryParse(raw) ?? DateTime.now();
+  }
+
+  DateTime? _parseRegistryDate(String raw) {
+    return DateTime.tryParse(raw);
+  }
+
+  bool _isDefaultRegistrySettings(RegistrySettings settings) {
+    final defaults = const RegistrySettings().toMap();
+    final current = settings.toMap();
+    return jsonEncode(defaults) == jsonEncode(current);
+  }
+
+  Future<void> _mirrorRegistryEntryToLegacyStore(RegistryEntry entry) async {
+    final normalizedType = RegistryStore.normalizeDocumentType(
+      entry.documentCategory.isNotEmpty
+          ? entry.documentCategory
+          : entry.registryType.storageValue,
+    );
+    if (normalizedType.isEmpty) {
+      return;
+    }
+    final allocatedNumber = await RegistryStore.allocateNumber(
+      type: normalizedType,
+      existingNumber: entry.documentNumber.trim().isNotEmpty
+          ? entry.documentNumber
+          : entry.registryNumber,
+    );
+    await RegistryStore.upsertEntry(
+      type: normalizedType,
+      number: allocatedNumber,
+      title: entry.documentTitle.trim(),
+      documentDate: entry.documentDate?.toIso8601String() ?? '',
+      status: entry.status.trim(),
+      clientName: entry.recipientName.trim(),
+      jobCode: entry.jobId.trim(),
+      jobId: entry.jobId.trim(),
+      referenceId: entry.id.trim(),
+      filePath: entry.filePath.trim(),
+      source: 'repository_registry',
+    );
+  }
+
+  Future<void> _writeAppointments(List<Appointment> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _appointmentsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<Set<String>> _readDeletedAppointmentIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_deletedAppointmentIdsKey);
+    if (raw == null) return <String>{};
+    return raw.where((id) => id.trim().isNotEmpty).toSet();
+  }
+
+  Future<void> _addDeletedAppointmentId(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = await _readDeletedAppointmentIds();
+    existing.add(id.trim());
+    await prefs.setStringList(_deletedAppointmentIdsKey, existing.toList());
+  }
+
+  Future<void> _removeDeletedAppointmentIds(Set<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = await _readDeletedAppointmentIds();
+    existing.removeAll(ids);
+    if (existing.isEmpty) {
+      await prefs.remove(_deletedAppointmentIdsKey);
+    } else {
+      await prefs.setStringList(_deletedAppointmentIdsKey, existing.toList());
+    }
+  }
+
+  Future<List<Appointment>> _readLocalAppointmentsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_appointmentsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <Appointment>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <Appointment>[];
+    }
+
+    return _sortAppointments(
+      decoded
+          .map(
+            (item) => Appointment.fromMap(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  List<Appointment> _sortAppointments(List<Appointment> items) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final byStart =
+          a.effectiveStartDateTime.compareTo(b.effectiveStartDateTime);
+      if (byStart != 0) return byStart;
+      return a.effectiveEndDateTime.compareTo(b.effectiveEndDateTime);
+    });
+    return sorted;
+  }
+
+  Future<void> _writeAgfrEquipments(List<AgfrEquipmentRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _agfrEquipmentsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<AgfrEquipmentRecord>> _readLocalAgfrEquipmentsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_agfrEquipmentsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <AgfrEquipmentRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <AgfrEquipmentRecord>[];
+    }
+    return _sortAgfrEquipments(
+      decoded
+          .whereType<Map>()
+          .map(
+            (item) => AgfrEquipmentRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  List<AgfrEquipmentRecord> _sortAgfrEquipments(
+    List<AgfrEquipmentRecord> items,
+  ) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final byClient =
+          a.clientName.toLowerCase().compareTo(b.clientName.toLowerCase());
+      if (byClient != 0) {
+        return byClient;
+      }
+      final byUpdated = b.updatedAt.compareTo(a.updatedAt);
+      if (byUpdated != 0) {
+        return byUpdated;
+      }
+      return a.serialNumber
+          .toLowerCase()
+          .compareTo(b.serialNumber.toLowerCase());
+    });
+    return sorted;
+  }
+
+  Future<void> _writeAgfrInterventions(
+    List<AgfrInterventionRecord> items,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _agfrInterventionsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<AgfrInterventionRecord>> _readLocalAgfrInterventionsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_agfrInterventionsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <AgfrInterventionRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <AgfrInterventionRecord>[];
+    }
+    return _sortAgfrInterventions(
+      decoded
+          .whereType<Map>()
+          .map(
+            (item) => AgfrInterventionRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  List<AgfrInterventionRecord> _sortAgfrInterventions(
+    List<AgfrInterventionRecord> items,
+  ) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final byDate = b.operationDate.compareTo(a.operationDate);
+      if (byDate != 0) {
+        return byDate;
+      }
+      return b.updatedAt.compareTo(a.updatedAt);
+    });
+    return sorted;
+  }
+
+  Future<void> _writeAgfrReports(List<AgfrReportRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _agfrReportsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<AgfrReportRecord>> _readLocalAgfrReportsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_agfrReportsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <AgfrReportRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <AgfrReportRecord>[];
+    }
+    return _sortAgfrReports(
+      decoded
+          .whereType<Map>()
+          .map(
+            (item) => AgfrReportRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  List<AgfrReportRecord> _sortAgfrReports(List<AgfrReportRecord> items) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final byDate = b.operationDate.compareTo(a.operationDate);
+      if (byDate != 0) {
+        return byDate;
+      }
+      return b.updatedAt.compareTo(a.updatedAt);
+    });
+    return sorted;
+  }
+
+  Future<void> _writeAgfrWeighingReports(
+    List<AgfrWeighingReportRecord> items,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _agfrWeighingReportsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<AgfrWeighingReportRecord>>
+      _readLocalAgfrWeighingReportsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_agfrWeighingReportsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <AgfrWeighingReportRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <AgfrWeighingReportRecord>[];
+    }
+    return _sortAgfrWeighingReports(
+      decoded
+          .whereType<Map>()
+          .map(
+            (item) => AgfrWeighingReportRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  List<AgfrWeighingReportRecord> _sortAgfrWeighingReports(
+    List<AgfrWeighingReportRecord> items,
+  ) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final byDate = b.operationDate.compareTo(a.operationDate);
+      if (byDate != 0) {
+        return byDate;
+      }
+      return b.updatedAt.compareTo(a.updatedAt);
+    });
+    return sorted;
+  }
+
+  Future<void> _writeRefrigerantReportingRecords(
+    List<RefrigerantReportingRecord> items,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _refrigerantReportingRecordsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<List<RefrigerantReportingRecord>>
+      _readLocalRefrigerantReportingRecordsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_refrigerantReportingRecordsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <RefrigerantReportingRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <RefrigerantReportingRecord>[];
+    }
+    return _sortRefrigerantReportingRecords(
+      decoded
+          .whereType<Map>()
+          .map(
+            (item) => RefrigerantReportingRecord.fromMap(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  List<RefrigerantReportingRecord> _sortRefrigerantReportingRecords(
+    List<RefrigerantReportingRecord> items,
+  ) {
+    final sorted = [...items];
+    sorted.sort((a, b) {
+      final byYear = b.reportingYear.compareTo(a.reportingYear);
+      if (byYear != 0) {
+        return byYear;
+      }
+      final byUpdated = b.updatedAt.compareTo(a.updatedAt);
+      if (byUpdated != 0) {
+        return byUpdated;
+      }
+      return a.clientName.toLowerCase().compareTo(b.clientName.toLowerCase());
+    });
+    return sorted;
+  }
+
+  Future<void> _writeTeams(List<Team> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _teamsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<List<PartnerRecord>> _readLocalPartnersOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_partnersKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <PartnerRecord>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <PartnerRecord>[];
+    }
+
+    final items = decoded
+        .whereType<Map>()
+        .map((row) => PartnerRecord.fromMap(Map<String, dynamic>.from(row)))
+        .where((item) => item.id.trim().isNotEmpty)
+        .toList(growable: false);
+    final sorted = [...items]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return sorted;
+  }
+
+  Future<List<PartnerWorkerRecord>> _readLocalPartnerWorkersOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_partnerWorkersKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <PartnerWorkerRecord>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <PartnerWorkerRecord>[];
+    }
+
+    final items = decoded
+        .whereType<Map>()
+        .map(
+          (row) => PartnerWorkerRecord.fromMap(Map<String, dynamic>.from(row)),
+        )
+        .where((item) => item.id.trim().isNotEmpty)
+        .toList(growable: false);
+    final sorted = [...items]..sort(
+        (a, b) => a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()),
+      );
+    return sorted;
+  }
+
+  Future<List<PartnerVehicleRecord>> _readLocalPartnerVehiclesOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_partnerVehiclesKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <PartnerVehicleRecord>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <PartnerVehicleRecord>[];
+    }
+
+    final items = decoded
+        .whereType<Map>()
+        .map(
+          (row) => PartnerVehicleRecord.fromMap(
+            Map<String, dynamic>.from(row),
+          ),
+        )
+        .where((item) => item.id.trim().isNotEmpty)
+        .toList(growable: false);
+    final sorted = [...items]..sort(
+        (a, b) =>
+            a.vehicleName.toLowerCase().compareTo(b.vehicleName.toLowerCase()),
+      );
+    return sorted;
+  }
+
+  Future<void> _writePartners(List<PartnerRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _partnersKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<void> _writePartnerWorkers(List<PartnerWorkerRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _partnerWorkersKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<void> _writePartnerVehicles(List<PartnerVehicleRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _partnerVehiclesKey,
+      jsonEncode(items.map((item) => item.toMap()).toList(growable: false)),
+    );
+  }
+
+  Future<void> _writeClients(List<ClientRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = jsonEncode(items.map((item) => item.toMap()).toList());
+    await prefs.setString(_clientsKey, payload);
+    await prefs.setString('clients_v1', payload);
+    await prefs.setString('deviz_clients_v1', payload);
+  }
+
+  Future<void> _writeJobs(List<JobRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = jsonEncode(items.map((item) => item.toMap()).toList());
+    await prefs.setString(_jobsKey, payload);
+    await prefs.setString('jobs_v1', payload);
+    await prefs.setString('deviz_jobs_v1', payload);
+  }
+
+  Future<List<Trip>> _readLocalTripsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_tripsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <Trip>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <Trip>[];
+    }
+
+    return decoded
+        .map((item) => Trip.fromMap(Map<String, dynamic>.from(item as Map)))
+        .toList()
+      ..sort((a, b) => b.departureDate.compareTo(a.departureDate));
+  }
+
+  Future<List<TravelOrder>> _readLocalTravelOrdersOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_travelOrdersKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <TravelOrder>[];
+    }
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List<dynamic>) {
+      return const <TravelOrder>[];
+    }
+
+    return decoded
+        .map(
+          (item) => TravelOrder.fromMap(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList()
+      ..sort((a, b) => b.issueDate.compareTo(a.issueDate));
+  }
+
+  Future<List<ComplaintRecord>> _readLocalComplaintsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_complaintsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <ComplaintRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return const <ComplaintRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map(
+          (item) => ComplaintRecord.fromMap(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList()
+      ..sort(_compareComplaints);
+  }
+
+  Future<List<RepairReportRecord>> _readLocalRepairReportsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_repairReportsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <RepairReportRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return const <RepairReportRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map((item) =>
+            RepairReportRecord.fromMap(Map<String, dynamic>.from(item)))
+        .toList()
+      ..sort(_compareRepairReports);
+  }
+
+  Future<List<WarrantyInterventionReportRecord>>
+      _readLocalWarrantyInterventionReportsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_warrantyInterventionReportsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <WarrantyInterventionReportRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return const <WarrantyInterventionReportRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map(
+          (item) => WarrantyInterventionReportRecord.fromMap(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList()
+      ..sort(_compareWarrantyInterventionReports);
+  }
+
+  Future<List<ComplaintClientCentralizerRecord>>
+      _readLocalComplaintClientCentralizersOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_complaintClientCentralizersKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <ComplaintClientCentralizerRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return const <ComplaintClientCentralizerRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map(
+          (item) => ComplaintClientCentralizerRecord.fromMap(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList()
+      ..sort(_compareComplaintClientCentralizers);
+  }
+
+  Future<List<ComplaintWorkOrderRecord>>
+      _readLocalComplaintWorkOrdersOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_complaintWorkOrdersKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <ComplaintWorkOrderRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return const <ComplaintWorkOrderRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map(
+          (item) => ComplaintWorkOrderRecord.fromMap(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList()
+      ..sort(_compareComplaintWorkOrders);
+  }
+
+  Future<List<FieldPhotoRecord>> _readLocalFieldPhotosOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_fieldPhotosKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <FieldPhotoRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return const <FieldPhotoRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map(
+            (item) => FieldPhotoRecord.fromMap(Map<String, dynamic>.from(item)))
+        .toList()
+      ..sort(_compareFieldPhotos);
+  }
+
+  Future<void> _writeTrips(List<Trip> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _tripsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeTravelOrders(List<TravelOrder> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _travelOrdersKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeComplaints(List<ComplaintRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _complaintsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeRepairReports(List<RepairReportRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _repairReportsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeWarrantyInterventionReports(
+    List<WarrantyInterventionReportRecord> items,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _warrantyInterventionReportsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeComplaintClientCentralizers(
+    List<ComplaintClientCentralizerRecord> items,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _complaintClientCentralizersKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeComplaintWorkOrders(
+    List<ComplaintWorkOrderRecord> items,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _complaintWorkOrdersKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeFieldPhotos(List<FieldPhotoRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _fieldPhotosKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<List<MonthlyTimesheetRecord>> _readLocalMonthlyTimesheetsOnly() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_monthlyTimesheetsKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return const <MonthlyTimesheetRecord>[];
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      return const <MonthlyTimesheetRecord>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map(
+          (item) => MonthlyTimesheetRecord.fromMap(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList()
+      ..sort(_compareMonthlyTimesheets);
+  }
+
+  Future<void> _writeMonthlyTimesheets(
+      List<MonthlyTimesheetRecord> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _monthlyTimesheetsKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  Future<void> _writeRegistryEntries(List<RegistryEntry> items) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _registryEntriesKey,
+      jsonEncode(items.map((item) => item.toMap()).toList()),
+    );
+  }
+
+  int _computeDaysCount(DateTime start, DateTime end) {
+    final from = DateTime(start.year, start.month, start.day);
+    final to = DateTime(end.year, end.month, end.day);
+    final diff = to.difference(from).inDays + 1;
+    return diff < 1 ? 1 : diff;
+  }
+
+  int _compareComplaints(ComplaintRecord a, ComplaintRecord b) {
+    final dateCompare = b.complaintDate.compareTo(a.complaintDate);
+    if (dateCompare != 0) {
+      return dateCompare;
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
+  int _compareRepairReports(RepairReportRecord a, RepairReportRecord b) {
+    final dateCompare = b.interventionDate.compareTo(a.interventionDate);
+    if (dateCompare != 0) {
+      return dateCompare;
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
+  int _compareWarrantyInterventionReports(
+    WarrantyInterventionReportRecord a,
+    WarrantyInterventionReportRecord b,
+  ) {
+    final left = a.documentDate ?? a.updatedAt;
+    final right = b.documentDate ?? b.updatedAt;
+    final dateCompare = right.compareTo(left);
+    if (dateCompare != 0) {
+      return dateCompare;
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
+  int _compareComplaintClientCentralizers(
+    ComplaintClientCentralizerRecord a,
+    ComplaintClientCentralizerRecord b,
+  ) {
+    final dateCompare = b.periodEnd.compareTo(a.periodEnd);
+    if (dateCompare != 0) {
+      return dateCompare;
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
+  int _compareComplaintWorkOrders(
+    ComplaintWorkOrderRecord a,
+    ComplaintWorkOrderRecord b,
+  ) {
+    final dateCompare = b.issueDate.compareTo(a.issueDate);
+    if (dateCompare != 0) {
+      return dateCompare;
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
+  int _compareFieldPhotos(FieldPhotoRecord a, FieldPhotoRecord b) {
+    final dateCompare = b.takenAt.compareTo(a.takenAt);
+    if (dateCompare != 0) {
+      return dateCompare;
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
+  int _compareMonthlyTimesheets(
+    MonthlyTimesheetRecord a,
+    MonthlyTimesheetRecord b,
+  ) {
+    if (a.year != b.year) {
+      return b.year.compareTo(a.year);
+    }
+    if (a.month != b.month) {
+      return b.month.compareTo(a.month);
+    }
+    return b.updatedAt.compareTo(a.updatedAt);
+  }
+
+  List<FieldPhotoRecord> _filterFieldPhotos(
+    List<FieldPhotoRecord> items, {
+    required String sourceModule,
+    required String sourceEntityId,
+    required String documentId,
+  }) {
+    return items.where((item) {
+      if (sourceModule.isNotEmpty && item.sourceModule.trim() != sourceModule) {
+        return false;
+      }
+      if (sourceEntityId.isNotEmpty &&
+          item.sourceEntityId.trim() != sourceEntityId) {
+        return false;
+      }
+      if (documentId.isNotEmpty && item.documentId.trim() != documentId) {
+        return false;
+      }
+      return true;
+    }).toList(growable: false)
+      ..sort(_compareFieldPhotos);
+  }
+
+  Future<String> _nextSequenceNumber({
+    required String type,
+    required DateTime date,
+    required List<String> items,
+  }) async {
+    final year = date.year.toString();
+    final prefix = '$type-$year-';
+    int max = 0;
+    for (final raw in items) {
+      final value = raw.trim().toUpperCase();
+      if (!value.startsWith(prefix)) {
+        continue;
+      }
+      final seq = int.tryParse(value.substring(prefix.length));
+      if (seq != null && seq > max) {
+        max = seq;
+      }
+    }
+    return '$type-$year-${(max + 1).toString().padLeft(4, '0')}';
+  }
+
+  Future<String> _nextConfiguredDocumentNumber({
+    required String documentType,
+    required DateTime date,
+    required List<String> items,
+  }) async {
+    final settings = await loadRegistrySettings();
+    final normalizedType =
+        RegistryDocumentSeriesCatalog.normalizeType(documentType);
+    final prefix = settings.seriesPrefixFor(normalizedType);
+    final includeYear =
+        RegistryDocumentSeriesCatalog.includeYear(normalizedType);
+    final year = date.year.toString();
+    final normalizedPrefix = prefix.trim().toUpperCase();
+    final pattern = includeYear
+        ? RegExp(
+            '^${RegExp.escape(normalizedPrefix)}-$year-(\\d+)' r'$',
+            caseSensitive: false,
+          )
+        : RegExp(
+            '^${RegExp.escape(normalizedPrefix)}-(\\d+)' r'$',
+            caseSensitive: false,
+          );
+    var max = 0;
+    for (final raw in items) {
+      final match = pattern.firstMatch(raw.trim().toUpperCase());
+      if (match == null) {
+        continue;
+      }
+      final value = int.tryParse(match.group(1) ?? '');
+      if (value != null && value > max) {
+        max = value;
+      }
+    }
+    final nextValue = (max + 1).toString().padLeft(4, '0');
+    if (includeYear) {
+      return '$normalizedPrefix-$year-$nextValue';
+    }
+    return '$normalizedPrefix-$nextValue';
+  }
+
+  Future<List<Map<String, dynamic>>> _loadLegacyListRows({
+    required List<String> priorityKeys,
+    required List<String> keyHints,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in priorityKeys) {
+      final rows = _decodeListRows(prefs.getString(key));
+      if (rows.isNotEmpty) {
+        return rows;
+      }
+    }
+
+    final keys = prefs.getKeys().toList()..sort((a, b) => a.compareTo(b));
+    for (final key in keys) {
+      final lower = key.toLowerCase();
+      if (!keyHints.any((hint) => lower.contains(hint))) {
+        continue;
+      }
+      final rows = _decodeListRows(prefs.getString(key));
+      if (rows.isNotEmpty) {
+        return rows;
+      }
+    }
+    return const <Map<String, dynamic>>[];
+  }
+
+  List<Map<String, dynamic>> _decodeListRows(String? raw) {
+    if (raw == null || raw.trim().isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(raw);
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
+    }
+    if (decoded is! List<dynamic>) {
+      return const <Map<String, dynamic>>[];
+    }
+    return decoded
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+  }
+
+  String _firstNonEmptyString(
+    Map<String, dynamic> map,
+    List<String> keys, {
+    String fallback = '',
+  }) {
+    for (final key in keys) {
+      final value = (map[key] ?? '').toString().trim();
+      if (value.isNotEmpty) {
+        return value;
+      }
+    }
+    return fallback;
+  }
+
+  List<LookupItem> _dedupeLookup(List<LookupItem> items) {
+    final map = <String, LookupItem>{};
+    for (final item in items) {
+      map[item.id] = item;
+    }
+    return map.values.toList();
+  }
+
+  Future<PdfExportSettings> _readLocalPdfExportSettings({
+    CompanyProfile? fallbackProfile,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_companyPdfExportSettingsKey);
+    if (raw != null && raw.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          return PdfExportSettings.fromMap(decoded);
+        }
+        if (decoded is Map) {
+          return PdfExportSettings.fromMap(Map<String, dynamic>.from(decoded));
+        }
+      } catch (_) {}
+    }
+    return (fallbackProfile ?? const CompanyProfile()).pdfExportSettings;
+  }
+
+  Future<void> _writeLocalPdfExportSettings(PdfExportSettings settings) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _companyPdfExportSettingsKey,
+      jsonEncode(settings.toMap()),
+    );
+  }
+
+  Future<void> _writeCompanyProfileCache(CompanyProfile profile) async {
+    final prefs = await SharedPreferences.getInstance();
+    Map<String, dynamic> base = <String, dynamic>{};
+    final existing = prefs.getString(_companySettingsKey);
+    if (existing != null && existing.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(existing);
+        if (decoded is Map<String, dynamic>) {
+          base = Map<String, dynamic>.from(decoded);
+        } else if (decoded is Map) {
+          base = Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {}
+    }
+    final merged = <String, dynamic>{...base, ...profile.toMap()};
+    final payload = jsonEncode(merged);
+    await prefs.setString(_companySettingsKey, payload);
+    await prefs.setString('company_settings', payload);
+    await prefs.setString('deviz_company_settings_v1', payload);
+  }
+
+  bool _hasCompanyProfileGlobalData(CompanyProfile profile) {
+    return profile.companyName.trim().isNotEmpty ||
+        profile.phone.trim().isNotEmpty ||
+        profile.email.trim().isNotEmpty ||
+        profile.cui.trim().isNotEmpty ||
+        profile.tradeRegister.trim().isNotEmpty ||
+        profile.bank.trim().isNotEmpty ||
+        profile.iban.trim().isNotEmpty ||
+        profile.contactName.trim().isNotEmpty ||
+        profile.address.trim().isNotEmpty ||
+        profile.logoBase64.trim().isNotEmpty ||
+        profile.appThemePreset != AppThemePreset.proTerm;
+  }
+
+  Map<String, dynamic> _companyProfileToCloudMap(CompanyProfile profile) {
+    return <String, dynamic>{
+      'company_name': profile.companyName,
+      'company_phone': profile.phone,
+      'company_email': profile.email,
+      // Câmpuri adăugate — lipseau din versiunile anterioare și nu se salvau în Firebase
+      'company_contact_email': profile.contactEmail,
+      'company_website': profile.website,
+      'company_city': profile.city,
+      'company_county': profile.county,
+      'company_currency': profile.currency,
+      'company_language': profile.language,
+      'company_cui': profile.cui,
+      'company_trade_register': profile.tradeRegister,
+      'company_bank': profile.bank,
+      'company_iban': profile.iban,
+      'company_contact_name': profile.contactName,
+      'company_address': profile.address,
+      'company_logo_base64': profile.logoBase64,
+      'app_theme': profile.appThemePreset.value,
+      'default_vat_percent': profile.defaultVatPercent,
+      'default_profit_percent': profile.defaultProfitPercent,
+      'default_overhead_percent': profile.defaultOverheadPercent,
+      'agfr_technician_name': profile.agfrTechnicianName,
+      'agfr_technician_certificate_number':
+          profile.agfrTechnicianCertificateNumber,
+      'agfr_company_authorization_number':
+          profile.agfrCompanyAuthorizationNumber,
+      'corporate_tax_type': profile.corporateTaxType,
+      'corporate_tax_percent': profile.corporateTaxPercent,
+      'smartbill_settings': profile.smartBillSettings.toMap(),
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+  }
+}

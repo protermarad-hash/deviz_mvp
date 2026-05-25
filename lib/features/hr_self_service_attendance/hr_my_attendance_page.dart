@@ -1,0 +1,323 @@
+import 'package:flutter/material.dart';
+
+import '../../core/auth_models.dart';
+import '../../core/help_content.dart';
+import '../../core/widgets/help_button.dart';
+import '../hr_payroll_run/hr_access_policy.dart';
+import 'hr_self_service_attendance_catalog_service.dart';
+import 'hr_self_service_attendance_models.dart';
+
+class HrMyAttendancePage extends StatefulWidget {
+  const HrMyAttendancePage({
+    super.key,
+    required this.employeeId,
+    required this.hrEmployeeProfileId,
+    required this.userId,
+    this.role,
+    this.embedded = false,
+  });
+
+  final String employeeId;
+  final String hrEmployeeProfileId;
+  final String userId;
+  final UserRole? role;
+  final bool embedded;
+
+  @override
+  State<HrMyAttendancePage> createState() => _HrMyAttendancePageState();
+}
+
+class _HrMyAttendancePageState extends State<HrMyAttendancePage> {
+  final HrSelfServiceAttendanceCatalogService _service =
+      HrSelfServiceAttendanceCatalogService();
+
+  bool _loading = true;
+  String? _message;
+  List<HrSelfServiceAttendanceSession> _sessions =
+      const <HrSelfServiceAttendanceSession>[];
+  HrSelfServiceAttendanceSession? _openSession;
+
+  bool get _isEnabled =>
+      HrAccessPolicy.canUseEmployeeAttendanceSelfService(widget.role);
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
+    try {
+      final rows = await _service.listSessionsForEmployee(widget.employeeId);
+      final open = await _service.findOpenSession(widget.employeeId);
+      if (!mounted) return;
+      setState(() {
+        _sessions = rows;
+        _openSession = open;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Nu am putut incarca sesiunile de pontaj: $error';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _checkIn() async {
+    if (!_isEnabled) return;
+    await _service.checkIn(
+      employeeId: widget.employeeId,
+      hrEmployeeProfileId: widget.hrEmployeeProfileId,
+      userId: widget.userId,
+      at: DateTime.now(),
+    );
+    await _reload();
+  }
+
+  Future<void> _checkOut() async {
+    if (!_isEnabled) return;
+    await _service.checkOut(
+      employeeId: widget.employeeId,
+      at: DateTime.now(),
+    );
+    await _reload();
+  }
+
+  Future<void> _startBreak() async {
+    if (!_isEnabled) return;
+    await _service.startBreak(
+      employeeId: widget.employeeId,
+      at: DateTime.now(),
+    );
+    await _reload();
+  }
+
+  Future<void> _endBreak() async {
+    if (!_isEnabled) return;
+    await _service.endBreak(
+      employeeId: widget.employeeId,
+      at: DateTime.now(),
+    );
+    await _reload();
+  }
+
+  String _dateTime(DateTime? value) {
+    if (value == null) return '-';
+    final d = value.day.toString().padLeft(2, '0');
+    final m = value.month.toString().padLeft(2, '0');
+    final y = value.year.toString().padLeft(4, '0');
+    final hh = value.hour.toString().padLeft(2, '0');
+    final mm = value.minute.toString().padLeft(2, '0');
+    return '$d.$m.$y $hh:$mm';
+  }
+
+  String _durationLabel(HrSelfServiceAttendanceSession item) {
+    final end = item.checkOutAt ?? DateTime.now();
+    final duration = end.difference(item.checkInAt);
+    final totalMinutes = duration.inMinutes < 0 ? 0 : duration.inMinutes;
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    return '${hours.toString().padLeft(2, '0')}h ${minutes.toString().padLeft(2, '0')}m';
+  }
+
+  Widget _sessionMetaChip(String label, String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return const SizedBox.shrink();
+    return Chip(label: Text('$label: $trimmed'));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isEnabled) {
+      final body = const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'Pontajul self-service este pregatit tehnic, dar ramane dezactivat prin policy.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+      if (widget.embedded) {
+        return Card(child: SizedBox(height: 220, child: body));
+      }
+      return Scaffold(
+        appBar: AppBar(title: const Text('Pontajul meu')),
+        body: body,
+      );
+    }
+
+    final content = RefreshIndicator(
+      onRefresh: _reload,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (_message != null)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(_message!),
+              ),
+            ),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton(
+                    onPressed: _openSession == null ? _checkIn : null,
+                    child: const Text('Începe programul'),
+                  ),
+                  OutlinedButton(
+                    onPressed: _openSession != null ? _checkOut : null,
+                    child: const Text('Încheie programul'),
+                  ),
+                  OutlinedButton(
+                    onPressed:
+                        _openSession != null && !_openSession!.hasOpenBreak
+                            ? _startBreak
+                            : null,
+                    child: const Text('Începe pauza'),
+                  ),
+                  OutlinedButton(
+                    onPressed:
+                        _openSession != null && _openSession!.hasOpenBreak
+                            ? _endBreak
+                            : null,
+                    child: const Text('Termină pauza'),
+                  ),
+                  Chip(label: Text('Sursa: ${_service.dataSourceLabel}')),
+                ],
+              ),
+            ),
+          ),
+          if (_openSession != null) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Sesiune curenta',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Text('Status: ${_openSession!.status}'),
+                    Text('Check-in: ${_dateTime(_openSession!.checkInAt)}'),
+                    Text('Durata curenta: ${_durationLabel(_openSession!)}'),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _sessionMetaChip(
+                          'Locatie',
+                          _openSession!.locationType,
+                        ),
+                        _sessionMetaChip('Job', _openSession!.jobId),
+                        _sessionMetaChip(
+                          'Programare',
+                          _openSession!.appointmentId,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          if (_loading)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            )
+          else if (_sessions.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Nu exista sesiuni de pontaj self-service.'),
+              ),
+            )
+          else
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Istoric sesiuni',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 12),
+                    ..._sessions.map(
+                      (item) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(_dateTime(item.checkInAt)),
+                        subtitle: Text(
+                          'Status ${item.status.isEmpty ? '-' : item.status} | '
+                          'Durata ${_durationLabel(item)} | '
+                          'Check-out ${_dateTime(item.checkOutAt)} | '
+                          'Pauza ${_dateTime(item.breakStartAt)} - ${_dateTime(item.breakEndAt)}',
+                        ),
+                        trailing: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (item.locationType.trim().isNotEmpty)
+                              Chip(label: Text('Locatie ${item.locationType}')),
+                            if (item.jobId.trim().isNotEmpty)
+                              Chip(label: Text('Job ${item.jobId}')),
+                            if (item.appointmentId.trim().isNotEmpty)
+                              Chip(
+                                label: Text(
+                                  'Programare ${item.appointmentId}',
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    if (widget.embedded) {
+      return SizedBox(
+        height: 520,
+        child: content,
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Pontajul meu'),
+        actions: [
+          HelpButton(content: AppHelp.hrPrezenta),
+        ],
+      ),
+      body: content,
+    );
+  }
+}

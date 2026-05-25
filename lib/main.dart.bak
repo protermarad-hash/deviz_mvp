@@ -1,0 +1,59 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
+import 'core/auth/field_auth_repository_factory.dart';
+import 'core/auth/field_auth_service.dart';
+import 'core/cloud/firebase_bootstrap.dart';
+import 'core/widgets/app_viewport_guard.dart';
+import 'core/widgets/pen_aware_scroll_behavior.dart';
+import 'features/auth/field_auth_gate.dart';
+import 'features/notifications/notification_runtime_service.dart';
+import 'app/field_role_ready_shell.dart';
+
+import 'app/deviz_ultra_app.dart';
+import 'app/deviz_ultra_bootstrap.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  Intl.defaultLocale = 'ro_RO';
+  await initializeDateFormatting('ro_RO');
+  await FirebaseBootstrap.initializeSafe();
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  runApp(
+    MaterialApp(
+      debugShowCheckedModeBanner: false,
+      scrollBehavior: const PenAwareScrollBehavior(),
+      locale: const Locale('ro', 'RO'),
+      supportedLocales: const <Locale>[
+        Locale('ro', 'RO'),
+      ],
+      localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      builder: (context, child) => AppViewportGuard(
+        child: child ?? const SizedBox.shrink(),
+      ),
+      home: FieldAuthGate(
+        authService: _fieldAuthService,
+        authenticatedBuilder: (_) => FieldRoleReadyShell(
+          authService: _fieldAuthService,
+          child: DevizUltraBootstrapApp(
+            child: DevizUltraApp(
+              fieldAuthRoleKey: _fieldAuthService.role?.name,
+              fieldAuthUserLabel: _fieldAuthService.session?.email,
+              fieldAuthUserId: _fieldAuthService.userId,
+              fieldAuthTeamId: _fieldAuthService.teamId,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+final FieldAuthService _fieldAuthService =
+    FieldAuthService(FieldAuthRepositoryFactory.create());

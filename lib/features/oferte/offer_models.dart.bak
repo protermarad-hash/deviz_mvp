@@ -1,0 +1,1484 @@
+import 'offer_acceptance_models.dart';
+import 'offer_labor_calculator.dart';
+import 'offer_partner_models.dart';
+import 'offer_smartbill_models.dart';
+
+enum OfferStatus {
+  draft,
+  sent,
+  awaiting,
+  accepted,
+  rejected,
+  cancelled;
+
+  String get value {
+    switch (this) {
+      case OfferStatus.draft:
+        return 'draft';
+      case OfferStatus.sent:
+        return 'sent';
+      case OfferStatus.awaiting:
+        return 'awaiting';
+      case OfferStatus.accepted:
+        return 'accepted';
+      case OfferStatus.rejected:
+        return 'rejected';
+      case OfferStatus.cancelled:
+        return 'cancelled';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case OfferStatus.draft:
+        return 'Draft';
+      case OfferStatus.sent:
+        return 'Trimisa';
+      case OfferStatus.awaiting:
+        return 'In asteptare';
+      case OfferStatus.accepted:
+        return 'Acceptata';
+      case OfferStatus.rejected:
+        return 'Respinsa';
+      case OfferStatus.cancelled:
+        return 'Anulata';
+    }
+  }
+
+  static OfferStatus fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return OfferStatus.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => OfferStatus.draft,
+    );
+  }
+}
+
+enum OfferLineType {
+  material,
+  manopera,
+  text;
+
+  String get value {
+    switch (this) {
+      case OfferLineType.material:
+        return 'material';
+      case OfferLineType.manopera:
+        return 'manopera';
+      case OfferLineType.text:
+        return 'text';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case OfferLineType.material:
+        return 'Material';
+      case OfferLineType.manopera:
+        return 'Manopera';
+      case OfferLineType.text:
+        return 'Text';
+    }
+  }
+
+  static OfferLineType fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return OfferLineType.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => OfferLineType.material,
+    );
+  }
+}
+
+enum OfferLaborSourceMode {
+  resources,
+  standard;
+
+  String get value {
+    switch (this) {
+      case OfferLaborSourceMode.resources:
+        return 'resources';
+      case OfferLaborSourceMode.standard:
+        return 'standard';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case OfferLaborSourceMode.resources:
+        return 'Din resurse';
+      case OfferLaborSourceMode.standard:
+        return 'Standard';
+    }
+  }
+
+  static OfferLaborSourceMode fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return OfferLaborSourceMode.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => OfferLaborSourceMode.resources,
+    );
+  }
+}
+
+enum OfferExchangeRateSource {
+  manual,
+  bnr;
+
+  String get value {
+    switch (this) {
+      case OfferExchangeRateSource.manual:
+        return 'manual';
+      case OfferExchangeRateSource.bnr:
+        return 'bnr';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case OfferExchangeRateSource.manual:
+        return 'Manual';
+      case OfferExchangeRateSource.bnr:
+        return 'BNR';
+    }
+  }
+
+  static OfferExchangeRateSource fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return OfferExchangeRateSource.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => OfferExchangeRateSource.manual,
+    );
+  }
+}
+
+enum TipDocumentDeviz {
+  devizLucrari,
+  ofertaLucrari,
+  situatieLucrari;
+
+  String get value {
+    switch (this) {
+      case TipDocumentDeviz.devizLucrari:
+        return 'deviz_lucrari';
+      case TipDocumentDeviz.ofertaLucrari:
+        return 'oferta_lucrari';
+      case TipDocumentDeviz.situatieLucrari:
+        return 'situatie_lucrari';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case TipDocumentDeviz.devizLucrari:
+        return 'Deviz de lucrări';
+      case TipDocumentDeviz.ofertaLucrari:
+        return 'Ofertă de lucrări';
+      case TipDocumentDeviz.situatieLucrari:
+        return 'Situație de lucrări';
+    }
+  }
+
+  String get pdfTitle {
+    switch (this) {
+      case TipDocumentDeviz.devizLucrari:
+        return 'DEVIZ DE LUCRĂRI';
+      case TipDocumentDeviz.ofertaLucrari:
+        return 'OFERTĂ DE LUCRĂRI';
+      case TipDocumentDeviz.situatieLucrari:
+        return 'SITUAȚIE DE LUCRĂRI';
+    }
+  }
+
+  static TipDocumentDeviz fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return TipDocumentDeviz.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => TipDocumentDeviz.devizLucrari,
+    );
+  }
+}
+
+enum OfferPriceDisplayMode {
+  withoutVat,
+  withVat,
+  both;
+
+  String get value {
+    switch (this) {
+      case OfferPriceDisplayMode.withoutVat:
+        return 'without_vat';
+      case OfferPriceDisplayMode.withVat:
+        return 'with_vat';
+      case OfferPriceDisplayMode.both:
+        return 'both';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case OfferPriceDisplayMode.withoutVat:
+        return 'Fără TVA';
+      case OfferPriceDisplayMode.withVat:
+        return 'Cu TVA';
+      case OfferPriceDisplayMode.both:
+        return 'Ambele';
+    }
+  }
+
+  bool get showsWithoutVat =>
+      this == OfferPriceDisplayMode.withoutVat ||
+      this == OfferPriceDisplayMode.both;
+
+  bool get showsWithVat =>
+      this == OfferPriceDisplayMode.withVat ||
+      this == OfferPriceDisplayMode.both;
+
+  static OfferPriceDisplayMode fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return OfferPriceDisplayMode.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => OfferPriceDisplayMode.both,
+    );
+  }
+}
+
+class OfferLineItem {
+  const OfferLineItem({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.unit,
+    required this.quantity,
+    required this.unitPrice,
+    required this.lineTotal,
+    required this.sortOrder,
+    required this.lineType,
+    this.materialId = '',
+    this.laborSourceMode = OfferLaborSourceMode.resources,
+    this.laborTemplateId = '',
+    this.laborHours = 0,
+    this.laborHourlyRate = 0,
+    this.laborPerDiemDays = 0,
+    this.laborPerDiemPerDay = 0,
+    this.laborLodgingNights = 0,
+    this.laborLodgingPerNight = 0,
+    this.laborPersonal = const <OfferLaborResourceUsage>[],
+    this.laborVehicles = const <OfferLaborResourceUsage>[],
+    this.laborToolPackages = const <OfferLaborResourceUsage>[],
+  });
+
+  final String id;
+  final String name;
+  final String description;
+  final String unit;
+  final double quantity;
+  final double unitPrice;
+  final double lineTotal;
+  final int sortOrder;
+  final OfferLineType lineType;
+  final String materialId;
+  final OfferLaborSourceMode laborSourceMode;
+  final String laborTemplateId;
+
+  final double laborHours;
+  final double laborHourlyRate;
+  final double laborPerDiemDays;
+  final double laborPerDiemPerDay;
+  final double laborLodgingNights;
+  final double laborLodgingPerNight;
+  final List<OfferLaborResourceUsage> laborPersonal;
+  final List<OfferLaborResourceUsage> laborVehicles;
+  final List<OfferLaborResourceUsage> laborToolPackages;
+
+  bool get hasLaborResourceDetails =>
+      laborPersonal.isNotEmpty ||
+      laborVehicles.isNotEmpty ||
+      laborToolPackages.isNotEmpty;
+
+  double get effectiveLineTotal {
+    if (lineType == OfferLineType.manopera) {
+      if (laborSourceMode == OfferLaborSourceMode.standard) {
+        return OfferLaborCalculator.roundPriceUpToTen(quantity * unitPrice);
+      }
+      return OfferLaborCalculator.roundPriceUpToTen(
+        OfferLaborCalculator.computeFromResources(
+          personal: hasLaborResourceDetails
+              ? laborPersonal
+              : <OfferLaborResourceUsage>[
+                  OfferLaborResourceUsage(
+                    resourceId: '',
+                    name: '',
+                    hours: laborHours,
+                    days: 0,
+                    hourlyRate: laborHourlyRate,
+                    dailyRate: 0,
+                  ),
+                ],
+          autoturisme: hasLaborResourceDetails
+              ? laborVehicles
+              : const <OfferLaborResourceUsage>[],
+          pacheteScule: hasLaborResourceDetails
+              ? laborToolPackages
+              : const <OfferLaborResourceUsage>[],
+          perDiemDays: laborPerDiemDays,
+          perDiemPerDay: laborPerDiemPerDay,
+          lodgingNights: laborLodgingNights,
+          lodgingPerNight: laborLodgingPerNight,
+        ).total,
+      );
+    }
+    return OfferLaborCalculator.roundPriceUpToTen(quantity * unitPrice);
+  }
+
+  OfferLineItem copyWith({
+    String? id,
+    String? name,
+    String? description,
+    String? unit,
+    double? quantity,
+    double? unitPrice,
+    double? lineTotal,
+    int? sortOrder,
+    OfferLineType? lineType,
+    String? materialId,
+    OfferLaborSourceMode? laborSourceMode,
+    String? laborTemplateId,
+    double? laborHours,
+    double? laborHourlyRate,
+    double? laborPerDiemDays,
+    double? laborPerDiemPerDay,
+    double? laborLodgingNights,
+    double? laborLodgingPerNight,
+    List<OfferLaborResourceUsage>? laborPersonal,
+    List<OfferLaborResourceUsage>? laborVehicles,
+    List<OfferLaborResourceUsage>? laborToolPackages,
+  }) {
+    final nextType = lineType ?? this.lineType;
+    final nextQty = quantity ?? this.quantity;
+    final nextPrice = unitPrice ?? this.unitPrice;
+    final nextLaborHours = laborHours ?? this.laborHours;
+    final nextLaborRate = laborHourlyRate ?? this.laborHourlyRate;
+    final nextLaborPerDiemDays = laborPerDiemDays ?? this.laborPerDiemDays;
+    final nextLaborPerDiemPerDay =
+        laborPerDiemPerDay ?? this.laborPerDiemPerDay;
+    final nextLaborNights = laborLodgingNights ?? this.laborLodgingNights;
+    final nextLaborLodgingPerNight =
+        laborLodgingPerNight ?? this.laborLodgingPerNight;
+    final nextLaborPersonal = laborPersonal ?? this.laborPersonal;
+    final nextLaborVehicles = laborVehicles ?? this.laborVehicles;
+    final nextLaborToolPackages = laborToolPackages ?? this.laborToolPackages;
+    final hasResourceDetails = nextLaborPersonal.isNotEmpty ||
+        nextLaborVehicles.isNotEmpty ||
+        nextLaborToolPackages.isNotEmpty;
+
+    final computed = nextType == OfferLineType.manopera
+        ? OfferLaborCalculator.computeFromResources(
+            personal: hasResourceDetails
+                ? nextLaborPersonal
+                : <OfferLaborResourceUsage>[
+                    OfferLaborResourceUsage(
+                      resourceId: '',
+                      name: '',
+                      hours: nextLaborHours,
+                      days: 0,
+                      hourlyRate: nextLaborRate,
+                      dailyRate: 0,
+                    ),
+                  ],
+            autoturisme: hasResourceDetails
+                ? nextLaborVehicles
+                : const <OfferLaborResourceUsage>[],
+            pacheteScule: hasResourceDetails
+                ? nextLaborToolPackages
+                : const <OfferLaborResourceUsage>[],
+            perDiemDays: nextLaborPerDiemDays,
+            perDiemPerDay: nextLaborPerDiemPerDay,
+            lodgingNights: nextLaborNights,
+            lodgingPerNight: nextLaborLodgingPerNight,
+          ).total
+        : nextQty * nextPrice;
+
+    return OfferLineItem(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      description: description ?? this.description,
+      unit: unit ?? this.unit,
+      quantity: nextQty,
+      unitPrice: nextPrice,
+      lineTotal: lineTotal ?? computed,
+      sortOrder: sortOrder ?? this.sortOrder,
+      lineType: nextType,
+      materialId: materialId ?? this.materialId,
+      laborSourceMode: laborSourceMode ?? this.laborSourceMode,
+      laborTemplateId: laborTemplateId ?? this.laborTemplateId,
+      laborHours: nextLaborHours,
+      laborHourlyRate: nextLaborRate,
+      laborPerDiemDays: nextLaborPerDiemDays,
+      laborPerDiemPerDay: nextLaborPerDiemPerDay,
+      laborLodgingNights: nextLaborNights,
+      laborLodgingPerNight: nextLaborLodgingPerNight,
+      laborPersonal: nextLaborPersonal,
+      laborVehicles: nextLaborVehicles,
+      laborToolPackages: nextLaborToolPackages,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'name': name,
+      'description': description,
+      'unit': unit,
+      'quantity': quantity,
+      'unit_price': unitPrice,
+      'line_total': lineTotal,
+      'sort_order': sortOrder,
+      'line_type': lineType.value,
+      'material_id': materialId,
+      'labor_source_mode': laborSourceMode.value,
+      'labor_template_id': laborTemplateId,
+      'labor_hours': laborHours,
+      'labor_hourly_rate': laborHourlyRate,
+      'labor_per_diem_days': laborPerDiemDays,
+      'labor_per_diem_per_day': laborPerDiemPerDay,
+      'labor_lodging_nights': laborLodgingNights,
+      'labor_lodging_per_night': laborLodgingPerNight,
+      'labor_personal':
+          laborPersonal.map((item) => item.toMap()).toList(growable: false),
+      'labor_vehicles':
+          laborVehicles.map((item) => item.toMap()).toList(growable: false),
+      'labor_tool_packages':
+          laborToolPackages.map((item) => item.toMap()).toList(growable: false),
+    };
+  }
+
+  factory OfferLineItem.fromMap(Map<String, dynamic> map) {
+    double asDouble(dynamic raw) {
+      if (raw == null) return 0;
+      if (raw is num) return raw.toDouble();
+      return double.tryParse(raw.toString().replaceAll(',', '.').trim()) ?? 0;
+    }
+
+    int asInt(dynamic raw) {
+      if (raw == null) return 0;
+      if (raw is int) return raw;
+      if (raw is num) return raw.toInt();
+      return int.tryParse(raw.toString().trim()) ?? 0;
+    }
+
+    final type = OfferLineType.fromValue(map['line_type'] ?? map['lineType']);
+    final laborSourceMode = OfferLaborSourceMode.fromValue(
+      map['labor_source_mode'] ?? map['laborSourceMode'],
+    );
+    final quantity = asDouble(map['quantity']);
+    final unitPrice = asDouble(map['unit_price'] ?? map['unitPrice']);
+    final laborHours = asDouble(map['labor_hours'] ?? map['laborHours']);
+    final laborHourlyRate =
+        asDouble(map['labor_hourly_rate'] ?? map['laborHourlyRate']);
+    final laborPerDiemDays =
+        asDouble(map['labor_per_diem_days'] ?? map['laborPerDiemDays']);
+    final laborPerDiemPerDay = asDouble(
+      map['labor_per_diem_per_day'] ?? map['laborPerDiemPerDay'],
+    );
+    final laborLodgingNights =
+        asDouble(map['labor_lodging_nights'] ?? map['laborLodgingNights']);
+    final laborLodgingPerNight = asDouble(
+      map['labor_lodging_per_night'] ?? map['laborLodgingPerNight'],
+    );
+    List<OfferLaborResourceUsage> parseResourceList(dynamic raw) {
+      if (raw is! List) return const <OfferLaborResourceUsage>[];
+      return raw
+          .whereType<Map>()
+          .map((item) => OfferLaborResourceUsage.fromMap(
+                Map<String, dynamic>.from(item),
+              ))
+          .toList(growable: false);
+    }
+
+    final laborPersonal = parseResourceList(
+      map['labor_personal'] ?? map['laborPersonal'],
+    );
+    final laborVehicles = parseResourceList(
+      map['labor_vehicles'] ?? map['laborVehicles'],
+    );
+    final laborToolPackages = parseResourceList(
+      map['labor_tool_packages'] ?? map['laborToolPackages'],
+    );
+    final hasResourceDetails = laborPersonal.isNotEmpty ||
+        laborVehicles.isNotEmpty ||
+        laborToolPackages.isNotEmpty;
+
+    final computed = type == OfferLineType.manopera
+        ? (laborSourceMode == OfferLaborSourceMode.standard
+            ? quantity * unitPrice
+            : OfferLaborCalculator.computeFromResources(
+                personal: hasResourceDetails
+                    ? laborPersonal
+                    : <OfferLaborResourceUsage>[
+                        OfferLaborResourceUsage(
+                          resourceId: '',
+                          name: '',
+                          hours: laborHours,
+                          days: 0,
+                          hourlyRate: laborHourlyRate,
+                          dailyRate: 0,
+                        ),
+                      ],
+                autoturisme: hasResourceDetails
+                    ? laborVehicles
+                    : const <OfferLaborResourceUsage>[],
+                pacheteScule: hasResourceDetails
+                    ? laborToolPackages
+                    : const <OfferLaborResourceUsage>[],
+                perDiemDays: laborPerDiemDays,
+                perDiemPerDay: laborPerDiemPerDay,
+                lodgingNights: laborLodgingNights,
+                lodgingPerNight: laborLodgingPerNight,
+              ).total)
+        : quantity * unitPrice;
+
+    final lineTotalRaw = map['line_total'] ?? map['lineTotal'];
+    final lineTotal = lineTotalRaw == null ? computed : asDouble(lineTotalRaw);
+
+    return OfferLineItem(
+      id: (map['id'] ?? '').toString().trim(),
+      name: (map['name'] ?? '').toString(),
+      description: (map['description'] ?? '').toString(),
+      unit: (map['unit'] ?? '').toString(),
+      quantity: quantity,
+      unitPrice: unitPrice,
+      lineTotal: lineTotal,
+      sortOrder: asInt(map['sort_order'] ?? map['sortOrder']),
+      lineType: type,
+      materialId: (map['material_id'] ?? map['materialId'] ?? '').toString(),
+      laborSourceMode: laborSourceMode,
+      laborTemplateId:
+          (map['labor_template_id'] ?? map['laborTemplateId'] ?? '').toString(),
+      laborHours: laborHours,
+      laborHourlyRate: laborHourlyRate,
+      laborPerDiemDays: laborPerDiemDays,
+      laborPerDiemPerDay: laborPerDiemPerDay,
+      laborLodgingNights: laborLodgingNights,
+      laborLodgingPerNight: laborLodgingPerNight,
+      laborPersonal: laborPersonal,
+      laborVehicles: laborVehicles,
+      laborToolPackages: laborToolPackages,
+    );
+  }
+}
+
+class OfferCommercialClause {
+  const OfferCommercialClause({
+    required this.id,
+    required this.title,
+    required this.content,
+    this.templateId = '',
+    this.category = '',
+    this.sortOrder = 0,
+  });
+
+  final String id;
+  final String title;
+  final String content;
+  final String templateId;
+  final String category;
+  final int sortOrder;
+
+  OfferCommercialClause copyWith({
+    String? id,
+    String? title,
+    String? content,
+    String? templateId,
+    String? category,
+    int? sortOrder,
+  }) {
+    return OfferCommercialClause(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      content: content ?? this.content,
+      templateId: templateId ?? this.templateId,
+      category: category ?? this.category,
+      sortOrder: sortOrder ?? this.sortOrder,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'title': title,
+      'content': content,
+      'template_id': templateId,
+      'category': category,
+      'sort_order': sortOrder,
+    };
+  }
+
+  factory OfferCommercialClause.fromMap(Map<String, dynamic> map) {
+    int asInt(dynamic raw) {
+      if (raw == null) return 0;
+      if (raw is int) return raw;
+      if (raw is num) return raw.toInt();
+      return int.tryParse(raw.toString().trim()) ?? 0;
+    }
+
+    return OfferCommercialClause(
+      id: (map['id'] ?? '').toString().trim(),
+      title: (map['title'] ?? '').toString(),
+      content: (map['content'] ?? '').toString(),
+      templateId: (map['template_id'] ?? map['templateId'] ?? '').toString(),
+      category: (map['category'] ?? '').toString(),
+      sortOrder: asInt(map['sort_order'] ?? map['sortOrder']),
+    );
+  }
+}
+
+class OfferTotals {
+  const OfferTotals({
+    required this.materialSubtotal,
+    required this.laborSubtotal,
+    required this.subtotalDirect,
+    required this.regiePercent,
+    required this.regieValue,
+    required this.profitPercent,
+    required this.profitValue,
+    required this.subtotalComercial,
+    required this.vatPercent,
+    required this.vatValue,
+    required this.totalValue,
+  });
+
+  final double materialSubtotal;
+  final double laborSubtotal;
+  final double subtotalDirect;
+  final double regiePercent;
+  final double regieValue;
+  final double profitPercent;
+  final double profitValue;
+  final double subtotalComercial;
+  final double vatPercent;
+  final double vatValue;
+  final double totalValue;
+
+  // Backward-compatible alias used in older UI labels.
+  double get subtotal => subtotalComercial;
+}
+
+class OfferRecord {
+  const OfferRecord({
+    required this.id,
+    required this.offerNumber,
+    required this.title,
+    required this.clientId,
+    required this.clientName,
+    this.departmentId = '',
+    this.departmentName = '',
+    this.contactPersonId = '',
+    this.contactPersonName = '',
+    this.contactPersonEmail = '',
+    this.contactPersonPhone = '',
+    this.clientSignatureBase64 = '',
+    this.issuerSignatureBase64 = '',
+    this.pdfPath = '',
+    this.beneficiaryClientId = '',
+    this.beneficiaryName = '',
+    this.commercialRecipientClientId = '',
+    this.commercialRecipientName = '',
+    this.complaintId = '',
+    this.complaintNumber = '',
+    this.appointmentId = '',
+    this.equipmentType = '',
+    this.equipmentBrand = '',
+    this.equipmentModel = '',
+    this.outdoorUnitSerial = '',
+    this.indoorUnitSerials = '',
+    this.equipmentDetails = '',
+    this.agreementAcceptedAt,
+    required this.jobId,
+    required this.jobCode,
+    required this.jobTitle,
+    required this.status,
+    required this.issueDate,
+    required this.validUntil,
+    required this.currency,
+    required this.exchangeRateSource,
+    required this.bnrRate,
+    required this.manualRate,
+    required this.exchangeCommissionPercent,
+    required this.effectiveExchangeRate,
+    required this.notes,
+    required this.materialSubtotal,
+    required this.laborSubtotal,
+    required this.subtotalDirect,
+    required this.regiePercent,
+    required this.regieValue,
+    required this.profitPercent,
+    required this.profitValue,
+    required this.subtotalComercial,
+    required this.subtotal,
+    required this.vatPercent,
+    required this.vatValue,
+    required this.totalValue,
+    required this.lines,
+    this.priceDisplayMode = OfferPriceDisplayMode.both,
+    this.partners = const <OfferPartner>[],
+    this.partnerWorkers = const <OfferPartnerWorker>[],
+    this.partnerVehicles = const <OfferPartnerVehicle>[],
+    this.commercialClauses = const <OfferCommercialClause>[],
+    required this.createdAt,
+    required this.updatedAt,
+    required this.createdByUserId,
+    required this.createdByUserEmail,
+    this.registryEntryId = '',
+    this.registryNumber = '',
+    this.registeredAt,
+    this.convertedToJobId = '',
+    this.convertedAt,
+    this.convertedByUserId = '',
+    this.smartBillEstimate = const OfferSmartBillDocumentState(
+      documentType: OfferSmartBillDocumentType.estimate,
+    ),
+    this.smartBillInvoice = const OfferSmartBillDocumentState(
+      documentType: OfferSmartBillDocumentType.invoice,
+    ),
+    this.acceptanceClauses = const <OfferAcceptanceClause>[],
+    this.acceptanceFormSignatureBase64 = '',
+    this.acceptanceFormSignedAt,
+    this.tipDocument = TipDocumentDeviz.devizLucrari,
+  });
+
+  final String id;
+  final String offerNumber;
+  final String title;
+  final String clientId;
+  final String clientName;
+  final String departmentId;
+  final String departmentName;
+  final String contactPersonId;
+  final String contactPersonName;
+  final String contactPersonEmail;
+  final String contactPersonPhone;
+  final String clientSignatureBase64;
+  final String issuerSignatureBase64;
+  final String pdfPath;
+  final String beneficiaryClientId;
+  final String beneficiaryName;
+  final String commercialRecipientClientId;
+  final String commercialRecipientName;
+  final String complaintId;
+  final String complaintNumber;
+  final String appointmentId;
+  final String equipmentType;
+  final String equipmentBrand;
+  final String equipmentModel;
+  final String outdoorUnitSerial;
+  final String indoorUnitSerials;
+  final String equipmentDetails;
+  final DateTime? agreementAcceptedAt;
+  final String jobId;
+  final String jobCode;
+  final String jobTitle;
+  final OfferStatus status;
+  final DateTime issueDate;
+  final DateTime? validUntil;
+  final String currency;
+  final OfferExchangeRateSource exchangeRateSource;
+  final double bnrRate;
+  final double manualRate;
+  final double exchangeCommissionPercent;
+  final double effectiveExchangeRate;
+  final String notes;
+  final double materialSubtotal;
+  final double laborSubtotal;
+  final double subtotalDirect;
+  final double regiePercent;
+  final double regieValue;
+  final double profitPercent;
+  final double profitValue;
+  final double subtotalComercial;
+  final double subtotal;
+  final double vatPercent;
+  final double vatValue;
+  final double totalValue;
+  final List<OfferLineItem> lines;
+  final OfferPriceDisplayMode priceDisplayMode;
+  final List<OfferPartner> partners;
+  final List<OfferPartnerWorker> partnerWorkers;
+  final List<OfferPartnerVehicle> partnerVehicles;
+  final List<OfferCommercialClause> commercialClauses;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final String createdByUserId;
+  final String createdByUserEmail;
+  final String registryEntryId;
+  final String registryNumber;
+  final DateTime? registeredAt;
+  final String convertedToJobId;
+  final DateTime? convertedAt;
+  final String convertedByUserId;
+  final OfferSmartBillDocumentState smartBillEstimate;
+  final OfferSmartBillDocumentState smartBillInvoice;
+  final List<OfferAcceptanceClause> acceptanceClauses;
+  final String acceptanceFormSignatureBase64;
+  final DateTime? acceptanceFormSignedAt;
+  final TipDocumentDeviz tipDocument;
+
+  bool get isAcceptanceSigned => acceptanceFormSignedAt != null && acceptanceFormSignatureBase64.isNotEmpty;
+
+  bool get isConverted => convertedToJobId.trim().isNotEmpty;
+
+  String get lifecycleLabel => isConverted ? 'Convertita' : status.label;
+
+  static OfferTotals computeTotals({
+    required List<OfferLineItem> lines,
+    required double vatPercent,
+    double regiePercent = 0,
+    double profitPercent = 0,
+  }) {
+    var materialSubtotal = 0.0;
+    var laborSubtotal = 0.0;
+    for (final line in lines) {
+      final total = line.effectiveLineTotal;
+      if (line.lineType == OfferLineType.manopera) {
+        laborSubtotal += total;
+      } else {
+        materialSubtotal += total;
+      }
+    }
+    final subtotalDirect = materialSubtotal + laborSubtotal;
+    final regieValue = subtotalDirect * regiePercent / 100;
+    final profitValue = subtotalDirect * profitPercent / 100;
+    var subtotalComercial = subtotalDirect + regieValue + profitValue;
+
+    // Round commercial subtotal UP to nearest 10
+    subtotalComercial =
+        OfferLaborCalculator.roundPriceUpToTen(subtotalComercial);
+
+    var vatValue = subtotalComercial * vatPercent / 100;
+    var totalValue = subtotalComercial + vatValue;
+
+    // Round final total UP to nearest 10
+    totalValue = OfferLaborCalculator.roundPriceUpToTen(totalValue);
+
+    return OfferTotals(
+      materialSubtotal: materialSubtotal,
+      laborSubtotal: laborSubtotal,
+      subtotalDirect: subtotalDirect,
+      regiePercent: regiePercent,
+      regieValue: regieValue,
+      profitPercent: profitPercent,
+      profitValue: profitValue,
+      subtotalComercial: subtotalComercial,
+      vatPercent: vatPercent,
+      vatValue: vatValue,
+      totalValue: totalValue,
+    );
+  }
+
+  OfferRecord copyWith({
+    String? id,
+    String? offerNumber,
+    String? title,
+    String? clientId,
+    String? clientName,
+    String? departmentId,
+    String? departmentName,
+    String? contactPersonId,
+    String? contactPersonName,
+    String? contactPersonEmail,
+    String? contactPersonPhone,
+    String? clientSignatureBase64,
+    String? issuerSignatureBase64,
+    String? pdfPath,
+    String? beneficiaryClientId,
+    String? beneficiaryName,
+    String? commercialRecipientClientId,
+    String? commercialRecipientName,
+    String? complaintId,
+    String? complaintNumber,
+    String? appointmentId,
+    String? equipmentType,
+    String? equipmentBrand,
+    String? equipmentModel,
+    String? outdoorUnitSerial,
+    String? indoorUnitSerials,
+    String? equipmentDetails,
+    DateTime? agreementAcceptedAt,
+    bool clearAgreementAcceptedAt = false,
+    String? jobId,
+    String? jobCode,
+    String? jobTitle,
+    OfferStatus? status,
+    DateTime? issueDate,
+    DateTime? validUntil,
+    bool clearValidUntil = false,
+    String? currency,
+    OfferExchangeRateSource? exchangeRateSource,
+    double? bnrRate,
+    double? manualRate,
+    double? exchangeCommissionPercent,
+    double? effectiveExchangeRate,
+    String? notes,
+    double? materialSubtotal,
+    double? laborSubtotal,
+    double? subtotalDirect,
+    double? regiePercent,
+    double? regieValue,
+    double? profitPercent,
+    double? profitValue,
+    double? subtotalComercial,
+    double? subtotal,
+    double? vatPercent,
+    double? vatValue,
+    double? totalValue,
+    List<OfferLineItem>? lines,
+    OfferPriceDisplayMode? priceDisplayMode,
+    List<OfferPartner>? partners,
+    List<OfferPartnerWorker>? partnerWorkers,
+    List<OfferPartnerVehicle>? partnerVehicles,
+    List<OfferCommercialClause>? commercialClauses,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    String? createdByUserId,
+    String? createdByUserEmail,
+    String? registryEntryId,
+    String? registryNumber,
+    DateTime? registeredAt,
+    bool clearRegisteredAt = false,
+    String? convertedToJobId,
+    DateTime? convertedAt,
+    bool clearConvertedAt = false,
+    String? convertedByUserId,
+    OfferSmartBillDocumentState? smartBillEstimate,
+    OfferSmartBillDocumentState? smartBillInvoice,
+    List<OfferAcceptanceClause>? acceptanceClauses,
+    String? acceptanceFormSignatureBase64,
+    DateTime? acceptanceFormSignedAt,
+    bool clearAcceptanceFormSignedAt = false,
+    TipDocumentDeviz? tipDocument,
+  }) {
+    final nextLines = lines ?? this.lines;
+    final nextRegiePercent = regiePercent ?? this.regiePercent;
+    final nextProfitPercent = profitPercent ?? this.profitPercent;
+    final nextVatPercent = vatPercent ?? this.vatPercent;
+    final computed = computeTotals(
+      lines: nextLines,
+      vatPercent: nextVatPercent,
+      regiePercent: nextRegiePercent,
+      profitPercent: nextProfitPercent,
+    );
+    return OfferRecord(
+      id: id ?? this.id,
+      offerNumber: offerNumber ?? this.offerNumber,
+      title: title ?? this.title,
+      clientId: clientId ?? this.clientId,
+      clientName: clientName ?? this.clientName,
+      departmentId: departmentId ?? this.departmentId,
+      departmentName: departmentName ?? this.departmentName,
+      contactPersonId: contactPersonId ?? this.contactPersonId,
+      contactPersonName: contactPersonName ?? this.contactPersonName,
+      contactPersonEmail: contactPersonEmail ?? this.contactPersonEmail,
+      contactPersonPhone: contactPersonPhone ?? this.contactPersonPhone,
+      clientSignatureBase64:
+          clientSignatureBase64 ?? this.clientSignatureBase64,
+      issuerSignatureBase64:
+          issuerSignatureBase64 ?? this.issuerSignatureBase64,
+      pdfPath: pdfPath ?? this.pdfPath,
+      beneficiaryClientId: beneficiaryClientId ?? this.beneficiaryClientId,
+      beneficiaryName: beneficiaryName ?? this.beneficiaryName,
+      commercialRecipientClientId:
+          commercialRecipientClientId ?? this.commercialRecipientClientId,
+      commercialRecipientName:
+          commercialRecipientName ?? this.commercialRecipientName,
+      complaintId: complaintId ?? this.complaintId,
+      complaintNumber: complaintNumber ?? this.complaintNumber,
+      appointmentId: appointmentId ?? this.appointmentId,
+      equipmentType: equipmentType ?? this.equipmentType,
+      equipmentBrand: equipmentBrand ?? this.equipmentBrand,
+      equipmentModel: equipmentModel ?? this.equipmentModel,
+      outdoorUnitSerial: outdoorUnitSerial ?? this.outdoorUnitSerial,
+      indoorUnitSerials: indoorUnitSerials ?? this.indoorUnitSerials,
+      equipmentDetails: equipmentDetails ?? this.equipmentDetails,
+      agreementAcceptedAt: clearAgreementAcceptedAt
+          ? null
+          : (agreementAcceptedAt ?? this.agreementAcceptedAt),
+      jobId: jobId ?? this.jobId,
+      jobCode: jobCode ?? this.jobCode,
+      jobTitle: jobTitle ?? this.jobTitle,
+      status: status ?? this.status,
+      issueDate: issueDate ?? this.issueDate,
+      validUntil: clearValidUntil ? null : (validUntil ?? this.validUntil),
+      currency: currency ?? this.currency,
+      exchangeRateSource: exchangeRateSource ?? this.exchangeRateSource,
+      bnrRate: bnrRate ?? this.bnrRate,
+      manualRate: manualRate ?? this.manualRate,
+      exchangeCommissionPercent:
+          exchangeCommissionPercent ?? this.exchangeCommissionPercent,
+      effectiveExchangeRate:
+          effectiveExchangeRate ?? this.effectiveExchangeRate,
+      notes: notes ?? this.notes,
+      materialSubtotal: materialSubtotal ?? computed.materialSubtotal,
+      laborSubtotal: laborSubtotal ?? computed.laborSubtotal,
+      subtotalDirect: subtotalDirect ?? computed.subtotalDirect,
+      regiePercent: nextRegiePercent,
+      regieValue: regieValue ?? computed.regieValue,
+      profitPercent: nextProfitPercent,
+      profitValue: profitValue ?? computed.profitValue,
+      subtotalComercial: subtotalComercial ?? computed.subtotalComercial,
+      subtotal: subtotal ?? computed.subtotalComercial,
+      vatPercent: nextVatPercent,
+      vatValue: vatValue ?? computed.vatValue,
+      totalValue: totalValue ?? computed.totalValue,
+      lines: nextLines,
+      priceDisplayMode: priceDisplayMode ?? this.priceDisplayMode,
+      partners: partners ?? this.partners,
+      partnerWorkers: partnerWorkers ?? this.partnerWorkers,
+      partnerVehicles: partnerVehicles ?? this.partnerVehicles,
+      commercialClauses: commercialClauses ?? this.commercialClauses,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      createdByUserId: createdByUserId ?? this.createdByUserId,
+      createdByUserEmail: createdByUserEmail ?? this.createdByUserEmail,
+      registryEntryId: registryEntryId ?? this.registryEntryId,
+      registryNumber: registryNumber ?? this.registryNumber,
+      registeredAt:
+          clearRegisteredAt ? null : (registeredAt ?? this.registeredAt),
+      convertedToJobId: convertedToJobId ?? this.convertedToJobId,
+      convertedAt: clearConvertedAt ? null : (convertedAt ?? this.convertedAt),
+      convertedByUserId: convertedByUserId ?? this.convertedByUserId,
+      smartBillEstimate: smartBillEstimate ?? this.smartBillEstimate,
+      smartBillInvoice: smartBillInvoice ?? this.smartBillInvoice,
+      acceptanceClauses: acceptanceClauses ?? this.acceptanceClauses,
+      acceptanceFormSignatureBase64:
+          acceptanceFormSignatureBase64 ?? this.acceptanceFormSignatureBase64,
+      acceptanceFormSignedAt: clearAcceptanceFormSignedAt
+          ? null
+          : (acceptanceFormSignedAt ?? this.acceptanceFormSignedAt),
+      tipDocument: tipDocument ?? this.tipDocument,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'offer_number': offerNumber,
+      'title': title,
+      'client_id': clientId,
+      'client_name': clientName,
+      'department_id': departmentId,
+      'department_name': departmentName,
+      'contact_person_id': contactPersonId,
+      'contact_person_name': contactPersonName,
+      'contact_person_email': contactPersonEmail,
+      'contact_person_phone': contactPersonPhone,
+      'client_signature_base64': clientSignatureBase64,
+      'issuer_signature_base64': issuerSignatureBase64,
+      'pdf_path': pdfPath,
+      'beneficiary_client_id': beneficiaryClientId,
+      'beneficiary_name': beneficiaryName,
+      'commercial_recipient_client_id': commercialRecipientClientId,
+      'commercial_recipient_name': commercialRecipientName,
+      'complaint_id': complaintId,
+      'complaint_number': complaintNumber,
+      'appointment_id': appointmentId,
+      'equipment_type': equipmentType,
+      'equipment_brand': equipmentBrand,
+      'equipment_model': equipmentModel,
+      'outdoor_unit_serial': outdoorUnitSerial,
+      'indoor_unit_serials': indoorUnitSerials,
+      'equipment_details': equipmentDetails,
+      'agreement_accepted_at': agreementAcceptedAt?.toIso8601String(),
+      'job_id': jobId,
+      'job_code': jobCode,
+      'job_title': jobTitle,
+      'status': status.value,
+      'issue_date': issueDate.toIso8601String(),
+      'valid_until': validUntil?.toIso8601String(),
+      'currency': currency,
+      'exchange_rate_source': exchangeRateSource.value,
+      'bnr_rate': bnrRate,
+      'manual_rate': manualRate,
+      'exchange_commission_percent': exchangeCommissionPercent,
+      'effective_exchange_rate': effectiveExchangeRate,
+      'notes': notes,
+      'material_subtotal': materialSubtotal,
+      'labor_subtotal': laborSubtotal,
+      'subtotal_direct': subtotalDirect,
+      'regie_percent': regiePercent,
+      'regie_value': regieValue,
+      'profit_percent': profitPercent,
+      'profit_value': profitValue,
+      'subtotal_comercial': subtotalComercial,
+      'subtotal': subtotal,
+      'vat_percent': vatPercent,
+      'vat_value': vatValue,
+      'total_value': totalValue,
+      'price_display_mode': priceDisplayMode.value,
+      'lines': lines.map((line) => line.toMap()).toList(growable: false),
+      'partners': partners.map((item) => item.toMap()).toList(growable: false),
+      'partner_workers':
+          partnerWorkers.map((item) => item.toMap()).toList(growable: false),
+      'partner_vehicles':
+          partnerVehicles.map((item) => item.toMap()).toList(growable: false),
+      'commercial_clauses':
+          commercialClauses.map((item) => item.toMap()).toList(growable: false),
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+      'created_by_user_id': createdByUserId,
+      'created_by_user_email': createdByUserEmail,
+      'registry_entry_id': registryEntryId,
+      'registry_number': registryNumber,
+      'registered_at': registeredAt?.toIso8601String(),
+      'converted_to_job_id': convertedToJobId,
+      'converted_at': convertedAt?.toIso8601String(),
+      'converted_by_user_id': convertedByUserId,
+      'smartbill_estimate': smartBillEstimate.toMap(),
+      'smartbill_invoice': smartBillInvoice.toMap(),
+      'acceptance_clauses':
+          acceptanceClauses.map((c) => c.toMap()).toList(growable: false),
+      'acceptance_form_signature_base64': acceptanceFormSignatureBase64,
+      'acceptance_form_signed_at': acceptanceFormSignedAt?.toIso8601String(),
+      'tip_document': tipDocument.value,
+    };
+  }
+
+  factory OfferRecord.fromMap(Map<String, dynamic> map) {
+    DateTime parseDate(dynamic raw, DateTime fallback) {
+      if (raw == null) return fallback;
+      final parsed = DateTime.tryParse(raw.toString().trim());
+      return parsed ?? fallback;
+    }
+
+    DateTime? parseOptionalDate(dynamic raw) {
+      if (raw == null) return null;
+      final text = raw.toString().trim();
+      if (text.isEmpty) return null;
+      return DateTime.tryParse(text);
+    }
+
+    double asDouble(dynamic raw, [double fallback = 0]) {
+      if (raw == null) return fallback;
+      if (raw is num) return raw.toDouble();
+      return double.tryParse(raw.toString().replaceAll(',', '.').trim()) ??
+          fallback;
+    }
+
+    String pick(List<String> keys) {
+      for (final key in keys) {
+        final value = (map[key] ?? '').toString().trim();
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
+
+    final now = DateTime.now();
+    final id = pick(const <String>['id', 'offer_id']);
+
+    final rawLines = map['lines'];
+    final lines = rawLines is List
+        ? rawLines
+            .whereType<Map>()
+            .map((row) => OfferLineItem.fromMap(Map<String, dynamic>.from(row)))
+            .toList(growable: false)
+        : const <OfferLineItem>[];
+    final rawClauses = map['commercial_clauses'] ?? map['commercialClauses'];
+    final rawPartners = map['partners'];
+    final rawPartnerWorkers = map['partner_workers'] ?? map['partnerWorkers'];
+    final rawPartnerVehicles =
+        map['partner_vehicles'] ?? map['partnerVehicles'];
+    final rawSmartBillEstimate =
+        map['smartbill_estimate'] ?? map['smartBillEstimate'];
+    final rawSmartBillInvoice =
+        map['smartbill_invoice'] ?? map['smartBillInvoice'];
+    final commercialClauses = rawClauses is List
+        ? rawClauses
+            .whereType<Map>()
+            .map(
+              (row) =>
+                  OfferCommercialClause.fromMap(Map<String, dynamic>.from(row)),
+            )
+            .toList(growable: false)
+        : const <OfferCommercialClause>[];
+    final partners = rawPartners is List
+        ? rawPartners
+            .whereType<Map>()
+            .map((row) => OfferPartner.fromMap(Map<String, dynamic>.from(row)))
+            .toList(growable: false)
+        : const <OfferPartner>[];
+    final partnerWorkers = rawPartnerWorkers is List
+        ? rawPartnerWorkers
+            .whereType<Map>()
+            .map((row) =>
+                OfferPartnerWorker.fromMap(Map<String, dynamic>.from(row)))
+            .toList(growable: false)
+        : const <OfferPartnerWorker>[];
+    final partnerVehicles = rawPartnerVehicles is List
+        ? rawPartnerVehicles
+            .whereType<Map>()
+            .map((row) =>
+                OfferPartnerVehicle.fromMap(Map<String, dynamic>.from(row)))
+            .toList(growable: false)
+        : const <OfferPartnerVehicle>[];
+    final smartBillEstimate = rawSmartBillEstimate is Map<String, dynamic>
+        ? OfferSmartBillDocumentState.fromMap(
+            rawSmartBillEstimate,
+            fallbackDocumentType: OfferSmartBillDocumentType.estimate,
+          )
+        : rawSmartBillEstimate is Map
+            ? OfferSmartBillDocumentState.fromMap(
+                Map<String, dynamic>.from(rawSmartBillEstimate),
+                fallbackDocumentType: OfferSmartBillDocumentType.estimate,
+              )
+            : const OfferSmartBillDocumentState(
+                documentType: OfferSmartBillDocumentType.estimate,
+              );
+    final smartBillInvoice = rawSmartBillInvoice is Map<String, dynamic>
+        ? OfferSmartBillDocumentState.fromMap(
+            rawSmartBillInvoice,
+            fallbackDocumentType: OfferSmartBillDocumentType.invoice,
+          )
+        : rawSmartBillInvoice is Map
+            ? OfferSmartBillDocumentState.fromMap(
+                Map<String, dynamic>.from(rawSmartBillInvoice),
+                fallbackDocumentType: OfferSmartBillDocumentType.invoice,
+              )
+            : const OfferSmartBillDocumentState(
+                documentType: OfferSmartBillDocumentType.invoice,
+              );
+
+    final regiePercent =
+        asDouble(map['regie_percent'] ?? map['regiePercent'], 0);
+    final profitPercent =
+        asDouble(map['profit_percent'] ?? map['profitPercent'], 0);
+    final vatPercent = asDouble(map['vat_percent'], 21);
+    final computed = computeTotals(
+      lines: lines,
+      vatPercent: vatPercent,
+      regiePercent: regiePercent,
+      profitPercent: profitPercent,
+    );
+    final exchangeRateSource = OfferExchangeRateSource.fromValue(
+      (map['exchange_rate_source'] ?? map['exchangeRateSource'])?.toString(),
+    );
+    final bnrRate = asDouble(map['bnr_rate'] ?? map['bnrRate']);
+    final manualRate = asDouble(map['manual_rate'] ?? map['manualRate']);
+    final exchangeCommissionPercent = asDouble(
+      map['exchange_commission_percent'] ?? map['exchangeCommissionPercent'],
+    );
+    final double baseRate = exchangeRateSource == OfferExchangeRateSource.bnr
+        ? bnrRate
+        : manualRate;
+    final double computedEffectiveExchangeRate = baseRate > 0
+        ? baseRate * (1.0 + (exchangeCommissionPercent / 100.0))
+        : 0.0;
+    final double effectiveExchangeRate = asDouble(
+      map['effective_exchange_rate'] ?? map['effectiveExchangeRate'],
+      computedEffectiveExchangeRate,
+    );
+
+    return OfferRecord(
+      id: id.isEmpty ? 'offer-${now.microsecondsSinceEpoch}' : id,
+      offerNumber: pick(const <String>['offer_number', 'number']),
+      title: pick(const <String>['title', 'offer_title']),
+      clientId: pick(const <String>['client_id']),
+      clientName: pick(const <String>['client_name']),
+      departmentId: pick(const <String>['department_id']),
+      departmentName: pick(const <String>['department_name']),
+      contactPersonId: pick(const <String>['contact_person_id']),
+      contactPersonName: pick(const <String>[
+        'contact_person_name',
+        'contact_name',
+      ]),
+      contactPersonEmail: pick(const <String>['contact_person_email']),
+      contactPersonPhone: pick(const <String>['contact_person_phone']),
+      clientSignatureBase64: pick(const <String>[
+        'client_signature_base64',
+        'clientSignatureBase64',
+      ]),
+      issuerSignatureBase64: pick(const <String>[
+        'issuer_signature_base64',
+        'issuerSignatureBase64',
+      ]),
+      pdfPath: pick(const <String>['pdf_path', 'pdfPath']),
+      beneficiaryClientId: pick(const <String>[
+        'beneficiary_client_id',
+        'beneficiaryClientId',
+      ]),
+      beneficiaryName: pick(const <String>[
+        'beneficiary_name',
+        'beneficiaryName',
+      ]),
+      commercialRecipientClientId: pick(const <String>[
+        'commercial_recipient_client_id',
+        'commercialRecipientClientId',
+        'payer_client_id',
+        'payerClientId',
+      ]),
+      commercialRecipientName: pick(const <String>[
+        'commercial_recipient_name',
+        'commercialRecipientName',
+        'payer_name',
+        'payerName',
+      ]),
+      complaintId: pick(const <String>['complaint_id', 'complaintId']),
+      complaintNumber:
+          pick(const <String>['complaint_number', 'complaintNumber']),
+      appointmentId: pick(const <String>['appointment_id', 'appointmentId']),
+      equipmentType: pick(const <String>['equipment_type', 'equipmentType']),
+      equipmentBrand: pick(const <String>['equipment_brand', 'equipmentBrand']),
+      equipmentModel: pick(const <String>['equipment_model', 'equipmentModel']),
+      outdoorUnitSerial: pick(
+        const <String>['outdoor_unit_serial', 'outdoorUnitSerial'],
+      ),
+      indoorUnitSerials: pick(
+        const <String>['indoor_unit_serials', 'indoorUnitSerials'],
+      ),
+      equipmentDetails: pick(
+        const <String>['equipment_details', 'equipmentDetails'],
+      ),
+      agreementAcceptedAt: parseOptionalDate(
+        map['agreement_accepted_at'] ?? map['agreementAcceptedAt'],
+      ),
+      jobId: pick(const <String>['job_id']),
+      jobCode: pick(const <String>['job_code']),
+      jobTitle: pick(const <String>['job_title']),
+      status: OfferStatus.fromValue(map['status']?.toString()),
+      issueDate: parseDate(
+        map['issue_date'] ?? map['offer_date'],
+        now,
+      ),
+      validUntil: parseOptionalDate(map['valid_until']),
+      currency: pick(const <String>['currency']).isEmpty
+          ? 'RON'
+          : pick(const <String>['currency']),
+      exchangeRateSource: exchangeRateSource,
+      bnrRate: bnrRate,
+      manualRate: manualRate,
+      exchangeCommissionPercent: exchangeCommissionPercent,
+      effectiveExchangeRate: effectiveExchangeRate,
+      notes: pick(const <String>['notes']),
+      materialSubtotal:
+          asDouble(map['material_subtotal'], computed.materialSubtotal),
+      laborSubtotal: asDouble(map['labor_subtotal'], computed.laborSubtotal),
+      subtotalDirect: asDouble(
+        map['subtotal_direct'] ?? map['subtotalDirect'],
+        computed.subtotalDirect,
+      ),
+      regiePercent: regiePercent,
+      regieValue: asDouble(
+        map['regie_value'] ?? map['regieValue'],
+        computed.regieValue,
+      ),
+      profitPercent: profitPercent,
+      profitValue: asDouble(
+        map['profit_value'] ?? map['profitValue'],
+        computed.profitValue,
+      ),
+      subtotalComercial: asDouble(
+        map['subtotal_comercial'] ?? map['subtotalComercial'],
+        computed.subtotalComercial,
+      ),
+      subtotal: asDouble(map['subtotal'], computed.subtotalComercial),
+      vatPercent: vatPercent,
+      vatValue: asDouble(map['vat_value'], computed.vatValue),
+      totalValue: asDouble(map['total_value'], computed.totalValue),
+      lines: lines,
+      priceDisplayMode: OfferPriceDisplayMode.fromValue(
+        (map['price_display_mode'] ?? map['priceDisplayMode'])?.toString(),
+      ),
+      partners: partners,
+      partnerWorkers: partnerWorkers,
+      partnerVehicles: partnerVehicles,
+      commercialClauses: commercialClauses,
+      createdAt: parseDate(map['created_at'], now),
+      updatedAt: parseDate(map['updated_at'], now),
+      createdByUserId: pick(const <String>['created_by_user_id']),
+      createdByUserEmail: pick(const <String>['created_by_user_email']),
+      registryEntryId:
+          pick(const <String>['registry_entry_id', 'registryEntryId']),
+      registryNumber: pick(const <String>['registry_number', 'registryNumber']),
+      registeredAt: parseOptionalDate(
+        map['registered_at'] ?? map['registeredAt'],
+      ),
+      convertedToJobId: pick(const <String>['converted_to_job_id']),
+      convertedAt: parseOptionalDate(map['converted_at']),
+      convertedByUserId: pick(const <String>['converted_by_user_id']),
+      smartBillEstimate: smartBillEstimate,
+      smartBillInvoice: smartBillInvoice,
+      acceptanceClauses: () {
+        final raw = map['acceptance_clauses'] ?? map['acceptanceClauses'];
+        if (raw is List) {
+          return raw
+              .whereType<Map<String, dynamic>>()
+              .map(OfferAcceptanceClause.fromMap)
+              .toList(growable: false);
+        }
+        return const <OfferAcceptanceClause>[];
+      }(),
+      acceptanceFormSignatureBase64: (map['acceptance_form_signature_base64']
+              ?? map['acceptanceFormSignatureBase64']
+              ?? '') as String,
+      acceptanceFormSignedAt: parseOptionalDate(
+        map['acceptance_form_signed_at'] ?? map['acceptanceFormSignedAt'],
+      ),
+      tipDocument: TipDocumentDeviz.fromValue(
+        (map['tip_document'] ?? map['tipDocument'])?.toString(),
+      ),
+    );
+  }
+}
+
+List<OfferLineItem> buildCommercialOfferLines(
+  List<OfferLineItem> sourceLines, {
+  // laborLabel și laborUnit păstrate pentru compatibilitate, dar nu mai sunt folosite
+  String laborLabel = 'Manopera',
+  String laborUnit = 'poz',
+}) {
+  final sorted = [...sourceLines]
+    ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+  final result = <OfferLineItem>[];
+  var order = 1;
+
+  for (final line in sorted) {
+    // Manopera cu resurse: afișăm fiecare linie cu numele și descrierea date
+    // de utilizator, fără să agregăm și fără texte generate automat.
+    // Prețul afișat = totalul efectiv al liniei.
+    if (line.lineType == OfferLineType.manopera &&
+        line.laborSourceMode == OfferLaborSourceMode.resources) {
+      result.add(
+        line.copyWith(
+          sortOrder: order,
+          quantity: 1,
+          unitPrice: line.effectiveLineTotal,
+          lineTotal: line.effectiveLineTotal,
+          // Descrierea rămâne cea dată de utilizator (poate fi goală)
+        ),
+      );
+      order += 1;
+      continue;
+    }
+    result.add(
+      line.copyWith(
+        sortOrder: order,
+        lineTotal: line.effectiveLineTotal,
+      ),
+    );
+    order += 1;
+  }
+
+  return result;
+}
+
+List<OfferLineItem> buildInternalLaborDetailLines(
+    List<OfferLineItem> sourceLines) {
+  final labor = sourceLines
+      .where(
+        (line) =>
+            line.lineType == OfferLineType.manopera &&
+            line.laborSourceMode == OfferLaborSourceMode.resources,
+      )
+      .map((line) => line.copyWith(lineTotal: line.effectiveLineTotal))
+      .toList(growable: false);
+  labor.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+  return labor;
+}

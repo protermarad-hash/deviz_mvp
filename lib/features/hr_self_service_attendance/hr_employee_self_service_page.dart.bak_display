@@ -1,0 +1,935 @@
+import 'package:flutter/material.dart';
+
+import '../../core/auth_models.dart';
+import '../../core/pdf_actions_helper.dart';
+import '../../core/auth_session.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import '../hr_core/hr_employee_catalog_service.dart';
+import '../hr_core/hr_employee_models.dart';
+import '../hr_leave/hr_leave_catalog_service.dart';
+import '../hr_leave/hr_leave_models.dart';
+import '../hr_payroll_run/hr_access_policy.dart';
+import '../hr_payroll_run/hr_leave_request_pdf_service.dart';
+import '../hr_payroll_run/hr_payslip_pdf_service.dart';
+import '../hr_payroll_run/hr_payroll_run_catalog_service.dart';
+import '../hr_payroll_run/hr_payroll_run_models.dart';
+import 'hr_my_attendance_page.dart';
+
+class HrEmployeeSelfServicePage extends StatefulWidget {
+  const HrEmployeeSelfServicePage({super.key});
+
+  @override
+  State<HrEmployeeSelfServicePage> createState() =>
+      _HrEmployeeSelfServicePageState();
+}
+
+class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
+  final AppDataRepository _repository = LocalAppDataRepository();
+  final HrEmployeeCatalogService _employeeService = HrEmployeeCatalogService();
+  final HrPayrollRunCatalogService _runService = HrPayrollRunCatalogService();
+  final HrLeaveCatalogService _leaveService = HrLeaveCatalogService();
+
+  bool _loading = true;
+  String? _message;
+  HrEmployeeProfile? _profile;
+  HrContract? _activeContract;
+  List<HrPayslip> _payslips = const <HrPayslip>[];
+  List<HrLeaveRequest> _leaveRequests = const <HrLeaveRequest>[];
+  List<HrLeaveType> _leaveTypes = const <HrLeaveType>[];
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+  String _leaveStatusFilter = 'all';
+
+  static const List<String> _leaveStatusOptions = <String>[
+    'all',
+    'draft',
+    'submitted',
+    'approved',
+    'needs_review',
+    'rejected',
+  ];
+
+  AppSessionController? _sessionControllerMaybe(BuildContext context) {
+    final element =
+        context.getElementForInheritedWidgetOfExactType<AppSessionScope>();
+    final widget = element?.widget;
+    if (widget is AppSessionScope) {
+      return widget.notifier;
+    }
+    return null;
+  }
+
+  AppUser? get _currentUser => _sessionControllerMaybe(context)?.currentUser;
+  UserRole? get _currentRole => _currentUser?.role;
+
+  bool get _isEnabled =>
+      HrAccessPolicy.canAccessEmployeeSelfServiceRoute(_currentRole);
+  bool get _canUseAttendance =>
+      HrAccessPolicy.canUseEmployeeAttendanceSelfService(_currentRole);
+  bool get _canUseLeaves =>
+      HrAccessPolicy.canUseEmployeeLeaveSelfService(_currentRole);
+  bool get _canUsePayslips =>
+      HrAccessPolicy.canUseEmployeePayslipSelfService(_currentRole);
+
+  DateTime get _monthStart =>
+      DateTime(_selectedMonth.year, _selectedMonth.month);
+  DateTime get _monthEnd =>
+      DateTime(_selectedMonth.year, _selectedMonth.month + 1, 0);
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  String _orDash(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? '-' : trimmed;
+  }
+
+  String _formatMoney(double value) => value.toStringAsFixed(2);
+
+  String _formatMonth(DateTime value) =>
+      '${value.month.toString().padLeft(2, '0')}.${value.year.toString().padLeft(4, '0')}';
+
+  String _formatDate(DateTime value) =>
+      '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year.toString().padLeft(4, '0')}';
+
+  String _formatDateTime(DateTime value) =>
+      '${_formatDate(value)} ${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+
+  bool _leaveOverlapsSelectedMonth(HrLeaveRequest item) {
+    return !item.endDateOnly.isBefore(_monthStart) &&
+        !item.startDateOnly.isAfter(_monthEnd);
+  }
+
+  List<HrPayslip> get _selectedMonthPayslips {
+    return _payslips
+        .where(
+          (item) =>
+              item.payrollMonth.year == _selectedMonth.year &&
+              item.payrollMonth.month == _selectedMonth.month,
+        )
+        .toList(growable: false);
+  }
+
+  List<HrLeaveRequest> get _selectedMonthLeaves {
+    return _leaveRequests.where((item) {
+      if (!_leaveOverlapsSelectedMonth(item)) return false;
+      if (_leaveStatusFilter == 'all') return true;
+      return item.status.trim().toLowerCase() == _leaveStatusFilter;
+    }).toList(growable: false);
+  }
+
+  Future<void> _selectMonth() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _monthStart,
+      firstDate: DateTime(2020, 1, 1),
+      lastDate: DateTime(2100, 12, 31),
+      helpText: 'Selecteaza luna',
+    );
+    if (picked == null) return;
+    setState(() {
+      _selectedMonth = DateTime(picked.year, picked.month);
+    });
+    await _reload();
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
+    try {
+      final user = _currentUser;
+      if (user == null) {
+        if (!mounted) return;
+        setState(() {
+          _profile = null;
+          _activeContract = null;
+          _payslips = const <HrPayslip>[];
+          _leaveRequests = const <HrLeaveRequest>[];
+          _leaveTypes = const <HrLeaveType>[];
+        });
+        return;
+      }
+
+      final profiles = await _employeeService.listProfiles();
+      HrEmployeeProfile? profile;
+      for (final item in profiles) {
+        if (item.userId.trim().isNotEmpty &&
+            item.userId.trim() == user.id.trim()) {
+          profile = item;
+          break;
+        }
+      }
+
+      if (profile == null) {
+        if (!mounted) return;
+        setState(() {
+          _profile = null;
+          _activeContract = null;
+          _payslips = const <HrPayslip>[];
+          _leaveRequests = const <HrLeaveRequest>[];
+          _leaveTypes = const <HrLeaveType>[];
+        });
+        return;
+      }
+
+      final allPayslips = await _runService.listPayslips();
+      final allLeaveRequests = await _leaveService.listLeaveRequests();
+      final leaveTypes = await _leaveService.listLeaveTypes();
+      final contract = await _employeeService.resolveActiveContract(
+        employeeId: profile.employeeId,
+        date: _monthStart,
+      );
+
+      final payslips = allPayslips
+          .where((item) => item.employeeId.trim() == profile!.employeeId.trim())
+          .toList(growable: false)
+        ..sort((a, b) {
+          final byMonth = b.payrollMonth.compareTo(a.payrollMonth);
+          if (byMonth != 0) return byMonth;
+          return b.generatedAt.compareTo(a.generatedAt);
+        });
+
+      final leaveRequests = allLeaveRequests
+          .where((item) => item.employeeId.trim() == profile!.employeeId.trim())
+          .toList(growable: false)
+        ..sort((a, b) => b.startDate.compareTo(a.startDate));
+
+      if (!mounted) return;
+      setState(() {
+        _profile = profile;
+        _activeContract = contract;
+        _payslips = payslips;
+        _leaveRequests = leaveRequests;
+        _leaveTypes = leaveTypes;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Nu am putut incarca self-service-ul HR: $error';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _exportPayslipPdf(HrPayslip payslip) async {
+    if (!_canUsePayslips) return;
+    try {
+      final path = await HrPayslipPdfService.export(
+        repository: _repository,
+        payslip: payslip,
+        employeeName: _profile?.fullName ?? payslip.employeeId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _message = 'Fluturaș exportat.';
+      });
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Fluturaș salariu generat',
+        shareSubject: 'Fluturaș salariu',
+        shareText: 'Fluturaș salariu generat din aplicație.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Nu am putut exporta fluturasul: $error';
+      });
+    }
+  }
+
+  Future<void> _exportLeaveRequestPdf(HrLeaveRequest request) async {
+    if (!_canUseLeaves) return;
+    try {
+      final path = await HrLeaveRequestPdfService.export(
+        repository: _repository,
+        request: request,
+        employeeName: _profile?.fullName ?? request.employeeId,
+        teamName: _profile?.teamId ?? '',
+      );
+      if (!mounted) return;
+      setState(() {
+        _message = 'Cerere concediu exportată.';
+      });
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Cerere concediu generată',
+        shareSubject: 'Cerere concediu',
+        shareText: 'Cerere de concediu generată din aplicație.',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Nu am putut exporta cererea de concediu: $error';
+      });
+    }
+  }
+
+  bool _canEditLeave(HrLeaveRequest item) {
+    final status = item.status.trim().toLowerCase();
+    return _canUseLeaves && (status == 'draft' || status == 'needs_review');
+  }
+
+  bool _canSubmitLeave(HrLeaveRequest item) {
+    final status = item.status.trim().toLowerCase();
+    return _canUseLeaves && (status == 'draft' || status == 'needs_review');
+  }
+
+  Future<void> _submitLeave(HrLeaveRequest item) async {
+    if (!_canSubmitLeave(item)) return;
+    try {
+      await _leaveService.submitLeaveRequest(
+        requestId: item.id,
+        submittedByUserId: _currentUser?.id ?? '',
+      );
+      await _reload();
+      if (!mounted) return;
+      setState(() {
+        _message = 'Cererea de concediu a fost trimisa.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Nu am putut trimite cererea: $error';
+      });
+    }
+  }
+
+  Future<void> _showLeaveEditor({HrLeaveRequest? existing}) async {
+    final profile = _profile;
+    if (!_canUseLeaves || profile == null) return;
+
+    final now = DateTime.now();
+    final item = existing;
+    var leaveTypeCode =
+        item?.leaveTypeCode.isNotEmpty == true ? item!.leaveTypeCode : '';
+    var startDate = item?.startDate ?? _monthStart;
+    var endDate = item?.endDate ?? _monthStart;
+    final calendarDaysController = TextEditingController(
+      text: (item?.calendarDays ?? 1).toStringAsFixed(0),
+    );
+    final workingDaysController = TextEditingController(
+      text: (item?.workingDays ?? 1).toStringAsFixed(0),
+    );
+    final medicalCodeController = TextEditingController(
+      text: item?.medicalCode ?? '',
+    );
+    final documentRefController = TextEditingController(
+      text: item?.documentRef ?? '',
+    );
+    final notesController = TextEditingController(text: item?.notes ?? '');
+    String? dialogError;
+
+    void updateComputedDays(StateSetter setDialogState) {
+      final diff = endDate.difference(startDate).inDays + 1;
+      final safeDays = diff < 1 ? 1 : diff;
+      calendarDaysController.text = safeDays.toString();
+      workingDaysController.text = safeDays.toString();
+      setDialogState(() {});
+    }
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(
+            item == null
+                ? 'Adauga cerere concediu'
+                : 'Editeaza cerere concediu',
+          ),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Angajat: ${_orDash(profile.fullName)}'),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: leaveTypeCode.isEmpty ? null : leaveTypeCode,
+                    decoration:
+                        const InputDecoration(labelText: 'Tip concediu'),
+                    items: _leaveTypes
+                        .where((row) => row.isActive)
+                        .map(
+                          (row) => DropdownMenuItem<String>(
+                            value: row.code,
+                            child: Text('${row.code} - ${row.name}'),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      leaveTypeCode = (value ?? '').trim();
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: startDate,
+                              firstDate: DateTime(2020, 1, 1),
+                              lastDate: DateTime(2100, 12, 31),
+                            );
+                            if (picked == null) return;
+                            startDate = picked;
+                            if (endDate.isBefore(startDate)) {
+                              endDate = startDate;
+                            }
+                            updateComputedDays(setDialogState);
+                          },
+                          child: Text('Start: ${_formatDate(startDate)}'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: endDate,
+                              firstDate: DateTime(2020, 1, 1),
+                              lastDate: DateTime(2100, 12, 31),
+                            );
+                            if (picked == null) return;
+                            endDate = picked;
+                            updateComputedDays(setDialogState);
+                          },
+                          child: Text('Sfârșit: ${_formatDate(endDate)}'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: calendarDaysController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Zile calendaristice',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: workingDaysController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Zile lucratoare',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: medicalCodeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Cod medical',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: documentRefController,
+                    decoration: const InputDecoration(
+                      labelText: 'Document referinta',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: notesController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(labelText: 'Note'),
+                  ),
+                  if (dialogError != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      dialogError!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Anulează'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final code = leaveTypeCode.trim();
+                if (code.isEmpty) {
+                  setDialogState(() {
+                    dialogError = 'Selecteaza un tip de concediu.';
+                  });
+                  return;
+                }
+                if (endDate.isBefore(startDate)) {
+                  setDialogState(() {
+                    dialogError =
+                        'Data de sfârșit nu poate fi înainte de data de început.';
+                  });
+                  return;
+                }
+
+                final calendarDays = double.tryParse(
+                      calendarDaysController.text.trim().replaceAll(',', '.'),
+                    ) ??
+                    0;
+                final workingDays = double.tryParse(
+                      workingDaysController.text.trim().replaceAll(',', '.'),
+                    ) ??
+                    0;
+                if (calendarDays <= 0 || workingDays <= 0) {
+                  setDialogState(() {
+                    dialogError = 'Completeaza un numar valid de zile.';
+                  });
+                  return;
+                }
+
+                final record = HrLeaveRequest(
+                  id: item?.id ??
+                      'hr-self-leave-${profile.employeeId}-${now.millisecondsSinceEpoch}',
+                  employeeId: profile.employeeId,
+                  hrEmployeeProfileId: profile.id,
+                  leaveTypeCode: code,
+                  startDate: startDate,
+                  endDate: endDate,
+                  calendarDays: calendarDays,
+                  workingDays: workingDays,
+                  medicalCode: medicalCodeController.text.trim(),
+                  documentRef: documentRefController.text.trim(),
+                  status: item?.status ?? 'draft',
+                  submittedAt: item?.submittedAt,
+                  submittedByUserId: item?.submittedByUserId ?? '',
+                  approvedAt: item?.approvedAt,
+                  approvedByUserId: item?.approvedByUserId ?? '',
+                  reviewedAt: item?.reviewedAt,
+                  reviewedByUserId: item?.reviewedByUserId ?? '',
+                  reviewNotes: item?.reviewNotes ?? '',
+                  notes: notesController.text.trim(),
+                  createdAt: item?.createdAt ?? now,
+                  updatedAt: now,
+                );
+
+                final overlap = await _leaveService.hasOverlap(record);
+                if (overlap) {
+                  setDialogState(() {
+                    dialogError =
+                        'Exista deja o alta cerere activa care se suprapune pe acest interval.';
+                  });
+                  return;
+                }
+
+                await _leaveService.upsertLeaveRequest(record);
+                if (!context.mounted) return;
+                Navigator.of(context).pop(true);
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true) {
+      await _reload();
+      if (!mounted) return;
+      setState(() {
+        _message = item == null
+            ? 'Cererea de concediu a fost salvata.'
+            : 'Cererea de concediu a fost actualizata.';
+      });
+    }
+  }
+
+  void _showPayslipDetails(HrPayslip item) {
+    final grossComponents =
+        (item.breakdown['gross_components'] as Map?)?.cast<String, dynamic>() ??
+            const <String, dynamic>{};
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Fluturas salariu'),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Luna: ${_formatMonth(item.payrollMonth)}'),
+                Text('Status: ${_orDash(item.status)}'),
+                Text('Generat la: ${_formatDateTime(item.generatedAt)}'),
+                const SizedBox(height: 12),
+                Text('Venituri', style: Theme.of(context).textTheme.titleSmall),
+                Text(
+                  'Salariu brut: ${_formatMoney((grossComponents['base_salary_gross'] as num?)?.toDouble() ?? 0)} ${item.currency}',
+                ),
+                Text(
+                  'Bonusuri taxabile: ${_formatMoney((grossComponents['bonuses_taxable'] as num?)?.toDouble() ?? 0)} ${item.currency}',
+                ),
+                Text(
+                  'Indemnizatii taxabile: ${_formatMoney((grossComponents['allowances_taxable'] as num?)?.toDouble() ?? 0)} ${item.currency}',
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Contributii si taxe',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                Text('CAS: ${_formatMoney(item.casAmount)} ${item.currency}'),
+                Text('CASS: ${_formatMoney(item.cassAmount)} ${item.currency}'),
+                Text(
+                  'Impozit: ${_formatMoney(item.incomeTaxAmount)} ${item.currency}',
+                ),
+                const SizedBox(height: 12),
+                Text('Net final',
+                    style: Theme.of(context).textTheme.titleSmall),
+                Text('${_formatMoney(item.netFinal)} ${item.currency}'),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Închide'),
+          ),
+          if (_canUsePayslips)
+            FilledButton(
+              onPressed: () => _exportPayslipPdf(item),
+              child: const Text('Export PDF'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showLeaveDetails(HrLeaveRequest item) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cererea mea de concediu'),
+        content: SizedBox(
+          width: 560,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Tip: ${_orDash(item.leaveTypeCode)}'),
+                Text(
+                  'Perioada: ${_formatDate(item.startDate)} - ${_formatDate(item.endDate)}',
+                ),
+                Text(
+                  'Zile: ${_formatMoney(item.workingDays)} lucratoare / ${_formatMoney(item.calendarDays)} calendaristice',
+                ),
+                Text('Status: ${_orDash(item.status)}'),
+                Text('Cod medical: ${_orDash(item.medicalCode)}'),
+                Text('Document: ${_orDash(item.documentRef)}'),
+                Text('Note: ${_orDash(item.notes)}'),
+                if (item.reviewNotes.trim().isNotEmpty)
+                  Text('Observatii revizie: ${item.reviewNotes.trim()}'),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Închide'),
+          ),
+          if (_canEditLeave(item))
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _showLeaveEditor(existing: item);
+              },
+              child: const Text('Editeaza'),
+            ),
+          if (_canUseLeaves)
+            FilledButton(
+              onPressed: () => _exportLeaveRequestPdf(item),
+              child: const Text('Genereaza cerere'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionCard({
+    required BuildContext context,
+    required String title,
+    required List<Widget> children,
+    List<Widget> actions = const <Widget>[],
+  }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                ...actions,
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isEnabled) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('HR autoservire')),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'Self-service HR este pregatit tehnic, dar ramane dezactivat prin policy.',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final profile = _profile;
+    final payslips = _selectedMonthPayslips;
+    final leaveRequests = _selectedMonthLeaves;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('HR self-service')),
+      body: RefreshIndicator(
+        onRefresh: _reload,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (_message != null)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Text(_message!),
+                ),
+              ),
+            _sectionCard(
+              context: context,
+              title: 'Luna selectata',
+              actions: [
+                OutlinedButton(
+                  onPressed: _selectMonth,
+                  child: Text(_formatMonth(_selectedMonth)),
+                ),
+              ],
+              children: [
+                Text('Fluturasi salariu: ${payslips.length}'),
+                Text('Cereri concediu: ${leaveRequests.length}'),
+              ],
+            ),
+            if (_loading)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              )
+            else if (profile == null)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    'Nu exista un profil HR legat de utilizatorul curent.',
+                  ),
+                ),
+              )
+            else ...[
+              _sectionCard(
+                context: context,
+                title: 'Datele mele HR',
+                children: [
+                  Text('Nume: ${_orDash(profile.fullName)}'),
+                  Text('Echipa: ${_orDash(profile.teamId)}'),
+                  Text(
+                    'Rezidenta fiscala: ${_orDash(profile.taxResidenceCountry)}',
+                  ),
+                  Text('Cont bancar: ${_orDash(profile.bankAccount)}'),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Contract activ: '
+                    '${_activeContract == null ? 'nu exista pentru luna selectata' : '${_orDash(_activeContract!.jobTitle)} / ${_orDash(_activeContract!.contractType)}'}',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (_canUseAttendance)
+                SizedBox(
+                  height: 620,
+                  child: HrMyAttendancePage(
+                    employeeId: profile.employeeId,
+                    hrEmployeeProfileId: profile.id,
+                    userId: profile.userId,
+                    role: _currentRole,
+                    embedded: true,
+                  ),
+                ),
+              const SizedBox(height: 12),
+              _sectionCard(
+                context: context,
+                title: 'Fluturasii mei de salariu',
+                children: [
+                  if (!_canUsePayslips)
+                    const Text(
+                        'Accesul la fluturasii de salariu este dezactivat.')
+                  else if (payslips.isEmpty)
+                    const Text(
+                        'Nu exista fluturasi de salariu pentru luna selectata.')
+                  else
+                    ...payslips.map(
+                      (item) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(_formatMonth(item.payrollMonth)),
+                        subtitle: Text(
+                          'Net ${_formatMoney(item.netFinal)} ${item.currency} | '
+                          'Status ${_orDash(item.status)} | '
+                          'Generat ${_formatDateTime(item.generatedAt)}',
+                        ),
+                        trailing: Wrap(
+                          spacing: 8,
+                          children: [
+                            TextButton(
+                              onPressed: () => _showPayslipDetails(item),
+                              child: const Text('Vezi'),
+                            ),
+                            TextButton(
+                              onPressed: () => _exportPayslipPdf(item),
+                              child: const Text('Exporta PDF'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _sectionCard(
+                context: context,
+                title: 'Concediile mele',
+                actions: [
+                  if (_canUseLeaves)
+                    FilledButton(
+                      onPressed: () => _showLeaveEditor(),
+                      child: const Text('Adauga cerere'),
+                    ),
+                ],
+                children: [
+                  if (_canUseLeaves)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: _leaveStatusFilter,
+                            decoration: const InputDecoration(
+                              labelText: 'Filtru status',
+                            ),
+                            items: _leaveStatusOptions
+                                .map(
+                                  (item) => DropdownMenuItem<String>(
+                                    value: item,
+                                    child: Text(item == 'all' ? 'toate' : item),
+                                  ),
+                                )
+                                .toList(growable: false),
+                            onChanged: (value) {
+                              setState(() {
+                                _leaveStatusFilter = value ?? 'all';
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  if (_canUseLeaves) const SizedBox(height: 12),
+                  if (!_canUseLeaves)
+                    const Text('Accesul la concedii este dezactivat.')
+                  else if (leaveRequests.isEmpty)
+                    const Text(
+                        'Nu exista cereri de concediu pentru filtrul selectat.')
+                  else
+                    ...leaveRequests.map(
+                      (item) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(_orDash(item.leaveTypeCode)),
+                        subtitle: Text(
+                          '${_formatDate(item.startDate)} - ${_formatDate(item.endDate)} | '
+                          '${_formatMoney(item.workingDays)} zile lucratoare | '
+                          '${_formatMoney(item.calendarDays)} zile calendaristice | '
+                          'Status ${_orDash(item.status)} | '
+                          'Cod medical ${_orDash(item.medicalCode)} | '
+                          'Document ${_orDash(item.documentRef)}',
+                        ),
+                        trailing: Wrap(
+                          spacing: 8,
+                          children: [
+                            TextButton(
+                              onPressed: () => _showLeaveDetails(item),
+                              child: const Text('Vezi'),
+                            ),
+                            if (_canEditLeave(item))
+                              TextButton(
+                                onPressed: () =>
+                                    _showLeaveEditor(existing: item),
+                                child: const Text('Editeaza'),
+                              ),
+                            if (_canSubmitLeave(item))
+                              TextButton(
+                                onPressed: () => _submitLeave(item),
+                                child: const Text('Trimite'),
+                              ),
+                            TextButton(
+                              onPressed: () => _exportLeaveRequestPdf(item),
+                              child: const Text('Genereaza cerere'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}

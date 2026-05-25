@@ -1,0 +1,112 @@
+import 'dart:convert';
+
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'cloud_sync_models.dart';
+import 'cloud_sync_repository.dart';
+
+class LocalCloudSyncRepository implements CloudSyncRepository {
+  static const _syncQueueKey = 'cloud_sync_queue_v1';
+
+  Future<SharedPreferences> get _prefs async => SharedPreferences.getInstance();
+
+  @override
+  Future<void> clearAll() async {
+    final prefs = await _prefs;
+    await prefs.remove(_syncQueueKey);
+  }
+
+  @override
+  Future<List<CloudSyncItem>> listItems() async {
+    final prefs = await _prefs;
+    final raw = prefs.getString(_syncQueueKey);
+    if (raw == null || raw.isEmpty) return const <CloudSyncItem>[];
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const <CloudSyncItem>[];
+    return decoded
+        .whereType<Map>()
+        .map((entry) => CloudSyncItem.fromMap(
+              Map<String, dynamic>.from(entry),
+            ))
+        .toList();
+  }
+
+  @override
+  Future<List<CloudSyncItem>> listPendingItems() async {
+    final items = await listItems();
+    final now = DateTime.now();
+    return items
+        .where(
+          (item) =>
+              !item.isSynced &&
+              (item.nextAttemptAt == null || !item.nextAttemptAt!.isAfter(now)),
+        )
+        .toList()
+      ..sort((a, b) => a.updatedAt.compareTo(b.updatedAt));
+  }
+
+  @override
+  Future<void> markItemSynced(String id, DateTime syncedAt) async {
+    final items = await listItems();
+    final updated = items
+        .map(
+          (item) => item.id == id
+              ? item.copyWith(
+                  syncedAt: syncedAt,
+                  clearFailureState: true,
+                )
+              : item,
+        )
+        .toList();
+    await _saveAll(updated);
+  }
+
+  @override
+  Future<void> markItemFailed({
+    required String id,
+    required DateTime attemptedAt,
+    required DateTime nextAttemptAt,
+    required String errorMessage,
+  }) async {
+    final items = await listItems();
+    final updated = items
+        .map(
+          (item) => item.id == id
+              ? item.copyWith(
+                  retryCount: item.retryCount + 1,
+                  lastError: errorMessage,
+                  lastAttemptAt: attemptedAt,
+                  nextAttemptAt: nextAttemptAt,
+                )
+              : item,
+        )
+        .toList();
+    await _saveAll(updated);
+  }
+
+  @override
+  Future<void> upsertItem(CloudSyncItem item) async {
+    final items = List<CloudSyncItem>.of(await listItems());
+    items.removeWhere(
+      (existing) =>
+          !existing.isSynced &&
+          existing.entityType == item.entityType &&
+          existing.entityId == item.entityId,
+    );
+    final index = items.indexWhere((existing) => existing.id == item.id);
+    if (index >= 0) {
+      items[index] = item;
+    } else {
+      items.add(item);
+    }
+    await _saveAll(items);
+  }
+
+  Future<void> _saveAll(List<CloudSyncItem> items) async {
+    final prefs = await _prefs;
+    final encoded = jsonEncode(
+      items.map((item) => item.toMap()).toList(),
+    );
+    await prefs.setString(_syncQueueKey, encoded);
+  }
+}

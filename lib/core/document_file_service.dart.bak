@@ -1,0 +1,136 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:share_plus/share_plus.dart';
+
+enum DocumentOpenStatus {
+  opened,
+  fileMissing,
+  noAppFound,
+  unsupported,
+  failed,
+}
+
+class DocumentOpenResult {
+  const DocumentOpenResult(this.status, this.message);
+
+  final DocumentOpenStatus status;
+  final String message;
+
+  bool get opened => status == DocumentOpenStatus.opened;
+
+  bool get shouldOfferShare =>
+      status == DocumentOpenStatus.noAppFound ||
+      status == DocumentOpenStatus.unsupported;
+}
+
+class DocumentFileService {
+  const DocumentFileService._();
+
+  static bool get isMobilePlatform =>
+      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  static bool get supportsFolderOpen =>
+      !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+
+  static Future<DocumentOpenResult> openFile(String path) async {
+    final normalizedPath = path.trim();
+    if (normalizedPath.isEmpty) {
+      return const DocumentOpenResult(
+        DocumentOpenStatus.fileMissing,
+        'Fisierul nu a fost gasit.',
+      );
+    }
+
+    final file = File(normalizedPath);
+    if (!file.existsSync()) {
+      return const DocumentOpenResult(
+        DocumentOpenStatus.fileMissing,
+        'Fisierul nu a fost gasit.',
+      );
+    }
+
+    try {
+      final result = await OpenFilex.open(normalizedPath);
+      switch (result.type) {
+        case ResultType.done:
+          return const DocumentOpenResult(
+            DocumentOpenStatus.opened,
+            'Document deschis.',
+          );
+        case ResultType.noAppToOpen:
+          return const DocumentOpenResult(
+            DocumentOpenStatus.noAppFound,
+            'Nu există o aplicație disponibilă pentru deschidere.',
+          );
+        case ResultType.fileNotFound:
+          return const DocumentOpenResult(
+            DocumentOpenStatus.fileMissing,
+            'Fisierul nu a fost gasit.',
+          );
+        case ResultType.permissionDenied:
+          return const DocumentOpenResult(
+            DocumentOpenStatus.failed,
+            'Permisiunea pentru deschiderea fișierului a fost refuzată.',
+          );
+        case ResultType.error:
+          return DocumentOpenResult(
+            DocumentOpenStatus.failed,
+            result.message.trim().isEmpty
+                ? 'Nu am putut deschide documentul.'
+                : result.message,
+          );
+      }
+    } catch (_) {
+      return const DocumentOpenResult(
+        DocumentOpenStatus.failed,
+        'Nu am putut deschide documentul.',
+      );
+    }
+  }
+
+  static Future<void> shareFile(
+    String path, {
+    String subject = '',
+    String text = '',
+  }) async {
+    final normalizedPath = path.trim();
+    if (normalizedPath.isEmpty) {
+      throw const FileSystemException('Fisierul nu a fost gasit.');
+    }
+    final file = File(normalizedPath);
+    if (!file.existsSync()) {
+      throw FileSystemException('Fisierul nu a fost gasit.', normalizedPath);
+    }
+    await Share.shareXFiles(
+      [XFile(normalizedPath)],
+      subject: subject.trim().isEmpty ? null : subject.trim(),
+      text: text.trim().isEmpty ? null : text.trim(),
+    );
+  }
+
+  static Future<bool> openFolderForFile(String filePath) async {
+    if (!supportsFolderOpen) {
+      return false;
+    }
+    final folderPath = File(filePath).parent.path;
+    final directory = Directory(folderPath);
+    if (!directory.existsSync()) {
+      return false;
+    }
+    if (Platform.isWindows) {
+      await Process.run('explorer', [folderPath]);
+      return true;
+    }
+    if (Platform.isMacOS) {
+      await Process.run('open', [folderPath]);
+      return true;
+    }
+    if (Platform.isLinux) {
+      await Process.run('xdg-open', [folderPath]);
+      return true;
+    }
+    return false;
+  }
+}

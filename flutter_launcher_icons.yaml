@@ -1,0 +1,14 @@
+flutter_launcher_icons:
+  android: true
+  ios: false
+  remove_alpha_ios: false
+  image_path: "assets/app_icon/proventaris_identity.png"
+  min_sdk_android: 21
+  web:
+    generate: false
+  windows:
+    generate: true
+    image_path: "assets/app_icon/proventaris_identity.png"
+    icon_size: 256
+  macos:
+    generate: false

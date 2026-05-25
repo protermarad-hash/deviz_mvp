@@ -1,0 +1,1056 @@
+import 'package:flutter/material.dart';
+
+import '../../core/auth/app_role_policy.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/widgets/app_viewport_guard.dart';
+import '../notifications/notification_models.dart';
+import '../notifications/notification_service.dart';
+import 'firebase_lucrari_repository.dart';
+import 'job_models.dart';
+import 'lucrare_detalii_page.dart';
+import 'lucrari_cloud_repository.dart';
+
+class JobsPage extends StatefulWidget {
+  const JobsPage({
+    super.key,
+    required this.repository,
+    this.fieldAuthRoleKey,
+    this.fieldAuthUserId,
+    this.fieldAuthUserLabel,
+    this.fieldAuthTeamId,
+  });
+
+  final AppDataRepository repository;
+  final String? fieldAuthRoleKey;
+  final String? fieldAuthUserId;
+  final String? fieldAuthUserLabel;
+  final String? fieldAuthTeamId;
+
+  @override
+  State<JobsPage> createState() => _JobsPageState();
+}
+
+class _JobsPageState extends State<JobsPage> {
+  final TextEditingController _searchController = TextEditingController();
+  final NotificationCenterService _notificationService =
+      NotificationCenterService();
+
+  bool _isLoading = true;
+  String? _loadError;
+  List<JobRecord> _jobs = const [];
+  List<JobRecord> _filteredJobs = const [];
+  List<_LookupOption> _clients = const [];
+  JobStatus? _statusFilter;
+  String? _clientFilter;
+  LucrariCloudRepository? _cloudRepository;
+  String _dataSourceLabel = 'local';
+  String? _cloudFallbackReason;
+
+  AppDataRepository get _repository => widget.repository;
+
+  bool get _isTechnician => AppRolePolicy.isTechnician(widget.fieldAuthRoleKey);
+
+  String _shortCloudError(Object error) {
+    final raw = error.toString().replaceAll('\n', ' ').trim();
+    if (raw.isEmpty) return 'necunoscuta';
+    return raw.length > 140 ? '${raw.substring(0, 140)}…' : raw;
+  }
+
+  String _localLabelWithFallback() {
+    final reason =
+        (_cloudFallbackReason ?? FirebaseBootstrap.lastErrorMessage ?? '')
+            .trim();
+    if (reason.isEmpty) return 'local';
+    return 'local';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshCloudRepository();
+    _searchController.addListener(_applyFilters);
+    _loadData();
+  }
+
+  void _refreshCloudRepository() {
+    if (FirebaseBootstrap.isInitialized) {
+      _cloudRepository ??= FirebaseLucrariRepository();
+    } else {
+      _cloudFallbackReason = FirebaseBootstrap.lastErrorMessage;
+      _dataSourceLabel = 'local';
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadData() async {
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
+    try {
+      final List<JobRecord> jobs = await _loadJobsResolved();
+      final sortedJobs = List<JobRecord>.from(jobs)
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+      final Iterable<dynamic> clientsRaw = await _loadClientsRawSafe();
+
+      final normalizedClientsRaw = clientsRaw;
+
+      var clients = normalizedClientsRaw
+          .map(_LookupOption.fromDynamic)
+          .where((entry) => entry.id.trim().isNotEmpty)
+          .fold<Map<String, _LookupOption>>(
+            <String, _LookupOption>{},
+            (acc, e) {
+              acc[e.id] = e;
+              return acc;
+            },
+          )
+          .values
+          .toList(growable: false);
+
+      if (!mounted) return;
+      setState(() {
+        _jobs = sortedJobs;
+        _clients = clients;
+      });
+      _applyFilters();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _jobs = const [];
+        _filteredJobs = const [];
+        _clients = const [];
+        _loadError = 'Nu am putut încărca lucrările. Încearcă reîncărcarea.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<List<JobRecord>> _loadJobsSafe() async {
+    try {
+      final List<JobRecord> raw =
+          await _repository.listJobs().timeout(const Duration(seconds: 8));
+      return List<JobRecord>.from(raw);
+    } catch (_) {
+      return <JobRecord>[];
+    }
+  }
+
+  Future<List<JobRecord>> _loadJobsResolved() async {
+    await OfflineSyncRuntime.instance.syncPending();
+    _refreshCloudRepository();
+    final cloud = _cloudRepository;
+    if (cloud == null) {
+      _dataSourceLabel = _localLabelWithFallback();
+      return _loadJobsSafe();
+    }
+    try {
+      final cloudItems =
+          await cloud.listJobs().timeout(const Duration(seconds: 8));
+      _dataSourceLabel = 'cloud';
+      _cloudFallbackReason = null;
+      for (final item in cloudItems) {
+        await _repository.saveJob(item);
+      }
+      return cloudItems;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _cloudFallbackReason = _shortCloudError(error);
+      _dataSourceLabel = _localLabelWithFallback();
+      return _loadJobsSafe();
+    }
+  }
+
+  Future<void> _saveJobResolved(JobRecord job) async {
+    final previous = _findJobById(job.id);
+    _refreshCloudRepository();
+    final cloud = _cloudRepository;
+    var queuedOffline = cloud == null;
+    if (cloud != null) {
+      try {
+        await cloud.upsertJob(job);
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _cloudFallbackReason = _shortCloudError(error);
+        _dataSourceLabel = _localLabelWithFallback();
+        queuedOffline = true;
+      }
+    }
+    await _repository.saveJob(job);
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueJob(job);
+    }
+    await _notifyJobSaved(job, previous: previous);
+  }
+
+  Future<void> _notifyJobSaved(
+    JobRecord job, {
+    JobRecord? previous,
+  }) async {
+    NotificationEventType? eventType;
+    if (previous == null && job.assignedTeamId.trim().isNotEmpty) {
+      eventType = NotificationEventType.jobAssigned;
+    } else if (previous != null &&
+        previous.assignedTeamId.trim() != job.assignedTeamId.trim() &&
+        job.assignedTeamId.trim().isNotEmpty) {
+      eventType = NotificationEventType.jobAssigned;
+    } else if (previous != null && previous.status != job.status) {
+      eventType = NotificationEventType.jobStatusChanged;
+    }
+    if (eventType == null) {
+      return;
+    }
+    final title = eventType == NotificationEventType.jobAssigned
+        ? 'Lucrare alocata'
+        : 'Status lucrare actualizat';
+    final clientLabel = _clientName(job.clientId).trim();
+    final message =
+        '${job.jobCode.trim().isEmpty ? 'Lucrare' : job.jobCode.trim()} | ${job.title.trim().isEmpty ? '-' : job.title.trim()} | Status: ${job.status.label} | Client: ${clientLabel.isEmpty ? '-' : clientLabel}';
+    await _notificationService.dispatchEvent(
+      NotificationDispatchRequest(
+        eventType: eventType,
+        title: title,
+        message: message,
+        sourceModule: 'lucrari',
+        sourceEntityId: job.id,
+        sourceLabel:
+            job.jobCode.trim().isEmpty ? 'Lucrare' : job.jobCode.trim(),
+        recipientTeamIds: job.assignedTeamId.trim().isEmpty
+            ? const <String>[]
+            : <String>[job.assignedTeamId.trim()],
+        recipientRoleKeys: const <String>['admin', 'office'],
+        recipientUserIds: job.createdByUserId.trim().isEmpty
+            ? const <String>[]
+            : <String>[job.createdByUserId.trim()],
+        recipientEmails: job.createdByUserEmail.trim().isEmpty
+            ? const <String>[]
+            : <String>[job.createdByUserEmail.trim()],
+        metadata: <String, dynamic>{
+          'job_status': job.status.value,
+          'client_id': job.clientId,
+        },
+      ),
+    );
+  }
+
+  Future<void> _deleteJobResolved(String jobId) async {
+    _refreshCloudRepository();
+    final cloud = _cloudRepository;
+    var queuedOffline = cloud == null;
+    if (cloud != null) {
+      try {
+        await cloud.deleteJob(jobId);
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _cloudFallbackReason = _shortCloudError(error);
+        _dataSourceLabel = _localLabelWithFallback();
+        queuedOffline = true;
+      }
+    }
+    await _repository.deleteJob(jobId);
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueJobDelete(jobId);
+    }
+  }
+
+  Future<Iterable<dynamic>> _loadClientsRawSafe() async {
+    try {
+      final dynamic repositoryDynamic = _repository;
+      final dynamic fullClients =
+          await (repositoryDynamic.listClients() as Future<dynamic>)
+              .timeout(const Duration(seconds: 8));
+      if (fullClients is Iterable) {
+        return fullClients;
+      }
+    } catch (_) {
+      // continue to lookup fallback
+    }
+
+    try {
+      final dynamic lookupClients = await _repository
+          .listClientsLookup()
+          .timeout(const Duration(seconds: 8));
+      if (lookupClients is Iterable) {
+        return lookupClients;
+      }
+    } catch (_) {
+      // return empty below
+    }
+    return const <dynamic>[];
+  }
+
+  void _applyFilters() {
+    final query = _searchController.text.trim().toLowerCase();
+    var filtered = _jobs.where((job) {
+      if (_statusFilter != null && job.status != _statusFilter) {
+        return false;
+      }
+      if (_clientFilter != null &&
+          _clientFilter!.isNotEmpty &&
+          job.clientId != _clientFilter) {
+        return false;
+      }
+      if (query.isEmpty) {
+        return true;
+      }
+      final clientName = _clientName(job.clientId).toLowerCase();
+      return job.jobCode.toLowerCase().contains(query) ||
+          job.title.toLowerCase().contains(query) ||
+          job.location.toLowerCase().contains(query) ||
+          clientName.contains(query);
+    }).toList(growable: false);
+    // Tehnicianul vede doar lucrările echipei sale
+    if (_isTechnician && (widget.fieldAuthTeamId ?? '').isNotEmpty) {
+      filtered = filtered
+          .where((job) => job.assignedTeamId == widget.fieldAuthTeamId)
+          .toList(growable: false);
+    }
+    if (!mounted) return;
+    setState(() => _filteredJobs = filtered);
+  }
+
+  Future<bool> _openJobForm({JobRecord? existing}) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _JobFormDialog(
+        repository: _repository,
+        clients: _clients,
+        existing: existing,
+        onSave: _saveJobResolved,
+      ),
+    );
+    if (saved == true) {
+      await _loadData();
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(existing == null
+              ? 'Lucrarea a fost salvată.'
+              : 'Lucrarea a fost actualizată.'),
+        ),
+      );
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _deleteJob(JobRecord job) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ștergere lucrare'),
+        content: Text('Sigur vrei să ștergi lucrarea ${job.jobCode}?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await _deleteJobResolved(job.id);
+    await _loadData();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Lucrarea a fost ștearsă.')),
+    );
+  }
+
+  JobRecord? _findJobById(String id) {
+    for (final item in _jobs) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  Future<void> _openJobDetails(JobRecord job) async {
+    var currentJob = job;
+    while (mounted) {
+      final action = await Navigator.of(context).push<String>(
+        MaterialPageRoute(
+          builder: (_) => LucrareDetaliiPage(
+            repository: _repository,
+            job: currentJob,
+            clientName: _clientName(currentJob.clientId),
+            roleKey: widget.fieldAuthRoleKey,
+          ),
+        ),
+      );
+      if (action != 'edit') {
+        break;
+      }
+      final saved = await _openJobForm(existing: currentJob);
+      if (!mounted) return;
+      if (saved) {
+        final refreshed = _findJobById(currentJob.id);
+        if (refreshed == null) {
+          break;
+        }
+        currentJob = refreshed;
+      }
+    }
+  }
+
+  String _clientName(String id) {
+    for (final client in _clients) {
+      if (client.id == id) return client.label;
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Padding(
+        padding: AppViewportGuard.scrollablePadding(reserveForFab: true),
+        child: Column(
+          children: [
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: 280,
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      labelText: 'Caută după cod, titlu, client, locație',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: DropdownButtonFormField<JobStatus?>(
+                    initialValue: _statusFilter,
+                    decoration:
+                        const InputDecoration(labelText: 'Filtru status'),
+                    items: [
+                      const DropdownMenuItem<JobStatus?>(
+                        value: null,
+                        child: Text('Toate statusurile'),
+                      ),
+                      ...JobStatus.values.map(
+                        (status) => DropdownMenuItem<JobStatus?>(
+                          value: status,
+                          child: Text(status.label),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setState(() => _statusFilter = value);
+                      _applyFilters();
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 260,
+                  child: DropdownButtonFormField<String?>(
+                    initialValue: _normalizeClientFilter(),
+                    decoration:
+                        const InputDecoration(labelText: 'Filtru client'),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('Toți clienții'),
+                      ),
+                      ..._clients.map(
+                        (client) => DropdownMenuItem<String?>(
+                          value: client.id,
+                          child: Text(client.label),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      setState(() => _clientFilter = value);
+                      _applyFilters();
+                    },
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _isLoading ? null : _loadData,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reîncarcă'),
+                ),
+                Chip(
+                  label: Text('Sursă date: $_dataSourceLabel'),
+                  visualDensity: VisualDensity.compact,
+                ),
+                if (_dataSourceLabel == 'local' &&
+                    (_cloudFallbackReason ?? '').trim().isNotEmpty)
+                  Text(
+                    'Motiv fallback: ${_shortCloudError(_cloudFallbackReason!)}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _loadError != null
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _loadError!,
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 12),
+                              OutlinedButton.icon(
+                                onPressed: _loadData,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Reîncarcă'),
+                              ),
+                            ],
+                          ),
+                        )
+                      : _filteredJobs.isEmpty
+                          ? const Center(
+                              child: Text('Nu există lucrări salvate.'),
+                            )
+                          : ListView.separated(
+                              itemCount: _filteredJobs.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final job = _filteredJobs[index];
+                                final dueText = job.dueDate != null
+                                    ? _formatDate(job.dueDate!)
+                                    : '-';
+                                return Card(
+                                  child: ListTile(
+                                    contentPadding: const EdgeInsets.all(12),
+                                    onTap: () => _openJobDetails(job),
+                                    title:
+                                        Text('${job.jobCode} • ${job.title}'),
+                                    subtitle: Padding(
+                                      padding: const EdgeInsets.only(top: 6),
+                                      child: Text(
+                                        'Client: ${_clientName(job.clientId).isEmpty ? '-' : _clientName(job.clientId)}'
+                                        '\nLocație: ${job.location.isEmpty ? '-' : job.location}'
+                                        '\nOraș: ${job.city.isEmpty ? '-' : job.city}'
+                                        '\nStatus: ${job.status.label} • Termen: $dueText • ${job.isActive ? 'Activă' : 'Inactivă'}'
+                                        '${job.sourceOfferNumber.trim().isNotEmpty ? '\nSursă: Ofertă ${job.sourceOfferNumber}' : ''}',
+                                      ),
+                                    ),
+                                    isThreeLine: true,
+                                    trailing: _isTechnician
+                                        ? null
+                                        : Wrap(
+                                            spacing: 8,
+                                            children: [
+                                              IconButton(
+                                                tooltip: 'Editează',
+                                                onPressed: () =>
+                                                    _openJobForm(existing: job),
+                                                icon: const Icon(
+                                                    Icons.edit_outlined),
+                                              ),
+                                              IconButton(
+                                                tooltip: 'Șterge',
+                                                onPressed: () =>
+                                                    _deleteJob(job),
+                                                icon: const Icon(
+                                                    Icons.delete_outline),
+                                              ),
+                                            ],
+                                          ),
+                                  ),
+                                );
+                              },
+                            ),
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: _isTechnician
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: _isLoading ? null : () => _openJobForm(),
+              icon: const Icon(Icons.add),
+              label: const Text('Adaugă lucrare'),
+            ),
+    );
+  }
+
+  String? _normalizeClientFilter() {
+    if (_clientFilter == null) return null;
+    final exists = _clients.any((client) => client.id == _clientFilter);
+    return exists ? _clientFilter : null;
+  }
+}
+
+class _JobFormDialog extends StatefulWidget {
+  const _JobFormDialog({
+    required this.repository,
+    required this.clients,
+    required this.onSave,
+    this.existing,
+  });
+
+  final AppDataRepository repository;
+  final List<_LookupOption> clients;
+  final Future<void> Function(JobRecord job) onSave;
+  final JobRecord? existing;
+
+  @override
+  State<_JobFormDialog> createState() => _JobFormDialogState();
+}
+
+class _JobFormDialogState extends State<_JobFormDialog> {
+  final _formKey = GlobalKey<FormState>();
+
+  final _titleController = TextEditingController();
+  final _locationController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _countyController = TextEditingController();
+  final _contactController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _categoryController = TextEditingController();
+  final _estimatedValueController = TextEditingController();
+  final _notesController = TextEditingController();
+
+  bool _saving = false;
+  String? _selectedClientId;
+  JobStatus _selectedStatus = JobStatus.noua;
+  bool _isActive = true;
+  DateTime? _startDate;
+  DateTime? _dueDate;
+  String _jobCode = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _jobCode = existing.jobCode;
+      _selectedClientId = _normalizeClient(existing.clientId);
+      _titleController.text = existing.title;
+      _locationController.text = existing.location;
+      _cityController.text = existing.city;
+      _countyController.text = existing.county;
+      _contactController.text = existing.contactPerson;
+      _phoneController.text = existing.contactPhone;
+      _descriptionController.text = existing.description;
+      _categoryController.text = existing.category;
+      _selectedStatus = existing.status;
+      _startDate = existing.startDate;
+      _dueDate = existing.dueDate;
+      _estimatedValueController.text =
+          existing.estimatedValue?.toStringAsFixed(2) ?? '';
+      _notesController.text = existing.notes;
+      _isActive = existing.isActive;
+      return;
+    }
+    _bootstrapCode();
+  }
+
+  Future<void> _bootstrapCode() async {
+    String code;
+    try {
+      code = await widget.repository
+          .nextJobCode()
+          .timeout(const Duration(seconds: 8));
+    } catch (_) {
+      final stamp = DateTime.now().millisecondsSinceEpoch.toString();
+      code = 'JOB-${stamp.substring(stamp.length - 4)}';
+    }
+    if (!mounted) return;
+    setState(() => _jobCode = code);
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _locationController.dispose();
+    _cityController.dispose();
+    _countyController.dispose();
+    _contactController.dispose();
+    _phoneController.dispose();
+    _descriptionController.dispose();
+    _categoryController.dispose();
+    _estimatedValueController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title:
+          Text(widget.existing == null ? 'Adaugă lucrare' : 'Editează lucrare'),
+      content: SizedBox(
+        width: 760,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                _disabledInfoField('Cod lucrare',
+                    _jobCode.isEmpty ? 'Se generează...' : _jobCode),
+                SizedBox(
+                  width: 360,
+                  child: DropdownButtonFormField<String?>(
+                    initialValue: _normalizeClient(_selectedClientId),
+                    decoration: InputDecoration(
+                      labelText: 'Client',
+                      helperText: widget.clients.isEmpty
+                          ? 'Nu există clienți salvați.'
+                          : null,
+                    ),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                        value: null,
+                        child: Text('Selectează client'),
+                      ),
+                      ...widget.clients.map(
+                        (client) => DropdownMenuItem<String?>(
+                          value: client.id,
+                          child: Text(client.label),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) =>
+                        setState(() => _selectedClientId = value),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    controller: _titleController,
+                    decoration:
+                        const InputDecoration(labelText: 'Titlu lucrare'),
+                    validator: (value) =>
+                        (value == null || value.trim().isEmpty)
+                            ? 'Completează titlul lucrării.'
+                            : null,
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    controller: _locationController,
+                    decoration: const InputDecoration(labelText: 'Locație'),
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _cityController,
+                    decoration: const InputDecoration(labelText: 'Oraș'),
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _countyController,
+                    decoration: const InputDecoration(labelText: 'Județ'),
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _contactController,
+                    decoration:
+                        const InputDecoration(labelText: 'Persoană contact'),
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _phoneController,
+                    decoration:
+                        const InputDecoration(labelText: 'Telefon contact'),
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _categoryController,
+                    decoration: const InputDecoration(labelText: 'Categorie'),
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: DropdownButtonFormField<JobStatus>(
+                    initialValue: _selectedStatus,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: JobStatus.values
+                        .map(
+                          (status) => DropdownMenuItem<JobStatus>(
+                            value: status,
+                            child: Text(status.label),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _selectedStatus = value);
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    controller: _estimatedValueController,
+                    decoration:
+                        const InputDecoration(labelText: 'Valoare estimată'),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                  ),
+                ),
+                _dateField(
+                  label: 'Dată început',
+                  value: _startDate,
+                  onTap: () => _pickDate(
+                      initial: _startDate,
+                      onPicked: (value) {
+                        setState(() => _startDate = value);
+                      }),
+                ),
+                _dateField(
+                  label: 'Termen',
+                  value: _dueDate,
+                  onTap: () => _pickDate(
+                      initial: _dueDate,
+                      onPicked: (value) {
+                        setState(() => _dueDate = value);
+                      }),
+                ),
+                SizedBox(
+                  width: 732,
+                  child: TextFormField(
+                    controller: _descriptionController,
+                    decoration: const InputDecoration(labelText: 'Descriere'),
+                    minLines: 2,
+                    maxLines: 4,
+                  ),
+                ),
+                SizedBox(
+                  width: 732,
+                  child: TextFormField(
+                    controller: _notesController,
+                    decoration: const InputDecoration(labelText: 'Observații'),
+                    minLines: 2,
+                    maxLines: 4,
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: SwitchListTile(
+                    value: _isActive,
+                    onChanged: (value) => setState(() => _isActive = value),
+                    title: const Text('Activ'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Anulează'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Se salvează...' : 'Salvează'),
+        ),
+      ],
+    );
+  }
+
+  Widget _disabledInfoField(String label, String value) {
+    return SizedBox(
+      width: 220,
+      child: TextFormField(
+        enabled: false,
+        initialValue: value,
+        decoration: InputDecoration(labelText: label),
+      ),
+    );
+  }
+
+  Widget _dateField({
+    required String label,
+    required DateTime? value,
+    required Future<void> Function() onTap,
+  }) {
+    return SizedBox(
+      width: 220,
+      child: InkWell(
+        onTap: onTap,
+        child: InputDecorator(
+          decoration: InputDecoration(
+            labelText: label,
+            suffixIcon: const Icon(Icons.calendar_today),
+          ),
+          child: Text(value == null ? '-' : _formatDate(value)),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDate({
+    required DateTime? initial,
+    required ValueChanged<DateTime?> onPicked,
+  }) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial ?? now,
+      firstDate: DateTime(now.year - 10),
+      lastDate: DateTime(now.year + 10),
+    );
+    onPicked(picked);
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_jobCode.isEmpty) {
+      final stamp = DateTime.now().millisecondsSinceEpoch.toString();
+      _jobCode = 'JOB-${stamp.substring(stamp.length - 4)}';
+    }
+    final now = DateTime.now();
+    final existing = widget.existing;
+    final estimatedValue = double.tryParse(
+      _estimatedValueController.text.trim().replaceAll(',', '.'),
+    );
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(
+        JobRecord(
+          id: existing?.id ?? 'job-${now.microsecondsSinceEpoch}',
+          jobCode: _jobCode,
+          clientId: _selectedClientId ?? '',
+          title: _titleController.text.trim(),
+          location: _locationController.text.trim(),
+          city: _cityController.text.trim(),
+          county: _countyController.text.trim(),
+          contactPerson: _contactController.text.trim(),
+          contactPhone: _phoneController.text.trim(),
+          clientDepartmentId: existing?.clientDepartmentId ?? '',
+          clientDepartmentName: existing?.clientDepartmentName ?? '',
+          contactPersonId: existing?.contactPersonId ?? '',
+          contactPersonEmail: existing?.contactPersonEmail ?? '',
+          description: _descriptionController.text.trim(),
+          category: _categoryController.text.trim(),
+          status: _selectedStatus,
+          startDate: _startDate,
+          dueDate: _dueDate,
+          closedDate: existing?.closedDate,
+          estimatedValue: estimatedValue,
+          notes: _notesController.text.trim(),
+          isActive: _isActive,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        ),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  String? _normalizeClient(String? id) {
+    if (id == null || id.trim().isEmpty) return null;
+    final exists = widget.clients.any((client) => client.id == id);
+    return exists ? id : null;
+  }
+}
+
+class _LookupOption {
+  const _LookupOption({
+    required this.id,
+    required this.label,
+  });
+
+  final String id;
+  final String label;
+
+  static String _tryReadString(dynamic Function() getter) {
+    try {
+      final value = getter();
+      return value?.toString().trim() ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  factory _LookupOption.fromDynamic(dynamic raw) {
+    if (raw is Map) {
+      final id = (raw['id'] ?? '').toString().trim();
+      final labelCandidate = (raw['label'] ?? '').toString().trim();
+      final titleCandidate = (raw['title'] ?? '').toString().trim();
+      final nameCandidate =
+          (raw['name'] ?? raw['companyName'] ?? '').toString().trim();
+      final contactCandidate = (raw['contactPerson'] ?? '').toString().trim();
+      final label = labelCandidate.isNotEmpty
+          ? labelCandidate
+          : (titleCandidate.isNotEmpty
+              ? titleCandidate
+              : (nameCandidate.isNotEmpty ? nameCandidate : contactCandidate));
+      return _LookupOption(id: id, label: label.isNotEmpty ? label : id);
+    }
+    final id = _tryReadString(() => (raw as dynamic).id);
+    final labelCandidate = _tryReadString(() => (raw as dynamic).label);
+    final titleCandidate = _tryReadString(() => (raw as dynamic).title);
+    final displayNameCandidate =
+        _tryReadString(() => (raw as dynamic).displayName);
+    final nameCandidate = _tryReadString(() => (raw as dynamic).name);
+    final companyNameCandidate =
+        _tryReadString(() => (raw as dynamic).companyName);
+    final contactCandidate =
+        _tryReadString(() => (raw as dynamic).contactPerson);
+    final label = labelCandidate.isNotEmpty
+        ? labelCandidate
+        : (titleCandidate.isNotEmpty
+            ? titleCandidate
+            : (displayNameCandidate.isNotEmpty
+                ? displayNameCandidate
+                : (nameCandidate.isNotEmpty
+                    ? nameCandidate
+                    : (companyNameCandidate.isNotEmpty
+                        ? companyNameCandidate
+                        : contactCandidate))));
+    return _LookupOption(id: id, label: label.isNotEmpty ? label : id);
+  }
+}
+
+String _formatDate(DateTime date) {
+  final day = date.day.toString().padLeft(2, '0');
+  final month = date.month.toString().padLeft(2, '0');
+  final year = date.year.toString();
+  return '$day.$month.$year';
+}

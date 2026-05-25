@@ -1,0 +1,4918 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../core/company_profile.dart';
+import '../../core/document_file_service.dart';
+import '../../core/pdf_document_branding.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/widgets/anaf_company_autofill_section.dart';
+import '../clients/client_models.dart';
+import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
+import '../jobs/job_models.dart';
+import '../materials/materials_catalog_service.dart';
+import '../partners/partner_models.dart';
+import '../registratura/registry_service.dart';
+import '../reclamatii/complaint_models.dart';
+import '../ai_assistant/ai_assistant_action_catalog.dart';
+import '../ai_assistant/ai_assistant_models.dart';
+import '../ai_assistant/ai_assistant_service.dart';
+import '../ai_assistant/ai_assistant_sheet.dart';
+import '../reclamatii/signature_capture_page.dart';
+import 'offer_currency_converter.dart';
+import 'offer_commercial_package_models.dart';
+import 'offer_email_template.dart';
+import 'offer_labor_calculator.dart';
+import 'offer_labor_resources_catalog_service.dart';
+import 'offer_line_resource_dialog.dart';
+import 'offer_partner_models.dart';
+import 'offer_pdf_service.dart';
+import 'offer_models.dart';
+import 'offer_smartbill_models.dart';
+import 'offer_smartbill_sync_service.dart';
+import 'offer_standard_catalog_models.dart';
+import 'offer_standard_labor_line_dialog.dart';
+import '../notifications/notification_service.dart';
+import '../notifications/notification_models.dart';
+
+class OfertaDetaliuPage extends StatefulWidget {
+  const OfertaDetaliuPage({
+    super.key,
+    required this.repository,
+    required this.initialOffer,
+    required this.clients,
+    required this.jobs,
+    required this.laborTemplates,
+    required this.clauseTemplates,
+    required this.packageTemplates,
+    required this.onSaveOffer,
+    this.currentUserEmail,
+    this.onEditOffer,
+    this.onDuplicateOffer,
+    this.onConvertToJob,
+  });
+
+  final AppDataRepository repository;
+  final OfferRecord initialOffer;
+  final List<ClientRecord> clients;
+  final List<JobRecord> jobs;
+  final List<OfferLaborTemplate> laborTemplates;
+  final List<OfferCommercialClauseTemplate> clauseTemplates;
+  final List<OfferCommercialPackageTemplate> packageTemplates;
+  final Future<void> Function(OfferRecord offer) onSaveOffer;
+  final String? currentUserEmail;
+  final Future<OfferRecord?> Function(OfferRecord offer)? onEditOffer;
+  final Future<OfferRecord?> Function(OfferRecord offer)? onDuplicateOffer;
+  final Future<OfferRecord?> Function(OfferRecord offer)? onConvertToJob;
+
+  @override
+  State<OfertaDetaliuPage> createState() => _OfertaDetaliuPageState();
+}
+
+class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
+  static const int _maxInlineAttachmentBytes = 550 * 1024;
+
+  late final RegistryService _registryService;
+  late final AiAssistantService _aiAssistantService;
+  late OfferRecord _offer;
+  bool _saving = false;
+  bool _exportingPdf = false;
+  bool _converting = false;
+  bool _pdfTemplateLoaded = false;
+  PdfVisualTemplate _selectedPdfTemplate = PdfVisualTemplate.classic;
+  PdfVisualTemplate? _lastGeneratedPdfTemplate;
+  final MaterialsCatalogService _materialsCatalogService =
+      MaterialsCatalogService();
+  final OfferSmartBillSyncService _smartBillSyncService =
+      OfferSmartBillSyncService();
+  final OfferLaborResourcesCatalogService _laborResourcesService =
+      OfferLaborResourcesCatalogService();
+  List<PartnerRecord> _masterPartners = const <PartnerRecord>[];
+  List<PartnerWorkerRecord> _masterPartnerWorkers =
+      const <PartnerWorkerRecord>[];
+  List<PartnerVehicleRecord> _masterPartnerVehicles =
+      const <PartnerVehicleRecord>[];
+  OfferLaborResourcesCatalog _laborResourcesCatalog =
+      const OfferLaborResourcesCatalog(
+    personnel: <OfferLaborResourceOption>[],
+    teams: <OfferLaborTeamOption>[],
+    vehicles: <OfferLaborResourceOption>[],
+    toolPackages: <OfferLaborResourceOption>[],
+    dataSourceLabel: 'local',
+  );
+  bool _smartBillSyncing = false;
+  bool _smartBillRefreshingStatus = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _registryService = RegistryService(widget.repository);
+    _aiAssistantService = AiAssistantService(repository: widget.repository);
+    _offer = widget.initialOffer;
+    _loadPdfTemplatePreference();
+    _loadLaborResources();
+    _loadPartnerCatalog();
+  }
+
+  Future<void> _loadPdfTemplatePreference() async {
+    final profile = await widget.repository.loadCompanyProfile();
+    if (!mounted) return;
+    setState(() {
+      _selectedPdfTemplate = profile.pdfExportSettings.visualTemplate;
+      _pdfTemplateLoaded = true;
+    });
+  }
+
+  PdfVisualTemplate _resolvedPdfTemplate(CompanyProfile profile) {
+    return _pdfTemplateLoaded
+        ? _selectedPdfTemplate
+        : profile.pdfExportSettings.visualTemplate;
+  }
+
+  Widget _buildPdfTemplateSelectorCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Sablon PDF',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Selector rapid pentru generare, Save As si Share direct din aceasta oferta.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<PdfVisualTemplate>(
+              initialValue: _selectedPdfTemplate,
+              decoration: const InputDecoration(
+                labelText: 'Model document',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: PdfVisualTemplate.values
+                  .map(
+                    (template) => DropdownMenuItem<PdfVisualTemplate>(
+                      value: template,
+                      child: Text(template.label),
+                    ),
+                  )
+                  .toList(growable: false),
+              onChanged: (_saving || _exportingPdf || _converting)
+                  ? null
+                  : (value) {
+                      if (value == null) return;
+                      setState(() => _selectedPdfTemplate = value);
+                    },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _selectedPdfTemplate.description,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadLaborResources() async {
+    final catalog = await _laborResourcesService.load();
+    if (!mounted) return;
+    setState(() => _laborResourcesCatalog = catalog);
+  }
+
+  Future<void> _loadPartnerCatalog() async {
+    final results = await Future.wait([
+      widget.repository.listPartners(),
+      widget.repository.listPartnerWorkers(),
+      widget.repository.listPartnerVehicles(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _masterPartners = results[0] as List<PartnerRecord>;
+      _masterPartnerWorkers = results[1] as List<PartnerWorkerRecord>;
+      _masterPartnerVehicles = results[2] as List<PartnerVehicleRecord>;
+    });
+  }
+
+  String _formatDate(DateTime? value) {
+    if (value == null) return '-';
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    return '$day.$month.${value.year}';
+  }
+
+  String _moneyCommercial(double ronAmount) {
+    return OfferCurrencyConverter.formatMoney(
+      ronAmount: ronAmount,
+      currency: _offer.currency,
+      effectiveRate: _offer.effectiveExchangeRate,
+    );
+  }
+
+  OfferPriceDisplayMode get _priceDisplayMode => _offer.priceDisplayMode;
+
+  double get _vatMultiplier => 1 + (_offer.vatPercent / 100);
+
+  double _amountWithVat(double amountWithoutVat) {
+    return amountWithoutVat * _vatMultiplier;
+  }
+
+  String _priceDisplayModeLabel() => _priceDisplayMode.label;
+
+  String _priceDisplayExplanation() {
+    switch (_priceDisplayMode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return 'Prețurile sunt exprimate fără TVA.';
+      case OfferPriceDisplayMode.withVat:
+        return 'Prețurile sunt exprimate cu TVA inclus.';
+      case OfferPriceDisplayMode.both:
+        return 'Prețurile sunt afișate atât fără TVA, cât și cu TVA.';
+    }
+  }
+
+  String _displayAmount(double amountWithoutVat) {
+    final withoutVat = _moneyCommercial(amountWithoutVat);
+    final withVat = _moneyCommercial(_amountWithVat(amountWithoutVat));
+    switch (_priceDisplayMode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return withoutVat;
+      case OfferPriceDisplayMode.withVat:
+        return withVat;
+      case OfferPriceDisplayMode.both:
+        return '$withoutVat fără TVA | $withVat cu TVA';
+    }
+  }
+
+  String _displaySingleAmount(double amountWithoutVat) {
+    final withoutVat = _moneyCommercial(amountWithoutVat);
+    final withVat = _moneyCommercial(_amountWithVat(amountWithoutVat));
+    switch (_priceDisplayMode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return withoutVat;
+      case OfferPriceDisplayMode.withVat:
+        return withVat;
+      case OfferPriceDisplayMode.both:
+        return '$withoutVat | $withVat';
+    }
+  }
+
+  String _displayAmountWithLabels(
+    double amountWithoutVat, {
+    String withoutVatLabel = 'Fără TVA',
+    String withVatLabel = 'Cu TVA',
+  }) {
+    final withoutVat = _moneyCommercial(amountWithoutVat);
+    final withVat = _moneyCommercial(_amountWithVat(amountWithoutVat));
+    switch (_priceDisplayMode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return withoutVat;
+      case OfferPriceDisplayMode.withVat:
+        return withVat;
+      case OfferPriceDisplayMode.both:
+        return '$withoutVatLabel: $withoutVat | $withVatLabel: $withVat';
+    }
+  }
+
+  String _rateLabel() {
+    final currency = OfferCurrencyConverter.normalizeCurrency(_offer.currency);
+    if (currency != 'EUR') return '-';
+    final base = _offer.exchangeRateSource == OfferExchangeRateSource.bnr
+        ? _offer.bnrRate
+        : _offer.manualRate;
+    final source = _offer.exchangeRateSource.label;
+    final commission = _offer.exchangeCommissionPercent.toStringAsFixed(2);
+    final effective = _offer.effectiveExchangeRate > 0
+        ? _offer.effectiveExchangeRate.toStringAsFixed(4)
+        : '-';
+    final baseLabel = base > 0 ? base.toStringAsFixed(4) : '-';
+    return '$source | baza $baseLabel | comision $commission% | efectiv $effective';
+  }
+
+  String _laborResourceSummary(OfferLineItem line) {
+    String section(
+      String title,
+      List<OfferLaborResourceUsage> rows, {
+      bool hoursOnly = false,
+      bool hoursAndKm = false,
+    }) {
+      if (rows.isEmpty) return '$title: -';
+      final labels = rows.map(
+        (row) {
+          final total = hoursOnly
+              ? (row.hours * row.hourlyRate)
+              : (hoursAndKm
+                  ? (row.hours * row.hourlyRate) + (row.days * row.dailyRate)
+                  : row.total);
+          final daysLabel = hoursOnly
+              ? ''
+              : (hoursAndKm
+                  ? ', km ${row.days.toStringAsFixed(2)}'
+                  : ', zile ${row.days.toStringAsFixed(2)}');
+          return '${row.name} [ore ${row.hours.toStringAsFixed(2)}$daysLabel, total ${total.toStringAsFixed(2)}]';
+        },
+      ).join('; ');
+      return '$title: $labels';
+    }
+
+    return '${section('Personal', line.laborPersonal)}\n'
+        '${section('Autoturisme', line.laborVehicles, hoursAndKm: true)}\n'
+        '${section('Scule', line.laborToolPackages, hoursOnly: true)}';
+  }
+
+  List<OfferLineItem> get _sortedLines {
+    final lines = [..._offer.lines];
+    lines.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    return lines;
+  }
+
+  List<OfferLineItem> get _commercialLines =>
+      buildCommercialOfferLines(_offer.lines);
+
+  List<OfferLineItem> get _internalLaborLines =>
+      buildInternalLaborDetailLines(_offer.lines);
+
+  double get _internalVehicleEstimatedCost {
+    return _internalLaborLines.fold<double>(0, (sum, line) {
+      final breakdown = OfferLaborCalculator.computeFromResources(
+        personal: const <OfferLaborResourceUsage>[],
+        autoturisme: line.laborVehicles,
+        pacheteScule: const <OfferLaborResourceUsage>[],
+        perDiemDays: 0,
+        perDiemPerDay: 0,
+        lodgingNights: 0,
+        lodgingPerNight: 0,
+      );
+      return sum + breakdown.costAutoturisme;
+    });
+  }
+
+  double get _estimatedCommercialVehicleValue =>
+      _estimatedCommercialValueForDirectCost(_internalVehicleEstimatedCost);
+
+  double get _estimatedVehicleMargin =>
+      _estimatedCommercialVehicleValue - _internalVehicleEstimatedCost;
+
+  double get _internalToolsEstimatedCost {
+    return _internalLaborLines.fold<double>(0, (sum, line) {
+      final breakdown = OfferLaborCalculator.computeFromResources(
+        personal: const <OfferLaborResourceUsage>[],
+        autoturisme: const <OfferLaborResourceUsage>[],
+        pacheteScule: line.laborToolPackages,
+        perDiemDays: 0,
+        perDiemPerDay: 0,
+        lodgingNights: 0,
+        lodgingPerNight: 0,
+      );
+      return sum + breakdown.costScule;
+    });
+  }
+
+  double get _estimatedCommercialToolsValue =>
+      _estimatedCommercialValueForDirectCost(_internalToolsEstimatedCost);
+
+  double get _estimatedToolsMargin =>
+      _estimatedCommercialToolsValue - _internalToolsEstimatedCost;
+
+  String _vehicleCostSourceSummary(OfferLineItem line) {
+    final labels = <String>{};
+    for (final row in line.laborVehicles) {
+      for (final option in _laborResourcesCatalog.vehicles) {
+        if (option.id != row.resourceId) continue;
+        final label = option.metaLabel.trim();
+        if (label.isNotEmpty) {
+          labels.add(label);
+        }
+        break;
+      }
+    }
+    if (labels.isEmpty) return '';
+    return labels.join(', ');
+  }
+
+  String get _vehicleCostSourceSummaryAll {
+    final labels = <String>{};
+    for (final line in _internalLaborLines) {
+      final label = _vehicleCostSourceSummary(line);
+      if (label.isNotEmpty) {
+        labels.add(label);
+      }
+    }
+    if (labels.isEmpty) return '';
+    return labels.join(', ');
+  }
+
+  String get _toolCostSourceSummaryAll {
+    final labels = <String>{};
+    for (final line in _internalLaborLines) {
+      for (final row in line.laborToolPackages) {
+        for (final option in _laborResourcesCatalog.toolPackages) {
+          if (option.id != row.resourceId) continue;
+          final label = option.metaLabel.trim();
+          if (label.isNotEmpty) {
+            labels.add(label);
+          }
+          break;
+        }
+      }
+    }
+    if (labels.isEmpty) return '';
+    return labels.join(', ');
+  }
+
+  List<OfferPartnerWorker> _partnerWorkersFor(String partnerId) {
+    return _offer.partnerWorkers
+        .where((item) => item.partnerId == partnerId)
+        .toList(growable: false);
+  }
+
+  List<OfferPartnerVehicle> _partnerVehiclesFor(String partnerId) {
+    return _offer.partnerVehicles
+        .where((item) => item.partnerId == partnerId)
+        .toList(growable: false);
+  }
+
+  PartnerRecord? _masterPartnerById(String partnerId) {
+    for (final partner in _masterPartners) {
+      if (partner.id == partnerId) return partner;
+    }
+    return null;
+  }
+
+  List<PartnerWorkerRecord> _masterWorkersForOfferPartner(
+      OfferPartner partner) {
+    final masterPartnerId = partner.masterPartnerId.trim();
+    if (masterPartnerId.isEmpty) return const <PartnerWorkerRecord>[];
+    return _masterPartnerWorkers
+        .where((item) => item.partnerId == masterPartnerId)
+        .toList(growable: false);
+  }
+
+  List<PartnerVehicleRecord> _masterVehiclesForOfferPartner(
+    OfferPartner partner,
+  ) {
+    final masterPartnerId = partner.masterPartnerId.trim();
+    if (masterPartnerId.isEmpty) return const <PartnerVehicleRecord>[];
+    return _masterPartnerVehicles
+        .where((item) => item.partnerId == masterPartnerId)
+        .toList(growable: false);
+  }
+
+  double _partnerWorkersTotalFor(String partnerId) {
+    return _partnerWorkersFor(partnerId)
+        .fold<double>(0, (sum, item) => sum + item.total);
+  }
+
+  double _partnerVehiclesTotalFor(String partnerId) {
+    return _partnerVehiclesFor(partnerId)
+        .fold<double>(0, (sum, item) => sum + item.total);
+  }
+
+  double _partnerTotalFor(String partnerId) {
+    return _partnerWorkersTotalFor(partnerId) +
+        _partnerVehiclesTotalFor(partnerId);
+  }
+
+  double get _partnerWorkersTotal =>
+      _offer.partnerWorkers.fold<double>(0, (sum, item) => sum + item.total);
+
+  double get _partnerVehiclesTotal =>
+      _offer.partnerVehicles.fold<double>(0, (sum, item) => sum + item.total);
+
+  double get _partnersTotal => _partnerWorkersTotal + _partnerVehiclesTotal;
+
+  String _currencyLabel(Iterable<String> values) {
+    final normalized = values
+        .map((value) => value.trim().toUpperCase())
+        .where((value) => value.isNotEmpty)
+        .toSet();
+    if (normalized.isEmpty) return 'RON';
+    if (normalized.length == 1) return normalized.first;
+    return 'monede mixte';
+  }
+
+  String get _partnerWorkersCurrency =>
+      _currencyLabel(_offer.partnerWorkers.map((item) => item.currency));
+
+  String get _partnerVehiclesCurrency =>
+      _currencyLabel(_offer.partnerVehicles.map((item) => item.currency));
+
+  String get _partnersCurrency => _currencyLabel([
+        ..._offer.partnerWorkers.map((item) => item.currency),
+        ..._offer.partnerVehicles.map((item) => item.currency),
+      ]);
+
+  double get _internalLaborEstimatedCost {
+    return _internalLaborLines.fold<double>(
+      0,
+      (sum, line) => sum + line.effectiveLineTotal,
+    );
+  }
+
+  double get _standardLaborCommercialValue {
+    return _sortedLines.fold<double>(0, (sum, line) {
+      if (line.lineType != OfferLineType.manopera) return sum;
+      if (line.laborSourceMode != OfferLaborSourceMode.standard) return sum;
+      return sum + line.effectiveLineTotal;
+    });
+  }
+
+  double _estimatedCommercialValueForDirectCost(double directCost) {
+    if (directCost <= 0) return 0;
+    if (_offer.subtotalDirect <= 0) return directCost;
+    final markupShare = (_offer.regieValue + _offer.profitValue) *
+        (directCost / _offer.subtotalDirect);
+    return directCost + markupShare;
+  }
+
+  double get _estimatedCommercialLaborValue =>
+      _estimatedCommercialValueForDirectCost(_internalLaborEstimatedCost);
+
+  double get _estimatedLaborMargin =>
+      _estimatedCommercialLaborValue - _internalLaborEstimatedCost;
+
+  double get _estimatedInterventionCost => _offer.subtotalDirect;
+
+  double get _offeredPriceWithoutVat => _offer.subtotalComercial;
+
+  double get _estimatedCommercialMargin =>
+      _offeredPriceWithoutVat - _estimatedInterventionCost;
+
+  OfferLineItem _commercialLineForDisplay(OfferLineItem source) {
+    final currency = OfferCurrencyConverter.normalizeCurrency(_offer.currency);
+    if (currency != 'EUR') return source;
+    final convertedUnitPrice = OfferCurrencyConverter.convertRonToOfferCurrency(
+      ronAmount: source.unitPrice,
+      currency: currency,
+      effectiveRate: _offer.effectiveExchangeRate,
+    );
+    final convertedTotal = OfferCurrencyConverter.convertRonToOfferCurrency(
+      ronAmount: source.effectiveLineTotal,
+      currency: currency,
+      effectiveRate: _offer.effectiveExchangeRate,
+    );
+    if (source.lineType == OfferLineType.manopera) {
+      return source.copyWith(
+        quantity: 1,
+        unitPrice: convertedUnitPrice,
+        lineTotal: convertedTotal,
+        laborHours: 1,
+        laborHourlyRate: convertedTotal,
+        laborPerDiemDays: 0,
+        laborPerDiemPerDay: 0,
+        laborLodgingNights: 0,
+        laborLodgingPerNight: 0,
+        laborPersonal: const <OfferLaborResourceUsage>[],
+        laborVehicles: const <OfferLaborResourceUsage>[],
+        laborToolPackages: const <OfferLaborResourceUsage>[],
+      );
+    }
+    return source.copyWith(
+      unitPrice: convertedUnitPrice,
+      lineTotal: convertedTotal,
+    );
+  }
+
+  OfferRecord _offerWithUpdatedLines(List<OfferLineItem> sourceLines) {
+    final normalized = <OfferLineItem>[];
+    final sorted = [...sourceLines]
+      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    for (var i = 0; i < sorted.length; i++) {
+      final line = sorted[i];
+      normalized.add(
+        line.copyWith(
+          sortOrder: i + 1,
+          lineTotal: line.effectiveLineTotal,
+        ),
+      );
+    }
+    final totals = OfferRecord.computeTotals(
+      lines: normalized,
+      vatPercent: _offer.vatPercent,
+      regiePercent: _offer.regiePercent,
+      profitPercent: _offer.profitPercent,
+    );
+    return _offer.copyWith(
+      lines: normalized,
+      materialSubtotal: totals.materialSubtotal,
+      laborSubtotal: totals.laborSubtotal,
+      subtotalDirect: totals.subtotalDirect,
+      regiePercent: totals.regiePercent,
+      regieValue: totals.regieValue,
+      profitPercent: totals.profitPercent,
+      profitValue: totals.profitValue,
+      subtotalComercial: totals.subtotalComercial,
+      subtotal: totals.subtotalComercial,
+      vatPercent: totals.vatPercent,
+      vatValue: totals.vatValue,
+      totalValue: totals.totalValue,
+    );
+  }
+
+  Color _statusChipColor(OfferRecord offer) {
+    if (offer.isConverted) return Colors.purple.shade400;
+    switch (offer.status) {
+      case OfferStatus.draft:
+        return Colors.grey.shade500;
+      case OfferStatus.sent:
+        return Colors.blue.shade500;
+      case OfferStatus.awaiting:
+        return Colors.orange.shade500;
+      case OfferStatus.accepted:
+        return Colors.green.shade600;
+      case OfferStatus.rejected:
+        return Colors.red.shade500;
+      case OfferStatus.cancelled:
+        return Colors.grey.shade700;
+    }
+  }
+
+  String _resolveClientName() {
+    if (_offer.clientName.trim().isNotEmpty) {
+      return _offer.clientName.trim();
+    }
+    for (final item in widget.clients) {
+      if (item.id == _offer.clientId) return item.name;
+    }
+    return '-';
+  }
+
+  ClientRecord? _clientRecordById(String clientId) {
+    final id = clientId.trim();
+    if (id.isEmpty) return null;
+    for (final item in widget.clients) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  String _resolveRecipientEmail() {
+    if (_offer.contactPersonEmail.trim().isNotEmpty) {
+      return _offer.contactPersonEmail.trim();
+    }
+
+    final clientCandidates = <ClientRecord?>[
+      _clientRecordById(_offer.commercialRecipientClientId),
+      _clientRecordById(_offer.clientId),
+      _clientRecordById(_offer.beneficiaryClientId),
+    ];
+    for (final client in clientCandidates.whereType<ClientRecord>()) {
+      if (client.email.trim().isNotEmpty) {
+        return client.email.trim();
+      }
+      for (final contact in client.contactPeople) {
+        if (_offer.contactPersonId.trim().isNotEmpty &&
+            contact.id == _offer.contactPersonId.trim() &&
+            contact.email.trim().isNotEmpty) {
+          return contact.email.trim();
+        }
+      }
+      for (final contact in client.contactPeople) {
+        if (contact.email.trim().isNotEmpty) {
+          return contact.email.trim();
+        }
+      }
+    }
+    return '';
+  }
+
+  String _resolveSenderName(CompanyProfile company) {
+    if (company.contactName.trim().isNotEmpty) {
+      return company.contactName.trim();
+    }
+    final currentEmail = (widget.currentUserEmail ?? '').trim();
+    if (currentEmail.isNotEmpty) {
+      return currentEmail;
+    }
+    if (_offer.createdByUserEmail.trim().isNotEmpty) {
+      return _offer.createdByUserEmail.trim();
+    }
+    return company.companyName.trim();
+  }
+
+  String _resolveSenderRole() => 'Departament comercial';
+
+  String _resolveJobLabel() {
+    if (_offer.jobCode.trim().isNotEmpty || _offer.jobTitle.trim().isNotEmpty) {
+      final code = _offer.jobCode.trim();
+      final title = _offer.jobTitle.trim();
+      if (code.isNotEmpty && title.isNotEmpty) return '$code - $title';
+      if (code.isNotEmpty) return code;
+      if (title.isNotEmpty) return title;
+    }
+    for (final item in widget.jobs) {
+      if (item.id != _offer.jobId) continue;
+      if (item.jobCode.trim().isNotEmpty && item.title.trim().isNotEmpty) {
+        return '${item.jobCode} - ${item.title}';
+      }
+      return item.title.trim().isEmpty ? '-' : item.title;
+    }
+    return '-';
+  }
+
+  String _displayStatusLabel(OfferRecord offer) {
+    if (offer.isConverted) return 'Convertita';
+    return offer.status.label;
+  }
+
+  Uint8List? _decodeSignature(String raw) {
+    final normalized = raw.trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+    try {
+      return base64Decode(normalized);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveOperationalMetadata(OfferRecord next) async {
+    final saved = next.copyWith(updatedAt: DateTime.now());
+    await widget.onSaveOffer(saved);
+    setState(() => _offer = saved);
+  }
+
+  /// Automatically updates offer status to [OfferStatus.sent] if it is still
+  /// in draft state, so the user doesn't have to change it manually.
+  Future<void> _markOfferAsSentIfDraft() async {
+    if (_offer.status == OfferStatus.draft ||
+        _offer.status == OfferStatus.awaiting) {
+      final next = _offer.copyWith(
+        status: OfferStatus.sent,
+        updatedAt: DateTime.now(),
+      );
+      await widget.onSaveOffer(next);
+      if (mounted) setState(() => _offer = next);
+    }
+  }
+
+  Future<void> _captureSignature({
+    required String title,
+    required bool isClient,
+  }) async {
+    final bytes =
+        await Navigator.of(context, rootNavigator: true).push<Uint8List>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => SignatureCapturePage(title: title),
+      ),
+    );
+    if (!mounted || bytes == null) {
+      return;
+    }
+    final encoded = base64Encode(bytes);
+    final next = isClient
+        ? _offer.copyWith(
+            clientSignatureBase64: encoded,
+            agreementAcceptedAt: DateTime.now(),
+            clearAgreementAcceptedAt: false,
+          )
+        : _offer.copyWith(
+            issuerSignatureBase64: encoded,
+          );
+    await _saveOperationalMetadata(next);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isClient
+              ? 'Semnatura clientului a fost salvata.'
+              : 'Semnatura emitentului a fost salvata.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _clearSignature({required bool isClient}) async {
+    final next = isClient
+        ? _offer.copyWith(
+            clientSignatureBase64: '',
+            agreementAcceptedAt: null,
+            clearAgreementAcceptedAt: true,
+          )
+        : _offer.copyWith(
+            issuerSignatureBase64: '',
+          );
+    await _saveOperationalMetadata(next);
+  }
+
+  Widget _signatureCard({
+    required String title,
+    required String raw,
+    required bool isClient,
+    String subtitle = '',
+  }) {
+    final bytes = _decodeSignature(raw);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleSmall),
+            if (subtitle.trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+            ],
+            const SizedBox(height: 10),
+            Container(
+              height: 140,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.grey.shade400),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              alignment: Alignment.center,
+              child: bytes == null
+                  ? Text(
+                      'Fara semnatura',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    )
+                  : Image.memory(bytes, fit: BoxFit.contain),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () => _captureSignature(
+                    title: title,
+                    isClient: isClient,
+                  ),
+                  icon: const Icon(Icons.draw_outlined),
+                  label: const Text('Semnează'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: raw.trim().isEmpty
+                      ? null
+                      : () => _clearSignature(isClient: isClient),
+                  icon: const Icon(Icons.restart_alt_outlined),
+                  label: const Text('Resetează'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _commercialLineSubtitle(OfferLineItem sourceLine, OfferLineItem line) {
+    final isAggregatedLabor = sourceLine.id == '__labor_aggregate__' &&
+        sourceLine.lineType == OfferLineType.manopera;
+    final buffer = StringBuffer()
+      ..writeln('Tip: ${isAggregatedLabor ? 'Manopera' : line.lineType.label}')
+      ..writeln(
+        sourceLine.description.trim().isEmpty ? '-' : sourceLine.description,
+      )
+      ..write(
+        'UM: ${line.unit} • Cantitate: ${line.quantity.toStringAsFixed(2)}'
+        ' • Preț unitar: ${_displayAmountWithLabels(line.unitPrice, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}'
+        ' • Total linie: ${_displayAmountWithLabels(line.effectiveLineTotal, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}',
+      );
+    if (isAggregatedLabor) {
+      buffer
+        ..writeln()
+        ..write(
+          'Cost intern estimat: ${_moneyCommercial(_internalLaborEstimatedCost)}'
+          ' • Preț comercial estimat: ${_moneyCommercial(_estimatedCommercialLaborValue)}'
+          ' • Diferență estimată: ${_moneyCommercial(_estimatedLaborMargin)}',
+        );
+    } else if (sourceLine.lineType == OfferLineType.manopera &&
+        sourceLine.laborSourceMode == OfferLaborSourceMode.standard) {
+      buffer
+        ..writeln()
+        ..write('Cost intern: indisponibil in aceasta varianta standard');
+    }
+    return buffer.toString();
+  }
+
+  bool get _isFrozen => _offer.isConverted;
+
+  void _showFrozenMessage() {
+    final jobId = _offer.convertedToJobId.trim();
+    final suffix = jobId.isEmpty ? '' : ' Lucrarea generata este $jobId.';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Oferta a fost deja convertita in lucrare si nu mai poate fi modificata.$suffix',
+        ),
+      ),
+    );
+  }
+
+  JobRecord? _findConvertedJob() {
+    final jobId = _offer.convertedToJobId.trim();
+    if (jobId.isEmpty) return null;
+    for (final item in widget.jobs) {
+      if (item.id == jobId) return item;
+    }
+    return null;
+  }
+
+  Future<void> _openConvertedJob() async {
+    final job = _findConvertedJob();
+    if (job == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Lucrarea generata pentru oferta ${_offer.offerNumber} nu a fost gasita in lista curenta.',
+          ),
+        ),
+      );
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LucrareDetaliiPage(
+          repository: widget.repository,
+          job: job,
+          clientName: _resolveClientName(),
+        ),
+      ),
+    );
+  }
+
+  // keepPdfPath: true doar când salvăm calea PDF după generare
+  // În rest, ștergem pdfPath pentru a forța regenerarea la următoarea cerere
+  Future<void> _persistOffer(
+    OfferRecord next, {
+    bool keepPdfPath = false,
+  }) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final toPersist = keepPdfPath ? next : next.copyWith(pdfPath: '');
+      final updated = toPersist.copyWith(updatedAt: DateTime.now());
+      await widget.onSaveOffer(updated);
+      if (!mounted) return;
+      setState(() => _offer = updated);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  ClientRecord? _findOfferClient() {
+    for (final item in widget.clients) {
+      if (item.id == _offer.clientId) return item;
+    }
+    return null;
+  }
+
+  JobRecord? _findOfferJob() {
+    for (final item in widget.jobs) {
+      if (item.id == _offer.jobId) return item;
+    }
+    return null;
+  }
+
+  ClientRecord? _resolveSmartBillBillingClient() {
+    final candidates = <ClientRecord?>[
+      _clientRecordById(_offer.commercialRecipientClientId),
+      _clientRecordById(_offer.clientId),
+      _clientRecordById(_offer.beneficiaryClientId),
+    ];
+    for (final candidate in candidates.whereType<ClientRecord>()) {
+      return candidate;
+    }
+    return null;
+  }
+
+  Future<void> _persistSmartBillState(
+    OfferRecord next, {
+    String? snackMessage,
+  }) async {
+    await widget.onSaveOffer(next);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _offer = next);
+    if ((snackMessage ?? '').trim().isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(snackMessage!)),
+      );
+    }
+  }
+
+  Future<void> _issueSmartBillEstimate() async {
+    if (_smartBillSyncing) {
+      return;
+    }
+    setState(() => _smartBillSyncing = true);
+    try {
+      final profile = await widget.repository.loadCompanyProfile();
+      final updated = await _smartBillSyncService.issueEstimate(
+        offer: _offer,
+        companyProfile: profile,
+        billingClient: _resolveSmartBillBillingClient(),
+      );
+      await _persistSmartBillState(
+        updated,
+        snackMessage:
+            'Proforma SmartBill a fost emisa: ${updated.smartBillEstimate.seriesName}${updated.smartBillEstimate.number}.',
+      );
+    } catch (error) {
+      final failed = _smartBillSyncService.markEstimateSyncError(_offer, error);
+      await _persistSmartBillState(failed);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Emiterea proformei SmartBill a esuat: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _smartBillSyncing = false);
+      }
+    }
+  }
+
+  Future<void> _issueSmartBillInvoice() async {
+    if (_smartBillSyncing) {
+      return;
+    }
+    setState(() => _smartBillSyncing = true);
+    try {
+      final profile = await widget.repository.loadCompanyProfile();
+      final updated = await _smartBillSyncService.issueInvoice(
+        offer: _offer,
+        companyProfile: profile,
+        billingClient: _resolveSmartBillBillingClient(),
+      );
+      await _persistSmartBillState(
+        updated,
+        snackMessage:
+            'Factura SmartBill a fost emisa: ${updated.smartBillInvoice.seriesName}${updated.smartBillInvoice.number}.',
+      );
+    } catch (error) {
+      final failed = _smartBillSyncService.markInvoiceSyncError(_offer, error);
+      await _persistSmartBillState(failed);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Emiterea facturii SmartBill a esuat: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _smartBillSyncing = false);
+      }
+    }
+  }
+
+  Future<void> _refreshSmartBillInvoiceStatus() async {
+    if (_smartBillRefreshingStatus) {
+      return;
+    }
+    setState(() => _smartBillRefreshingStatus = true);
+    try {
+      final profile = await widget.repository.loadCompanyProfile();
+      final updated = await _smartBillSyncService.refreshInvoicePaymentStatus(
+        offer: _offer,
+        companyProfile: profile,
+      );
+      await _persistSmartBillState(
+        updated,
+        snackMessage: 'Statusul facturii SmartBill a fost actualizat.',
+      );
+    } catch (error) {
+      final failed = _smartBillSyncService.markInvoiceSyncError(_offer, error);
+      await _persistSmartBillState(failed);
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Nu am putut actualiza statusul SmartBill: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _smartBillRefreshingStatus = false);
+      }
+    }
+  }
+
+  Future<void> _openExternalSmartBillUrl(
+    String rawUrl,
+    String label,
+  ) async {
+    final value = rawUrl.trim();
+    if (value.isEmpty) {
+      return;
+    }
+    final uri = Uri.tryParse(value);
+    if (uri == null) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Link invalid pentru $label.')),
+      );
+      return;
+    }
+    final canOpen = await canLaunchUrl(uri);
+    if (canOpen) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Nu am putut deschide linkul $label.')),
+    );
+  }
+
+  String _smartBillDocumentCaption(OfferSmartBillDocumentState document) {
+    if (!document.hasDocument) {
+      if (document.lastError.trim().isNotEmpty) {
+        return '${document.syncStatus.label} • ${document.lastError.trim()}';
+      }
+      return document.syncStatus.label;
+    }
+    final issuedAt =
+        document.issuedAt == null ? '' : ' • ${_formatDate(document.issuedAt)}';
+    final suffix = document.isDraft ? ' • ciorna' : '';
+    return '${document.syncStatus.label} • ${document.seriesName}${document.number}$issuedAt$suffix';
+  }
+
+  Widget _buildSmartBillDocumentTile(OfferSmartBillDocumentState document) {
+    final canOpenView = document.documentViewUrl.trim().isNotEmpty;
+    final canOpenCloud = document.documentUrl.trim().isNotEmpty;
+    final canOpenPublic = document.publicUrl.trim().isNotEmpty;
+    final payment = document.paymentStatus;
+    return Card(
+      margin: const EdgeInsets.only(top: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              document.documentType.label,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _smartBillDocumentCaption(document),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (payment.hasValues) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Total: ${payment.invoiceTotalAmount.toStringAsFixed(2)} • Incasat: ${payment.paidAmount.toStringAsFixed(2)} • Rest: ${payment.unpaidAmount.toStringAsFixed(2)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: canOpenView
+                      ? () => _openExternalSmartBillUrl(
+                            document.documentViewUrl,
+                            document.documentType.label,
+                          )
+                      : null,
+                  icon: const Icon(Icons.open_in_new_outlined),
+                  label: const Text('Deschide document'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: canOpenCloud
+                      ? () => _openExternalSmartBillUrl(
+                            document.documentUrl,
+                            'document cloud',
+                          )
+                      : null,
+                  icon: const Icon(Icons.cloud_outlined),
+                  label: const Text('Cloud'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: canOpenPublic
+                      ? () => _openExternalSmartBillUrl(
+                            document.publicUrl,
+                            'link public',
+                          )
+                      : null,
+                  icon: const Icon(Icons.link_outlined),
+                  label: const Text('Link public'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSmartBillSection() {
+    final billingClient = _resolveSmartBillBillingClient();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'SmartBill',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              billingClient == null
+                  ? 'Clientul comercial nu a fost gasit in nomenclator. Emiterea SmartBill va cere un client complet configurat.'
+                  : 'Client comercial pentru emitere: ${billingClient.name}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: _smartBillSyncing ? null : _issueSmartBillEstimate,
+                  icon: const Icon(Icons.receipt_long_outlined),
+                  label: const Text('Emite proforma'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _smartBillSyncing ? null : _issueSmartBillInvoice,
+                  icon: const Icon(Icons.request_quote_outlined),
+                  label: const Text('Emite factura'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: (_smartBillRefreshingStatus ||
+                          !_offer.smartBillInvoice.hasDocument)
+                      ? null
+                      : _refreshSmartBillInvoiceStatus,
+                  icon: const Icon(Icons.sync_outlined),
+                  label: const Text('Actualizeaza status'),
+                ),
+              ],
+            ),
+            _buildSmartBillDocumentTile(_offer.smartBillEstimate),
+            _buildSmartBillDocumentTile(_offer.smartBillInvoice),
+          ],
+        ),
+      ),
+    );
+  }
+
+  AiAssistantRuntimeContext _buildOfferAiContext() {
+    final client = _findOfferClient();
+    final job = _findOfferJob();
+    return AiAssistantRuntimeContext(
+      contextType: AiAssistantContextType.offers,
+      module: 'oferte',
+      entityId: _offer.id,
+      entityLabel: _offer.offerNumber,
+      userId: widget.currentUserEmail?.trim() ?? '',
+      contextLabel: 'Oferta ${_offer.offerNumber}',
+      primaryData: <String, dynamic>{
+        ..._offer.toMap(),
+        'type': 'offer',
+      },
+      relatedData: <String, dynamic>{
+        'offer': _offer.toMap(),
+        'client': client?.toMap() ?? <String, dynamic>{},
+        'job': job?.toMap() ?? <String, dynamic>{},
+      },
+      insertionTargets: const <AiAssistantInsertionTarget>[
+        AiAssistantInsertionTarget(
+          key: 'offer_notes',
+          label: 'Note oferta',
+          description: 'Insereaza draftul in notele ofertei.',
+          insertMode: AiAssistantInsertMode.replace,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openMaterialNecessar() async {
+    // Collect only material lines
+    final materialLines = _offer.lines
+        .where((l) => l.lineType == OfferLineType.material)
+        .toList(growable: false);
+
+    if (materialLines.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Oferta nu contine pozitii de tip material.'),
+        ),
+      );
+      return;
+    }
+
+    // Build mutable state: name + quantity + unit per item
+    final names =
+        materialLines.map((l) => TextEditingController(text: l.name)).toList();
+    final quantities = materialLines
+        .map((l) => TextEditingController(
+              text: l.quantity % 1 == 0
+                  ? l.quantity.toInt().toString()
+                  : l.quantity.toString(),
+            ))
+        .toList();
+    final units =
+        materialLines.map((l) => TextEditingController(text: l.unit)).toList();
+
+    void disposeControllers() {
+      for (final c in names) {
+        c.dispose();
+      }
+      for (final c in quantities) {
+        c.dispose();
+      }
+      for (final c in units) {
+        c.dispose();
+      }
+    }
+
+    String buildText() {
+      final buf = StringBuffer();
+      buf.writeln('NECESAR MATERIALE');
+      buf.writeln('Oferta: ${_offer.offerNumber}');
+      buf.writeln(
+          'Data: ${_offer.createdAt.day.toString().padLeft(2, '0')}.${_offer.createdAt.month.toString().padLeft(2, '0')}.${_offer.createdAt.year}');
+      buf.writeln();
+      buf.writeln('Nr.  Denumire${' ' * 40}Cant.   UM');
+      buf.writeln('-' * 70);
+      for (int i = 0; i < names.length; i++) {
+        final nr = (i + 1).toString().padLeft(3);
+        final name = names[i].text.trim();
+        final qty = quantities[i].text.trim();
+        final um = units[i].text.trim();
+        buf.writeln('$nr. $name  $qty  $um');
+      }
+      return buf.toString();
+    }
+
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlgState) {
+          return AlertDialog(
+            title: const Text('Necesar materiale furnizori'),
+            content: SizedBox(
+              width: 680,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Editati lista de materiale inainte de a o trimite furnizorilor. Preturile nu sunt vizibile.',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  // Header row
+                  Row(
+                    children: [
+                      const SizedBox(
+                          width: 40,
+                          child: Text('#',
+                              style: TextStyle(fontWeight: FontWeight.bold))),
+                      const Expanded(
+                          flex: 5,
+                          child: Text('Denumire',
+                              style: TextStyle(fontWeight: FontWeight.bold))),
+                      const SizedBox(width: 12),
+                      const SizedBox(
+                          width: 80,
+                          child: Text('Cantitate',
+                              style: TextStyle(fontWeight: FontWeight.bold))),
+                      const SizedBox(width: 12),
+                      const SizedBox(
+                          width: 60,
+                          child: Text('UM',
+                              style: TextStyle(fontWeight: FontWeight.bold))),
+                    ],
+                  ),
+                  const Divider(),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 420),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: names.length,
+                      itemBuilder: (_, i) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                              width: 40,
+                              child: Padding(
+                                padding: const EdgeInsets.only(top: 12),
+                                child: Text('${i + 1}.',
+                                    style: const TextStyle(color: Colors.grey)),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 5,
+                              child: TextFormField(
+                                controller: names[i],
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                  contentPadding: EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 8),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            SizedBox(
+                              width: 80,
+                              child: TextFormField(
+                                controller: quantities[i],
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                  contentPadding: EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 8),
+                                ),
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                        decimal: true),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            SizedBox(
+                              width: 60,
+                              child: TextFormField(
+                                controller: units[i],
+                                decoration: const InputDecoration(
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                  contentPadding: EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 8),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  disposeControllers();
+                  Navigator.of(ctx).pop();
+                },
+                child: const Text('Inchide'),
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.copy_outlined),
+                label: const Text('Copiaza text'),
+                onPressed: () async {
+                  final text = buildText();
+                  await Clipboard.setData(ClipboardData(text: text));
+                  if (!ctx.mounted) return;
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                          'Lista copiata in clipboard. Puteti lipi in email sau WhatsApp.'),
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    disposeControllers();
+  }
+
+  Future<void> _openAiAssistant() async {
+    await AiAssistantSheet.show(
+      context: context,
+      title: 'Asistent AI oferta',
+      service: _aiAssistantService,
+      runtimeContext: _buildOfferAiContext(),
+      actions: AiAssistantActionCatalog.actionsFor(
+        AiAssistantContextType.offers,
+      ),
+      onInsertDraft: _applyAiOfferDraft,
+    );
+  }
+
+  Future<bool> _applyAiOfferDraft(String targetKey, String content) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return false;
+    }
+    if (targetKey != 'offer_notes') return false;
+    final next = _offer.copyWith(
+      notes: content.trim(),
+      updatedAt: DateTime.now(),
+    );
+    await _persistOffer(next);
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Draftul AI a fost inserat in notele ofertei.'),
+      ),
+    );
+    return true;
+  }
+
+  Future<void> _editOfferHeader() async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final edit = widget.onEditOffer;
+    if (edit == null) return;
+    final updated = await edit(_offer);
+    if (!mounted || updated == null) return;
+    setState(() => _offer = updated);
+  }
+
+  Future<void> _duplicateOffer() async {
+    final duplicate = widget.onDuplicateOffer;
+    if (duplicate == null) return;
+    final created = await duplicate(_offer);
+    if (!mounted || created == null) {
+      return;
+    }
+    await Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => OfertaDetaliuPage(
+          repository: widget.repository,
+          initialOffer: created,
+          clients: widget.clients,
+          jobs: widget.jobs,
+          laborTemplates: widget.laborTemplates,
+          clauseTemplates: widget.clauseTemplates,
+          packageTemplates: widget.packageTemplates,
+          onSaveOffer: widget.onSaveOffer,
+          currentUserEmail: widget.currentUserEmail,
+          onEditOffer: widget.onEditOffer,
+          onDuplicateOffer: widget.onDuplicateOffer,
+          onConvertToJob: widget.onConvertToJob,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _changeOfferStatus(OfferStatus newStatus) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    if (_offer.status == newStatus) return;
+
+    final next = _offer.copyWith(
+      status: newStatus,
+      updatedAt: DateTime.now(),
+    );
+    await _persistOffer(next);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Status oferta a fost schimbat in: ${newStatus.label}',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openEmailDialog() async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+
+    try {
+      final company = await widget.repository.loadCompanyProfile();
+      final attachmentPath = await _ensureOfferPdfAvailable(company: company);
+
+      if (!mounted) return;
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => OfferEmailSendDialog(
+          offer: _offer,
+          company: company,
+          currentUserEmail: widget.currentUserEmail ?? '',
+          initialRecipientEmail: _resolveRecipientEmail(),
+          currentUserName: _resolveSenderName(company),
+          currentUserRole: _resolveSenderRole(),
+          attachmentPath: attachmentPath,
+          attachmentLabel: attachmentPath.split(RegExp(r'[\\/]')).last,
+          onSendEmail: _sendEmailViaMailto,
+          onQueueEmail: _queueSendEmail,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Eroare la incarcarea datelor companiei: $e'),
+        ),
+      );
+    }
+  }
+
+  Future<bool> _sendEmailViaMailto(
+    String recipientEmail,
+    String subject,
+    String bodyText,
+    String bodyHtml,
+    String attachmentPath,
+  ) async {
+    try {
+      final company = await widget.repository.loadCompanyProfile();
+      final pdfPath = await _ensureOfferPdfAvailable(company: company);
+      final resolvedAttachmentPath =
+          attachmentPath.trim().isEmpty ? pdfPath : attachmentPath.trim();
+
+      if (Platform.isWindows) {
+        final opened = await _openOutlookDraftOnWindows(
+          recipientEmail: recipientEmail,
+          subject: subject,
+          bodyText: bodyText,
+          bodyHtml: bodyHtml,
+          attachmentPath: resolvedAttachmentPath,
+        );
+        if (opened) {
+          await _markOfferAsSentIfDraft();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Outlook a fost deschis cu PDF-ul atasat.',
+                ),
+              ),
+            );
+          }
+          return true;
+        }
+      }
+
+      final encodedTo = Uri.encodeComponent(recipientEmail);
+      final encodedSubject = Uri.encodeComponent(subject);
+      final encodedBody = Uri.encodeComponent(bodyText);
+
+      final uri = Uri.parse(
+        'mailto:$encodedTo?subject=$encodedSubject&body=$encodedBody',
+      );
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        await _markOfferAsSentIfDraft();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Clientul de email a fost deschis. PDF-ul ofertei este pregatit la: $pdfPath',
+              ),
+            ),
+          );
+        }
+        return true;
+      } else {
+        if (!mounted) return false;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Nu am putut deschide clientul de email. Vă rugăm să trimiteți emailul manual.',
+            ),
+          ),
+        );
+        return false;
+      }
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Eroare la deschiderea clientului de email: $e'),
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<bool> _openOutlookDraftOnWindows({
+    required String recipientEmail,
+    required String subject,
+    required String bodyText,
+    required String bodyHtml,
+    required String attachmentPath,
+  }) async {
+    final normalizedAttachmentPath = attachmentPath.trim();
+    if (!Platform.isWindows || normalizedAttachmentPath.isEmpty) {
+      return false;
+    }
+
+    final attachmentFile = File(normalizedAttachmentPath);
+    if (!attachmentFile.existsSync()) {
+      return false;
+    }
+
+    String psLiteral(String value) => "'${value.replaceAll("'", "''")}'";
+
+    List<int> utf16LeBytes(String value) {
+      final bytes = <int>[];
+      for (final unit in value.codeUnits) {
+        bytes
+          ..add(unit & 0xff)
+          ..add((unit >> 8) & 0xff);
+      }
+      return bytes;
+    }
+
+    final script = '''
+
+
+\$ErrorActionPreference = 'Stop'
+\$outlook = New-Object -ComObject Outlook.Application
+\$mail = \$outlook.CreateItem(0)
+\$mail.To = ${psLiteral(recipientEmail)}
+\$mail.Subject = ${psLiteral(subject)}
+\$attachment = ${psLiteral(normalizedAttachmentPath)}
+if (${psLiteral(bodyHtml)} -ne '') {
+  \$mail.HTMLBody = ${psLiteral(bodyHtml)}
+} else {
+  \$mail.Body = ${psLiteral(bodyText)}
+}
+if (Test-Path \$attachment) {
+  [void]\$mail.Attachments.Add(\$attachment)
+}
+\$mail.Display()
+''';
+
+    try {
+      final encodedCommand = base64Encode(utf16LeBytes(script));
+      final result = await Process.run(
+        'powershell',
+        <String>[
+          '-NoProfile',
+          '-NonInteractive',
+          '-EncodedCommand',
+          encodedCommand,
+        ],
+      );
+      if (result.exitCode == 0) {
+        return true;
+      }
+    } catch (_) {
+      // Fall through to the command-line fallback below.
+    }
+
+    return _openOutlookAttachmentFallbackOnWindows(
+      attachmentPath: normalizedAttachmentPath,
+      recipientEmail: recipientEmail,
+      subject: subject,
+      bodyText: bodyText,
+    );
+  }
+
+  Future<bool> _openOutlookAttachmentFallbackOnWindows({
+    required String attachmentPath,
+    required String recipientEmail,
+    required String subject,
+    required String bodyText,
+  }) async {
+    if (!Platform.isWindows || attachmentPath.trim().isEmpty) {
+      return false;
+    }
+
+    final attachmentFile = File(attachmentPath.trim());
+    if (!attachmentFile.existsSync()) {
+      return false;
+    }
+
+    try {
+      final result = await Process.run(
+        'cmd',
+        <String>[
+          '/c',
+          'start',
+          '',
+          'outlook.exe',
+          '/a',
+          attachmentFile.path,
+        ],
+        runInShell: true,
+      );
+      if (result.exitCode == 0) {
+        return true;
+      }
+    } catch (_) {
+      // Fall through to the .eml draft fallback below.
+    }
+
+    return _openEmailDraftFileWithAttachment(
+      recipientEmail: recipientEmail,
+      subject: subject,
+      bodyText: bodyText,
+      attachmentPath: attachmentPath,
+    );
+  }
+
+  Future<bool> _openEmailDraftFileWithAttachment({
+    required String recipientEmail,
+    required String subject,
+    required String bodyText,
+    required String attachmentPath,
+  }) async {
+    final normalizedAttachmentPath = attachmentPath.trim();
+    if (normalizedAttachmentPath.isEmpty) {
+      return false;
+    }
+
+    final attachmentFile = File(normalizedAttachmentPath);
+    if (!attachmentFile.existsSync()) {
+      return false;
+    }
+
+    String sanitizeHeader(String value) =>
+        value.replaceAll('\r', ' ').replaceAll('\n', ' ').trim();
+
+    String wrapBase64(String value, {int width = 76}) {
+      final buffer = StringBuffer();
+      for (var index = 0; index < value.length; index += width) {
+        final end =
+            (index + width < value.length) ? index + width : value.length;
+        buffer.writeln(value.substring(index, end));
+      }
+      return buffer.toString();
+    }
+
+    try {
+      final boundary =
+          '----=_NextPart_${DateTime.now().microsecondsSinceEpoch}';
+      final attachmentBytes = await attachmentFile.readAsBytes();
+      final attachmentBase64 = wrapBase64(base64Encode(attachmentBytes));
+      final bodyBase64 = wrapBase64(base64Encode(utf8.encode(bodyText)));
+      final fileName = attachmentFile.uri.pathSegments.isNotEmpty
+          ? attachmentFile.uri.pathSegments.last
+          : 'document.pdf';
+      final emlContent = StringBuffer()
+        ..writeln('To: ${sanitizeHeader(recipientEmail)}')
+        ..writeln('Subject: ${sanitizeHeader(subject)}')
+        ..writeln('MIME-Version: 1.0')
+        ..writeln('Content-Type: multipart/mixed; boundary="$boundary"')
+        ..writeln()
+        ..writeln('--$boundary')
+        ..writeln('Content-Type: text/plain; charset="utf-8"')
+        ..writeln('Content-Transfer-Encoding: base64')
+        ..writeln()
+        ..write(bodyBase64)
+        ..writeln('--$boundary')
+        ..writeln('Content-Type: application/pdf; name="$fileName"')
+        ..writeln('Content-Transfer-Encoding: base64')
+        ..writeln('Content-Disposition: attachment; filename="$fileName"')
+        ..writeln()
+        ..write(attachmentBase64)
+        ..writeln('--$boundary--');
+
+      final draftFile = File(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}offer_email_${DateTime.now().microsecondsSinceEpoch}.eml',
+      );
+      await draftFile.writeAsString(emlContent.toString(), flush: true);
+      final openResult = await DocumentFileService.openFile(draftFile.path);
+      return openResult.opened;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _queueSendEmail(
+    String recipientEmail,
+    String subject,
+    String bodyText,
+    String bodyHtml,
+  ) async {
+    if (recipientEmail.trim().isEmpty) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Va rugam introduceti email-ul destinatarului.')),
+      );
+      return false;
+    }
+
+    try {
+      final company = await widget.repository.loadCompanyProfile();
+      final pdfPath = await _ensureOfferPdfAvailable(company: company);
+
+      final pdfFile = File(pdfPath);
+      if (!pdfFile.existsSync()) {
+        throw StateError('PDF-ul ofertei nu exista pe disc pentru atasare.');
+      }
+      final pdfBytes = await pdfFile.readAsBytes();
+
+      final inlineAssets = <Map<String, dynamic>>[];
+      if (company.logoBase64.trim().isNotEmpty) {
+        inlineAssets.add({
+          'cid': 'companylogo',
+          'filename': 'logo.png',
+          'base64': company.logoBase64.trim(),
+          'contentType': 'image/png',
+        });
+      }
+
+      final pdfFileName = OfferPdfService.exportFileName(_offer);
+      final attachments = <Map<String, dynamic>>[
+        await _buildQueueAttachmentForOfferPdf(
+          pdfBytes: pdfBytes,
+          fileName: pdfFileName,
+          sourceEntityId: _offer.id,
+        ),
+      ];
+
+      final templateData = OfferEmailTemplate.buildComplete(
+        offer: _offer,
+        company: company,
+        currentUserEmail: widget.currentUserEmail ?? '',
+        currentUserName: _resolveSenderName(company),
+        currentUserRole: _resolveSenderRole(),
+        recipientEmail: recipientEmail.trim(),
+      );
+
+      final notif = NotificationCenterService();
+      final queueItem = await notif.sendEmailNotification(
+        recipientEmail: recipientEmail.trim(),
+        recipientName: _resolveClientName(),
+        subject: subject.trim().isEmpty
+            ? OfferEmailTemplate.subject(offerNumber: _offer.offerNumber)
+            : subject.trim(),
+        bodyText: bodyText,
+        bodyHtml: bodyHtml.trim().isEmpty ? templateData.htmlBody : bodyHtml,
+        attachments: attachments,
+        inlineAssets: inlineAssets,
+        sourceModule: 'oferte',
+        sourceEntityId: _offer.id,
+        eventType: NotificationEventType.documentGenerated,
+        metadata: {'offer_number': _offer.offerNumber},
+      );
+
+      if (!mounted) return true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Email pus in coada: ${queueItem.id}')),
+      );
+
+      final resolved = await notif.waitForEmailQueueFinalStatus(queueItem.id);
+      final status = (resolved?.status ?? '').trim().toLowerCase();
+      if (!mounted) return status != 'failed';
+
+      if (status == 'sent') {
+        await _markOfferAsSentIfDraft();
+        if (!mounted) return true;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Email trimis cu succes (${queueItem.id}).')),
+        );
+        return true;
+      }
+
+      if (status == 'failed') {
+        final reason = (resolved?.errorMessage ?? '').trim();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              reason.isEmpty
+                  ? 'Email esuat (${queueItem.id}). Verifica notificarea din coada.'
+                  : 'Email esuat: $reason',
+            ),
+          ),
+        );
+        return false;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Emailul este in procesare (${queueItem.id}). Verifica statusul in notification_email_queue.',
+          ),
+        ),
+      );
+
+      return true;
+    } catch (e) {
+      final diagnosticMessage = _describeDirectEmailFailure(e);
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(diagnosticMessage)),
+      );
+      return false;
+    }
+  }
+
+  String _describeDirectEmailFailure(Object error) {
+    final text = error.toString().trim();
+    final normalized = text.toLowerCase();
+
+    if (normalized.contains('firebase cloud nu este disponibil')) {
+      return 'Trimiterea directa pe email nu este disponibila deoarece conexiunea cloud Firebase nu este activa.';
+    }
+    if (normalized.contains('notification_email_queue')) {
+      return 'Trimiterea directa pe email a esuat la scrierea in coada cloud notification_email_queue.';
+    }
+    if (normalized.contains('resource-exhausted') ||
+        normalized.contains('maximum size') ||
+        normalized.contains('document too large')) {
+      return 'Payload-ul emailului este prea mare pentru Firestore. PDF-ul trebuie incarcat in Storage pentru a fi trimis prin coada.';
+    }
+    if (normalized.contains('pdf-ul ofertei nu exista')) {
+      return 'PDF-ul ofertei lipseste. Regenerati PDF-ul si incercati din nou.';
+    }
+    if (normalized.contains('config email lipsa') ||
+        normalized.contains('notification_smtp_') ||
+        normalized.contains('smtp_host') ||
+        normalized.contains('email_from')) {
+      return 'Trimiterea directa pe email nu este configurata complet pe server. Lipsesc setarile SMTP sau adresa expeditorului.';
+    }
+    return 'Trimiterea directa pe email a esuat: $text';
+  }
+
+  Future<Map<String, dynamic>> _buildQueueAttachmentForOfferPdf({
+    required Uint8List pdfBytes,
+    required String fileName,
+    required String sourceEntityId,
+  }) async {
+    final normalizedFileName = _sanitizeAttachmentFileName(fileName);
+    if (pdfBytes.length <= _maxInlineAttachmentBytes) {
+      return <String, dynamic>{
+        'filename': normalizedFileName,
+        'base64': base64Encode(pdfBytes),
+        'content_type': 'application/pdf',
+        'size_bytes': pdfBytes.length,
+      };
+    }
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final safeEntity = sourceEntityId.trim().isEmpty
+        ? 'unknown_offer'
+        : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+    final path =
+        'notification_email_attachments/oferte/$safeEntity/${now}_$normalizedFileName';
+    final ref = FirebaseStorage.instance.ref().child(path);
+    await ref.putData(
+      pdfBytes,
+      SettableMetadata(contentType: 'application/pdf'),
+    );
+
+    return <String, dynamic>{
+      'filename': normalizedFileName,
+      'storage_path': ref.fullPath,
+      'storage_bucket': ref.bucket,
+      'content_type': 'application/pdf',
+      'size_bytes': pdfBytes.length,
+      'encoding': 'firebase_storage',
+    };
+  }
+
+  String _sanitizeAttachmentFileName(String fileName) {
+    final trimmed = fileName.trim();
+    if (trimmed.isEmpty) {
+      return 'oferta.pdf';
+    }
+    return trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+  }
+
+  Future<String> _ensureOfferPdfAvailable({
+    CompanyProfile? company,
+    PdfVisualTemplate? template,
+    bool forceRegenerate = false,
+  }) async {
+    final currentPath = _offer.pdfPath.trim();
+    final profile = company ?? await widget.repository.loadCompanyProfile();
+    final resolvedTemplate = template ?? _resolvedPdfTemplate(profile);
+    final shouldRegenerate = forceRegenerate ||
+        (_lastGeneratedPdfTemplate != null &&
+            _lastGeneratedPdfTemplate != resolvedTemplate);
+    if (!shouldRegenerate &&
+        currentPath.isNotEmpty &&
+        File(currentPath).existsSync()) {
+      return currentPath;
+    }
+
+    final issuer = (_offer.createdByUserEmail.trim().isNotEmpty
+            ? _offer.createdByUserEmail
+            : (widget.currentUserEmail ?? ''))
+        .trim();
+    final branding = DocumentBrandingData.fromCompanyProfile(profile);
+    final path = await OfferPdfService.export(
+      repository: widget.repository,
+      offer: _offer,
+      clientLabel: _resolveClientName(),
+      jobLabel: _resolveJobLabel(),
+      issuerLabel: issuer.isEmpty ? '-' : issuer,
+      branding: branding,
+      template: resolvedTemplate,
+    );
+    final next = _offer.copyWith(
+      pdfPath: path,
+      updatedAt: DateTime.now(),
+    );
+    await _persistOffer(next, keepPdfPath: true);
+    _lastGeneratedPdfTemplate = resolvedTemplate;
+    return path;
+  }
+
+  Future<void> _editVatPercent() async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final ctrl =
+        TextEditingController(text: _offer.vatPercent.toStringAsFixed(2));
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Modifica TVA (%)'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'TVA %'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = double.tryParse(
+                ctrl.text.replaceAll(',', '.').trim(),
+              );
+              if (value == null || value < 0) {
+                Navigator.of(context).pop();
+                return;
+              }
+              Navigator.of(context).pop(value);
+            },
+            child: const Text('Salveaza'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null) return;
+    final next = _offer.copyWith(
+      vatPercent: result,
+      lines: _offer.lines,
+    );
+    await _persistOffer(next);
+  }
+
+  Future<void> _generatePdf({bool share = false, bool saveAs = false}) async {
+    if (_exportingPdf) return;
+    setState(() => _exportingPdf = true);
+    try {
+      final companyProfile = await widget.repository.loadCompanyProfile();
+      final selectedTemplate = _resolvedPdfTemplate(companyProfile);
+      final issuer = (_offer.createdByUserEmail.trim().isNotEmpty
+              ? _offer.createdByUserEmail
+              : (widget.currentUserEmail ?? ''))
+          .trim();
+      final branding = DocumentBrandingData.fromCompanyProfile(
+        companyProfile,
+      );
+      String path = '';
+      var offerForActions = _offer;
+      if (share) {
+        await OfferPdfService.share(
+          offer: _offer,
+          clientLabel: _resolveClientName(),
+          jobLabel: _resolveJobLabel(),
+          issuerLabel: issuer.isEmpty ? '-' : issuer,
+          branding: branding,
+          template: selectedTemplate,
+        );
+        _lastGeneratedPdfTemplate = selectedTemplate;
+      } else {
+        path = await OfferPdfService.export(
+          repository: widget.repository,
+          offer: _offer,
+          clientLabel: _resolveClientName(),
+          jobLabel: _resolveJobLabel(),
+          issuerLabel: issuer.isEmpty ? '-' : issuer,
+          branding: branding,
+          template: selectedTemplate,
+          saveAs: saveAs,
+        );
+        offerForActions = offerForActions.copyWith(
+          pdfPath: path,
+          updatedAt: DateTime.now(),
+        );
+        _lastGeneratedPdfTemplate = selectedTemplate;
+      }
+      var successMessage = share
+          ? 'Documentul a fost trimis catre share sheet.'
+          : 'PDF oferta generat: $path';
+      if (!share && _offer.registryEntryId.trim().isEmpty) {
+        try {
+          final entry = await _registryService.registerOffer(
+            offerId: _offer.id,
+            documentNumber: _offer.offerNumber.trim().isEmpty
+                ? _offer.id
+                : _offer.offerNumber,
+            title: _offer.title.trim().isEmpty
+                ? 'Oferta client ${_offer.offerNumber}'
+                : _offer.title.trim(),
+            clientId: _offer.clientId,
+            recipientName: _resolveClientName(),
+            documentDate: _offer.issueDate,
+            filePath: path,
+            fileName: path.split(RegExp(r'[\\/]')).last,
+            notes: 'Oferta client inregistrata automat la primul export PDF.',
+          );
+          offerForActions = offerForActions.copyWith(
+            registryEntryId: entry.id,
+            registryNumber: entry.registryNumber,
+            registeredAt: entry.registeredAt,
+            updatedAt: DateTime.now(),
+          );
+          successMessage =
+              'PDF oferta generat si inregistrat in Registratura (${entry.registryNumber}).';
+        } catch (registryError) {
+          successMessage =
+              'PDF oferta generat, dar inregistrarea in Registratura a esuat: $registryError';
+        }
+      }
+      if (!share || offerForActions != _offer) {
+        await widget.onSaveOffer(offerForActions);
+        if (!mounted) return;
+        setState(() => _offer = offerForActions);
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(successMessage)),
+      );
+      if (!share && path.trim().isNotEmpty) {
+        await _showGeneratedPdfActions(path);
+      }
+    } on PdfSaveCanceledException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Salvarea documentului a fost anulata.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la generare PDF oferta: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _exportingPdf = false);
+      }
+    }
+  }
+
+  Future<void> _showGeneratedPdfActions(String filePath) async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'PDF oferta generat',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  filePath,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: () async {
+                        Navigator.of(sheetContext).pop();
+                        final result =
+                            await DocumentFileService.openFile(filePath);
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(result.message)),
+                        );
+                        if (result.shouldOfferShare && mounted) {
+                          await _shareExistingPdf(filePath);
+                        }
+                      },
+                      icon: const Icon(Icons.picture_as_pdf_outlined),
+                      label: const Text('Deschide'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        Navigator.of(sheetContext).pop();
+                        await _shareExistingPdf(filePath);
+                      },
+                      icon: const Icon(Icons.share_outlined),
+                      label: const Text('Share'),
+                    ),
+                    if (!DocumentFileService.isMobilePlatform)
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          Navigator.of(sheetContext).pop();
+                          final opened =
+                              await DocumentFileService.openFolderForFile(
+                            filePath,
+                          );
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                opened
+                                    ? 'Folder deschis.'
+                                    : 'Nu am putut deschide folderul.',
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.folder_open_outlined),
+                        label: const Text('Deschide folderul'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _shareExistingPdf(String filePath) async {
+    try {
+      await DocumentFileService.shareFile(
+        filePath,
+        subject: 'Oferta ${_offer.offerNumber.trim()}'.trim(),
+        text: 'PDF oferta generat din aplicatie.',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Share deschis pentru PDF.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nu am putut trimite PDF-ul: $error')),
+      );
+    }
+  }
+
+  bool get _canConvertToJob =>
+      _offer.status == OfferStatus.accepted &&
+      _offer.convertedToJobId.trim().isEmpty &&
+      widget.onConvertToJob != null;
+
+  Future<void> _convertToJob() async {
+    final action = widget.onConvertToJob;
+    if (action == null || !_canConvertToJob || _converting) return;
+    setState(() => _converting = true);
+    try {
+      final updated = await action(_offer);
+      if (!mounted) return;
+      if (updated != null) {
+        setState(() => _offer = updated);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _converting = false);
+      }
+    }
+  }
+
+  Future<void> _addLine() async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final mode = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.inventory_outlined),
+              title: const Text('Adaugă din pachet comercial'),
+              onTap: () => Navigator.of(context).pop('commercial_package'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.inventory_2_outlined),
+              title: const Text('Material / manoperă din resurse'),
+              onTap: () => Navigator.of(context).pop('resource'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.calculate_outlined),
+              title: const Text('Manoperă simplă (cantitate × preț)'),
+              subtitle: const Text(
+                  'Titlu personalizat, nr. bucăți și preț fix — fără resurse'),
+              onTap: () => Navigator.of(context).pop('simple_labor'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.build_circle_outlined),
+              title: const Text('Manoperă standard'),
+              onTap: () => Navigator.of(context).pop('standard_labor'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (mode == null) {
+      return;
+    }
+    if (mode == 'commercial_package') {
+      await _addCommercialPackage();
+      return;
+    }
+    if (mode == 'simple_labor') {
+      await _addSimpleLaborLine();
+      return;
+    }
+    if (mode == 'standard_labor') {
+      await _addStandardLaborLine();
+      return;
+    }
+    if (!mounted) return;
+    final saved = await showDialog<OfferLineItem>(
+      context: context,
+      builder: (context) => OfferLineResourceDialog(
+        initialSortOrder: _sortedLines.length + 1,
+        personnelOptions: _laborResourcesCatalog.personnel,
+        teamOptions: _laborResourcesCatalog.teams,
+        vehicleOptions: _laborResourcesCatalog.vehicles,
+        toolPackageOptions: _laborResourcesCatalog.toolPackages,
+      ),
+    );
+    if (saved == null) return;
+    final syncedLine = await _syncMaterialLineIfNeeded(saved);
+    final lines = [
+      ..._sortedLines,
+      syncedLine.copyWith(
+        sortOrder: _sortedLines.length + 1,
+        lineTotal: syncedLine.effectiveLineTotal,
+      ),
+    ];
+    final next = _offerWithUpdatedLines(lines);
+    await _persistOffer(next);
+  }
+
+  Future<void> _addCommercialPackage() async {
+    final selected = await showDialog<OfferCommercialPackageTemplate>(
+      context: context,
+      builder: (context) => _OfferCommercialPackagePickerDialog(
+        items: widget.packageTemplates,
+      ),
+    );
+    if (selected == null) {
+      return;
+    }
+    final normalizedMaterials = <OfferLineItem>[];
+    var nextSortOrder = _sortedLines.length + 1;
+    for (final material in selected.materials) {
+      if (material.name.trim().isEmpty) {
+        continue;
+      }
+      final line = OfferLineItem(
+        id: 'line-${DateTime.now().microsecondsSinceEpoch}-$nextSortOrder',
+        name: material.name.trim(),
+        description: material.description.trim(),
+        unit: material.unit.trim().isEmpty ? 'buc' : material.unit.trim(),
+        quantity: material.quantity > 0 ? material.quantity : 1,
+        unitPrice: material.unitPrice,
+        lineTotal: (material.quantity > 0 ? material.quantity : 1) *
+            material.unitPrice,
+        sortOrder: nextSortOrder,
+        lineType: OfferLineType.material,
+        materialId: material.materialId.trim(),
+      );
+      normalizedMaterials.add(await _syncMaterialLineIfNeeded(line));
+      nextSortOrder++;
+    }
+
+    final laborLines = <OfferLineItem>[];
+    for (final labor in selected.standardLabor) {
+      if (labor.name.trim().isEmpty) {
+        continue;
+      }
+      laborLines.add(
+        OfferLineItem(
+          id: 'line-${DateTime.now().microsecondsSinceEpoch}-$nextSortOrder',
+          name: labor.name.trim(),
+          description: labor.description.trim(),
+          unit: labor.unit.trim().isEmpty ? 'ore' : labor.unit.trim(),
+          quantity: labor.quantity > 0 ? labor.quantity : 1,
+          unitPrice: labor.unitPrice,
+          lineTotal:
+              (labor.quantity > 0 ? labor.quantity : 1) * labor.unitPrice,
+          sortOrder: nextSortOrder,
+          lineType: OfferLineType.manopera,
+          laborSourceMode: OfferLaborSourceMode.standard,
+          laborTemplateId: labor.laborTemplateId.trim(),
+        ),
+      );
+      nextSortOrder++;
+    }
+
+    final appendedLines = [
+      ..._sortedLines,
+      ...normalizedMaterials,
+      ...laborLines,
+    ];
+
+    final existingClauses = [..._offer.commercialClauses];
+    final clauseTitles = existingClauses
+        .map((item) => item.title.trim().toLowerCase())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    final addedClauses = <OfferCommercialClause>[];
+    for (final clause in selected.commercialClauses) {
+      final normalizedTitle = clause.title.trim().toLowerCase();
+      if (normalizedTitle.isNotEmpty &&
+          clauseTitles.contains(normalizedTitle)) {
+        continue;
+      }
+      addedClauses.add(
+        OfferCommercialClause(
+          id: 'clause-${DateTime.now().microsecondsSinceEpoch}-${addedClauses.length}',
+          title: clause.title.trim(),
+          content: clause.content.trim(),
+          templateId: clause.templateId.trim(),
+          category: clause.category.trim(),
+          sortOrder: existingClauses.length + addedClauses.length + 1,
+        ),
+      );
+      if (normalizedTitle.isNotEmpty) {
+        clauseTitles.add(normalizedTitle);
+      }
+    }
+
+    final next = _offerWithUpdatedLines(appendedLines).copyWith(
+      commercialClauses: [
+        ...existingClauses,
+        ...addedClauses,
+      ],
+    );
+    await _persistOffer(next);
+  }
+
+  Future<void> _addStandardLaborLine() async {
+    final saved = await showDialog<OfferLineItem>(
+      context: context,
+      builder: (context) => OfferStandardLaborLineDialog(
+        initialSortOrder: _sortedLines.length + 1,
+        templates: widget.laborTemplates,
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    final lines = [
+      ..._sortedLines,
+      saved.copyWith(
+        sortOrder: _sortedLines.length + 1,
+        lineTotal: saved.effectiveLineTotal,
+      ),
+    ];
+    final next = _offerWithUpdatedLines(lines);
+    await _persistOffer(next);
+  }
+
+  Future<void> _addSimpleLaborLine() async {
+    final saved = await showDialog<OfferLineItem>(
+      context: context,
+      builder: (context) => OfferStandardLaborLineDialog(
+        initialSortOrder: _sortedLines.length + 1,
+        templates: widget.laborTemplates,
+        simpleMode: true,
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    final lines = [
+      ..._sortedLines,
+      saved.copyWith(
+        sortOrder: _sortedLines.length + 1,
+        lineTotal: saved.effectiveLineTotal,
+      ),
+    ];
+    final next = _offerWithUpdatedLines(lines);
+    await _persistOffer(next);
+  }
+
+  Future<void> _editLine(OfferLineItem line) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    if (line.lineType == OfferLineType.manopera &&
+        line.laborSourceMode == OfferLaborSourceMode.standard) {
+      final saved = await showDialog<OfferLineItem>(
+        context: context,
+        builder: (context) => OfferStandardLaborLineDialog(
+          existing: line,
+          initialSortOrder: line.sortOrder,
+          templates: widget.laborTemplates,
+        ),
+      );
+      if (saved == null) {
+        return;
+      }
+      final lines = _sortedLines
+          .map((item) => item.id == line.id ? saved : item)
+          .toList(growable: false);
+      final next = _offerWithUpdatedLines(lines);
+      await _persistOffer(next);
+      return;
+    }
+    final saved = await showDialog<OfferLineItem>(
+      context: context,
+      builder: (context) => OfferLineResourceDialog(
+        existing: line,
+        initialSortOrder: line.sortOrder,
+        personnelOptions: _laborResourcesCatalog.personnel,
+        teamOptions: _laborResourcesCatalog.teams,
+        vehicleOptions: _laborResourcesCatalog.vehicles,
+        toolPackageOptions: _laborResourcesCatalog.toolPackages,
+      ),
+    );
+    if (saved == null) return;
+    final syncedLine = await _syncMaterialLineIfNeeded(saved);
+    final lines = _sortedLines
+        .map((item) => item.id == line.id ? syncedLine : item)
+        .toList(growable: false);
+    final next = _offerWithUpdatedLines(lines);
+    await _persistOffer(next);
+  }
+
+  Future<OfferLineItem> _syncMaterialLineIfNeeded(OfferLineItem line) async {
+    if (line.lineType != OfferLineType.material) {
+      return line;
+    }
+    final synced = await _materialsCatalogService.upsertFromOfferMaterial(
+      name: line.name,
+      unit: line.unit,
+      price: line.unitPrice,
+      notes: line.description,
+    );
+    return line.copyWith(materialId: synced.id);
+  }
+
+  Future<void> _deleteLine(OfferLineItem line) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Șterge poziție'),
+        content: Text('Sigur vrei să ștergi poziția "${line.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    final remaining = _sortedLines
+        .where((item) => item.id != line.id)
+        .toList(growable: false);
+    final next = _offerWithUpdatedLines(remaining);
+    await _persistOffer(next);
+  }
+
+  Future<OfferPartner?> _showPartnerDialog({OfferPartner? existing}) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final cuiCtrl = TextEditingController(text: existing?.cui ?? '');
+    final regCtrl =
+        TextEditingController(text: existing?.tradeRegisterNumber ?? '');
+    final contactCtrl =
+        TextEditingController(text: existing?.contactPerson ?? '');
+    final phoneCtrl = TextEditingController(text: existing?.phone ?? '');
+    final emailCtrl = TextEditingController(text: existing?.email ?? '');
+    final addressCtrl = TextEditingController(text: existing?.address ?? '');
+    final cityCtrl = TextEditingController(text: existing?.city ?? '');
+    final countyCtrl = TextEditingController(text: existing?.county ?? '');
+    final ibanCtrl = TextEditingController(text: existing?.iban ?? '');
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    String? selectedMasterPartnerId =
+        existing?.masterPartnerId.trim().isNotEmpty == true
+            ? existing!.masterPartnerId.trim()
+            : null;
+    try {
+      return await showDialog<OfferPartner>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text(
+                existing == null ? 'Adaugă partener' : 'Editează partener'),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_masterPartners.isNotEmpty)
+                      DropdownButtonFormField<String?>(
+                        initialValue: selectedMasterPartnerId != null &&
+                                _masterPartners.any(
+                                  (item) => item.id == selectedMasterPartnerId,
+                                )
+                            ? selectedMasterPartnerId
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Partener salvat',
+                          helperText:
+                              'Optional: preia datele din registrul de parteneri',
+                        ),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('Introducere manuală'),
+                          ),
+                          ..._masterPartners.map(
+                            (item) => DropdownMenuItem<String?>(
+                              value: item.id,
+                              child: Text(item.name),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setDialogState(() {
+                            selectedMasterPartnerId = value;
+                            final selected = value == null
+                                ? null
+                                : _masterPartnerById(value);
+                            if (selected == null) return;
+                            nameCtrl.text = selected.name;
+                            cuiCtrl.text = selected.cui;
+                            regCtrl.text = selected.tradeRegisterNumber;
+                            contactCtrl.text = selected.contactPerson;
+                            phoneCtrl.text = selected.phone;
+                            emailCtrl.text = selected.email;
+                            addressCtrl.text = selected.address;
+                            cityCtrl.text = selected.city;
+                            countyCtrl.text = selected.county;
+                            ibanCtrl.text = selected.iban;
+                            notesCtrl.text = selected.notes;
+                          });
+                        },
+                      ),
+                    if (selectedMasterPartnerId == null)
+                      AnafCompanyAutofillSection(
+                        cuiController: cuiCtrl,
+                        nameController: nameCtrl,
+                        tradeRegisterController: regCtrl,
+                        phoneController: phoneCtrl,
+                        ibanController: ibanCtrl,
+                        addressController: addressCtrl,
+                        cityController: cityCtrl,
+                        countyController: countyCtrl,
+                      ),
+                    TextField(
+                      controller: nameCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Partener / companie'),
+                    ),
+                    if (selectedMasterPartnerId != null)
+                      TextField(
+                        controller: cuiCtrl,
+                        decoration: const InputDecoration(labelText: 'CUI'),
+                      ),
+                    TextField(
+                      controller: regCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Nr. Reg. Com.',
+                      ),
+                    ),
+                    TextField(
+                      controller: contactCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Persoană contact'),
+                    ),
+                    TextField(
+                      controller: phoneCtrl,
+                      decoration: const InputDecoration(labelText: 'Telefon'),
+                    ),
+                    TextField(
+                      controller: emailCtrl,
+                      decoration: const InputDecoration(labelText: 'Email'),
+                    ),
+                    TextField(
+                      controller: addressCtrl,
+                      decoration: const InputDecoration(labelText: 'Adresa'),
+                    ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: cityCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'Localitate'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: countyCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'Județ'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    TextField(
+                      controller: ibanCtrl,
+                      decoration: const InputDecoration(labelText: 'IBAN'),
+                    ),
+                    TextField(
+                      controller: notesCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Observații'),
+                      minLines: 2,
+                      maxLines: 4,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Renunță'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final name = nameCtrl.text.trim();
+                  if (name.isEmpty) {
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Completează numele partenerului.'),
+                      ),
+                    );
+                    return;
+                  }
+                  Navigator.of(context).pop(
+                    OfferPartner(
+                      id: existing?.id ??
+                          'offer-partner-${DateTime.now().microsecondsSinceEpoch}',
+                      name: name,
+                      masterPartnerId: selectedMasterPartnerId ?? '',
+                      cui: cuiCtrl.text.trim(),
+                      tradeRegisterNumber: regCtrl.text.trim(),
+                      contactPerson: contactCtrl.text.trim(),
+                      phone: phoneCtrl.text.trim(),
+                      email: emailCtrl.text.trim(),
+                      address: addressCtrl.text.trim(),
+                      city: cityCtrl.text.trim(),
+                      county: countyCtrl.text.trim(),
+                      iban: ibanCtrl.text.trim(),
+                      notes: notesCtrl.text.trim(),
+                    ),
+                  );
+                },
+                child: const Text('Salvează'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      nameCtrl.dispose();
+      cuiCtrl.dispose();
+      regCtrl.dispose();
+      contactCtrl.dispose();
+      phoneCtrl.dispose();
+      emailCtrl.dispose();
+      addressCtrl.dispose();
+      cityCtrl.dispose();
+      countyCtrl.dispose();
+      ibanCtrl.dispose();
+      notesCtrl.dispose();
+    }
+  }
+
+  Future<OfferPartnerWorker?> _showPartnerWorkerDialog({
+    required OfferPartner partner,
+    OfferPartnerWorker? existing,
+  }) async {
+    final nameCtrl = TextEditingController(text: existing?.fullName ?? '');
+    final roleCtrl = TextEditingController(text: existing?.role ?? '');
+    final hoursCtrl =
+        TextEditingController(text: (existing?.hours ?? 0).toString());
+    final rateCtrl =
+        TextEditingController(text: (existing?.hourlyRate ?? 0).toString());
+    final currencyCtrl =
+        TextEditingController(text: existing?.currency ?? 'RON');
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    final masterWorkers = _masterWorkersForOfferPartner(partner);
+    String? selectedMasterWorkerId =
+        existing?.masterWorkerId.trim().isNotEmpty == true
+            ? existing!.masterWorkerId.trim()
+            : null;
+    try {
+      return await showDialog<OfferPartnerWorker>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+            builder: (context, setDialogState) => AlertDialog(
+                  title: Text(
+                    existing == null
+                        ? 'Adaugă personal partener'
+                        : 'Editează personal partener',
+                  ),
+                  content: SizedBox(
+                    width: 520,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              partner.name,
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                          ),
+                          if (masterWorkers.isNotEmpty)
+                            DropdownButtonFormField<String?>(
+                              initialValue: selectedMasterWorkerId != null &&
+                                      masterWorkers.any(
+                                        (item) =>
+                                            item.id == selectedMasterWorkerId,
+                                      )
+                                  ? selectedMasterWorkerId
+                                  : null,
+                              decoration: const InputDecoration(
+                                labelText: 'Personal salvat',
+                                helperText:
+                                    'Optional: precompleteaza din registrul partenerului',
+                              ),
+                              items: [
+                                const DropdownMenuItem<String?>(
+                                  value: null,
+                                  child: Text('Introducere manuală'),
+                                ),
+                                ...masterWorkers.map(
+                                  (item) => DropdownMenuItem<String?>(
+                                    value: item.id,
+                                    child: Text(item.fullName),
+                                  ),
+                                ),
+                              ],
+                              onChanged: (value) {
+                                setDialogState(() {
+                                  selectedMasterWorkerId = value;
+                                  final selected = value == null
+                                      ? null
+                                      : masterWorkers.firstWhere(
+                                          (item) => item.id == value,
+                                        );
+                                  if (selected == null) return;
+                                  nameCtrl.text = selected.fullName;
+                                  roleCtrl.text = selected.role;
+                                  rateCtrl.text =
+                                      selected.hourlyRate.toStringAsFixed(2);
+                                  currencyCtrl.text = selected.currency;
+                                  notesCtrl.text = selected.notes;
+                                });
+                              },
+                            ),
+                          TextField(
+                            controller: nameCtrl,
+                            decoration: const InputDecoration(
+                                labelText: 'Nume complet'),
+                          ),
+                          TextField(
+                            controller: roleCtrl,
+                            decoration: const InputDecoration(labelText: 'Rol'),
+                          ),
+                          TextField(
+                            controller: hoursCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                            decoration: const InputDecoration(
+                                labelText: 'Ore estimate'),
+                          ),
+                          TextField(
+                            controller: rateCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(
+                                decimal: true),
+                            decoration: const InputDecoration(
+                                labelText: 'Tarif negociat / ora'),
+                          ),
+                          TextField(
+                            controller: currencyCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'Moneda'),
+                          ),
+                          TextField(
+                            controller: notesCtrl,
+                            decoration:
+                                const InputDecoration(labelText: 'Observații'),
+                            minLines: 2,
+                            maxLines: 4,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Renunță'),
+                    ),
+                    FilledButton(
+                      onPressed: () {
+                        final fullName = nameCtrl.text.trim();
+                        if (fullName.isEmpty) {
+                          Navigator.of(context).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text('Completează numele persoanei.')),
+                          );
+                          return;
+                        }
+                        Navigator.of(context).pop(
+                          OfferPartnerWorker(
+                            id: existing?.id ??
+                                'offer-partner-worker-${DateTime.now().microsecondsSinceEpoch}',
+                            partnerId: partner.id,
+                            fullName: fullName,
+                            masterWorkerId: selectedMasterWorkerId ?? '',
+                            role: roleCtrl.text.trim(),
+                            hours: double.tryParse(
+                                  hoursCtrl.text.replaceAll(',', '.').trim(),
+                                ) ??
+                                0,
+                            hourlyRate: double.tryParse(
+                                  rateCtrl.text.replaceAll(',', '.').trim(),
+                                ) ??
+                                0,
+                            currency: currencyCtrl.text.trim().isEmpty
+                                ? 'RON'
+                                : currencyCtrl.text.trim().toUpperCase(),
+                            notes: notesCtrl.text.trim(),
+                          ),
+                        );
+                      },
+                      child: const Text('Salvează'),
+                    ),
+                  ],
+                )),
+      );
+    } finally {
+      nameCtrl.dispose();
+      roleCtrl.dispose();
+      hoursCtrl.dispose();
+      rateCtrl.dispose();
+      currencyCtrl.dispose();
+      notesCtrl.dispose();
+    }
+  }
+
+  Future<OfferPartnerVehicle?> _showPartnerVehicleDialog({
+    required OfferPartner partner,
+    OfferPartnerVehicle? existing,
+  }) async {
+    final nameCtrl = TextEditingController(text: existing?.vehicleName ?? '');
+    final registrationCtrl =
+        TextEditingController(text: existing?.registrationNumber ?? '');
+    final kmCtrl = TextEditingController(text: (existing?.km ?? 0).toString());
+    final consumptionCtrl = TextEditingController(
+      text: (existing?.fuelConsumptionPer100Km ?? 0).toString(),
+    );
+    final priceCtrl = TextEditingController(
+      text: (existing?.fuelPricePerLiter ?? 0).toString(),
+    );
+    final currencyCtrl =
+        TextEditingController(text: existing?.currency ?? 'RON');
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    final masterVehicles = _masterVehiclesForOfferPartner(partner);
+    String? selectedMasterVehicleId =
+        existing?.masterVehicleId.trim().isNotEmpty == true
+            ? existing!.masterVehicleId.trim()
+            : null;
+    try {
+      return await showDialog<OfferPartnerVehicle>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text(
+              existing == null
+                  ? 'Adaugă autovehicul partener'
+                  : 'Editează autovehicul partener',
+            ),
+            content: SizedBox(
+              width: 520,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        partner.name,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ),
+                    if (masterVehicles.isNotEmpty)
+                      DropdownButtonFormField<String?>(
+                        initialValue: selectedMasterVehicleId != null &&
+                                masterVehicles.any(
+                                  (item) => item.id == selectedMasterVehicleId,
+                                )
+                            ? selectedMasterVehicleId
+                            : null,
+                        decoration: const InputDecoration(
+                          labelText: 'Autovehicul salvat',
+                          helperText:
+                              'Optional: precompletează din registrul partenerului',
+                        ),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('Introducere manuală'),
+                          ),
+                          ...masterVehicles.map(
+                            (item) => DropdownMenuItem<String?>(
+                              value: item.id,
+                              child: Text(item.vehicleName),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setDialogState(() {
+                            selectedMasterVehicleId = value;
+                            final selected = value == null
+                                ? null
+                                : masterVehicles.firstWhere(
+                                    (item) => item.id == value,
+                                  );
+                            if (selected == null) return;
+                            nameCtrl.text = selected.vehicleName;
+                            registrationCtrl.text = selected.registrationNumber;
+                            consumptionCtrl.text = selected
+                                .fuelConsumptionPer100Km
+                                .toStringAsFixed(2);
+                            priceCtrl.text =
+                                selected.fuelPricePerLiter.toStringAsFixed(2);
+                            currencyCtrl.text = selected.currency;
+                            notesCtrl.text = selected.notes;
+                          });
+                        },
+                      ),
+                    TextField(
+                      controller: nameCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Denumire vehicul'),
+                    ),
+                    TextField(
+                      controller: registrationCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Nr. înmatriculare',
+                      ),
+                    ),
+                    TextField(
+                      controller: kmCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Km estimați',
+                      ),
+                    ),
+                    TextField(
+                      controller: consumptionCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Consum L / 100 km',
+                      ),
+                    ),
+                    TextField(
+                      controller: priceCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Preț combustibil',
+                      ),
+                    ),
+                    TextField(
+                      controller: currencyCtrl,
+                      decoration: const InputDecoration(labelText: 'Monedă'),
+                    ),
+                    TextField(
+                      controller: notesCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Observații'),
+                      minLines: 2,
+                      maxLines: 4,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Renunță'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final vehicleName = nameCtrl.text.trim();
+                  if (vehicleName.isEmpty) {
+                    Navigator.of(context).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Completează denumirea vehiculului.'),
+                      ),
+                    );
+                    return;
+                  }
+                  Navigator.of(context).pop(
+                    OfferPartnerVehicle(
+                      id: existing?.id ??
+                          'offer-partner-vehicle-${DateTime.now().microsecondsSinceEpoch}',
+                      partnerId: partner.id,
+                      vehicleName: vehicleName,
+                      masterVehicleId: selectedMasterVehicleId ?? '',
+                      registrationNumber: registrationCtrl.text.trim(),
+                      km: double.tryParse(
+                            kmCtrl.text.replaceAll(',', '.').trim(),
+                          ) ??
+                          0,
+                      fuelConsumptionPer100Km: double.tryParse(
+                            consumptionCtrl.text.replaceAll(',', '.').trim(),
+                          ) ??
+                          0,
+                      fuelPricePerLiter: double.tryParse(
+                            priceCtrl.text.replaceAll(',', '.').trim(),
+                          ) ??
+                          0,
+                      currency: currencyCtrl.text.trim().isEmpty
+                          ? 'RON'
+                          : currencyCtrl.text.trim().toUpperCase(),
+                      notes: notesCtrl.text.trim(),
+                    ),
+                  );
+                },
+                child: const Text('Salvează'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } finally {
+      nameCtrl.dispose();
+      registrationCtrl.dispose();
+      kmCtrl.dispose();
+      consumptionCtrl.dispose();
+      priceCtrl.dispose();
+      currencyCtrl.dispose();
+      notesCtrl.dispose();
+    }
+  }
+
+  Future<void> _addPartner() async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final created = await _showPartnerDialog();
+    if (created == null) return;
+    await _persistOffer(
+      _offer.copyWith(partners: [..._offer.partners, created]),
+    );
+  }
+
+  Future<void> _editPartner(OfferPartner partner) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final updated = await _showPartnerDialog(existing: partner);
+    if (updated == null) return;
+    await _persistOffer(
+      _offer.copyWith(
+        partners: _offer.partners
+            .map((item) => item.id == updated.id ? updated : item)
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  Future<void> _deletePartner(OfferPartner partner) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Șterge partener'),
+        content: Text(
+          'Partenerul "${partner.name}" va fi sters impreuna cu personalul si autovehiculele asociate.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await _persistOffer(
+      _offer.copyWith(
+        partners: _offer.partners
+            .where((item) => item.id != partner.id)
+            .toList(growable: false),
+        partnerWorkers: _offer.partnerWorkers
+            .where((item) => item.partnerId != partner.id)
+            .toList(growable: false),
+        partnerVehicles: _offer.partnerVehicles
+            .where((item) => item.partnerId != partner.id)
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  Future<void> _addPartnerWorker(OfferPartner partner) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final created = await _showPartnerWorkerDialog(partner: partner);
+    if (created == null) return;
+    await _persistOffer(
+      _offer.copyWith(
+        partnerWorkers: [..._offer.partnerWorkers, created],
+      ),
+    );
+  }
+
+  Future<void> _editPartnerWorker(
+    OfferPartner partner,
+    OfferPartnerWorker worker,
+  ) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final updated = await _showPartnerWorkerDialog(
+      partner: partner,
+      existing: worker,
+    );
+    if (updated == null) return;
+    await _persistOffer(
+      _offer.copyWith(
+        partnerWorkers: _offer.partnerWorkers
+            .map((item) => item.id == updated.id ? updated : item)
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  Future<void> _deletePartnerWorker(OfferPartnerWorker worker) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    await _persistOffer(
+      _offer.copyWith(
+        partnerWorkers: _offer.partnerWorkers
+            .where((item) => item.id != worker.id)
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  Future<void> _addPartnerVehicle(OfferPartner partner) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final created = await _showPartnerVehicleDialog(partner: partner);
+    if (created == null) return;
+    await _persistOffer(
+      _offer.copyWith(
+        partnerVehicles: [..._offer.partnerVehicles, created],
+      ),
+    );
+  }
+
+  Future<void> _editPartnerVehicle(
+    OfferPartner partner,
+    OfferPartnerVehicle vehicle,
+  ) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    final updated = await _showPartnerVehicleDialog(
+      partner: partner,
+      existing: vehicle,
+    );
+    if (updated == null) return;
+    await _persistOffer(
+      _offer.copyWith(
+        partnerVehicles: _offer.partnerVehicles
+            .map((item) => item.id == updated.id ? updated : item)
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  Future<void> _deletePartnerVehicle(OfferPartnerVehicle vehicle) async {
+    if (_isFrozen) {
+      _showFrozenMessage();
+      return;
+    }
+    await _persistOffer(
+      _offer.copyWith(
+        partnerVehicles: _offer.partnerVehicles
+            .where((item) => item.id != vehicle.id)
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  Widget _buildPartnerSection() {
+    if (_offer.partners.isEmpty) {
+      return const Card(
+        child: Padding(
+          padding: EdgeInsets.all(12),
+          child: Text('Nu exista resurse partener adaugate.'),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: _offer.partners.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (context, index) {
+        final partner = _offer.partners[index];
+        final workers = _partnerWorkersFor(partner.id);
+        final vehicles = _partnerVehiclesFor(partner.id);
+        final workerCurrency =
+            _currencyLabel(workers.map((item) => item.currency));
+        final vehicleCurrency =
+            _currencyLabel(vehicles.map((item) => item.currency));
+        final totalCurrency = _currencyLabel([
+          ...workers.map((item) => item.currency),
+          ...vehicles.map((item) => item.currency),
+        ]);
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            partner.name,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              if (partner.contactPerson.isNotEmpty)
+                                Chip(
+                                    label: Text(
+                                        'Contact: ${partner.contactPerson}')),
+                              if (partner.phone.isNotEmpty)
+                                Chip(label: Text('Telefon: ${partner.phone}')),
+                              if (partner.email.isNotEmpty)
+                                Chip(label: Text('Email: ${partner.email}')),
+                              Chip(
+                                label: Text(
+                                  'Total personal: ${_partnerWorkersTotalFor(partner.id).toStringAsFixed(2)} $workerCurrency',
+                                ),
+                              ),
+                              Chip(
+                                label: Text(
+                                  'Total autovehicule: ${_partnerVehiclesTotalFor(partner.id).toStringAsFixed(2)} $vehicleCurrency',
+                                ),
+                              ),
+                              Chip(
+                                label: Text(
+                                  'Total partener: ${_partnerTotalFor(partner.id).toStringAsFixed(2)} $totalCurrency',
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (partner.notes.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text('Observatii: ${partner.notes}'),
+                          ],
+                        ],
+                      ),
+                    ),
+                    Wrap(
+                      spacing: 4,
+                      children: [
+                        IconButton(
+                          tooltip: 'Editeaza partener',
+                          onPressed: (_saving || _isFrozen)
+                              ? null
+                              : () => _editPartner(partner),
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
+                        IconButton(
+                          tooltip: 'Șterge partener',
+                          onPressed: (_saving || _isFrozen)
+                              ? null
+                              : () => _deletePartner(partner),
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Text(
+                      'Personal partener',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: (_saving || _isFrozen)
+                          ? null
+                          : () => _addPartnerWorker(partner),
+                      icon: const Icon(Icons.person_add_alt_1_outlined),
+                      label: const Text('Adauga personal'),
+                    ),
+                  ],
+                ),
+                if (workers.isEmpty)
+                  const Text('Nu exista personal partener adaugat.')
+                else
+                  ...workers.map((worker) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(worker.fullName),
+                        subtitle: Text(
+                          [
+                            if (worker.role.isNotEmpty) 'Rol: ${worker.role}',
+                            'Ore: ${worker.hours.toStringAsFixed(2)}',
+                            'Tarif: ${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency}',
+                            'Total: ${worker.total.toStringAsFixed(2)} ${worker.currency}',
+                            if (worker.notes.isNotEmpty)
+                              'Observatii: ${worker.notes}',
+                          ].join(' • '),
+                        ),
+                        trailing: Wrap(
+                          spacing: 4,
+                          children: [
+                            IconButton(
+                              tooltip: 'Editeaza',
+                              onPressed: (_saving || _isFrozen)
+                                  ? null
+                                  : () => _editPartnerWorker(partner, worker),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                            IconButton(
+                              tooltip: 'Șterge',
+                              onPressed: (_saving || _isFrozen)
+                                  ? null
+                                  : () => _deletePartnerWorker(worker),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ],
+                        ),
+                      )),
+                const Divider(height: 20),
+                Row(
+                  children: [
+                    Text(
+                      'Autovehicule partener',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: (_saving || _isFrozen)
+                          ? null
+                          : () => _addPartnerVehicle(partner),
+                      icon: const Icon(Icons.local_shipping_outlined),
+                      label: const Text('Adauga autovehicul'),
+                    ),
+                  ],
+                ),
+                if (vehicles.isEmpty)
+                  const Text('Nu exista autovehicule partener adaugate.')
+                else
+                  ...vehicles.map((vehicle) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(vehicle.vehicleName),
+                        subtitle: Text(
+                          [
+                            if (vehicle.registrationNumber.isNotEmpty)
+                              'Nr: ${vehicle.registrationNumber}',
+                            'Km: ${vehicle.km.toStringAsFixed(2)}',
+                            'Consum: ${vehicle.fuelConsumptionPer100Km.toStringAsFixed(2)} L/100 km',
+                            'Pret combustibil: ${vehicle.fuelPricePerLiter.toStringAsFixed(2)} ${vehicle.currency}',
+                            'Total: ${vehicle.total.toStringAsFixed(2)} ${vehicle.currency}',
+                            if (vehicle.notes.isNotEmpty)
+                              'Observatii: ${vehicle.notes}',
+                          ].join(' • '),
+                        ),
+                        trailing: Wrap(
+                          spacing: 4,
+                          children: [
+                            IconButton(
+                              tooltip: 'Editeaza',
+                              onPressed: (_saving || _isFrozen)
+                                  ? null
+                                  : () => _editPartnerVehicle(partner, vehicle),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                            IconButton(
+                              tooltip: 'Șterge',
+                              onPressed: (_saving || _isFrozen)
+                                  ? null
+                                  : () => _deletePartnerVehicle(vehicle),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ],
+                        ),
+                      )),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('${_offer.offerNumber} - Detaliu ofertă'),
+        actions: [
+          PopupMenuButton<PdfVisualTemplate>(
+            tooltip: 'Șablon PDF',
+            enabled: !(_saving || _exportingPdf || _converting),
+            initialValue: _selectedPdfTemplate,
+            onSelected: (value) {
+              setState(() => _selectedPdfTemplate = value);
+            },
+            itemBuilder: (context) => PdfVisualTemplate.values
+                .map(
+                  (template) => PopupMenuItem<PdfVisualTemplate>(
+                    value: template,
+                    child: SizedBox(
+                      width: 280,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(template.label),
+                          const SizedBox(height: 2),
+                          Text(
+                            template.description,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                )
+                .toList(growable: false),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.style_outlined),
+                  const SizedBox(width: 6),
+                  Text(_selectedPdfTemplate.label),
+                ],
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: (_saving || _exportingPdf || _converting)
+                ? null
+                : () => _generatePdf(),
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            tooltip: 'Generează PDF',
+          ),
+          IconButton(
+            onPressed:
+                (_saving || _converting || _isFrozen) ? null : _openEmailDialog,
+            icon: const Icon(Icons.email_outlined),
+            tooltip: 'Trimite oferta',
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Mai mult',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'ai':
+                  _openAiAssistant();
+                case 'necesar':
+                  _openMaterialNecessar();
+                case 'save_as':
+                  _generatePdf(saveAs: true);
+                case 'share':
+                  _generatePdf(share: true);
+                case 'lucrare':
+                  _openConvertedJob();
+                case 'convert':
+                  _convertToJob();
+                case 'duplica':
+                  _duplicateOffer();
+                case 'edit':
+                  _editOfferHeader();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'ai',
+                child: ListTile(
+                  leading: Icon(Icons.auto_awesome_outlined),
+                  title: Text('Asistent AI'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'necesar',
+                enabled: !(_saving || _converting),
+                child: const ListTile(
+                  leading: Icon(Icons.format_list_bulleted_outlined),
+                  title: Text('Necesar materiale'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'save_as',
+                enabled: !(_saving || _exportingPdf || _converting),
+                child: const ListTile(
+                  leading: Icon(Icons.save_as_outlined),
+                  title: Text('Salvează ca...'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              if (_offer.complaintId.trim().isNotEmpty)
+                PopupMenuItem(
+                  value: 'share',
+                  enabled: !(_saving || _exportingPdf || _converting),
+                  child: const ListTile(
+                    leading: Icon(Icons.share_outlined),
+                    title: Text('Distribuie'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+              if (_offer.isConverted)
+                PopupMenuItem(
+                  value: 'lucrare',
+                  enabled: !(_saving || _exportingPdf || _converting),
+                  child: const ListTile(
+                    leading: Icon(Icons.open_in_new_outlined),
+                    title: Text('Deschide lucrarea'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+              if (widget.onConvertToJob != null)
+                PopupMenuItem(
+                  value: 'convert',
+                  enabled: !(_saving ||
+                      _exportingPdf ||
+                      _converting ||
+                      !_canConvertToJob),
+                  child: const ListTile(
+                    leading: Icon(Icons.transform_outlined),
+                    title: Text('Transformă în lucrare'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+              if (widget.onDuplicateOffer != null)
+                PopupMenuItem(
+                  value: 'duplica',
+                  enabled: !(_saving || _exportingPdf || _converting),
+                  child: const ListTile(
+                    leading: Icon(Icons.content_copy_outlined),
+                    title: Text('Duplică'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+              if (widget.onEditOffer != null)
+                PopupMenuItem(
+                  value: 'edit',
+                  enabled: !(_saving || _converting || _isFrozen),
+                  child: const ListTile(
+                    leading: Icon(Icons.edit_outlined),
+                    title: Text('Editează antet'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: (_saving || _converting || _isFrozen) ? null : _addLine,
+        icon: const Icon(Icons.add),
+        label: const Text('Adaugă poziție'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            _offer.isConverted
+                                ? 'Status: Convertită'
+                                : 'Status: ${_offer.status.label}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                          backgroundColor: _statusChipColor(_offer),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            _offer.registryNumber.trim().isEmpty
+                                ? 'Neînregistrată'
+                                : 'Registratură: ${_offer.registryNumber.trim()}',
+                            style: TextStyle(
+                              color: _offer.registryNumber.trim().isEmpty
+                                  ? Colors.orange.shade900
+                                  : Colors.green.shade900,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                          backgroundColor: _offer.registryNumber.trim().isEmpty
+                              ? Colors.orange.shade100
+                              : Colors.green.shade100,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                    if (!_offer.isConverted) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        'Status rapid',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: OfferStatus.values.map((status) {
+                          final selected = _offer.status == status;
+                          final chipColor =
+                              _statusChipColor(_offer.copyWith(status: status));
+                          return ChoiceChip(
+                            label: Text(
+                              status.label,
+                              style: TextStyle(
+                                color: selected ? Colors.white : chipColor,
+                                fontWeight: selected
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                            selected: selected,
+                            selectedColor: chipColor,
+                            side: BorderSide(color: chipColor, width: 1.2),
+                            onSelected: (_saving || _isFrozen || selected)
+                                ? null
+                                : (_) => _changeOfferStatus(status),
+                          );
+                        }).toList(growable: false),
+                      ),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: (_saving || _isFrozen)
+                                ? null
+                                : _openEmailDialog,
+                            icon: const Icon(Icons.email_outlined),
+                            label: const Text('Trimite oferta'),
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    _buildPdfTemplateSelectorCard(),
+                    const SizedBox(height: 12),
+                    _buildSmartBillSection(),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 8,
+                      children: [
+                        _kv('Numar oferta', _offer.offerNumber),
+                        _kv('Titlu', _offer.title),
+                        _kv('Client', _resolveClientName()),
+                        if (_offer.commercialRecipientName.trim().isNotEmpty)
+                          _kv(
+                            'Destinatar comercial / platitor',
+                            _offer.commercialRecipientName.trim(),
+                          ),
+                        if (_offer.beneficiaryName.trim().isNotEmpty)
+                          _kv('Beneficiar real', _offer.beneficiaryName.trim()),
+                        _kv(
+                          'Departament',
+                          _offer.departmentName.trim().isEmpty
+                              ? '-'
+                              : _offer.departmentName.trim(),
+                        ),
+                        _kv(
+                          'Persoana de contact',
+                          _offer.contactPersonName.trim().isEmpty
+                              ? '-'
+                              : _offer.contactPersonName.trim(),
+                        ),
+                        _kv(
+                          'Contact email',
+                          _offer.contactPersonEmail.trim().isEmpty
+                              ? '-'
+                              : _offer.contactPersonEmail.trim(),
+                        ),
+                        _kv(
+                          'Contact telefon',
+                          _offer.contactPersonPhone.trim().isEmpty
+                              ? '-'
+                              : _offer.contactPersonPhone.trim(),
+                        ),
+                        _kv('Lucrare', _resolveJobLabel()),
+                        if (_offer.complaintNumber.trim().isNotEmpty)
+                          _kv('Reclamatie sursa',
+                              _offer.complaintNumber.trim()),
+                        if (_offer.appointmentId.trim().isNotEmpty)
+                          _kv('Programare sursa', _offer.appointmentId.trim()),
+                        _kv(
+                          'Acord client',
+                          _offer.agreementAcceptedAt == null
+                              ? 'Nesemnat'
+                              : _formatDate(_offer.agreementAcceptedAt),
+                        ),
+                        _kv('Status', _displayStatusLabel(_offer)),
+                        _kv(
+                          'Registratura',
+                          _offer.registryNumber.trim().isEmpty
+                              ? 'neinregistrat'
+                              : _offer.registryNumber.trim(),
+                        ),
+                        _kv(
+                          'Data inregistrare',
+                          _formatDate(_offer.registeredAt),
+                        ),
+                        _kv(
+                          'Conversie in lucrare',
+                          _offer.convertedToJobId.trim().isEmpty
+                              ? 'Nu'
+                              : 'Da (${_offer.convertedToJobId})',
+                        ),
+                        _kv(
+                          'Data conversie',
+                          _formatDate(_offer.convertedAt),
+                        ),
+                        _kv('Data emitere', _formatDate(_offer.issueDate)),
+                        _kv('Valabil pana la', _formatDate(_offer.validUntil)),
+                        _kv(
+                            'Moneda',
+                            OfferCurrencyConverter.normalizeCurrency(
+                                _offer.currency)),
+                        _kv('Curs oferta', _rateLabel()),
+                        _kv(
+                          'Observatii',
+                          _offer.notes.trim().isEmpty
+                              ? '-'
+                              : _offer.notes.trim(),
+                        ),
+                        _kv('Afisare preturi', _priceDisplayModeLabel()),
+                        if (_offer.pdfPath.trim().isNotEmpty)
+                          _kv('Ultimul PDF', _offer.pdfPath.trim()),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_offer.complaintId.trim().isNotEmpty)
+              Card(
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.45),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Flux comercial complet pentru reclamatie',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Oferta pornita din reclamatie foloseste acelasi motor comercial din Oferte. Poti calcula normal materiale, manopera, autoturisme, scule, parteneri si totalurile comerciale.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: const [
+                          Chip(
+                            label: Text('Materiale'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text('Manopera'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text('Autoturisme'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text('Scule'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text('Parteneri'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text('Regie / Profit / TVA'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            if (_hasEquipmentData)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    children: [
+                      _kv('Tip echipament', _equipmentTypeLabel),
+                      _kv(
+                          'Brand',
+                          _offer.equipmentBrand.trim().isEmpty
+                              ? '-'
+                              : _offer.equipmentBrand.trim()),
+                      _kv(
+                          'Model',
+                          _offer.equipmentModel.trim().isEmpty
+                              ? '-'
+                              : _offer.equipmentModel.trim()),
+                      _kv(
+                        'Serie unitate exterioara',
+                        _offer.outdoorUnitSerial.trim().isEmpty
+                            ? '-'
+                            : _offer.outdoorUnitSerial.trim(),
+                      ),
+                      _kv(
+                        'Serii unitati interioare',
+                        _offer.indoorUnitSerials.trim().isEmpty
+                            ? '-'
+                            : _offer.indoorUnitSerials.trim(),
+                      ),
+                      _kv(
+                        'Detalii tehnice',
+                        _offer.equipmentDetails.trim().isEmpty
+                            ? '-'
+                            : _offer.equipmentDetails.trim(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Acord si semnaturi',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _offer.complaintId.trim().isEmpty
+                          ? 'Semnaturile pot fi folosite pentru confirmarea documentului comercial.'
+                          : 'Documentul poate functiona si ca acord pentru interventia provenita din reclamatie.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            _offer.beneficiaryName.trim().isEmpty
+                                ? 'Beneficiar: -'
+                                : 'Beneficiar: ${_offer.beneficiaryName.trim()}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            _offer.commercialRecipientName.trim().isEmpty
+                                ? 'Platitor comercial: ${_resolveClientName()}'
+                                : 'Platitor comercial: ${_offer.commercialRecipientName.trim()}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            _offer.agreementAcceptedAt == null
+                                ? 'Acord client: in asteptare'
+                                : 'Acord client: ${_formatDate(_offer.agreementAcceptedAt)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final vertical = constraints.maxWidth < 900;
+                        final items = [
+                          SizedBox(
+                            width: vertical
+                                ? double.infinity
+                                : (constraints.maxWidth - 12) / 2,
+                            child: _signatureCard(
+                              title: 'Semnatura client / beneficiar',
+                              raw: _offer.clientSignatureBase64,
+                              isClient: true,
+                              subtitle: _offer.agreementAcceptedAt == null
+                                  ? 'Confirmă acordul pentru execuție.'
+                                  : 'Acord înregistrat la ${_formatDate(_offer.agreementAcceptedAt)}.',
+                            ),
+                          ),
+                          SizedBox(
+                            width: vertical
+                                ? double.infinity
+                                : (constraints.maxWidth - 12) / 2,
+                            child: _signatureCard(
+                              title: 'Semnatura emitent / reprezentant firma',
+                              raw: _offer.issuerSignatureBase64,
+                              isClient: false,
+                              subtitle:
+                                  'Semnatura emitentului pentru documentul comercial.',
+                            ),
+                          ),
+                        ];
+                        return Wrap(
+                          spacing: 12,
+                          runSpacing: 12,
+                          children: items,
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_offer.isConverted) ...[
+              const SizedBox(height: 12),
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.lock_outline),
+                  title:
+                      const Text('Oferta convertita este blocata operational'),
+                  subtitle: Text(
+                    'Oferta a fost deja convertita in lucrare si nu mai poate fi modificata. Lucrare generata: ${_offer.convertedToJobId.trim().isEmpty ? "-" : _offer.convertedToJobId.trim()}',
+                  ),
+                  trailing: OutlinedButton.icon(
+                    onPressed: _openConvertedJob,
+                    icon: const Icon(Icons.open_in_new_outlined),
+                    label: const Text('Deschide lucrarea'),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Card(
+              color: _offer.complaintId.trim().isNotEmpty
+                  ? Theme.of(context)
+                      .colorScheme
+                      .surfaceContainerHighest
+                      .withValues(alpha: 0.38)
+                  : null,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _offer.complaintId.trim().isNotEmpty
+                          ? 'Rezumat economic pentru reclamație'
+                          : 'Rezumat economic',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            'Cost estimat: ${_displayAmount(_estimatedInterventionCost)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            _priceDisplayMode == OfferPriceDisplayMode.both
+                                ? _displayAmountWithLabels(
+                                    _offeredPriceWithoutVat,
+                                    withoutVatLabel: 'Preț ofertat fără TVA',
+                                    withVatLabel: 'Preț ofertat cu TVA',
+                                  )
+                                : 'Preț ofertat: ${_displaySingleAmount(_offeredPriceWithoutVat)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        if (_priceDisplayMode == OfferPriceDisplayMode.both)
+                          Chip(
+                            label: Text(
+                              'TVA (${_offer.vatPercent.toStringAsFixed(2)}%): ${_moneyCommercial(_offer.vatValue)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        Chip(
+                          label: Text(
+                            _priceDisplayMode == OfferPriceDisplayMode.both
+                                ? _displayAmountWithLabels(
+                                    _offeredPriceWithoutVat,
+                                    withoutVatLabel: 'Total fără TVA',
+                                    withVatLabel: 'Preț final',
+                                  )
+                                : '${_priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${_displaySingleAmount(_offeredPriceWithoutVat)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        if (_estimatedInterventionCost > 0 ||
+                            _offeredPriceWithoutVat > 0)
+                          Chip(
+                            label: Text(
+                              'Marja estimata: ${_moneyCommercial(_estimatedCommercialMargin)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${_priceDisplayExplanation()} ${_offer.complaintId.trim().isNotEmpty ? 'Cost estimat = subtotal direct calculat din resursele ofertei. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul către plătitorul comercial.' : 'Cost estimat = subtotal direct. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul cu TVA.'}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Totaluri oferta',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const Spacer(),
+                        OutlinedButton.icon(
+                          onPressed:
+                              (_saving || _isFrozen) ? null : _editVatPercent,
+                          icon: const Icon(Icons.percent),
+                          label: const Text('Modifica TVA'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            'Subtotal materiale: ${_displayAmount(_offer.materialSubtotal)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            'Manopera generala: ${_displayAmount(_offer.laborSubtotal)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            'Cost estimat / subtotal direct: ${_displayAmount(_offer.subtotalDirect)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            'Regie (${_offer.regiePercent.toStringAsFixed(2)}%): ${_displayAmount(_offer.regieValue)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            'Profit (${_offer.profitPercent.toStringAsFixed(2)}%): ${_displayAmount(_offer.profitValue)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            _priceDisplayMode == OfferPriceDisplayMode.both
+                                ? _displayAmountWithLabels(
+                                    _offer.subtotalComercial,
+                                    withoutVatLabel: 'Preț ofertat fără TVA',
+                                    withVatLabel: 'Preț ofertat cu TVA',
+                                  )
+                                : 'Preț ofertat: ${_displaySingleAmount(_offer.subtotalComercial)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        if (_priceDisplayMode == OfferPriceDisplayMode.both)
+                          Chip(
+                            label: Text(
+                              'TVA (${_offer.vatPercent.toStringAsFixed(2)}%): ${_moneyCommercial(_offer.vatValue)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        Chip(
+                          label: Text(
+                            _priceDisplayMode == OfferPriceDisplayMode.both
+                                ? _displayAmountWithLabels(
+                                    _offer.subtotalComercial,
+                                    withoutVatLabel: 'Total fără TVA',
+                                    withVatLabel: 'Preț final',
+                                  )
+                                : '${_priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${_displaySingleAmount(_offer.subtotalComercial)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _priceDisplayExplanation(),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_internalLaborLines.isNotEmpty ||
+                _standardLaborCommercialValue > 0) ...[
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Transparenta manopera',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 8,
+                        children: [
+                          if (_internalLaborLines.isNotEmpty) ...[
+                            Chip(
+                              label: Text(
+                                'Cost intern estimat: ${_moneyCommercial(_internalLaborEstimatedCost)}',
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            Chip(
+                              label: Text(
+                                'Pret comercial estimat: ${_moneyCommercial(_estimatedCommercialLaborValue)}',
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            Chip(
+                              label: Text(
+                                'Diferenta estimata: ${_moneyCommercial(_estimatedLaborMargin)}',
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ],
+                          if (_standardLaborCommercialValue > 0)
+                            Chip(
+                              label: Text(
+                                'Manopera standard comerciala: ${_moneyCommercial(_standardLaborCommercialValue)}',
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _standardLaborCommercialValue > 0
+                            ? 'Zona este doar informativa. Pentru manopera standard pastram doar pretul comercial daca nu exista un cost intern clar.'
+                            : 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (_internalVehicleEstimatedCost > 0) ...[
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Transparenta autoturisme',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            label: Text(
+                              'Cost intern estimat autoturisme: ${_moneyCommercial(_internalVehicleEstimatedCost)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Pret comercial estimat: ${_moneyCommercial(_estimatedCommercialVehicleValue)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Diferenta estimata: ${_moneyCommercial(_estimatedVehicleMargin)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _vehicleCostSourceSummaryAll.isEmpty
+                            ? 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.'
+                            : 'Sursa cost autoturisme: $_vehicleCostSourceSummaryAll\nZona este doar informativa si nu modifica totalurile actuale ale ofertei.',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (_internalToolsEstimatedCost > 0) ...[
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Transparenta scule / pachete scule',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            label: Text(
+                              'Cost intern estimat scule: ${_moneyCommercial(_internalToolsEstimatedCost)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Pret comercial estimat: ${_moneyCommercial(_estimatedCommercialToolsValue)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Diferenta estimata: ${_moneyCommercial(_estimatedToolsMargin)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _toolCostSourceSummaryAll.isEmpty
+                            ? 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.'
+                            : 'Sursa cost scule: $_toolCostSourceSummaryAll\nZona este doar informativa si nu modifica totalurile actuale ale ofertei.',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (_offer.partners.isNotEmpty ||
+                _offer.partnerWorkers.isNotEmpty ||
+                _offer.partnerVehicles.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Totaluri parteneri',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 8,
+                        children: [
+                          Chip(
+                            label: Text(
+                              'Personal partener: ${_partnerWorkersTotal.toStringAsFixed(2)} $_partnerWorkersCurrency',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Autovehicule partener: ${_partnerVehiclesTotal.toStringAsFixed(2)} $_partnerVehiclesCurrency',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Total general parteneri: ${_partnersTotal.toStringAsFixed(2)} $_partnersCurrency',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Zona este separata de resursele interne si are rol informativ pentru componenta partenerilor din oferta.',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(
+                  'Resurse partener',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: (_saving || _isFrozen) ? null : _addPartner,
+                  icon: const Icon(Icons.handshake_outlined),
+                  label: const Text('Adauga partener'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            _buildPartnerSection(),
+            const SizedBox(height: 12),
+            Text(
+              'Pozitii comerciale oferta',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _priceDisplayExplanation(),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: (_saving || _isFrozen) ? null : _addLine,
+                icon: const Icon(Icons.add),
+                label: const Text('Adaugă poziție'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (_commercialLines.isEmpty)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text('Nu exista pozitii in aceasta oferta.'),
+                ),
+              )
+            else
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _commercialLines.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final sourceLine = _commercialLines[index];
+                  final line = _commercialLineForDisplay(sourceLine);
+                  final isAggregatedLabor =
+                      sourceLine.id == '__labor_aggregate__' &&
+                          sourceLine.lineType == OfferLineType.manopera;
+                  return Card(
+                    child: ListTile(
+                      title: Text('${line.sortOrder}. ${line.name}'),
+                      subtitle: Text(_commercialLineSubtitle(sourceLine, line)),
+                      isThreeLine: true,
+                      trailing: isAggregatedLabor
+                          ? null
+                          : Wrap(
+                              spacing: 8,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Editeaza pozitie',
+                                  onPressed: (_saving || _isFrozen)
+                                      ? null
+                                      : () => _editLine(sourceLine),
+                                  icon: const Icon(Icons.edit_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: 'Șterge poziție',
+                                  onPressed: (_saving || _isFrozen)
+                                      ? null
+                                      : () => _deleteLine(sourceLine),
+                                  icon: const Icon(Icons.delete_outline),
+                                ),
+                              ],
+                            ),
+                    ),
+                  );
+                },
+              ),
+            if (_offer.commercialClauses.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Servicii incluse / Condiții comerciale',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 6),
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _offer.commercialClauses.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final clause = _offer.commercialClauses[index];
+                  return Card(
+                    child: ListTile(
+                      title: Text(
+                        clause.title.trim().isEmpty
+                            ? 'Conditie comerciala'
+                            : clause.title.trim(),
+                      ),
+                      subtitle: Text(
+                        clause.content.trim().isEmpty
+                            ? '-'
+                            : clause.content.trim(),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+            if (_internalLaborLines.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Compunere interna manopera',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 6),
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _internalLaborLines.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final line = _internalLaborLines[index];
+                  return Card(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withValues(alpha: 0.35),
+                    child: ListTile(
+                      title: Text('${line.sortOrder}. ${line.name}'),
+                      subtitle: Text(
+                        'Ore: ${line.laborHours.toStringAsFixed(2)} • Tarif orar: ${line.laborHourlyRate.toStringAsFixed(2)}\n'
+                        'Diurna: ${line.laborPerDiemDays.toStringAsFixed(2)} zile x ${line.laborPerDiemPerDay.toStringAsFixed(2)}'
+                        ' • Cazare: ${line.laborLodgingNights.toStringAsFixed(2)} nopti x ${line.laborLodgingPerNight.toStringAsFixed(2)}\n'
+                        'Total intern: ${line.effectiveLineTotal.toStringAsFixed(2)}\n'
+                        '${_laborResourceSummary(line)}',
+                      ),
+                      isThreeLine: true,
+                      trailing: Wrap(
+                        spacing: 8,
+                        children: [
+                          IconButton(
+                            tooltip: 'Editeaza manopera',
+                            onPressed: (_saving || _isFrozen)
+                                ? null
+                                : () => _editLine(line),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                          IconButton(
+                            tooltip: 'Șterge manoperă',
+                            onPressed: (_saving || _isFrozen)
+                                ? null
+                                : () => _deleteLine(line),
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool get _hasEquipmentData =>
+      _offer.equipmentType.trim().isNotEmpty ||
+      _offer.equipmentBrand.trim().isNotEmpty ||
+      _offer.equipmentModel.trim().isNotEmpty ||
+      _offer.outdoorUnitSerial.trim().isNotEmpty ||
+      _offer.indoorUnitSerials.trim().isNotEmpty ||
+      _offer.equipmentDetails.trim().isNotEmpty;
+
+  String get _equipmentTypeLabel {
+    return ComplaintEquipmentType.fromValue(_offer.equipmentType)?.label ??
+        (_offer.equipmentType.trim().isEmpty
+            ? '-'
+            : _offer.equipmentType.trim());
+  }
+
+  Widget _kv(String label, String value) {
+    return SizedBox(
+      width: 280,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 2),
+          Text(value),
+        ],
+      ),
+    );
+  }
+}
+
+class _OfferCommercialPackagePickerDialog extends StatelessWidget {
+  const _OfferCommercialPackagePickerDialog({required this.items});
+
+  final List<OfferCommercialPackageTemplate> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final available = items
+        .where((item) => item.isActive)
+        .toList(growable: false)
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return AlertDialog(
+      title: const Text('Adauga din pachet comercial'),
+      content: SizedBox(
+        width: 720,
+        child: available.isEmpty
+            ? const Center(
+                child: Text('Nu exista pachete comerciale standard active.'),
+              )
+            : ListView.separated(
+                shrinkWrap: true,
+                itemCount: available.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final item = available[index];
+                  return ListTile(
+                    title: Text(item.name),
+                    subtitle: Text(
+                      '${item.description.trim().isEmpty ? '-' : item.description.trim()}\n'
+                      'Materiale: ${item.materials.length} • Manopera standard: ${item.standardLabor.length} • Conditii: ${item.commercialClauses.length}',
+                    ),
+                    isThreeLine: true,
+                    onTap: () => Navigator.of(context).pop(item),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+      ],
+    );
+  }
+}

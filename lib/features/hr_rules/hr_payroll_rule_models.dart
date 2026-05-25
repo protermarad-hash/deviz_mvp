@@ -1,0 +1,738 @@
+class HrPayrollRuleSet {
+  const HrPayrollRuleSet({
+    required this.id,
+    required this.jurisdiction,
+    required this.scope,
+    required this.name,
+  });
+
+  final String id;
+  final String jurisdiction;
+  final String scope;
+  final String name;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'jurisdiction': jurisdiction,
+      'scope': scope,
+      'name': name,
+    };
+  }
+
+  factory HrPayrollRuleSet.fromMap(Map<String, dynamic> map) {
+    return HrPayrollRuleSet(
+      id: (map['id'] ?? '').toString(),
+      jurisdiction: (map['jurisdiction'] ?? '').toString(),
+      scope: (map['scope'] ?? '').toString(),
+      name: (map['name'] ?? '').toString(),
+    );
+  }
+}
+
+class HrPayrollRuleVersion {
+  const HrPayrollRuleVersion({
+    required this.id,
+    required this.ruleSetId,
+    required this.jurisdiction,
+    required this.versionCode,
+    required this.effectiveFrom,
+    this.effectiveTo,
+    required this.ruleType,
+    required this.rulePayload,
+    required this.legalBasis,
+    required this.isDefault,
+    required this.isOverridable,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String ruleSetId;
+  final String jurisdiction;
+  final String versionCode;
+  final DateTime effectiveFrom;
+  final DateTime? effectiveTo;
+  final String ruleType;
+  final Map<String, dynamic> rulePayload;
+  final String legalBasis;
+  final bool isDefault;
+  final bool isOverridable;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  HrPayrollRuleVersion copyWith({
+    String? id,
+    String? ruleSetId,
+    String? jurisdiction,
+    String? versionCode,
+    DateTime? effectiveFrom,
+    DateTime? effectiveTo,
+    bool clearEffectiveTo = false,
+    String? ruleType,
+    Map<String, dynamic>? rulePayload,
+    String? legalBasis,
+    bool? isDefault,
+    bool? isOverridable,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) {
+    return HrPayrollRuleVersion(
+      id: id ?? this.id,
+      ruleSetId: ruleSetId ?? this.ruleSetId,
+      jurisdiction: jurisdiction ?? this.jurisdiction,
+      versionCode: versionCode ?? this.versionCode,
+      effectiveFrom: effectiveFrom ?? this.effectiveFrom,
+      effectiveTo: clearEffectiveTo ? null : (effectiveTo ?? this.effectiveTo),
+      ruleType: ruleType ?? this.ruleType,
+      rulePayload: rulePayload ?? this.rulePayload,
+      legalBasis: legalBasis ?? this.legalBasis,
+      isDefault: isDefault ?? this.isDefault,
+      isOverridable: isOverridable ?? this.isOverridable,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  bool appliesTo(DateTime date) {
+    final target = DateTime(date.year, date.month, date.day);
+    final from = DateTime(
+      effectiveFrom.year,
+      effectiveFrom.month,
+      effectiveFrom.day,
+    );
+    final to = effectiveTo == null
+        ? null
+        : DateTime(effectiveTo!.year, effectiveTo!.month, effectiveTo!.day);
+    if (target.isBefore(from)) return false;
+    if (to != null && target.isAfter(to)) return false;
+    return true;
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'rule_set_id': ruleSetId,
+      'jurisdiction': jurisdiction,
+      'version_code': versionCode,
+      'effective_from': effectiveFrom.toIso8601String(),
+      'effective_to': effectiveTo?.toIso8601String() ?? '',
+      'rule_type': ruleType,
+      'rule_payload': rulePayload,
+      'legal_basis': legalBasis,
+      'is_default': isDefault,
+      'is_overridable': isOverridable,
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+    };
+  }
+
+  factory HrPayrollRuleVersion.fromMap(Map<String, dynamic> map) {
+    DateTime parseDate(dynamic raw, {DateTime? fallback}) {
+      final text = (raw ?? '').toString().trim();
+      if (text.isEmpty) {
+        return fallback ?? DateTime.fromMillisecondsSinceEpoch(0);
+      }
+      return DateTime.tryParse(text) ??
+          fallback ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+    }
+
+    DateTime? parseNullableDate(dynamic raw) {
+      final text = (raw ?? '').toString().trim();
+      if (text.isEmpty) return null;
+      return DateTime.tryParse(text);
+    }
+
+    bool parseBool(dynamic raw, {bool fallback = false}) {
+      if (raw is bool) return raw;
+      final text = (raw ?? '').toString().trim().toLowerCase();
+      if (text == 'true' || text == '1') return true;
+      if (text == 'false' || text == '0') return false;
+      return fallback;
+    }
+
+    Map<String, dynamic> parsePayload(dynamic raw) {
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) {
+        return Map<String, dynamic>.from(raw);
+      }
+      return const <String, dynamic>{};
+    }
+
+    return HrPayrollRuleVersion(
+      id: (map['id'] ?? '').toString(),
+      ruleSetId: (map['rule_set_id'] ?? map['ruleSetId'] ?? '').toString(),
+      jurisdiction: (map['jurisdiction'] ?? '').toString(),
+      versionCode: (map['version_code'] ?? map['versionCode'] ?? '').toString(),
+      effectiveFrom: parseDate(map['effective_from'] ?? map['effectiveFrom']),
+      effectiveTo: parseNullableDate(map['effective_to'] ?? map['effectiveTo']),
+      ruleType: (map['rule_type'] ?? map['ruleType'] ?? '').toString(),
+      rulePayload: parsePayload(map['rule_payload'] ?? map['rulePayload']),
+      legalBasis: (map['legal_basis'] ?? map['legalBasis'] ?? '').toString(),
+      isDefault: parseBool(map['is_default'] ?? map['isDefault']),
+      isOverridable: parseBool(map['is_overridable'] ?? map['isOverridable']),
+      createdAt: parseDate(
+        map['created_at'] ?? map['createdAt'],
+        fallback: parseDate(map['effective_from'] ?? map['effectiveFrom']),
+      ),
+      updatedAt: parseDate(
+        map['updated_at'] ?? map['updatedAt'],
+        fallback: parseDate(map['effective_from'] ?? map['effectiveFrom']),
+      ),
+    );
+  }
+}
+
+class HrPayrollRuleSeed {
+  const HrPayrollRuleSeed._();
+
+  static List<HrPayrollRuleSet> roRuleSets() {
+    return const <HrPayrollRuleSet>[
+      HrPayrollRuleSet(
+        id: 'ro-payroll',
+        jurisdiction: 'RO',
+        scope: 'payroll',
+        name: 'Romania payroll base rules',
+      ),
+      HrPayrollRuleSet(
+        id: 'ro-leave',
+        jurisdiction: 'RO',
+        scope: 'leave',
+        name: 'Romania leave rules',
+      ),
+      HrPayrollRuleSet(
+        id: 'ro-medical-leave',
+        jurisdiction: 'RO',
+        scope: 'medical_leave',
+        name: 'Romania medical leave rules',
+      ),
+      HrPayrollRuleSet(
+        id: 'ro-overtime',
+        jurisdiction: 'RO',
+        scope: 'overtime',
+        name: 'Romania overtime rules',
+      ),
+      HrPayrollRuleSet(
+        id: 'ro-garnishment',
+        jurisdiction: 'RO',
+        scope: 'garnishment',
+        name: 'Romania garnishment rules',
+      ),
+      HrPayrollRuleSet(
+        id: 'ro-meal-ticket',
+        jurisdiction: 'RO',
+        scope: 'meal_ticket',
+        name: 'Romania meal ticket rules',
+      ),
+      HrPayrollRuleSet(
+        id: 'ro-night-work',
+        jurisdiction: 'RO',
+        scope: 'night_work',
+        name: 'Romania night work supplement rules',
+      ),
+    ];
+  }
+
+  static List<HrPayrollRuleVersion> roRuleVersions() {
+    final timestamp = DateTime.utc(2026, 4, 12);
+    return <HrPayrollRuleVersion>[
+      HrPayrollRuleVersion(
+        id: 'ro-payroll-minimum-wage-2025-01-01',
+        ruleSetId: 'ro-payroll',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: DateTime.utc(2025, 12, 31),
+        ruleType: 'minimum_wage',
+        rulePayload: const <String, dynamic>{
+          'currency': 'RON',
+          'gross_monthly_amount': 4050.0,
+          'average_monthly_hours': 165.334,
+          'gross_hourly_amount': 24.496,
+          'source_kind': 'national_minimum_wage',
+        },
+        legalBasis:
+            'HG 1506/2024, art. 1, aplicabil de la 2025-01-01 - https://legislatie.just.ro/public/DetaliiDocument/291450',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-payroll-minimum-wage-2026-01-01',
+        ruleSetId: 'ro-payroll',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2026.01',
+        effectiveFrom: DateTime.utc(2026, 1, 1),
+        effectiveTo: DateTime.utc(2026, 6, 30),
+        ruleType: 'minimum_wage',
+        rulePayload: const <String, dynamic>{
+          'currency': 'RON',
+          'gross_monthly_amount': 4300.0,
+          'average_monthly_hours': 165.334,
+          'gross_hourly_amount': 26.007,
+          'source_kind': 'national_minimum_wage',
+        },
+        legalBasis:
+            'HG 1220/2025, art. 1, aplicabil de la 2026-01-01 pana la 2026-06-30 - https://legislatie.just.ro/Public/DetaliiDocument/294140',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-payroll-minimum-wage-2026-07-01',
+        ruleSetId: 'ro-payroll',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2026.07',
+        effectiveFrom: DateTime.utc(2026, 7, 1),
+        effectiveTo: null,
+        ruleType: 'minimum_wage',
+        rulePayload: const <String, dynamic>{
+          'currency': 'RON',
+          'gross_monthly_amount': 4325.0,
+          'average_monthly_hours': 165.334,
+          'gross_hourly_amount': 26.158,
+          'source_kind': 'national_minimum_wage',
+        },
+        legalBasis:
+            'HG 146/2026, art. 1, aplicabil de la 2026-07-01 - https://legislatie.just.ro/Public/DetaliiDocument/296600',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-payroll-salary-tax-2025-01-01',
+        ruleSetId: 'ro-payroll',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: null,
+        ruleType: 'salary_tax',
+        rulePayload: const <String, dynamic>{
+          'employee_cas_percent': 25.0,
+          'employee_cass_percent': 10.0,
+          'income_tax_percent': 10.0,
+          'employer_cam_percent': 2.25,
+          'deductions_formula_version': 'ro_standard_v1',
+          'notes':
+              'Seed general pentru regimul standard; exceptiile fiscale speciale raman pentru versiuni ulterioare.',
+        },
+        legalBasis:
+            'Codul fiscal - art. 138, art. 156, art. 64, art. 220^3; referinte oficiale: https://legislatie.just.ro/Public/DetaliiDocument/216306',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-payroll-salary-tax-2026-01-01',
+        ruleSetId: 'ro-payroll',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2026.01',
+        effectiveFrom: DateTime.utc(2026, 1, 1),
+        effectiveTo: null,
+        ruleType: 'salary_tax',
+        rulePayload: const <String, dynamic>{
+          'employee_cas_percent': 25.0,
+          'employee_cass_percent': 10.0,
+          'income_tax_percent': 10.0,
+          'employer_cam_percent': 2.25,
+          'deductions_formula_version': 'ro_standard_v2_ded_personala',
+          'employee_personal_deduction_supported': true,
+          'personal_deduction_formula': 'ro_ded_personala_oug89_2025',
+          'personal_deduction_base_ron': 699.0,
+          'personal_deduction_threshold_gross_ron': 4050.0,
+          'personal_deduction_max_gross_factor': 3.0,
+          'notes':
+              'OUG 89/2025: deducerea personala de baza 699 RON pentru brut <= 4300 RON; reducere liniara pana la 3x salariu minim; zero peste. Impozit 10% se aplica pe baza neta dupa CAS+CASS-deducere. Dependenti si exceptii speciale raman pentru patch-uri ulterioare.',
+        },
+        legalBasis:
+            'Codul fiscal (Legea nr. 227/2015) - art. 64, art. 138 lit. a), art. 156, art. 220^3; OUG 89/2025 privind deducerea personala - https://legislatie.just.ro/Public/DetaliiDocument/178854',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-leave-vacation-leave-2025-01-01',
+        ruleSetId: 'ro-leave',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: null,
+        ruleType: 'vacation_leave',
+        rulePayload: const <String, dynamic>{
+          'minimum_working_days_per_year': 20,
+          'allowance_formula_version': 'ro_vacation_last_3_months_avg_v1',
+          'notes':
+              'Seed minim pentru concediul de odihna; reguli favorabile suplimentare pot fi configurate ulterior.',
+        },
+        legalBasis:
+            'Codul muncii - art. 139-150; minim 20 zile lucratoare - https://legislatie.just.ro/Public/DetaliiDocument/75203',
+        isDefault: true,
+        isOverridable: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-medical-leave-2025-01-01',
+        ruleSetId: 'ro-medical-leave',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: null,
+        ruleType: 'medical_leave',
+        rulePayload: const <String, dynamic>{
+          'base_formula_version': 'ro_medical_leave_last_6_of_12_v1',
+          'base_reference_months': 6,
+          'base_reference_window_months': 12,
+          'employer_paid_day_count': 5,
+          'percentage_by_code': <String, dynamic>{},
+          'requires_admin_completion': true,
+          'notes':
+              'Structura este pregatita pentru procente pe coduri/tipuri de concediu medical; seed-ul evita inventarea completa a tuturor subcategoriilor.',
+        },
+        legalBasis:
+            'OUG 158/2005 privind concediile si indemnizatiile de asigurari sociale de sanatate - https://legislatie.just.ro/Public/DetaliiDocumentAfis/66305',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-medical-leave-2025-08-01',
+        ruleSetId: 'ro-medical-leave',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.08',
+        effectiveFrom: DateTime.utc(2025, 8, 1),
+        effectiveTo: DateTime.utc(2026, 1, 31),
+        ruleType: 'medical_leave',
+        rulePayload: const <String, dynamic>{
+          'base_formula_version': 'ro_medical_leave_last_6_of_12_v2',
+          'base_reference_months': 6,
+          'base_reference_window_months': 12,
+          'employer_paid_day_count': 5,
+          'episode_recalculation_cross_month_required': true,
+          'percentage_by_code': <String, dynamic>{
+            '01': <String, dynamic>{
+              'kind': 'ordinary_sickness_stepped',
+              'brackets': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'min_episode_days': 1,
+                  'max_episode_days': 7,
+                  'percent': 55.0,
+                },
+                <String, dynamic>{
+                  'min_episode_days': 8,
+                  'max_episode_days': 14,
+                  'percent': 65.0,
+                },
+                <String, dynamic>{
+                  'min_episode_days': 15,
+                  'max_episode_days': 9999,
+                  'percent': 75.0,
+                },
+              ],
+              'aliases': <String>[
+                'BOALA OBISNUITA',
+                'BOALA_OBISNUITA',
+                'OBISNUITA',
+              ],
+            },
+            'URGENTA_MEDICO_CHIRURGICALA': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 100.0,
+            },
+            'MATERNITATE': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 85.0,
+            },
+            'INGRIJIRE_COPIL_BOLNAV': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 85.0,
+            },
+            'RISC_MATERNAL': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 75.0,
+            },
+            'CARANTINA': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 75.0,
+            },
+          },
+          'requires_admin_completion': true,
+          'notes':
+              'Aliniaza codul 01 la 55/65/75 si marcheaza necesitatea recalcularii pe acelasi episod care traverseaza lunile.',
+        },
+        legalBasis:
+            'OUG nr. 158/2005, art. 10, art. 17, art. 25, art. 30, art. 31; Ordinul nr. 522/2025 si Ordinul nr. 523/2025 privind codul 01 si formularele de concediu medical; surse oficiale: https://legislatie.just.ro/Public/DetaliiDocument/66305 ; https://legislatie.just.ro/Public/DetaliiDocument/300419',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-medical-leave-2026-02-01',
+        ruleSetId: 'ro-medical-leave',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2026.02',
+        effectiveFrom: DateTime.utc(2026, 2, 1),
+        effectiveTo: null,
+        ruleType: 'medical_leave',
+        rulePayload: const <String, dynamic>{
+          'base_formula_version': 'ro_medical_leave_last_6_of_12_v2',
+          'base_reference_months': 6,
+          'base_reference_window_months': 12,
+          'episode_recalculation_cross_month_required': true,
+          'temporary_reduction_days': 1,
+          'temporary_reduction_from': '2026-02-01',
+          'temporary_reduction_to': '2027-12-31',
+          'support_split': <String, dynamic>{
+            'ordinary_employer_from_day': 2,
+            'ordinary_employer_to_day': 6,
+            'fnuass_from_next_day_after_employer': true,
+            'integral_fnuass_from_day': 2,
+          },
+          'percentage_by_code': <String, dynamic>{
+            '01': <String, dynamic>{
+              'kind': 'ordinary_sickness_stepped',
+              'brackets': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'min_episode_days': 1,
+                  'max_episode_days': 7,
+                  'percent': 55.0,
+                },
+                <String, dynamic>{
+                  'min_episode_days': 8,
+                  'max_episode_days': 14,
+                  'percent': 65.0,
+                },
+                <String, dynamic>{
+                  'min_episode_days': 15,
+                  'max_episode_days': 9999,
+                  'percent': 75.0,
+                },
+              ],
+              'aliases': <String>[
+                'BOALA OBISNUITA',
+                'BOALA_OBISNUITA',
+                'OBISNUITA',
+              ],
+            },
+            'URGENTA_MEDICO_CHIRURGICALA': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 100.0,
+            },
+            'MATERNITATE': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 85.0,
+            },
+            'INGRIJIRE_COPIL_BOLNAV': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 85.0,
+            },
+            'RISC_MATERNAL': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 75.0,
+            },
+            'CARANTINA': <String, dynamic>{
+              'kind': 'fixed_percent',
+              'percent': 75.0,
+            },
+          },
+          'requires_admin_completion': true,
+          'notes':
+              'Include diminuarea cu o zi pentru certificatele emise intre 2026-02-01 si 2027-12-31 si splitul angajator/FNUASS prevazut de normele 2026.',
+        },
+        legalBasis:
+            'OUG nr. 158/2005; OUG nr. 91/2025, art. II; Ordinul nr. 521/2026, art. 78^4; surse oficiale: https://legislatie.just.ro/Public/DetaliiDocument/66305 ; https://legislatie.just.ro/Public/DetaliiDocumentAfis/306237 ; https://legislatie.just.ro/Public/DetaliiDocumentAfis/307943',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-overtime-2025-01-01',
+        ruleSetId: 'ro-overtime',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: null,
+        ruleType: 'overtime',
+        rulePayload: const <String, dynamic>{
+          'compensation_time_off_days': 60,
+          'minimum_salary_bonus_percent': 75.0,
+          'notes':
+              'Compensare prin ore libere platite in termenul legal; daca nu este posibila, se aplica sporul minim.',
+        },
+        legalBasis:
+            'Codul muncii - art. 120-123 - https://legislatie.just.ro/Public/DetaliiDocument/75203',
+        isDefault: true,
+        isOverridable: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-garnishment-2025-01-01',
+        ruleSetId: 'ro-garnishment',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: null,
+        ruleType: 'garnishment',
+        rulePayload: const <String, dynamic>{
+          'general_cap_net_fraction': 0.3333333333,
+          'maintenance_cap_net_fraction': 0.5,
+          'combined_cap_net_fraction': 0.5,
+          'notes':
+              'Plafonare CPC art. 729: max 1/3 net pentru creditori generali, max 1/2 net pentru pensie/intretinere, max 1/2 net total combinat. Implementata in calculator.',
+        },
+        legalBasis:
+            'Codul de procedura civila - art. 729 privind urmarirea veniturilor banesti - https://legislatie.just.ro/Public/FormaPrintabila/00000G1WB9UQAJ6IE1M1TUDD92LOKT7U',
+        isDefault: true,
+        isOverridable: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-meal-ticket-2025-01-01',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: DateTime.utc(2025, 12, 31),
+        ruleType: 'meal_ticket',
+        ruleSetId: 'ro-meal-ticket',
+        rulePayload: const <String, dynamic>{
+          // correct 2025
+          'daily_cap_ron': 40.96,
+          'currency': 'RON',
+          'fiscal_treatment':
+              'exempt_cas_subject_cass_subject_income_tax_10pct',
+          'notes':
+              'Conform OUG 115/2023 (vigoare ian 2024) si Legii 296/2023: tichete in limita plafonului zilnic SCUTITE de CAS (25%), SUPUSE CASS (10%) si impozitului pe venit (10%) retinute din salariul net. HG 1507/2024: plafon zilnic 40.96 RON.',
+        },
+        legalBasis:
+            'Legea 165/2018; OUG 115/2023 art. 2 (Titlul V - CASS); Legea 296/2023; Codul Fiscal art. 76 alin.(4); HG 1507/2024',
+        isDefault: true,
+        isOverridable: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-meal-ticket-2026-01-01',
+        ruleSetId: 'ro-meal-ticket',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2026.01',
+        effectiveFrom: DateTime.utc(2026, 1, 1),
+        effectiveTo: null,
+        ruleType: 'meal_ticket',
+        rulePayload: const <String, dynamic>{
+          'daily_cap_ron': 45.0,
+          'currency': 'RON',
+          'fiscal_treatment':
+              'exempt_cas_subject_cass_subject_income_tax_10pct',
+          'notes':
+              'Conform OUG 115/2023 si Legii 296/2023 si OUG 89/2025 (vigoare 2026): tichete in limita plafonului zilnic SCUTITE de CAS (25%), SUPUSE CASS (10%) si impozitului pe venit (10%) retinute din salariul net. Plafon zilnic 2026: 45 RON (Legea 201/2025).',
+        },
+        legalBasis:
+            'Legea 165/2018; OUG 115/2023 Titlul V; Legea 296/2023; OUG 89/2025; Codul Fiscal art. 76 alin.(4); Legea 201/2025 plafon 45 RON',
+        isDefault: true,
+        isOverridable: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+      HrPayrollRuleVersion(
+        id: 'ro-night-work-2025-01-01',
+        ruleSetId: 'ro-night-work',
+        jurisdiction: 'RO',
+        versionCode: 'RO-2025.01',
+        effectiveFrom: DateTime.utc(2025, 1, 1),
+        effectiveTo: null,
+        ruleType: 'night_work',
+        rulePayload: const <String, dynamic>{
+          'minimum_supplement_percent': 25.0,
+          'night_interval_start_hour': 22,
+          'night_interval_end_hour': 6,
+          'minimum_night_hours_per_shift_for_entitlement': 3.0,
+          'auto_compute_in_calculator': true,
+          'notes':
+              'Spor minim 25% din salariul de baza pentru orele lucrate intre 22:00-06:00. Daca angajatul lucreaza cel putin 3h pe noapte, are dreptul la spor. Calculat automat din nightHours (pontaj) × tarif orar × 25%.',
+        },
+        legalBasis:
+            'Codul muncii - art. 122-128 privind munca de noapte - https://legislatie.just.ro/Public/DetaliiDocument/75203',
+        isDefault: true,
+        isOverridable: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      ),
+    ];
+  }
+
+  static List<HrPayrollRuleVersion> mergeWithRoDefaults(
+    Iterable<HrPayrollRuleVersion> rows,
+  ) {
+    final merged = <String, HrPayrollRuleVersion>{};
+    for (final item in roRuleVersions()) {
+      merged[item.id] = item;
+    }
+    for (final item in rows) {
+      if (item.id.trim().isEmpty) continue;
+      merged[item.id] = item;
+    }
+    final result = merged.values.toList(growable: false);
+    result.sort((a, b) {
+      final byFrom = b.effectiveFrom.compareTo(a.effectiveFrom);
+      if (byFrom != 0) return byFrom;
+      return a.id.compareTo(b.id);
+    });
+    return result;
+  }
+
+  static List<HrPayrollRuleSet> mergeRuleSetsWithRoDefaults(
+    Iterable<HrPayrollRuleSet> rows,
+  ) {
+    final merged = <String, HrPayrollRuleSet>{};
+    for (final item in roRuleSets()) {
+      merged[item.id] = item;
+    }
+    for (final item in rows) {
+      if (item.id.trim().isEmpty) continue;
+      merged[item.id] = item;
+    }
+    final result = merged.values.toList(growable: false);
+    result.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return result;
+  }
+
+  static HrPayrollRuleVersion? fallbackRoRuleForMonth({
+    required String scope,
+    required String ruleType,
+    required DateTime payrollMonth,
+  }) {
+    final month = DateTime(payrollMonth.year, payrollMonth.month, 1);
+    final rows = roRuleVersions().where((item) {
+      return item.ruleType.trim().toLowerCase() ==
+              ruleType.trim().toLowerCase() &&
+          item.appliesTo(month) &&
+          _scopeFromRuleSetId(item.ruleSetId) == scope.trim().toLowerCase();
+    }).toList(growable: false);
+    if (rows.isEmpty) return null;
+    rows.sort((a, b) => b.effectiveFrom.compareTo(a.effectiveFrom));
+    return rows.first;
+  }
+
+  static String _scopeFromRuleSetId(String ruleSetId) {
+    final value = ruleSetId.trim().toLowerCase();
+    if (value == 'ro-payroll') return 'payroll';
+    if (value == 'ro-leave') return 'leave';
+    if (value == 'ro-medical-leave') return 'medical_leave';
+    if (value == 'ro-overtime') return 'overtime';
+    if (value == 'ro-garnishment') return 'garnishment';
+    if (value == 'ro-meal-ticket') return 'meal_ticket';
+    if (value == 'ro-night-work') return 'night_work';
+    return value;
+  }
+}

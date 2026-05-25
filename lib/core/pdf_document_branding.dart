@@ -1,0 +1,456 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import 'company_profile.dart';
+import 'pdf_export_settings.dart';
+
+class DocumentBrandingData {
+  const DocumentBrandingData({
+    required this.companyName,
+    required this.address,
+    required this.phone,
+    required this.email,
+    required this.cui,
+    required this.tradeRegister,
+    required this.bank,
+    required this.iban,
+    required this.contactName,
+    required this.logoBytes,
+    this.city = '',
+    this.county = '',
+    this.website = '',
+    this.contactEmail = '',
+    this.currency = 'RON',
+  });
+
+  final String companyName;
+  final String address;
+  final String city;
+  final String county;
+  final String phone;
+  final String email;
+  final String contactEmail;
+  final String website;
+  final String cui;
+  final String tradeRegister;
+  final String bank;
+  final String iban;
+  final String contactName;
+  final String currency;
+  final Uint8List? logoBytes;
+
+  /// Adresa completă: stradă + oraș + județ.
+  String get fullAddress {
+    final parts = [address, city, county]
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
+    return parts.isEmpty ? '' : parts.join(', ');
+  }
+
+  factory DocumentBrandingData.fromCompanyProfile(CompanyProfile profile) {
+    Uint8List? logoBytes;
+    final rawLogo = profile.logoBase64.trim();
+    if (rawLogo.isNotEmpty) {
+      try {
+        logoBytes = base64Decode(rawLogo);
+      } catch (_) {
+        logoBytes = null;
+      }
+    }
+    return DocumentBrandingData(
+      companyName: profile.companyName.trim(),
+      address: profile.address.trim(),
+      city: profile.city.trim(),
+      county: profile.county.trim(),
+      phone: profile.phone.trim(),
+      email: profile.email.trim(),
+      contactEmail: profile.contactEmail.trim(),
+      website: profile.website.trim(),
+      cui: profile.cui.trim(),
+      tradeRegister: profile.tradeRegister.trim(),
+      bank: profile.bank.trim(),
+      iban: profile.iban.trim(),
+      contactName: profile.contactName.trim(),
+      currency: profile.currency.trim().isEmpty ? 'RON' : profile.currency.trim(),
+      logoBytes: logoBytes,
+    );
+  }
+}
+
+class PdfTemplatePalette {
+  const PdfTemplatePalette({
+    required this.primary,
+    required this.secondary,
+    required this.accent,
+    required this.surface,
+    required this.surfaceAlt,
+    required this.border,
+    required this.note,
+    required this.headerText,
+  });
+
+  final PdfColor primary;
+  final PdfColor secondary;
+  final PdfColor accent;
+  final PdfColor surface;
+  final PdfColor surfaceAlt;
+  final PdfColor border;
+  final PdfColor note;
+  final PdfColor headerText;
+}
+
+PdfTemplatePalette resolvePdfTemplatePalette(PdfVisualTemplate template) {
+  switch (template) {
+    case PdfVisualTemplate.classic:
+      return PdfTemplatePalette(
+        primary: PdfColor.fromHex('#26415E'),
+        secondary: PdfColor.fromHex('#5C6F82'),
+        accent: PdfColor.fromHex('#A97B37'),
+        surface: PdfColors.white,
+        surfaceAlt: PdfColor.fromHex('#F4F6F8'),
+        border: PdfColor.fromHex('#D2D9E0'),
+        note: PdfColor.fromHex('#F9F3E6'),
+        headerText: PdfColors.white,
+      );
+    case PdfVisualTemplate.executive:
+      return PdfTemplatePalette(
+        primary: PdfColor.fromHex('#1F2A44'),
+        secondary: PdfColor.fromHex('#4D5D78'),
+        accent: PdfColor.fromHex('#C9A55C'),
+        surface: PdfColor.fromHex('#FBFBFA'),
+        surfaceAlt: PdfColor.fromHex('#EEF1F4'),
+        border: PdfColor.fromHex('#CDD5DE'),
+        note: PdfColor.fromHex('#F8F1DF'),
+        headerText: PdfColors.white,
+      );
+    case PdfVisualTemplate.modern:
+      return PdfTemplatePalette(
+        primary: PdfColor.fromHex('#0E5A6F'),
+        secondary: PdfColor.fromHex('#3C7D8F'),
+        accent: PdfColor.fromHex('#E28A2B'),
+        surface: PdfColors.white,
+        surfaceAlt: PdfColor.fromHex('#EAF5F7'),
+        border: PdfColor.fromHex('#C8DEE3'),
+        note: PdfColor.fromHex('#FFF4E6'),
+        headerText: PdfColors.white,
+      );
+    case PdfVisualTemplate.minimal:
+      return PdfTemplatePalette(
+        primary: PdfColor.fromHex('#31363F'),
+        secondary: PdfColor.fromHex('#6D7480'),
+        accent: PdfColor.fromHex('#8C6A43'),
+        surface: PdfColors.white,
+        surfaceAlt: PdfColor.fromHex('#F7F7F6'),
+        border: PdfColor.fromHex('#DDDEDF'),
+        note: PdfColor.fromHex('#F3F1EC'),
+        headerText: PdfColors.white,
+      );
+    case PdfVisualTemplate.bold:
+      return PdfTemplatePalette(
+        primary: PdfColor.fromHex('#7B1E2B'),
+        secondary: PdfColor.fromHex('#9B4151'),
+        accent: PdfColor.fromHex('#D08C3F'),
+        surface: PdfColors.white,
+        surfaceAlt: PdfColor.fromHex('#FAEFF1'),
+        border: PdfColor.fromHex('#E2C8CD'),
+        note: PdfColor.fromHex('#FFF1E4'),
+        headerText: PdfColors.white,
+      );
+    case PdfVisualTemplate.joyson:
+      return PdfTemplatePalette(
+        primary: PdfColor.fromHex('#183A6A'),
+        secondary: PdfColor.fromHex('#506884'),
+        accent: PdfColor.fromHex('#D39A2D'),
+        surface: PdfColors.white,
+        surfaceAlt: PdfColor.fromHex('#F2F6FB'),
+        border: PdfColor.fromHex('#C8D4E2'),
+        note: PdfColor.fromHex('#F7F1E4'),
+        headerText: PdfColors.white,
+      );
+  }
+}
+
+pw.Widget buildClassicDocumentHeader({
+  required DocumentBrandingData branding,
+  required String documentTitle,
+  required List<MapEntry<String, String>> metadata,
+  PdfVisualTemplate template = PdfVisualTemplate.classic,
+  String? documentSubtitle,
+}) {
+  final palette = resolvePdfTemplatePalette(template);
+
+  pw.Widget infoLine(String label, String value) {
+    final normalizedValue = value.trim().isEmpty ? '-' : value.trim();
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 3),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.SizedBox(
+            width: template == PdfVisualTemplate.minimal ? 108 : 116,
+            child: pw.Text(
+              label,
+              style: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 8.6,
+                color: palette.secondary,
+              ),
+            ),
+          ),
+          pw.Expanded(
+            child: pw.Text(
+              normalizedValue,
+              style: const pw.TextStyle(fontSize: 8.6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget detailLine(String value) {
+    if (value.trim().isEmpty) {
+      return pw.SizedBox.shrink();
+    }
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 2),
+      child: pw.Text(
+        value.trim(),
+        style: pw.TextStyle(fontSize: 8.7, color: palette.secondary),
+      ),
+    );
+  }
+
+  pw.Widget metadataPanel() {
+    if (template == PdfVisualTemplate.executive ||
+        template == PdfVisualTemplate.bold) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(12),
+        decoration: pw.BoxDecoration(
+          color: palette.primary,
+          borderRadius: pw.BorderRadius.circular(8),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              documentTitle,
+              style: pw.TextStyle(
+                fontSize: 17,
+                fontWeight: pw.FontWeight.bold,
+                color: palette.headerText,
+              ),
+            ),
+            if ((documentSubtitle ?? '').trim().isNotEmpty) ...[
+              pw.SizedBox(height: 4),
+              pw.Text(
+                documentSubtitle!.trim(),
+                style: pw.TextStyle(
+                  fontSize: 9.2,
+                  fontWeight: pw.FontWeight.bold,
+                  color: palette.accent,
+                ),
+              ),
+            ],
+            pw.SizedBox(height: 8),
+            ...metadata.map(
+              (entry) => pw.Padding(
+                padding: const pw.EdgeInsets.only(bottom: 3),
+                child: pw.Text(
+                  '${entry.key}: ${entry.value.trim().isEmpty ? '-' : entry.value.trim()}',
+                  style: pw.TextStyle(
+                    fontSize: 8.6,
+                    color: palette.headerText,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (template == PdfVisualTemplate.modern) {
+      return pw.Container(
+        padding: const pw.EdgeInsets.all(12),
+        decoration: pw.BoxDecoration(
+          color: palette.surfaceAlt,
+          border: pw.Border.all(color: palette.border),
+          borderRadius: pw.BorderRadius.circular(10),
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(
+              documentTitle,
+              style: pw.TextStyle(
+                fontSize: 16,
+                fontWeight: pw.FontWeight.bold,
+                color: palette.primary,
+              ),
+            ),
+            if ((documentSubtitle ?? '').trim().isNotEmpty) ...[
+              pw.SizedBox(height: 4),
+              pw.Text(
+                documentSubtitle!.trim(),
+                style: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: pw.FontWeight.bold,
+                  color: palette.accent,
+                ),
+              ),
+            ],
+            pw.SizedBox(height: 8),
+            pw.Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: metadata
+                  .map(
+                    (entry) => pw.Container(
+                      padding: const pw.EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: pw.BoxDecoration(
+                        color: PdfColors.white,
+                        borderRadius: pw.BorderRadius.circular(10),
+                      ),
+                      child: pw.Text(
+                        '${entry.key}: ${entry.value.trim().isEmpty ? '-' : entry.value.trim()}',
+                        style: pw.TextStyle(
+                          fontSize: 8.2,
+                          color: palette.primary,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(12),
+      decoration: pw.BoxDecoration(
+        color: palette.surfaceAlt,
+        border: template == PdfVisualTemplate.minimal
+            ? pw.Border(
+                left: pw.BorderSide(color: palette.border, width: 2),
+              )
+            : pw.Border.all(color: palette.border),
+        borderRadius: pw.BorderRadius.circular(6),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            documentTitle,
+            style: pw.TextStyle(
+              fontSize: template == PdfVisualTemplate.minimal ? 16 : 18,
+              fontWeight: pw.FontWeight.bold,
+              color: palette.primary,
+            ),
+          ),
+          if ((documentSubtitle ?? '').trim().isNotEmpty) ...[
+            pw.SizedBox(height: 4),
+            pw.Text(
+              documentSubtitle!.trim(),
+              style: pw.TextStyle(
+                fontSize: 9,
+                fontWeight: pw.FontWeight.bold,
+                color: palette.accent,
+              ),
+            ),
+          ],
+          pw.SizedBox(height: 6),
+          ...metadata.map((entry) => infoLine(entry.key, entry.value)),
+        ],
+      ),
+    );
+  }
+
+  return pw.Container(
+    padding: const pw.EdgeInsets.all(16),
+    decoration: pw.BoxDecoration(
+      color: palette.surface,
+      border: pw.Border.all(color: palette.border),
+      borderRadius: pw.BorderRadius.circular(8),
+    ),
+    child: pw.Column(
+      children: [
+        pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            if (branding.logoBytes != null) ...[
+              pw.Container(
+                width: 82,
+                height: 82,
+                alignment: pw.Alignment.center,
+                decoration: pw.BoxDecoration(
+                  color: palette.surfaceAlt,
+                  border: pw.Border.all(color: palette.border),
+                  borderRadius: pw.BorderRadius.circular(6),
+                ),
+                child: pw.Image(
+                  pw.MemoryImage(branding.logoBytes!),
+                  fit: pw.BoxFit.contain,
+                ),
+              ),
+              pw.SizedBox(width: 16),
+            ],
+            pw.Expanded(
+              flex: 2,
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  if (branding.companyName.trim().isNotEmpty)
+                    pw.Text(
+                      branding.companyName.trim(),
+                      style: pw.TextStyle(
+                        fontSize: 15,
+                        fontWeight: pw.FontWeight.bold,
+                        color: palette.primary,
+                      ),
+                    ),
+                  detailLine(branding.address),
+                  detailLine(
+                      branding.phone.isEmpty ? '' : 'Tel: ${branding.phone}'),
+                  detailLine(
+                      branding.email.isEmpty ? '' : 'Email: ${branding.email}'),
+                  detailLine(
+                      branding.cui.isEmpty ? '' : 'CUI: ${branding.cui}'),
+                  detailLine(
+                    branding.tradeRegister.isEmpty
+                        ? ''
+                        : 'Reg. com.: ${branding.tradeRegister}',
+                  ),
+                  detailLine(
+                      branding.bank.isEmpty ? '' : 'Banca: ${branding.bank}'),
+                  detailLine(
+                      branding.iban.isEmpty ? '' : 'IBAN: ${branding.iban}'),
+                  detailLine(
+                    branding.contactName.isEmpty
+                        ? ''
+                        : 'Persoana contact: ${branding.contactName}',
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(width: 20),
+            pw.Expanded(
+              flex: 3,
+              child: metadataPanel(),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}

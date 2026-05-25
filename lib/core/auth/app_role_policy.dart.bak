@@ -1,0 +1,145 @@
+import '../auth_models.dart';
+import 'field_auth_models.dart';
+
+class AppRolePolicy {
+  const AppRolePolicy._();
+
+  static UserRole? fromFieldRole(FieldUserRole? role) {
+    switch (role) {
+      case FieldUserRole.admin:
+        return UserRole.admin;
+      case FieldUserRole.office:
+        return UserRole.birou;
+      case FieldUserRole.teamLead:
+        return UserRole.sefEchipa;
+      case FieldUserRole.employee:
+        return UserRole.tehnician;
+      case null:
+        return null;
+    }
+  }
+
+  static UserRole? fromRoleKey(String? rawRoleKey) {
+    final normalized = _normalizeRoleKey(rawRoleKey);
+    switch (normalized) {
+      case 'admin':
+        return UserRole.admin;
+      case 'birou':
+      case 'office':
+        return UserRole.birou;
+      case 'sefechipa':
+      case 'teamlead':
+        return UserRole.sefEchipa;
+      case 'tehnician':
+      case 'employee':
+      case 'angajat':
+        return UserRole.tehnician;
+      default:
+        return null;
+    }
+  }
+
+  static UserRole? resolve({
+    UserRole? appRole,
+    FieldUserRole? fieldRole,
+    String? roleKey,
+  }) {
+    return appRole ?? fromFieldRole(fieldRole) ?? fromRoleKey(roleKey);
+  }
+
+  static String displayLabel({
+    UserRole? appRole,
+    FieldUserRole? fieldRole,
+    String? roleKey,
+  }) {
+    final resolved = resolve(
+      appRole: appRole,
+      fieldRole: fieldRole,
+      roleKey: roleKey,
+    );
+    switch (resolved) {
+      case UserRole.admin:
+        return 'Admin';
+      case UserRole.birou:
+        return 'Birou';
+      case UserRole.sefEchipa:
+        return 'Sef echipa';
+      case UserRole.tehnician:
+        return 'Angajat';
+      case null:
+        return 'Utilizator';
+    }
+  }
+
+  static bool canAccessOffice(UserRole? role) {
+    return role == null || role == UserRole.admin || role == UserRole.birou;
+  }
+
+  static bool canAccessTeamLead(UserRole? role) {
+    return canAccessOffice(role) || role == UserRole.sefEchipa;
+  }
+
+  static bool isEmployee(UserRole? role) {
+    return role == UserRole.tehnician;
+  }
+
+  // Verifică dacă un roleKey brut (string din Firestore/auth) corespunde tehnicianului
+  static bool isTechnician(String? roleKey) {
+    return fromRoleKey(roleKey) == UserRole.tehnician;
+  }
+
+  static bool fieldShellAllowsDestination(
+    String destinationId, {
+    String? roleKey,
+    FieldUserRole? fieldRole,
+  }) {
+    final role = resolve(roleKey: roleKey, fieldRole: fieldRole);
+    if (role == null || role == UserRole.admin) return true;
+    if (role == UserRole.birou) {
+      return destinationId != 'utilizatori' &&
+          destinationId != 'backup_restore';
+    }
+    if (role == UserRole.sefEchipa) {
+      const allowed = <String>{
+        'dashboard',
+        'programari',
+        'agfr',
+        'refrigerant_reporting',
+        'lucrari',
+        'reclamatii',
+        'registratura',
+        'clienti',
+        'parteneri',
+        'catalog_produse',
+        'materiale',
+        'angajati',
+        'echipe',
+        'scule',
+        'pachete_scule',
+        'hr_deplasari',
+        'hr',
+      };
+      return allowed.contains(destinationId);
+    }
+    if (role == UserRole.tehnician) {
+      const allowed = <String>{
+        'dashboard',
+        'programari',
+        'agfr',
+        'refrigerant_reporting',
+        'lucrari',
+        'reclamatii',
+      };
+      return allowed.contains(destinationId);
+    }
+    return true;
+  }
+
+  static String _normalizeRoleKey(String? rawRoleKey) {
+    return (rawRoleKey ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll('_', '')
+        .replaceAll(' ', '');
+  }
+}

@@ -1,0 +1,1384 @@
+import 'dart:math';
+import 'dart:ui' as ui;
+
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../core/pdf_font_bundle.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import 'appointment_models.dart';
+
+// ---------------------------------------------------------------------------
+// Perioadă
+// ---------------------------------------------------------------------------
+
+enum _Perioada {
+  saptamanaAceasta,
+  ultimaSaptamana,
+  ultimele2Saptamani,
+  lunaCurenta,
+  lunaTrecuta;
+
+  String get label {
+    switch (this) {
+      case _Perioada.saptamanaAceasta:
+        return 'Săptămâna curentă';
+      case _Perioada.ultimaSaptamana:
+        return 'Ultima săptămână';
+      case _Perioada.ultimele2Saptamani:
+        return 'Ultimele 2 săptămâni';
+      case _Perioada.lunaCurenta:
+        return 'Luna curentă';
+      case _Perioada.lunaTrecuta:
+        return 'Luna trecută';
+    }
+  }
+
+  DateTimeRange get interval {
+    final now = DateTime.now();
+    switch (this) {
+      case _Perioada.saptamanaAceasta:
+        final monday = now.subtract(Duration(days: now.weekday - 1));
+        return DateTimeRange(
+          start: DateTime(monday.year, monday.month, monday.day),
+          end: now,
+        );
+      case _Perioada.ultimaSaptamana:
+        final thisMonday = now.subtract(Duration(days: now.weekday - 1));
+        final lastMonday = thisMonday.subtract(const Duration(days: 7));
+        final lastSunday = thisMonday.subtract(const Duration(seconds: 1));
+        return DateTimeRange(start: lastMonday, end: lastSunday);
+      case _Perioada.ultimele2Saptamani:
+        final start = now.subtract(const Duration(days: 14));
+        return DateTimeRange(
+          start: DateTime(start.year, start.month, start.day),
+          end: now,
+        );
+      case _Perioada.lunaCurenta:
+        return DateTimeRange(
+          start: DateTime(now.year, now.month, 1),
+          end: now,
+        );
+      case _Perioada.lunaTrecuta:
+        final firstZiCurenta = DateTime(now.year, now.month, 1);
+        final lastZiTrecuta =
+            firstZiCurenta.subtract(const Duration(seconds: 1));
+        return DateTimeRange(
+          start: DateTime(lastZiTrecuta.year, lastZiTrecuta.month, 1),
+          end: lastZiTrecuta,
+        );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sumar per partener
+// ---------------------------------------------------------------------------
+
+class _SumarPartener {
+  _SumarPartener({
+    required this.id,
+    required this.name,
+    required this.tip,
+  });
+
+  final String id;
+  final String name;
+  final String tip; // 'executant' | 'contractant'
+  double totalValoare = 0;
+  double totalPlatit = 0;
+  int nrProgramari = 0;
+  final List<Appointment> programari = [];
+
+  double get restDePlatit => totalValoare - totalPlatit;
+}
+
+// ---------------------------------------------------------------------------
+// Pagina principală
+// ---------------------------------------------------------------------------
+
+class ProgramariParteneriPage extends StatefulWidget {
+  final List<Appointment> appointments;
+  final Future<void> Function(Appointment updated)? onAppointmentSaved;
+
+  const ProgramariParteneriPage({
+    super.key,
+    required this.appointments,
+    this.onAppointmentSaved,
+  });
+
+  @override
+  State<ProgramariParteneriPage> createState() =>
+      _ProgramariParteneriPageState();
+}
+
+class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
+    with SingleTickerProviderStateMixin {
+  _Perioada _perioada = _Perioada.lunaCurenta;
+  bool _exportingPdf = false;
+  late TabController _tabController;
+  late List<Appointment> _localAppointments;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _localAppointments = List.from(widget.appointments);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveUpdated(Appointment updated) async {
+    setState(() {
+      final idx = _localAppointments.indexWhere((a) => a.id == updated.id);
+      if (idx >= 0) _localAppointments[idx] = updated;
+    });
+    await widget.onAppointmentSaved?.call(updated);
+  }
+
+  List<Appointment> get _filtratePerioada {
+    final interval = _perioada.interval;
+    return _localAppointments.where((a) {
+      final dt = a.effectiveStartDateTime;
+      return !dt.isBefore(interval.start) && !dt.isAfter(interval.end);
+    }).toList()
+      ..sort(
+        (a, b) =>
+            b.effectiveStartDateTime.compareTo(a.effectiveStartDateTime),
+      );
+  }
+
+  // Programări cu partener executant (tu plătești)
+  List<Appointment> get _cuExecutant => _filtratePerioada
+      .where((a) => a.executingPartnerId.trim().isNotEmpty)
+      .toList();
+
+  // Programări cu partener contractant (ei te plătesc)
+  List<Appointment> get _cuContractant => _filtratePerioada
+      .where((a) => a.forPartnerId.trim().isNotEmpty)
+      .toList();
+
+  // Totale parteneri executanți
+  double get _totalDePlatit =>
+      _cuExecutant.fold(0, (s, a) => s + a.executingPartnerCommission);
+
+  double get _totalPlatit => _cuExecutant
+      .where((a) => a.executingPartnerPaymentStatus == PartnerPaymentStatus.platit)
+      .fold(0, (s, a) => s + a.executingPartnerCommission);
+
+  double get _totalRestExecutant => _totalDePlatit - _totalPlatit;
+
+  // Totale parteneri contractanți
+  double get _totalDeIncasat =>
+      _cuContractant.fold(0, (s, a) => s + a.forPartnerInvoiceAmount);
+
+  double get _totalIncasat => _cuContractant
+      .where((a) => a.forPartnerReceiveStatus == PartnerPaymentStatus.platit)
+      .fold(0, (s, a) => s + a.forPartnerInvoiceAmount);
+
+  double get _totalRestContractant => _totalDeIncasat - _totalIncasat;
+
+  // Grupare per partener
+  List<_SumarPartener> get _sumarExecutanti {
+    final map = <String, _SumarPartener>{};
+    for (final a in _cuExecutant) {
+      final id = a.executingPartnerId.trim();
+      if (id.isEmpty) continue;
+      map.putIfAbsent(
+        id,
+        () => _SumarPartener(
+          id: id,
+          name: a.executingPartnerName.trim().isNotEmpty
+              ? a.executingPartnerName
+              : id,
+          tip: 'executant',
+        ),
+      );
+      map[id]!.totalValoare += a.executingPartnerCommission;
+      map[id]!.nrProgramari++;
+      map[id]!.programari.add(a);
+      if (a.executingPartnerPaymentStatus == PartnerPaymentStatus.platit) {
+        map[id]!.totalPlatit += a.executingPartnerCommission;
+      } else if (a.executingPartnerPaymentStatus ==
+          PartnerPaymentStatus.platitPartial) {
+        map[id]!.totalPlatit += a.executingPartnerCommission * 0.5;
+      }
+    }
+    return map.values.toList()
+      ..sort((a, b) => b.restDePlatit.compareTo(a.restDePlatit));
+  }
+
+  List<_SumarPartener> get _sumarContractanti {
+    final map = <String, _SumarPartener>{};
+    for (final a in _cuContractant) {
+      final id = a.forPartnerId.trim();
+      if (id.isEmpty) continue;
+      map.putIfAbsent(
+        id,
+        () => _SumarPartener(
+          id: id,
+          name: a.forPartnerName.trim().isNotEmpty ? a.forPartnerName : id,
+          tip: 'contractant',
+        ),
+      );
+      map[id]!.totalValoare += a.forPartnerInvoiceAmount;
+      map[id]!.nrProgramari++;
+      map[id]!.programari.add(a);
+      if (a.forPartnerReceiveStatus == PartnerPaymentStatus.platit) {
+        map[id]!.totalPlatit += a.forPartnerInvoiceAmount;
+      } else if (a.forPartnerReceiveStatus == PartnerPaymentStatus.platitPartial) {
+        map[id]!.totalPlatit += a.forPartnerInvoiceAmount * 0.5;
+      }
+    }
+    return map.values.toList()
+      ..sort((a, b) => b.restDePlatit.compareTo(a.restDePlatit));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Export PDF
+  // ---------------------------------------------------------------------------
+
+  Future<void> _exportPdf() async {
+    setState(() => _exportingPdf = true);
+    try {
+      final fonts = await PdfFontBundle.load();
+      final doc = pw.Document();
+      final fmtDate = DateFormat('dd.MM.yyyy');
+      final now = DateTime.now();
+
+      doc.addPage(
+        pw.MultiPage(
+          theme: fonts.theme,
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.fromLTRB(28, 24, 28, 24),
+          build: (pw.Context ctx) => [
+            pw.Text(
+              'Raport Parteneri — Plăți & Încasări',
+              style: pw.TextStyle(
+                fontSize: 18,
+                fontWeight: pw.FontWeight.bold,
+              ),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text('Perioadă: ${_perioada.label}',
+                style: const pw.TextStyle(fontSize: 11)),
+            pw.Text('Generat: ${fmtDate.format(now)}',
+                style: const pw.TextStyle(
+                    fontSize: 9, color: PdfColors.grey600)),
+            pw.SizedBox(height: 16),
+
+            // Sumar general
+            pw.Text('Sumar general',
+                style: pw.TextStyle(
+                    fontSize: 13, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 6),
+            pw.Table(
+              border:
+                  pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+              columnWidths: {
+                0: const pw.FlexColumnWidth(3),
+                1: const pw.FlexColumnWidth(2),
+              },
+              children: [
+                _pdfRow('Total comisioane parteneri executanți',
+                    '${_totalDePlatit.toStringAsFixed(2)} RON'),
+                _pdfRow('Din care plătit',
+                    '${_totalPlatit.toStringAsFixed(2)} RON'),
+                _pdfRow('Rest de plătit parteneri executanți',
+                    '${_totalRestExecutant.toStringAsFixed(2)} RON',
+                    bold: true,
+                    valueColor: _totalRestExecutant > 0
+                        ? PdfColors.red
+                        : PdfColors.green800),
+                _pdfRowSpacer(),
+                _pdfRow('Total de încasat de la parteneri contractanți',
+                    '${_totalDeIncasat.toStringAsFixed(2)} RON'),
+                _pdfRow('Din care încasat',
+                    '${_totalIncasat.toStringAsFixed(2)} RON'),
+                _pdfRow('Rest de încasat',
+                    '${_totalRestContractant.toStringAsFixed(2)} RON',
+                    bold: true,
+                    valueColor: _totalRestContractant > 0
+                        ? PdfColors.orange700
+                        : PdfColors.green800),
+              ],
+            ),
+            pw.SizedBox(height: 20),
+
+            // Parteneri executanți
+            if (_cuExecutant.isNotEmpty) ...[
+              pw.Text('Parteneri executanți (tu plătești)',
+                  style: pw.TextStyle(
+                      fontSize: 13, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 6),
+              pw.Table(
+                border: pw.TableBorder.all(
+                    color: PdfColors.grey400, width: 0.5),
+                columnWidths: {
+                  0: const pw.FixedColumnWidth(64),
+                  1: const pw.FlexColumnWidth(3),
+                  2: const pw.FlexColumnWidth(2),
+                  3: const pw.FixedColumnWidth(80),
+                  4: const pw.FixedColumnWidth(80),
+                },
+                children: [
+                  _pdfHeader(['Data', 'Client', 'Partener', 'Comision', 'Status']),
+                  ..._cuExecutant.map(
+                    (a) => pw.TableRow(
+                      children: [
+                        fmtDate.format(a.effectiveStartDateTime),
+                        a.clientName.isNotEmpty ? a.clientName : a.title,
+                        a.executingPartnerName,
+                        a.executingPartnerCommission > 0
+                            ? '${a.executingPartnerCommission.toStringAsFixed(2)} ${a.executingPartnerCommissionCurrency}'
+                            : '—',
+                        a.executingPartnerPaymentStatus.label,
+                      ]
+                          .map(
+                            (c) => pw.Padding(
+                              padding: const pw.EdgeInsets.all(5),
+                              child: pw.Text(c,
+                                  style:
+                                      const pw.TextStyle(fontSize: 8)),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                ],
+              ),
+              pw.SizedBox(height: 20),
+            ],
+
+            // Parteneri contractanți
+            if (_cuContractant.isNotEmpty) ...[
+              pw.Text('Parteneri contractanți (ei te plătesc)',
+                  style: pw.TextStyle(
+                      fontSize: 13, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 6),
+              pw.Table(
+                border: pw.TableBorder.all(
+                    color: PdfColors.grey400, width: 0.5),
+                columnWidths: {
+                  0: const pw.FixedColumnWidth(64),
+                  1: const pw.FlexColumnWidth(3),
+                  2: const pw.FlexColumnWidth(2),
+                  3: const pw.FixedColumnWidth(80),
+                  4: const pw.FixedColumnWidth(80),
+                },
+                children: [
+                  _pdfHeader(['Data', 'Client', 'Partener', 'Valoare', 'Status']),
+                  ..._cuContractant.map(
+                    (a) => pw.TableRow(
+                      children: [
+                        fmtDate.format(a.effectiveStartDateTime),
+                        a.clientName.isNotEmpty ? a.clientName : a.title,
+                        a.forPartnerName,
+                        a.forPartnerInvoiceAmount > 0
+                            ? '${a.forPartnerInvoiceAmount.toStringAsFixed(2)} ${a.forPartnerInvoiceCurrency}'
+                            : '—',
+                        a.forPartnerReceiveStatus.label,
+                      ]
+                          .map(
+                            (c) => pw.Padding(
+                              padding: const pw.EdgeInsets.all(5),
+                              child: pw.Text(c,
+                                  style:
+                                      const pw.TextStyle(fontSize: 8)),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      );
+
+      final bytes = await doc.save();
+      final fileName =
+          'parteneri_${DateFormat('yyyyMMdd').format(now)}.pdf';
+      final savedPath = await PdfSaveService.savePdf(
+        repository: LocalAppDataRepository(),
+        bytes: bytes,
+        fileName: fileName,
+        category: PdfDocumentCategory.other,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('PDF salvat: $savedPath')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la export: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _exportingPdf = false);
+    }
+  }
+
+  static pw.TableRow _pdfRow(
+    String label,
+    String value, {
+    bool bold = false,
+    PdfColor? valueColor,
+  }) {
+    return pw.TableRow(
+      children: [
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(5),
+          child: pw.Text(label,
+              style: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: bold ? pw.FontWeight.bold : null)),
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.all(5),
+          child: pw.Text(value,
+              style: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: bold ? pw.FontWeight.bold : null,
+                  color: valueColor)),
+        ),
+      ],
+    );
+  }
+
+  static pw.TableRow _pdfRowSpacer() {
+    return pw.TableRow(
+      children: [
+        pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 2),
+          child: pw.SizedBox(),
+        ),
+        pw.SizedBox(),
+      ],
+    );
+  }
+
+  static pw.TableRow _pdfHeader(List<String> headers) {
+    return pw.TableRow(
+      decoration:
+          const pw.BoxDecoration(color: PdfColors.grey200),
+      children: headers
+          .map(
+            (h) => pw.Padding(
+              padding: const pw.EdgeInsets.all(5),
+              child: pw.Text(h,
+                  style: pw.TextStyle(
+                      fontSize: 8, fontWeight: pw.FontWeight.bold)),
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Build
+  // ---------------------------------------------------------------------------
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Parteneri — Plăți & Încasări'),
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(text: 'Executanți (plătești)'),
+            Tab(text: 'Contractanți (încasezi)'),
+          ],
+        ),
+        actions: [
+          if (_exportingPdf)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          else
+            IconButton(
+              tooltip: 'Exportă PDF',
+              onPressed: _exportPdf,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+            ),
+        ],
+      ),
+      body: Column(
+        children: [
+          _buildPerioadaSelector(),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                _buildTabExecutanti(),
+                _buildTabContractanti(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPerioadaSelector() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          spacing: 6,
+          children: _Perioada.values
+              .map(
+                (p) => ChoiceChip(
+                  label: Text(p.label),
+                  selected: _perioada == p,
+                  onSelected: (_) => setState(() => _perioada = p),
+                ),
+              )
+              .toList(),
+        ),
+      ),
+    );
+  }
+
+  // -----------  TAB 1: Executanți  -----------
+
+  Widget _buildTabExecutanti() {
+    final sumar = _sumarExecutanti;
+    final items = _cuExecutant;
+    final fmt = DateFormat('dd.MM.yyyy');
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        // Carduri sumar
+        Row(
+          children: [
+            Expanded(
+              child: _SumarCard(
+                label: 'Total comisioane',
+                value: '${_totalDePlatit.toStringAsFixed(2)} RON',
+                icon: Icons.handshake_outlined,
+                color: Theme.of(context).colorScheme.primary,
+                sub: '${items.length} programări',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _SumarCard(
+                label: 'Deja plătit',
+                value: '${_totalPlatit.toStringAsFixed(2)} RON',
+                icon: Icons.check_circle_outline,
+                color: Colors.green.shade700,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _SumarCard(
+                label: 'Rest de plătit',
+                value: '${_totalRestExecutant.toStringAsFixed(2)} RON',
+                icon: Icons.warning_amber_outlined,
+                color: _totalRestExecutant > 0
+                    ? Colors.red.shade700
+                    : Colors.green.shade700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        // Grafic per partener
+        if (sumar.isNotEmpty) ...[
+          _PartenerBarChart(sumari: sumar, colorRest: Colors.red.shade400),
+          const SizedBox(height: 12),
+        ],
+
+        // Lista per partener
+        if (sumar.isNotEmpty) ...[
+          Text('Per partener',
+              style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          ...sumar.map((s) => _SumarPartenerCard(sumar: s, onSave: _saveUpdated)),
+          const SizedBox(height: 12),
+        ],
+
+        // Lista programărilor
+        if (items.isEmpty)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Nu există programări cu parteneri executanți în această perioadă.',
+              ),
+            ),
+          )
+        else ...[
+          Text('Programări', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          ...items.map(
+            (a) => _RandProgramareExecutant(item: a, fmt: fmt),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // -----------  TAB 2: Contractanți  -----------
+
+  Widget _buildTabContractanti() {
+    final sumar = _sumarContractanti;
+    final items = _cuContractant;
+    final fmt = DateFormat('dd.MM.yyyy');
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _SumarCard(
+                label: 'Total de încasat',
+                value: '${_totalDeIncasat.toStringAsFixed(2)} RON',
+                icon: Icons.receipt_long_outlined,
+                color: Theme.of(context).colorScheme.primary,
+                sub: '${items.length} programări',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _SumarCard(
+                label: 'Deja încasat',
+                value: '${_totalIncasat.toStringAsFixed(2)} RON',
+                icon: Icons.check_circle_outline,
+                color: Colors.green.shade700,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _SumarCard(
+                label: 'Rest de încasat',
+                value: '${_totalRestContractant.toStringAsFixed(2)} RON',
+                icon: Icons.hourglass_empty_outlined,
+                color: _totalRestContractant > 0
+                    ? Colors.orange.shade700
+                    : Colors.green.shade700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        if (sumar.isNotEmpty) ...[
+          _PartenerBarChart(
+              sumari: sumar, colorRest: Colors.orange.shade400),
+          const SizedBox(height: 12),
+          Text('Per partener',
+              style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          ...sumar.map((s) => _SumarPartenerCard(sumar: s, isReceivable: true, onSave: _saveUpdated)),
+          const SizedBox(height: 12),
+        ],
+
+        if (items.isEmpty)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Nu există programări cu parteneri contractanți în această perioadă.',
+              ),
+            ),
+          )
+        else ...[
+          Text('Programări', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          ...items.map(
+            (a) => _RandProgramareContractant(item: a, fmt: fmt),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Grafic bare per partener
+// ---------------------------------------------------------------------------
+
+class _PartenerBarChart extends StatelessWidget {
+  final List<_SumarPartener> sumari;
+  final Color colorRest;
+
+  const _PartenerBarChart({required this.sumari, required this.colorRest});
+
+  @override
+  Widget build(BuildContext context) {
+    if (sumari.isEmpty) return const SizedBox.shrink();
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text('Distribuție per partener',
+                    style: Theme.of(context).textTheme.titleSmall),
+                const Spacer(),
+                _Legenda(color: Colors.green.shade600, label: 'Platit'),
+                const SizedBox(width: 10),
+                _Legenda(color: colorRest, label: 'Rest'),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 140,
+              child: CustomPaint(
+                painter: _PartenerChartPainter(
+                  sumari: sumari,
+                  colorPlatit: Colors.green.shade600,
+                  colorRest: colorRest,
+                  labelColor:
+                      colorScheme.onSurface.withValues(alpha: 0.6),
+                  gridColor: colorScheme.outline.withValues(alpha: 0.15),
+                ),
+                size: Size.infinite,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PartenerChartPainter extends CustomPainter {
+  const _PartenerChartPainter({
+    required this.sumari,
+    required this.colorPlatit,
+    required this.colorRest,
+    required this.labelColor,
+    required this.gridColor,
+  });
+
+  final List<_SumarPartener> sumari;
+  final Color colorPlatit;
+  final Color colorRest;
+  final Color labelColor;
+  final Color gridColor;
+
+  static const double _labelHeight = 28.0;
+  static const double _topPadding = 6.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (sumari.isEmpty) return;
+
+    final chartHeight = size.height - _labelHeight - _topPadding;
+    final n = sumari.length;
+    final slotWidth = size.width / n;
+    final barWidth = (slotWidth * 0.55).clamp(6.0, 32.0);
+    final maxVal = sumari.map((s) => s.totalValoare).reduce(max);
+    if (maxVal <= 0) return;
+
+    // Grid
+    final gridPaint = Paint()
+      ..color = gridColor
+      ..strokeWidth = 0.5;
+    for (int i = 0; i <= 4; i++) {
+      final y = _topPadding + chartHeight * i / 4;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    for (int i = 0; i < n; i++) {
+      final s = sumari[i];
+      final centerX = slotWidth * i + slotWidth / 2;
+      final barLeft = centerX - barWidth / 2;
+
+      // Bară totală (rest)
+      final totalH = (s.totalValoare / maxVal) * chartHeight;
+      final restRect = Rect.fromLTWH(
+        barLeft,
+        _topPadding + chartHeight - totalH,
+        barWidth,
+        totalH,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(restRect, const Radius.circular(2)),
+        Paint()..color = colorRest.withValues(alpha: 0.4),
+      );
+
+      // Bară plătit (suprapusă)
+      if (s.totalPlatit > 0) {
+        final platitH = (s.totalPlatit / maxVal) * chartHeight;
+        final platitRect = Rect.fromLTWH(
+          barLeft,
+          _topPadding + chartHeight - platitH,
+          barWidth,
+          platitH,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(platitRect, const Radius.circular(2)),
+          Paint()..color = colorPlatit,
+        );
+      }
+
+      // Etichetă partener (scurtată)
+      final nameWords = s.name.split(' ');
+      final shortName =
+          nameWords.isNotEmpty ? nameWords[0] : s.name;
+      _drawLabel(canvas, shortName, Offset(centerX, size.height - _labelHeight + 4), slotWidth);
+    }
+  }
+
+  void _drawLabel(Canvas canvas, String text, Offset center, double maxW) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(color: labelColor, fontSize: 8.5),
+      ),
+      textDirection: ui.TextDirection.ltr,
+      textAlign: TextAlign.center,
+    )..layout(maxWidth: maxW);
+    tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy));
+  }
+
+  @override
+  bool shouldRepaint(_PartenerChartPainter old) => old.sumari != sumari;
+}
+
+// ---------------------------------------------------------------------------
+// Widget-uri auxiliare
+// ---------------------------------------------------------------------------
+
+class _SumarPartenerCard extends StatelessWidget {
+  final _SumarPartener sumar;
+  final bool isReceivable;
+  final Future<void> Function(Appointment)? onSave;
+
+  const _SumarPartenerCard({
+    required this.sumar,
+    this.isReceivable = false,
+    this.onSave,
+  });
+
+  Future<void> _showBulkDialog(BuildContext context) async {
+    final programari = sumar.programari;
+    var method = isReceivable ? 'Transfer' : 'Transfer';
+    var date = DateTime.now();
+    final amountCtrl = TextEditingController(
+      text: sumar.restDePlatit.toStringAsFixed(2),
+    );
+    final notesCtrl = TextEditingController();
+
+    // Statuses neprocesate
+    final neplatite = programari.where((a) {
+      if (isReceivable) {
+        return a.forPartnerReceiveStatus != PartnerPaymentStatus.platit;
+      }
+      return a.executingPartnerPaymentStatus != PartnerPaymentStatus.platit;
+    }).toList();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (_, setS) => AlertDialog(
+          title: Text(
+            isReceivable
+                ? 'Înregistrează încasare — ${sumar.name}'
+                : 'Plătește partener — ${sumar.name}',
+          ),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Context
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isReceivable ? Colors.orange.shade50 : Colors.teal.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isReceivable ? Colors.orange.shade200 : Colors.teal.shade200,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isReceivable
+                              ? 'Încasezi de la: ${sumar.name}'
+                              : 'Plătești către: ${sumar.name}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 6),
+                        const Divider(height: 1),
+                        const SizedBox(height: 6),
+                        Text('Total datorat: ${sumar.totalValoare.toStringAsFixed(2)} RON'),
+                        Text('Deja procesat: ${sumar.totalPlatit.toStringAsFixed(2)} RON'),
+                        Text(
+                          'Rest: ${sumar.restDePlatit.toStringAsFixed(2)} RON',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: isReceivable ? Colors.orange.shade800 : Colors.red.shade700,
+                          ),
+                        ),
+                        if (neplatite.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          const Divider(height: 1),
+                          const SizedBox(height: 6),
+                          Text(
+                            '${neplatite.length} programări neprocessate:',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                          ),
+                          ...neplatite.map((a) => Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${a.clientName.isNotEmpty ? a.clientName : a.title} — ${DateFormat('dd.MM').format(a.effectiveStartDateTime)}',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                                Text(
+                                  isReceivable
+                                      ? '${a.forPartnerInvoiceAmount.toStringAsFixed(2)} RON'
+                                      : '${a.executingPartnerCommission.toStringAsFixed(2)} RON',
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          )),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: isReceivable ? 'Sumă încasată' : 'Sumă plătită',
+                      suffixText: 'RON',
+                      helperText: 'Poți modifica suma dacă plătești/încasezi parțial',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: method,
+                    decoration: const InputDecoration(labelText: 'Modalitate'),
+                    items: const [
+                      DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                      DropdownMenuItem(value: 'Transfer', child: Text('Transfer bancar')),
+                    ],
+                    onChanged: (v) => setS(() => method = v ?? 'Transfer'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    initialValue: DateFormat('dd.MM.yyyy').format(date),
+                    readOnly: true,
+                    decoration: InputDecoration(
+                      labelText: isReceivable ? 'Data încasării' : 'Data plății',
+                      suffixIcon: const Icon(Icons.calendar_today_outlined),
+                    ),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: date,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                      );
+                      if (picked != null) setS(() => date = picked);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: notesCtrl,
+                    maxLines: 2,
+                    decoration: const InputDecoration(labelText: 'Observații (opțional)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Anulează'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(
+                isReceivable
+                    ? 'Înregistrează încasare (${neplatite.length} progr.)'
+                    : 'Marchează ca plătit (${neplatite.length} progr.)',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final notes = notesCtrl.text.trim();
+    amountCtrl.dispose();
+    notesCtrl.dispose();
+
+    if (confirmed != true || onSave == null) return;
+    for (final a in neplatite) {
+      final updated = isReceivable
+          ? a.copyWith(
+              forPartnerReceiveStatus: PartnerPaymentStatus.platit,
+              forPartnerReceiveDate: date,
+              forPartnerReceiveNotes: notes.isNotEmpty ? notes : a.forPartnerReceiveNotes,
+            )
+          : a.copyWith(
+              executingPartnerPaymentStatus: PartnerPaymentStatus.platit,
+              executingPartnerPaymentDate: date,
+              executingPartnerPaymentNotes: notes.isNotEmpty ? notes : a.executingPartnerPaymentNotes,
+            );
+      await onSave!(updated);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final restColor = sumar.restDePlatit > 0
+        ? (isReceivable ? Colors.orange.shade700 : Colors.red.shade700)
+        : Colors.green.shade700;
+    final canAct = onSave != null && sumar.restDePlatit > 0;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(sumar.name,
+                          style: Theme.of(context).textTheme.titleSmall),
+                      Text('${sumar.nrProgramari} programări',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      'Total: ${sumar.totalValoare.toStringAsFixed(2)} RON',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Text(
+                      isReceivable
+                          ? 'Rest de încasat: ${sumar.restDePlatit.toStringAsFixed(2)} RON'
+                          : 'Rest de plătit: ${sumar.restDePlatit.toStringAsFixed(2)} RON',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: restColor,
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            if (canAct) ...[
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.tonalIcon(
+                  onPressed: () => _showBulkDialog(context),
+                  icon: Icon(
+                    isReceivable ? Icons.receipt_long_outlined : Icons.send_outlined,
+                    size: 16,
+                  ),
+                  label: Text(
+                    isReceivable
+                        ? 'Înregistrează încasare (${sumar.restDePlatit.toStringAsFixed(0)} RON)'
+                        : 'Plătește (${sumar.restDePlatit.toStringAsFixed(0)} RON)',
+                  ),
+                  style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RandProgramareExecutant extends StatelessWidget {
+  final Appointment item;
+  final DateFormat fmt;
+
+  const _RandProgramareExecutant({required this.item, required this.fmt});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = item.executingPartnerPaymentStatus;
+    final statusColor = status == PartnerPaymentStatus.platit
+        ? Colors.green.shade700
+        : status == PartnerPaymentStatus.platitPartial
+            ? Colors.orange.shade700
+            : Colors.red.shade700;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    item.executingPartnerName.isNotEmpty
+                        ? item.executingPartnerName
+                        : 'Partener necunoscut',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                Text(fmt.format(item.effectiveStartDateTime),
+                    style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+            if (item.clientName.isNotEmpty)
+              Text(item.clientName,
+                  style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                if (item.executingPartnerCommission > 0)
+                  Text(
+                    '${item.executingPartnerCommission.toStringAsFixed(2)} ${item.executingPartnerCommissionCurrency}',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    status.label,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: statusColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            if (item.executingPartnerPaymentNotes.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  item.executingPartnerPaymentNotes,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RandProgramareContractant extends StatelessWidget {
+  final Appointment item;
+  final DateFormat fmt;
+
+  const _RandProgramareContractant({required this.item, required this.fmt});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = item.forPartnerReceiveStatus;
+    final statusColor = status == PartnerPaymentStatus.platit
+        ? Colors.green.shade700
+        : status == PartnerPaymentStatus.platitPartial
+            ? Colors.orange.shade700
+            : Colors.orange.shade800;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 6),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    item.forPartnerName.isNotEmpty
+                        ? item.forPartnerName
+                        : 'Partener necunoscut',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                Text(fmt.format(item.effectiveStartDateTime),
+                    style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+            if (item.clientName.isNotEmpty)
+              Text(item.clientName,
+                  style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                if (item.forPartnerInvoiceAmount > 0)
+                  Text(
+                    '${item.forPartnerInvoiceAmount.toStringAsFixed(2)} ${item.forPartnerInvoiceCurrency}',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    status.label,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: statusColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            if (item.forPartnerReceiveNotes.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  item.forPartnerReceiveNotes,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SumarCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final String sub;
+  final IconData icon;
+  final Color color;
+
+  const _SumarCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    this.sub = '',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 16, color: color),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(label,
+                      style: Theme.of(context).textTheme.labelMedium),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              value,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            if (sub.isNotEmpty)
+              Text(sub,
+                  style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Legenda extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _Legenda({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+      ],
+    );
+  }
+}

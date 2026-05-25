@@ -1,0 +1,949 @@
+import 'package:flutter/material.dart';
+
+import '../master/master_local_store.dart';
+import '../materials/materials_catalog_service.dart';
+import 'programare_kit_catalog_service.dart';
+import 'programare_kit_models.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
+
+class ProgramareKituriPage extends StatefulWidget {
+  const ProgramareKituriPage({super.key});
+
+  @override
+  State<ProgramareKituriPage> createState() => _ProgramareKituriPageState();
+}
+
+class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
+  final ProgramareKitCatalogService _service = ProgramareKitCatalogService();
+  final MaterialsCatalogService _materialsService = MaterialsCatalogService();
+
+  bool _loading = true;
+  List<AppointmentMaterialKitTemplate> _items =
+      const <AppointmentMaterialKitTemplate>[];
+  List<MasterMaterial> _materials = const <MasterMaterial>[];
+  String _dataSourceLabel = 'local_cache';
+  String? _fallbackReason;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final templates = await _service.listTemplates();
+    final materials = await _materialsService.listMaterials();
+    if (!mounted) return;
+    setState(() {
+      _items = templates..sort((a, b) => a.name.compareTo(b.name));
+      _materials = materials..sort((a, b) => a.name.compareTo(b.name));
+      _dataSourceLabel = _service.dataSourceLabel;
+      _fallbackReason = _service.fallbackReason;
+      _loading = false;
+    });
+  }
+
+  Future<void> _editTemplate({
+    AppointmentMaterialKitTemplate? existing,
+    bool duplicate = false,
+  }) async {
+    final seed = existing;
+    final duplicateMode = duplicate && seed != null;
+    final nameCtrl = TextEditingController(
+      text: duplicateMode ? '${seed.name} - copie' : seed?.name ?? '',
+    );
+    final descriptionCtrl =
+        TextEditingController(text: seed?.description ?? '');
+    final defaultMlCtrl = TextEditingController(
+      text: seed == null
+          ? '0'
+          : seed.defaultLinearMeters.toStringAsFixed(2),
+    );
+    final components = <AppointmentMaterialKitComponent>[
+      ...?seed?.components.map(
+        (component) => duplicateMode
+            ? component.copyWith(
+                id: 'kit-comp-${DateTime.now().microsecondsSinceEpoch}-${component.materialId}',
+              )
+            : component,
+      ),
+    ];
+    var isActive = seed?.isActive ?? true;
+
+    Future<void> editComponent([AppointmentMaterialKitComponent? current]) async {
+      final saved = await showDialog<AppointmentMaterialKitComponent>(
+        context: context,
+        builder: (dialogContext) => _AppointmentKitComponentDialog(
+          existing: current,
+          initialMaterials: _materials,
+          materialsService: _materialsService,
+        ),
+      );
+
+      if (saved == null) return;
+      final refreshedMaterials = await _materialsService.listMaterials();
+      final index = components.indexWhere((item) => item.id == saved.id);
+      setState(() {
+        _materials = refreshedMaterials..sort((a, b) => a.name.compareTo(b.name));
+      });
+      if (index >= 0) {
+        components[index] = saved;
+      } else {
+        components.add(saved);
+      }
+    }
+
+    final saved = await showDialog<AppointmentMaterialKitTemplate>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(
+                duplicateMode
+                    ? 'Duplicare kit'
+                    : seed == null
+                        ? 'Kit nou pentru programari'
+                        : 'Editeaza kitul',
+              ),
+            content: SizedBox(
+              width: 760,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Denumire kit',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: descriptionCtrl,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Descriere',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: defaultMlCtrl,
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Ml implicit',
+                              helperText:
+                                  'Valoare propusa automat angajatului in programare.',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SwitchListTile(
+                            title: const Text('Kit activ'),
+                            value: isActive,
+                            contentPadding: EdgeInsets.zero,
+                            onChanged: (value) {
+                              setDialogState(() => isActive = value);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Componente kit',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        FilledButton.tonalIcon(
+                          onPressed: () async {
+                            await editComponent();
+                            setDialogState(() {});
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('Adauga material'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    if (components.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          'Nu exista componente inca. Adauga materialele fixe si variabile care compun kitul.',
+                        ),
+                      ),
+                    for (final component in components)
+                      Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: ListTile(
+                          title: Text(component.name),
+                          subtitle: Text(
+                            component.isVariableLength
+                                ? 'Variabil: ${_formatQuantity(component.quantityPerLinearMeter)} ${component.unit}/ml'
+                                : 'Fix: ${_formatQuantity(component.baseQuantity)} ${component.unit}',
+                          ),
+                          trailing: Wrap(
+                            spacing: 6,
+                            children: [
+                              IconButton(
+                                tooltip: 'Editeaza',
+                                onPressed: () async {
+                                  await editComponent(component);
+                                  setDialogState(() {});
+                                },
+                                icon: const Icon(Icons.edit_outlined),
+                              ),
+                              IconButton(
+                                tooltip: 'Sterge',
+                                onPressed: () {
+                                  setDialogState(
+                                    () => components.removeWhere(
+                                      (item) => item.id == component.id,
+                                    ),
+                                  );
+                                },
+                                icon: const Icon(Icons.delete_outline),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Renunta'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  if (nameCtrl.text.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Completeaza denumirea kitului.'),
+                      ),
+                    );
+                    return;
+                  }
+                  if (components.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Adauga cel putin o componenta in kit.'),
+                      ),
+                    );
+                    return;
+                  }
+                  final now = DateTime.now();
+                  Navigator.of(context).pop(
+                    AppointmentMaterialKitTemplate(
+                      id: duplicateMode
+                          ? 'appointment-kit-${now.microsecondsSinceEpoch}'
+                          : seed?.id ??
+                          'appointment-kit-${now.microsecondsSinceEpoch}',
+                      name: nameCtrl.text.trim(),
+                      description: descriptionCtrl.text.trim(),
+                      defaultLinearMeters: _asDouble(defaultMlCtrl.text),
+                      isActive: isActive,
+                      components: components,
+                      createdAt: duplicateMode ? now : seed?.createdAt ?? now,
+                      updatedAt: now,
+                    ),
+                  );
+                },
+                child: const Text('Salveaza'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    nameCtrl.dispose();
+    descriptionCtrl.dispose();
+    defaultMlCtrl.dispose();
+
+    if (saved == null) return;
+    await _service.upsertTemplate(saved);
+    await _load();
+  }
+
+  Future<void> _deleteTemplate(AppointmentMaterialKitTemplate item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Stergi kitul?'),
+        content: Text(
+          'Kitul "${item.name}" va fi scos din lista pentru programari. Programarile deja salvate isi pastreaza consumul inregistrat.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunta'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Sterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _service.deleteTemplate(item.id);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Retete kit materiale programari'),
+        actions: [
+          IconButton(
+            tooltip: 'Reincarca',
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
+          ),
+          HelpButton(content: AppHelp.reteteKituri),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _editTemplate(),
+        icon: const Icon(Icons.add),
+        label: const Text('Kit nou'),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.info_outline),
+                      title: Text(
+                        _dataSourceLabel == 'cloud'
+                            ? 'Sursa date: cloud'
+                            : 'Sursa date: cache local',
+                      ),
+                      subtitle: _fallbackReason == null ||
+                              _fallbackReason!.trim().isEmpty
+                          ? const Text(
+                              'Kiturile raman disponibile si offline.',
+                            )
+                          : Text(_fallbackReason!),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: _items.isEmpty
+                      ? const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'Nu exista inca retete de kit. Creeaza primul kit pentru ca angajatii sa poata selecta materialele in programari.',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 88),
+                          itemCount: _items.length,
+                          itemBuilder: (context, index) {
+                            final item = _items[index];
+                            final fixedItems = item.components
+                                .where((component) => !component.isVariableLength)
+                                .length;
+                            final variableItems = item.components
+                                .where((component) => component.isVariableLength)
+                                .length;
+                            final estimatedDefaultCost = item.components.fold<double>(
+                              0,
+                              (sum, component) =>
+                                  sum +
+                                  (component.resolvedQuantity(
+                                        item.defaultLinearMeters,
+                                      ) *
+                                      component.unitCost),
+                            );
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              child: ListTile(
+                                isThreeLine: true,
+                                title: Text(item.name),
+                                subtitle: Text(
+                                  '${item.description.isEmpty ? 'Fara descriere' : item.description}\nComponente fixe: $fixedItems | componente variabile: $variableItems | cost estimat la ml implicit: ${estimatedDefaultCost.toStringAsFixed(2)} RON',
+                                ),
+                                trailing: PopupMenuButton<String>(
+                                  icon: const Icon(Icons.more_vert),
+                                  tooltip: 'Acțiuni',
+                                  itemBuilder: (_) => const [
+                                    PopupMenuItem(
+                                      value: 'duplicate',
+                                      child: ListTile(
+                                        leading: Icon(Icons.copy_outlined),
+                                        title: Text('Duplicează'),
+                                        contentPadding: EdgeInsets.zero,
+                                      ),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'edit',
+                                      child: ListTile(
+                                        leading: Icon(Icons.edit_outlined),
+                                        title: Text('Editează'),
+                                        contentPadding: EdgeInsets.zero,
+                                      ),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'delete',
+                                      child: ListTile(
+                                        leading: Icon(Icons.delete_outline),
+                                        title: Text('Șterge'),
+                                        contentPadding: EdgeInsets.zero,
+                                      ),
+                                    ),
+                                  ],
+                                  onSelected: (value) {
+                                    switch (value) {
+                                      case 'duplicate':
+                                        _editTemplate(
+                                            existing: item, duplicate: true);
+                                      case 'edit':
+                                        _editTemplate(existing: item);
+                                      case 'delete':
+                                        _deleteTemplate(item);
+                                    }
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class _AppointmentKitComponentDialog extends StatefulWidget {
+  const _AppointmentKitComponentDialog({
+    required this.initialMaterials,
+    required this.materialsService,
+    this.existing,
+  });
+
+  final AppointmentMaterialKitComponent? existing;
+  final List<MasterMaterial> initialMaterials;
+  final MaterialsCatalogService materialsService;
+
+  @override
+  State<_AppointmentKitComponentDialog> createState() =>
+      _AppointmentKitComponentDialogState();
+}
+
+class _AppointmentKitComponentDialogState
+    extends State<_AppointmentKitComponentDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _searchController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _unitController = TextEditingController();
+  final _baseQuantityController = TextEditingController();
+  final _quantityPerMlController = TextEditingController();
+  final _unitCostController = TextEditingController();
+  final _notesController = TextEditingController();
+
+  late List<MasterMaterial> _materials;
+  String _selectedMaterialId = '';
+  bool _isVariableLength = false;
+  bool _savingCatalogMaterial = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _materials = widget.initialMaterials.toList(growable: true)
+      ..sort((a, b) => a.name.compareTo(b.name));
+    final existing = widget.existing;
+    _selectedMaterialId = existing?.materialId ?? '';
+    _nameController.text = existing?.name ?? '';
+    _unitController.text = existing?.unit ?? 'buc';
+    _baseQuantityController.text = existing == null
+        ? '1'
+        : existing.baseQuantity.toStringAsFixed(2);
+    _quantityPerMlController.text = existing == null
+        ? '1'
+        : existing.quantityPerLinearMeter.toStringAsFixed(2);
+    _unitCostController.text = existing == null
+        ? '0'
+        : existing.unitCost.toStringAsFixed(2);
+    _notesController.text = existing?.notes ?? '';
+    _isVariableLength = existing?.isVariableLength ?? false;
+    if (existing != null) {
+      _searchController.text = existing.name;
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _nameController.dispose();
+    _unitController.dispose();
+    _baseQuantityController.dispose();
+    _quantityPerMlController.dispose();
+    _unitCostController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  List<MasterMaterial> get _suggestions => widget.materialsService.suggestByName(
+        _materials,
+        _searchController.text,
+        minChars: 1,
+      );
+
+  void _applyMaterial(MasterMaterial material) {
+    setState(() {
+      _selectedMaterialId = material.id;
+      _searchController.text = material.name;
+      _nameController.text = material.name;
+      _unitController.text = material.unit.trim().isEmpty ? 'buc' : material.unit;
+      _unitCostController.text = material.price.toStringAsFixed(2);
+      if (_notesController.text.trim().isEmpty && material.notes.trim().isNotEmpty) {
+        _notesController.text = material.notes.trim();
+      }
+    });
+  }
+
+  Future<void> _addNewMaterialQuick() async {
+    final created = await showDialog<MasterMaterial>(
+      context: context,
+      builder: (dialogContext) => _QuickMaterialCatalogDialog(
+        materialsService: widget.materialsService,
+        initialName: _nameController.text.trim().isNotEmpty
+            ? _nameController.text.trim()
+            : _searchController.text.trim(),
+        initialUnit: _unitController.text.trim(),
+        initialPrice: _asDouble(_unitCostController.text),
+        initialNotes: _notesController.text.trim(),
+      ),
+    );
+    if (created == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _savingCatalogMaterial = true;
+    });
+    final refreshed = await widget.materialsService.listMaterials();
+    if (!mounted) return;
+    setState(() {
+      _materials = refreshed..sort((a, b) => a.name.compareTo(b.name));
+      _savingCatalogMaterial = false;
+    });
+    _applyMaterial(created);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final suggestions = _suggestions;
+    return AlertDialog(
+      title: Text(
+        widget.existing == null ? 'Componenta noua' : 'Editeaza componenta',
+      ),
+      content: SizedBox(
+        width: 680,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    labelText: 'Cauta material in catalog',
+                    hintText: 'Scrie denumirea materialului',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _searchController.text.trim().isEmpty
+                        ? null
+                        : IconButton(
+                            onPressed: () => setState(() {
+                              _searchController.clear();
+                            }),
+                            icon: const Icon(Icons.clear),
+                          ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _addNewMaterialQuick,
+                      icon: const Icon(Icons.add_circle_outline),
+                      label: const Text('Material nou'),
+                    ),
+                    if (_savingCatalogMaterial)
+                      const Chip(label: Text('Se actualizeaza catalogul...')),
+                  ],
+                ),
+                if (suggestions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Theme.of(context).dividerColor),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: suggestions.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final material = suggestions[index];
+                        return ListTile(
+                          dense: true,
+                          title: Text(material.name),
+                          subtitle: Text(
+                            '${material.unit.isEmpty ? 'buc' : material.unit} • ${material.price.toStringAsFixed(2)}',
+                          ),
+                          trailing: _selectedMaterialId == material.id
+                              ? const Icon(Icons.check_circle_outline)
+                              : null,
+                          onTap: () => _applyMaterial(material),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedMaterialId.isEmpty
+                      ? null
+                      : _selectedMaterialId,
+                  decoration: const InputDecoration(
+                    labelText: 'Sau alege direct din lista de materiale',
+                  ),
+                  items: _materials
+                      .map(
+                        (item) => DropdownMenuItem<String>(
+                          value: item.id,
+                          child: Text(item.name),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    final material = _materials.cast<MasterMaterial?>().firstWhere(
+                          (item) => item?.id == value,
+                          orElse: () => null,
+                        );
+                    if (material == null) return;
+                    _applyMaterial(material);
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Denumire material',
+                  ),
+                  validator: (value) => (value ?? '').trim().isEmpty
+                      ? 'Completeaza denumirea materialului.'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: _unitController,
+                        decoration: const InputDecoration(
+                          labelText: 'Unitate',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _unitCostController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Cost unitar',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Cantitate variabila in functie de ml'),
+                  subtitle: const Text(
+                    'Daca este activ, angajatul va modifica doar cantitatea de ml folosita, iar aceasta componenta se recalculeaza automat.',
+                  ),
+                  value: _isVariableLength,
+                  onChanged: (value) {
+                    setState(() => _isVariableLength = value);
+                  },
+                ),
+                const SizedBox(height: 12),
+                if (_isVariableLength) ...[
+                  TextFormField(
+                    controller: _quantityPerMlController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Cantitate pe 1 ml kit',
+                      helperText:
+                          'Exemplu: 1 pentru teava, cablu sau alte materiale proportionale cu lungimea.',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _baseQuantityController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Cantitate fixa suplimentara',
+                      helperText:
+                          'Optional: se adauga peste componenta variabila.',
+                    ),
+                  ),
+                ] else
+                  TextFormField(
+                    controller: _baseQuantityController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Cantitate fixa in kit',
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _notesController,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Observatii componenta',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunta'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            Navigator.of(context).pop(
+              AppointmentMaterialKitComponent(
+                id: widget.existing?.id ??
+                    'kit-comp-${DateTime.now().microsecondsSinceEpoch}',
+                materialId: _selectedMaterialId,
+                name: _nameController.text.trim(),
+                unit: _unitController.text.trim().isEmpty
+                    ? 'buc'
+                    : _unitController.text.trim(),
+                baseQuantity: _asDouble(_baseQuantityController.text),
+                quantityPerLinearMeter: _isVariableLength
+                    ? _asDouble(_quantityPerMlController.text)
+                    : 0,
+                unitCost: _asDouble(_unitCostController.text),
+                isVariableLength: _isVariableLength,
+                notes: _notesController.text.trim(),
+              ),
+            );
+          },
+          child: const Text('Salveaza'),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuickMaterialCatalogDialog extends StatefulWidget {
+  const _QuickMaterialCatalogDialog({
+    required this.materialsService,
+    this.initialName = '',
+    this.initialUnit = '',
+    this.initialPrice = 0,
+    this.initialNotes = '',
+  });
+
+  final MaterialsCatalogService materialsService;
+  final String initialName;
+  final String initialUnit;
+  final double initialPrice;
+  final String initialNotes;
+
+  @override
+  State<_QuickMaterialCatalogDialog> createState() =>
+      _QuickMaterialCatalogDialogState();
+}
+
+class _QuickMaterialCatalogDialogState
+    extends State<_QuickMaterialCatalogDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameController;
+  late final TextEditingController _unitController;
+  late final TextEditingController _priceController;
+  late final TextEditingController _notesController;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+    _unitController =
+        TextEditingController(text: widget.initialUnit.isEmpty ? 'buc' : widget.initialUnit);
+    _priceController =
+        TextEditingController(text: widget.initialPrice.toStringAsFixed(2));
+    _notesController = TextEditingController(text: widget.initialNotes);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _unitController.dispose();
+    _priceController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final created = await widget.materialsService.upsertFromOfferMaterial(
+        name: _nameController.text.trim(),
+        unit: _unitController.text.trim().isEmpty
+            ? 'buc'
+            : _unitController.text.trim(),
+        price: _asDouble(_priceController.text),
+        notes: _notesController.text.trim(),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(created);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Material nou in catalog'),
+      content: SizedBox(
+        width: 520,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Denumire'),
+                validator: (value) => (value ?? '').trim().isEmpty
+                    ? 'Completeaza denumirea materialului.'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _unitController,
+                      decoration: const InputDecoration(labelText: 'UM'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _priceController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration:
+                          const InputDecoration(labelText: 'Pret unitar'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _notesController,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Observatii'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Renunta'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Se salveaza...' : 'Salveaza'),
+        ),
+      ],
+    );
+  }
+}
+
+double _asDouble(String raw) {
+  return double.tryParse(raw.trim().replaceAll(',', '.')) ?? 0;
+}
+
+String _formatQuantity(double value) {
+  if (value == value.roundToDouble()) {
+    return value.toStringAsFixed(0);
+  }
+  return value.toStringAsFixed(2);
+}

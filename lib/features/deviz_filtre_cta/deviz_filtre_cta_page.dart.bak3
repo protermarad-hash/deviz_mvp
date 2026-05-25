@@ -1,0 +1,533 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/help_content.dart';
+import '../../core/pdf_actions_helper.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/widgets/help_button.dart';
+import 'deviz_filtre_cta_editor_page.dart';
+import 'deviz_filtre_cta_models.dart';
+import 'deviz_filtre_cta_pdf_service.dart';
+import 'deviz_filtre_cta_repository.dart';
+
+/// Pagina de listare devize filtre CTA — arată toate devizele salvate,
+/// permite creare, editare, export PDF și ștergere.
+class DevizFiltreCtaPage extends StatefulWidget {
+  const DevizFiltreCtaPage({
+    super.key,
+    required this.appRepository,
+    this.currentUserName = '',
+    this.hideAppBar = false,
+  });
+
+  final AppDataRepository appRepository;
+  final String currentUserName;
+  final bool hideAppBar;
+
+  @override
+  State<DevizFiltreCtaPage> createState() => _DevizFiltreCtaPageState();
+}
+
+class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  final _repo = DevizFiltreCtaRepository();
+  final _searchCtrl = TextEditingController();
+  final _fmtEur = NumberFormat('#,##0.00', 'ro_RO');
+
+  bool _loading = true;
+  bool _syncing = false;
+  List<DevizFiltreCta> _items = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl.addListener(_refresh);
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+    Future.microtask(_load);
+  }
+
+  @override
+  void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    if (FirebaseBootstrap.onlineNotifier.value && _items.isEmpty && !_loading) {
+      _load();
+    }
+  }
+
+  void _refresh() => setState(() {});
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final items = await _repo.list();
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la încărcare: $e')),
+      );
+    }
+  }
+
+  List<DevizFiltreCta> get _filtered {
+    final q = _searchCtrl.text.toLowerCase().trim();
+    if (q.isEmpty) return _items;
+    return _items.where((d) {
+      return d.titluDeviz.toLowerCase().contains(q) ||
+          d.numar.toLowerCase().contains(q) ||
+          d.clientName.toLowerCase().contains(q) ||
+          d.anDeviz.toLowerCase().contains(q);
+    }).toList();
+  }
+
+  Future<void> _openEditor({DevizFiltreCta? existing}) async {
+    final result = await Navigator.of(context).push<DevizFiltreCta>(
+      MaterialPageRoute(
+        builder: (_) => DevizFiltreCtaEditorPage(
+          existing: existing,
+          repository: _repo,
+          appRepository: widget.appRepository,
+          currentUserName: widget.currentUserName,
+        ),
+      ),
+    );
+    if (result != null) {
+      await _load();
+    }
+  }
+
+  Future<void> _exportPdf(DevizFiltreCta deviz) async {
+    try {
+      final company = await widget.appRepository.loadCompanyProfile();
+      if (!mounted) return;
+      final path = await FiltreCtaPdfService.generate(
+        deviz: deviz,
+        company: company,
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'PDF deviz filtre CTA generat',
+        shareSubject:
+            'Deviz Filtre CTA ${deviz.numar.isNotEmpty ? deviz.numar : deviz.titluDeviz}',
+        shareText: 'PDF deviz filtre CTA generat din aplicație.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare export PDF: $e')),
+      );
+    }
+  }
+
+  Future<void> _delete(DevizFiltreCta deviz) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Șterge deviz'),
+        content: Text(
+          'Ești sigur că vrei să ștergi devizul '
+          '"${deviz.titluDeviz.isNotEmpty ? deviz.titluDeviz : deviz.numar}"?\n'
+          'Această acțiune nu poate fi anulată.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    // Optimistic UI: elimină imediat din listă — nu așteptăm operația async
+    setState(() => _items.removeWhere((d) => d.id == deviz.id));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Deviz șters.')),
+    );
+
+    // Ștergerea efectivă rulează în fundal (nu blochează UI)
+    _repo.delete(deviz.id).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la ștergere: $e')),
+        );
+        _load(); // restaurează starea corectă la eroare
+      }
+    });
+  }
+
+  Future<void> _forceSyncToCloud() async {
+    setState(() => _syncing = true);
+    try {
+      final count = await _repo.forceSyncLocalToCloud();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(count > 0
+              ? '$count deviz(e) trimise la cloud cu succes.'
+              : 'Niciun deviz de trimis.'),
+        ),
+      );
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la trimitere: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final filtered = _filtered;
+
+    final body = RefreshIndicator(
+      onRefresh: _load,
+      child: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : filtered.isEmpty
+              ? _buildEmpty()
+              : ListView.builder(
+                  padding: const EdgeInsets.only(
+                      left: 8, right: 8, top: 8, bottom: 80),
+                  itemCount: filtered.length,
+                  itemBuilder: (ctx, i) => _buildCard(filtered[i]),
+                ),
+    );
+
+    if (widget.hideAppBar) {
+      return Scaffold(
+        body: Column(
+          children: [
+            _buildSearchBar(),
+            Expanded(child: body),
+          ],
+        ),
+        floatingActionButton: _buildFab(),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Devize Filtre CTA'),
+        actions: [
+          HelpButton(content: AppHelp.devizeFiltreCta),
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(56),
+          child: _buildSearchBar(),
+        ),
+      ),
+      body: body,
+      floatingActionButton: _buildFab(),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: InputDecoration(
+                hintText: 'Caută deviz (titlu, număr, client, an)…',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => _searchCtrl.clear(),
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                isDense: true,
+                filled: true,
+              ),
+            ),
+          ),
+          // Buton sincronizare forțată — trimite datele locale la cloud
+          const SizedBox(width: 4),
+          IconButton(
+            icon: _syncing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.cloud_sync_outlined),
+            tooltip: 'Sincronizează la cloud (trimite datele locale)',
+            onPressed: (_loading || _syncing) ? null : _forceSyncToCloud,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmpty() {
+    return ListView(
+      children: [
+        const SizedBox(height: 48),
+        Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.air_outlined, size: 56, color: Colors.grey),
+              const SizedBox(height: 12),
+              const Text(
+                'Niciun deviz filtre CTA',
+                style:
+                    TextStyle(fontSize: 16, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              Card(
+                margin: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Firebase: init=${FirebaseBootstrap.isInitialized} '
+                        'online=${FirebaseBootstrap.isOnline}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: FirebaseBootstrap.isInitialized
+                              ? Colors.grey.shade700
+                              : Colors.orange.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Cache local: ${DevizFiltreCtaRepository.lastLocalCount} doc.'
+                        '  |  Firestore: ${DevizFiltreCtaRepository.lastFirestoreCount < 0 ? "eroare/nefinalizat" : "${DevizFiltreCtaRepository.lastFirestoreCount} doc."}',
+                        style:
+                            const TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      if (DevizFiltreCtaRepository.lastFirestoreError !=
+                          null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Eroare: ${DevizFiltreCtaRepository.lastFirestoreError}',
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.red.shade700),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Trage în jos pentru a reîncărca din cloud.',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: _loading ? null : _load,
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('Reîncarcă din cloud'),
+              ),
+              const SizedBox(height: 8),
+              if (DevizFiltreCtaRepository.lastLocalCount > 0)
+                OutlinedButton.icon(
+                  onPressed: (_loading || _syncing) ? null : _forceSyncToCloud,
+                  icon: _syncing
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child:
+                              CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.cloud_upload_outlined, size: 16),
+                  label: Text(_syncing
+                      ? 'Se trimite la cloud…'
+                      : 'Trimite la cloud (${DevizFiltreCtaRepository.lastLocalCount} doc.)'),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCard(DevizFiltreCta d) {
+    const blue = Color(0xFF1565C0);
+    final fmtDate =
+        DateFormat('dd.MM.yyyy').format(d.dataEmitere);
+    final total = d.totalGeneral;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(10),
+        side: const BorderSide(color: Color(0xFFBBDEFB), width: 1),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => _openEditor(existing: d),
+        child: Padding(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (d.numar.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: blue,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        d.numar,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  if (d.numar.isNotEmpty) const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      d.titluDeviz.isNotEmpty
+                          ? d.titluDeviz
+                          : 'Deviz filtre CTA',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 14),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  const Icon(Icons.calendar_today_outlined,
+                      size: 13, color: Colors.grey),
+                  const SizedBox(width: 4),
+                  Text(fmtDate,
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.grey)),
+                  if (d.clientName.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    const Icon(Icons.business_outlined,
+                        size: 13, color: Colors.grey),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        d.clientName,
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.grey),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Text(
+                    '${d.ctas.length} CTA-uri',
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF1565C0)),
+                  ),
+                  const Spacer(),
+                  if (total > 0)
+                    Text(
+                      '${_fmtEur.format(total)} EUR',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Color(0xFF1565C0),
+                      ),
+                    ),
+                ],
+              ),
+              const Divider(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    onPressed: () => _exportPdf(d),
+                    icon: const Icon(Icons.picture_as_pdf_outlined,
+                        size: 16),
+                    label: const Text('PDF',
+                        style: TextStyle(fontSize: 12)),
+                    style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4)),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _openEditor(existing: d),
+                    icon: const Icon(Icons.edit_outlined, size: 16),
+                    label: const Text('Editează',
+                        style: TextStyle(fontSize: 12)),
+                    style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4)),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => _delete(d),
+                    icon: Icon(Icons.delete_outline,
+                        size: 16, color: Colors.red.shade700),
+                    label: Text('Șterge',
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.red.shade700)),
+                    style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFab() {
+    return FloatingActionButton.extended(
+      onPressed: () => _openEditor(),
+      icon: const Icon(Icons.add),
+      label: const Text('Deviz nou'),
+      tooltip: 'Deviz filtre CTA nou',
+    );
+  }
+}

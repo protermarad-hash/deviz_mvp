@@ -1,0 +1,769 @@
+import 'package:flutter/material.dart';
+
+import '../../core/app_theme_preset.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../master/master_local_store.dart';
+import '../teams/echipe_cloud_repository.dart';
+import '../teams/firebase_echipe_repository.dart';
+import '../tools/scule_catalog_service.dart';
+import '../tools/scule_models.dart';
+import 'angajati_cloud_repository.dart';
+import 'firebase_angajati_repository.dart';
+
+class EmployeesMasterPage extends StatefulWidget {
+  const EmployeesMasterPage({super.key});
+
+  @override
+  State<EmployeesMasterPage> createState() => _EmployeesMasterPageState();
+}
+
+class _EmployeesMasterPageState extends State<EmployeesMasterPage> {
+  bool _loading = true;
+  List<MasterEmployee> _rows = const [];
+  List<MasterTeam> _teams = const [];
+  List<ToolInventoryItem> _tools = const [];
+  AngajatiCloudRepository? _cloudRepository;
+  EchipeCloudRepository? _teamsCloudRepository;
+  final SculeCatalogService _toolsCatalogService = SculeCatalogService();
+  String _dataSourceLabel = 'local_cache';
+  String? _cloudFallbackReason;
+  final TextEditingController _searchController = TextEditingController();
+  bool? _activeFilter;
+  String? _teamFilterId;
+
+  @override
+  void initState() {
+    super.initState();
+    if (FirebaseBootstrap.isInitialized) {
+      _cloudRepository = FirebaseAngajatiRepository();
+      _teamsCloudRepository = FirebaseEchipeRepository();
+    } else {
+      _cloudFallbackReason = FirebaseBootstrap.lastErrorMessage;
+    }
+    _searchController.addListener(() => setState(() {}));
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  String _shortCloudError(Object error) {
+    final raw = error.toString().replaceAll('\n', ' ').trim();
+    if (raw.isEmpty) return 'necunoscuta';
+    return raw.length > 120 ? '${raw.substring(0, 120)}...' : raw;
+  }
+
+  Future<List<MasterEmployee>> _listEmployeesResolved() async {
+    final cloud = _cloudRepository;
+    final localRows = await MasterLocalStore.readEmployees();
+    if (cloud == null) {
+      _dataSourceLabel = 'local_cache';
+      _cloudFallbackReason = 'cloud indisponibil';
+      return localRows;
+    }
+    try {
+      var cloudRows = await cloud.listEmployees();
+      if (cloudRows.isEmpty && localRows.isNotEmpty) {
+        final knownIds = <String>{};
+        for (final row in localRows) {
+          final id = row.id.trim();
+          if (id.isEmpty || knownIds.contains(id)) {
+            continue;
+          }
+          await cloud.upsertEmployee(row);
+          knownIds.add(id);
+        }
+        cloudRows = await cloud.listEmployees();
+      }
+      _dataSourceLabel = 'cloud';
+      _cloudFallbackReason = null;
+      await MasterLocalStore.writeEmployees(cloudRows);
+      return cloudRows;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _cloudFallbackReason = _shortCloudError(error);
+      _dataSourceLabel = 'local_cache';
+      return localRows;
+    }
+  }
+
+  Future<void> _saveEmployeeResolved(MasterEmployee row) async {
+    final cloud = _cloudRepository;
+    if (cloud != null) {
+      try {
+        await cloud.upsertEmployee(row);
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _cloudFallbackReason = _shortCloudError(error);
+        _dataSourceLabel = 'local_cache';
+      }
+    } else {
+      _dataSourceLabel = 'local_cache';
+      _cloudFallbackReason = 'cloud indisponibil';
+    }
+    final next = [..._rows];
+    final index = next.indexWhere((e) => e.id == row.id);
+    if (index >= 0) {
+      next[index] = row;
+    } else {
+      next.add(row);
+    }
+    await MasterLocalStore.writeEmployees(next);
+  }
+
+  Future<void> _deleteEmployeeResolved(MasterEmployee row) async {
+    final cloud = _cloudRepository;
+    if (cloud != null) {
+      try {
+        await cloud.deleteEmployee(row.id);
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _cloudFallbackReason = _shortCloudError(error);
+        _dataSourceLabel = 'local_cache';
+      }
+    } else {
+      _dataSourceLabel = 'local_cache';
+      _cloudFallbackReason = 'cloud indisponibil';
+    }
+    final next = _rows.where((e) => e.id != row.id).toList(growable: false);
+    await MasterLocalStore.writeEmployees(next);
+  }
+
+  Future<List<MasterTeam>> _listTeamsResolved() async {
+    final cloud = _teamsCloudRepository;
+    if (cloud == null) {
+      return MasterLocalStore.readTeams();
+    }
+    try {
+      final rows = await cloud.listTeams();
+      await MasterLocalStore.writeTeams(rows);
+      return rows;
+    } catch (_) {
+      return MasterLocalStore.readTeams();
+    }
+  }
+
+  Future<void> _load() async {
+    final rows = await _listEmployeesResolved();
+    final teams = await _listTeamsResolved();
+    final tools = await _toolsCatalogService.listTools();
+    if (!mounted) return;
+    setState(() {
+      _rows = rows;
+      _teams = teams;
+      _tools = tools;
+      _loading = false;
+    });
+  }
+
+  String _teamNameFor(String teamId) {
+    final id = teamId.trim();
+    if (id.isEmpty) return '-';
+    for (final row in _teams) {
+      if (row.id == id) {
+        final name = row.name.trim();
+        return name.isEmpty ? id : name;
+      }
+    }
+    return id;
+  }
+
+  Future<void> _edit([MasterEmployee? existing]) async {
+    final result = await showDialog<MasterEmployee>(
+      context: context,
+      builder: (_) => _EmployeeDialog(existing: existing, teams: _teams),
+    );
+    if (result == null) return;
+    await _saveEmployeeResolved(result);
+    await _load();
+  }
+
+  Future<void> _delete(MasterEmployee row) async {
+    final assignedTools = _tools
+        .where((item) => item.assignedEmployeeId.trim() == row.id.trim())
+        .toList(growable: false);
+    if (assignedTools.isNotEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Nu poți șterge angajatul: are ${assignedTools.length} scule asignate.',
+          ),
+        ),
+      );
+      return;
+    }
+    await _deleteEmployeeResolved(row);
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final brand = theme.extension<AppBrandTheme>();
+    final query = _searchController.text.trim().toLowerCase();
+    final activeCount = _rows.where((e) => e.active).length;
+    final inactiveCount = _rows.length - activeCount;
+
+    final filtered = _rows.where((e) {
+      if (_activeFilter != null && e.active != _activeFilter) return false;
+      if (_teamFilterId != null && e.teamId.trim() != _teamFilterId) return false;
+      if (query.isNotEmpty &&
+          !e.name.toLowerCase().contains(query) &&
+          !e.role.toLowerCase().contains(query)) {
+        return false;
+      }
+      return true;
+    }).toList(growable: false);
+
+    return Scaffold(
+      body: Column(
+        children: [
+          // Hero header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: brand?.shellHeaderGradient ??
+                    LinearGradient(
+                      colors: [cs.primaryContainer, cs.secondaryContainer],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: brand?.shellGlow ?? cs.primary.withValues(alpha: 0.12),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(Icons.people_outlined, size: 24, color: cs.primary),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Angajați',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: cs.onPrimaryContainer,
+                          ),
+                        ),
+                        Text(
+                          '${_rows.length} înregistrați · $_dataSourceLabel'
+                          '${(_cloudFallbackReason ?? '').isNotEmpty ? ' ⚠' : ''}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onPrimaryContainer.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _statChip('$activeCount activi', Colors.green.shade700, cs.surface),
+                  if (inactiveCount > 0) ...[
+                    const SizedBox(width: 6),
+                    _statChip('$inactiveCount inactivi', Colors.grey.shade600, cs.surface),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          // Search + filters
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+            child: Column(
+              children: [
+                TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    labelText: 'Caută angajat',
+                    prefixIcon: const Icon(Icons.search),
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    suffixIcon: query.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: _searchController.clear,
+                          )
+                        : null,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _filterChip(cs, 'Toți', _activeFilter == null && _teamFilterId == null, () => setState(() {
+                        _activeFilter = null;
+                        _teamFilterId = null;
+                      })),
+                      const SizedBox(width: 6),
+                      _filterChip(cs, 'Activi ($activeCount)', _activeFilter == true, () => setState(() {
+                        _activeFilter = _activeFilter == true ? null : true;
+                        _teamFilterId = null;
+                      })),
+                      const SizedBox(width: 6),
+                      if (inactiveCount > 0)
+                        _filterChip(cs, 'Inactivi ($inactiveCount)', _activeFilter == false, () => setState(() {
+                          _activeFilter = _activeFilter == false ? null : false;
+                          _teamFilterId = null;
+                        })),
+                      ..._teams.map((team) {
+                        final count = _rows.where((e) => e.teamId.trim() == team.id.trim()).length;
+                        if (count == 0) return const SizedBox.shrink();
+                        return Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: _filterChip(cs, '${team.name} ($count)', _teamFilterId == team.id, () => setState(() {
+                            _teamFilterId = _teamFilterId == team.id ? null : team.id;
+                            _activeFilter = null;
+                          })),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // List
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : filtered.isEmpty
+                    ? Center(
+                        child: Text(
+                          query.isNotEmpty || _activeFilter != null || _teamFilterId != null
+                              ? 'Niciun angajat găsit.'
+                              : 'Nu există angajați definiți.',
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+                        itemCount: filtered.length,
+                        itemBuilder: (context, i) =>
+                            _buildEmployeeCard(filtered[i], cs, theme),
+                      ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _loading ? null : () => _edit(),
+        icon: const Icon(Icons.add),
+        label: const Text('Adaugă angajat'),
+      ),
+    );
+  }
+
+  Widget _filterChip(ColorScheme cs, String label, bool selected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? cs.primaryContainer : cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? cs.primary.withValues(alpha: 0.4) : cs.outlineVariant,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            color: selected ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _statChip(String label, Color fg, Color bg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      child: Text(label, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg)),
+    );
+  }
+
+  Widget _badge(String text, Color bg, Color fg) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(10)),
+      child: Text(text, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: fg)),
+    );
+  }
+
+  Widget _buildEmployeeCard(MasterEmployee e, ColorScheme cs, ThemeData theme) {
+    final parts = e.name.trim().split(' ').where((w) => w.isNotEmpty).toList();
+    final initials = parts.take(2).map((w) => w[0].toUpperCase()).join();
+    final teamName = _teamNameFor(e.teamId);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: e.active ? cs.outlineVariant : cs.outlineVariant.withValues(alpha: 0.4),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: cs.shadow.withValues(alpha: 0.05),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _edit(e),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: e.active ? cs.primaryContainer : cs.surfaceContainerHighest,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  initials.isEmpty ? '?' : initials,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: e.active ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            e.name,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              color: e.active ? cs.onSurface : cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: e.active ? Colors.green.shade50 : Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: e.active ? Colors.green.shade200 : Colors.grey.shade300,
+                            ),
+                          ),
+                          child: Text(
+                            e.active ? 'Activ' : 'Inactiv',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: e.active ? Colors.green.shade700 : Colors.grey.shade600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    Wrap(
+                      spacing: 5,
+                      runSpacing: 4,
+                      children: [
+                        if (e.role.isNotEmpty)
+                          _badge(e.role, cs.primary.withValues(alpha: 0.1), cs.primary),
+                        if (teamName != '-')
+                          _badge(teamName, cs.tertiaryContainer, cs.onTertiaryContainer),
+                        _badge(
+                          '${e.effectiveTarifOrar.toStringAsFixed(0)} RON/h',
+                          cs.surfaceContainerHighest,
+                          cs.onSurfaceVariant,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.delete_outline, size: 20, color: cs.error.withValues(alpha: 0.7)),
+                onPressed: () => _delete(e),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmployeeDialog extends StatefulWidget {
+  const _EmployeeDialog({this.existing, required this.teams});
+  final MasterEmployee? existing;
+  final List<MasterTeam> teams;
+
+  @override
+  State<_EmployeeDialog> createState() => _EmployeeDialogState();
+}
+
+class _EmployeeDialogState extends State<_EmployeeDialog> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.existing?.name ?? '');
+  late final TextEditingController _role =
+      TextEditingController(text: widget.existing?.role ?? '');
+  late final TextEditingController _costLunar = TextEditingController(
+    text: widget.existing == null
+        ? ''
+        : widget.existing!.costLunar.toStringAsFixed(2),
+  );
+  late final TextEditingController _tarifOrar = TextEditingController(
+    text: widget.existing == null
+        ? ''
+        : widget.existing!.tarifOrar.toStringAsFixed(2),
+  );
+  late final TextEditingController _oreLunareStandard = TextEditingController(
+    text: widget.existing == null
+        ? '168'
+        : widget.existing!.oreLunareStandard.toStringAsFixed(0),
+  );
+  late final TextEditingController _dailyAllowance = TextEditingController(
+    text: widget.existing == null
+        ? ''
+        : widget.existing!.dailyAllowance.toStringAsFixed(2),
+  );
+  late final TextEditingController _defaultLodgingCost = TextEditingController(
+    text: widget.existing == null
+        ? ''
+        : widget.existing!.defaultLodgingCost.toStringAsFixed(2),
+  );
+
+  bool _active = true;
+  bool _requiresLodgingByDefault = false;
+  String _laborCostType = 'orar';
+  String? _teamId;
+
+  @override
+  void initState() {
+    super.initState();
+    _active = widget.existing?.active ?? true;
+    _requiresLodgingByDefault =
+        widget.existing?.requiresLodgingByDefault ?? false;
+    _laborCostType =
+        widget.existing?.laborCostType == 'lunar' ? 'lunar' : 'orar';
+    final current = widget.existing?.teamId.trim() ?? '';
+    if (current.isNotEmpty &&
+        widget.teams.any((row) => row.id.trim() == current)) {
+      _teamId = current;
+    } else {
+      _teamId = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _role.dispose();
+    _costLunar.dispose();
+    _tarifOrar.dispose();
+    _oreLunareStandard.dispose();
+    _dailyAllowance.dispose();
+    _defaultLodgingCost.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title:
+          Text(widget.existing == null ? 'Adaugă angajat' : 'Editează angajat'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          primary: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'Nume'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _role,
+                decoration: const InputDecoration(labelText: 'Funcție'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String?>(
+                initialValue: _teamId,
+                decoration: const InputDecoration(labelText: 'Echipa'),
+                items: [
+                  const DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('Fără echipă'),
+                  ),
+                  ...widget.teams.map(
+                    (team) => DropdownMenuItem<String?>(
+                      value: team.id,
+                      child:
+                          Text(team.name.trim().isEmpty ? team.id : team.name),
+                    ),
+                  ),
+                ],
+                onChanged: (value) => setState(() => _teamId = value),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _laborCostType,
+                decoration:
+                    const InputDecoration(labelText: 'Tip cost manoperă'),
+                items: const [
+                  DropdownMenuItem(value: 'orar', child: Text('Orar')),
+                  DropdownMenuItem(value: 'lunar', child: Text('Lunar')),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _laborCostType = value);
+                },
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _costLunar,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Cost lunar'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _tarifOrar,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Tarif orar'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _oreLunareStandard,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration:
+                    const InputDecoration(labelText: 'Ore standard lunare'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _dailyAllowance,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration:
+                    const InputDecoration(labelText: 'Diurnă implicită / zi'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _defaultLodgingCost,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                    labelText: 'Cost cazare implicit / noapte'),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Necesită cazare implicită'),
+                value: _requiresLodgingByDefault,
+                onChanged: (value) =>
+                    setState(() => _requiresLodgingByDefault = value),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Activ'),
+                value: _active,
+                onChanged: (value) => setState(() => _active = value),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Anulează'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final name = _name.text.trim();
+            if (name.isEmpty) return;
+            final now = DateTime.now().millisecondsSinceEpoch;
+            final costLunar =
+                double.tryParse(_costLunar.text.trim().replaceAll(',', '.')) ??
+                    0.0;
+            final tarifOrar =
+                double.tryParse(_tarifOrar.text.trim().replaceAll(',', '.')) ??
+                    0.0;
+            final oreRaw = double.tryParse(
+                    _oreLunareStandard.text.trim().replaceAll(',', '.')) ??
+                168.0;
+            final oreLunareStandard = oreRaw > 0 ? oreRaw : 168.0;
+            final dailyAllowance = double.tryParse(
+                    _dailyAllowance.text.trim().replaceAll(',', '.')) ??
+                0.0;
+            final defaultLodgingCost = double.tryParse(
+                    _defaultLodgingCost.text.trim().replaceAll(',', '.')) ??
+                0.0;
+
+            Navigator.of(context).pop(
+              MasterEmployee(
+                id: widget.existing?.id ?? 'emp-$now',
+                name: name,
+                role: _role.text.trim(),
+                active: _active,
+                teamId: (_teamId ?? '').trim(),
+                laborCostType: _laborCostType,
+                costLunar: costLunar,
+                tarifOrar: tarifOrar,
+                oreLunareStandard: oreLunareStandard,
+                dailyAllowance: dailyAllowance,
+                defaultLodgingCost: defaultLodgingCost,
+                requiresLodgingByDefault: _requiresLodgingByDefault,
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}

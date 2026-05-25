@@ -1,0 +1,4969 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/widgets/adaptive_side_panel_layout.dart';
+import '../../core/widgets/app_viewport_guard.dart';
+import '../ai_assistant/ai_assistant_service.dart';
+import '../clients/client_models.dart';
+import '../jobs/firebase_lucrari_repository.dart';
+import '../jobs/job_models.dart';
+import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
+import '../jobs/lucrari_cloud_repository.dart';
+import 'company_cost_profile_models.dart';
+import 'company_cost_profile_service.dart';
+import 'firebase_oferte_repository.dart';
+import 'local_oferte_repository.dart';
+import 'oferta_detaliu_page.dart';
+import 'offer_commercial_package_models.dart';
+import 'offer_editor_defaults_store.dart';
+import 'offer_requirement_ai_dialog.dart';
+import 'offer_currency_converter.dart';
+import 'offer_list_filter.dart';
+import 'offer_models.dart';
+import 'offer_smartbill_models.dart';
+import 'offer_standard_catalog_models.dart';
+import 'offer_standard_catalog_service.dart';
+import 'oferte_cloud_repository.dart';
+import 'bnr_exchange_rate_service.dart';
+import 'deviz_articole_baza_page.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
+
+class OfertePage extends StatefulWidget {
+  const OfertePage({
+    super.key,
+    required this.repository,
+    this.currentUserId,
+    this.currentUserEmail,
+    this.initialDraftOffer,
+    this.autoOpenDraftOnStart = false,
+    this.autoCloseAfterDraftSave = false,
+    this.initialFocusOfferId = '',
+    this.onOfferSaved,
+    this.hideAppBar = false,
+  });
+
+  final AppDataRepository repository;
+  final String? currentUserId;
+  final String? currentUserEmail;
+  final OfferRecord? initialDraftOffer;
+  final bool autoOpenDraftOnStart;
+  final bool autoCloseAfterDraftSave;
+  final String initialFocusOfferId;
+  final Future<void> Function(OfferRecord offer)? onOfferSaved;
+  /// Când e true, AppBar-ul nu se afișează (folosit în tab-ul din OferteDevizeModulPage)
+  final bool hideAppBar;
+
+  @override
+  State<OfertePage> createState() => _OfertePageState();
+}
+
+class _OfertePageState extends State<OfertePage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+  final TextEditingController _searchController = TextEditingController();
+  final LocalOferteRepository _localRepository = LocalOferteRepository();
+  final OfferEditorDefaultsStore _defaultsStore = OfferEditorDefaultsStore();
+  final OfferStandardCatalogService _standardCatalogService =
+      OfferStandardCatalogService();
+  final CompanyCostProfileService _companyCostProfileService =
+      CompanyCostProfileService();
+  late final AiAssistantService _aiAssistantService;
+  StreamSubscription<List<OfferRecord>>? _offersSubscription;
+
+  bool _loading = true;
+  List<OfferRecord> _items = const <OfferRecord>[];
+  List<ClientRecord> _clients = const <ClientRecord>[];
+  List<JobRecord> _jobs = const <JobRecord>[];
+  List<OfferLaborTemplate> _laborTemplates = const <OfferLaborTemplate>[];
+  List<OfferCommercialClauseTemplate> _clauseTemplates =
+      const <OfferCommercialClauseTemplate>[];
+  List<OfferCommercialPackageTemplate> _packageTemplates =
+      const <OfferCommercialPackageTemplate>[];
+  OfferStatus? _statusFilter;
+  String? _clientFilter;
+  OferteCloudRepository? _cloudRepository;
+  LucrariCloudRepository? _lucrariCloudRepository;
+  String _dataSourceLabel = 'local_cache';
+  String? _fallbackReason;
+  OfferEditorDefaults _offerDefaults = const OfferEditorDefaults();
+  bool _didHandleInitialDraft = false;
+  bool _didHandleInitialFocus = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _aiAssistantService = AiAssistantService(repository: widget.repository);
+    if (FirebaseBootstrap.isInitialized) {
+      _cloudRepository = FirebaseOferteRepository();
+      _lucrariCloudRepository = FirebaseLucrariRepository();
+    } else {
+      _setLocalCacheSource(FirebaseBootstrap.lastErrorMessage);
+    }
+    _searchController.addListener(_refreshUi);
+    _bindCloudOffers();
+    _loadOfferDefaults();
+    _load();
+  }
+
+  Future<void> _loadOfferDefaults() async {
+    final profileFallback = await widget.repository.loadCompanyProfile();
+    final loaded = await _defaultsStore.load(profileFallback: profileFallback);
+    if (!mounted) return;
+    setState(() => _offerDefaults = loaded);
+  }
+
+  @override
+  void dispose() {
+    _offersSubscription?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _refreshUi() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  String _shortCloudError(Object error) {
+    final raw = error.toString().replaceAll('\n', ' ').trim();
+    if (raw.isEmpty) return 'necunoscuta';
+    return raw.length > 140 ? '${raw.substring(0, 140)}...' : raw;
+  }
+
+  void _setCloudSource() {
+    _dataSourceLabel = 'cloud';
+    _fallbackReason = null;
+  }
+
+  void _setLocalCacheSource(String? reason) {
+    _dataSourceLabel = 'local_cache';
+    final trimmed = (reason ?? '').trim();
+    _fallbackReason = trimmed.isEmpty ? null : trimmed;
+  }
+
+  void _bindCloudOffers() {
+    _offersSubscription?.cancel();
+    final cloud = _cloudRepository;
+    if (cloud == null) {
+      return;
+    }
+    _offersSubscription = cloud.watchOffers().listen(
+      (cloudItems) async {
+        await _localRepository.replaceOffers(cloudItems);
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _setCloudSource();
+          _items = [...cloudItems]
+            ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+          _loading = false;
+        });
+      },
+      onError: (Object error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _setLocalCacheSource(_shortCloudError(error));
+        });
+      },
+    );
+  }
+
+  Future<List<OfferRecord>> _listOffersResolved() async {
+    final cloud = _cloudRepository;
+    if (cloud == null) {
+      _setLocalCacheSource(
+          _fallbackReason ?? FirebaseBootstrap.lastErrorMessage);
+      return _localRepository.listOffers();
+    }
+    try {
+      final cloudItems = await cloud.listOffers();
+      _setCloudSource();
+      await _localRepository.replaceOffers(cloudItems);
+      return cloudItems;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      _setLocalCacheSource(_shortCloudError(error));
+      return _localRepository.listOffers();
+    }
+  }
+
+  Future<void> _saveOfferResolved(OfferRecord item) async {
+    final resolved = item.offerNumber.trim().isEmpty
+        ? item.copyWith(offerNumber: await widget.repository.nextOfferNumber())
+        : item.copyWith(offerNumber: item.offerNumber.trim());
+    final cloud = _cloudRepository;
+    if (cloud != null) {
+      // Retry de 3 ori cu backoff exponențial (1s, 2s, 4s) pentru erori tranzitorii
+      const maxRetries = 3;
+      Object? lastError;
+      for (var attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          if (attempt > 0) {
+            await Future.delayed(Duration(seconds: 1 << attempt));
+          }
+          await cloud.upsertOffer(resolved);
+          _setCloudSource();
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          FirebaseBootstrap.registerRuntimeError(error);
+        }
+      }
+      if (lastError != null) {
+        _setLocalCacheSource(_shortCloudError(lastError));
+      }
+    } else {
+      _setLocalCacheSource(
+          _fallbackReason ?? FirebaseBootstrap.lastErrorMessage);
+    }
+    try {
+      await _localRepository.upsertOffer(resolved);
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    }
+    try {
+      await OfflineSyncRuntime.instance.queueOffer(resolved);
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    }
+  }
+
+  Future<void> _deleteOfferResolved(String id) async {
+    final cloud = _cloudRepository;
+    if (cloud != null) {
+      try {
+        await cloud.deleteOffer(id);
+        _setCloudSource();
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        _setLocalCacheSource(_shortCloudError(error));
+      }
+    } else {
+      _setLocalCacheSource(
+          _fallbackReason ?? FirebaseBootstrap.lastErrorMessage);
+    }
+    await _localRepository.deleteOffer(id);
+    await OfflineSyncRuntime.instance.queueOfferDelete(id);
+  }
+
+  Future<void> _quickUpdateOfferStatus(
+    OfferRecord item,
+    OfferStatus nextStatus,
+  ) async {
+    if (item.status == nextStatus) {
+      return;
+    }
+    if (_isOfferFrozen(item)) {
+      _showConvertedFrozenMessage(item);
+      return;
+    }
+    await _saveOfferResolved(
+      item.copyWith(
+        status: nextStatus,
+        updatedAt: DateTime.now(),
+      ),
+    );
+    await _load();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Status oferta actualizat: ${nextStatus.label}')),
+    );
+  }
+
+  PopupMenuButton<OfferStatus> _buildOfferStatusMenu(OfferRecord item) {
+    return PopupMenuButton<OfferStatus>(
+      tooltip: item.isConverted ? 'Oferta convertita' : 'Status oferta',
+      enabled: !item.isConverted,
+      onSelected: (status) => _quickUpdateOfferStatus(item, status),
+      itemBuilder: (_) {
+        return OfferStatus.values
+            .map(
+              (status) => PopupMenuItem<OfferStatus>(
+                value: status,
+                enabled: status != item.status,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.circle,
+                      size: 10,
+                      color: _offerStatusBaseColor(status),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(status.label),
+                  ],
+                ),
+              ),
+            )
+            .toList(growable: false);
+      },
+      icon: const Icon(Icons.flag_outlined),
+    );
+  }
+
+  Future<void> _saveJobResolved(JobRecord job) async {
+    if (_lucrariCloudRepository == null && FirebaseBootstrap.isInitialized) {
+      _lucrariCloudRepository = FirebaseLucrariRepository();
+    }
+    final cloud = _lucrariCloudRepository;
+    var queuedOffline = cloud == null;
+    if (cloud != null) {
+      try {
+        await cloud.upsertJob(job);
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+        queuedOffline = true;
+      }
+    }
+    final next = await widget.repository.saveJob(job);
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueJob(next);
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      await OfflineSyncRuntime.instance.syncPending();
+      // Paralelizare: toate fetch-urile sunt independente
+      final results = await Future.wait<dynamic>(<Future<dynamic>>[
+        _listOffersResolved(),
+        _loadClientsSafe(),
+        _loadJobsSafe(),
+        _loadLaborTemplatesSafe(),
+        _loadClauseTemplatesSafe(),
+        _loadPackageTemplatesSafe(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _items = [...(results[0] as List<OfferRecord>)]
+          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        _clients = results[1] as List<ClientRecord>;
+        _jobs = results[2] as List<JobRecord>;
+        _laborTemplates = results[3] as List<OfferLaborTemplate>;
+        _clauseTemplates = results[4] as List<OfferCommercialClauseTemplate>;
+        _packageTemplates = results[5] as List<OfferCommercialPackageTemplate>;
+      });
+      await _handleInitialNavigationIntents();
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handleInitialNavigationIntents() async {
+    if (!mounted) return;
+    if (!_didHandleInitialDraft &&
+        widget.autoOpenDraftOnStart &&
+        widget.initialDraftOffer != null) {
+      _didHandleInitialDraft = true;
+      final resolved = await _openEditorInternal(
+        draftOffer: widget.initialDraftOffer,
+        showFeedback: false,
+        closePageOnSave: widget.autoCloseAfterDraftSave,
+      );
+      if (!mounted) return;
+      if (!widget.autoCloseAfterDraftSave && resolved != null) {
+        await _openDetails(resolved);
+      }
+      return;
+    }
+    if (!_didHandleInitialFocus &&
+        widget.initialFocusOfferId.trim().isNotEmpty) {
+      _didHandleInitialFocus = true;
+      final offer = _findOfferById(widget.initialFocusOfferId.trim());
+      if (offer != null) {
+        await _openDetails(offer);
+      }
+    }
+  }
+
+  Future<List<OfferLaborTemplate>> _loadLaborTemplatesSafe() async {
+    try {
+      final items = await _standardCatalogService.listLaborTemplates();
+      final sorted = [...items]
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      return sorted;
+    } catch (_) {
+      return const <OfferLaborTemplate>[];
+    }
+  }
+
+  Future<List<OfferCommercialClauseTemplate>> _loadClauseTemplatesSafe() async {
+    try {
+      final items = await _standardCatalogService.listClauseTemplates();
+      final sorted = [
+        ...items
+      ]..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+      return sorted;
+    } catch (_) {
+      return const <OfferCommercialClauseTemplate>[];
+    }
+  }
+
+  Future<List<OfferCommercialPackageTemplate>>
+      _loadPackageTemplatesSafe() async {
+    try {
+      final items = await _standardCatalogService.listPackageTemplates();
+      final sorted = [...items]
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      return sorted;
+    } catch (_) {
+      return const <OfferCommercialPackageTemplate>[];
+    }
+  }
+
+  Future<List<ClientRecord>> _loadClientsSafe() async {
+    try {
+      final items = await widget.repository.listClients();
+      final sorted = [...items]
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      return sorted;
+    } catch (_) {
+      return const <ClientRecord>[];
+    }
+  }
+
+  Future<List<JobRecord>> _loadJobsSafe() async {
+    try {
+      final items = await widget.repository.listJobs();
+      final sorted = [...items]
+        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      return sorted;
+    } catch (_) {
+      return const <JobRecord>[];
+    }
+  }
+
+  List<OfferRecord> get _filteredItems {
+    return OfferListFilter.apply(
+      items: _items,
+      searchQuery: _searchController.text,
+      status: _statusFilter,
+      clientId: _clientFilter,
+      resolveClientName: _resolveClientName,
+    );
+  }
+
+  String _resolveClientName(OfferRecord item) {
+    if (item.clientName.trim().isNotEmpty) return item.clientName.trim();
+    for (final client in _clients) {
+      if (client.id == item.clientId) return client.name;
+    }
+    return '-';
+  }
+
+  String _dataSourceUiLabel() {
+    switch (_dataSourceLabel) {
+      case 'cloud':
+        return 'cloud';
+      case 'local_cache':
+        return 'cache local';
+      default:
+        return _dataSourceLabel;
+    }
+  }
+
+  String _emptyStateMessage() {
+    final hasFilters = OfferListFilter.hasActiveFilters(
+      status: _statusFilter,
+      clientId: _clientFilter,
+      searchQuery: _searchController.text,
+    );
+    if (hasFilters) {
+      return 'Nu există oferte care să corespundă filtrelor curente.';
+    }
+    return 'Nu există oferte salvate momentan.';
+  }
+
+  String _resolveDepartmentLabel(OfferRecord item) {
+    return item.departmentName.trim().isEmpty
+        ? '-'
+        : item.departmentName.trim();
+  }
+
+  String _resolveContactLabel(OfferRecord item) {
+    return item.contactPersonName.trim().isEmpty
+        ? '-'
+        : item.contactPersonName.trim();
+  }
+
+  String _resolveJobLabel(OfferRecord item) {
+    if (item.jobCode.trim().isNotEmpty || item.jobTitle.trim().isNotEmpty) {
+      final code = item.jobCode.trim();
+      final title = item.jobTitle.trim();
+      if (code.isNotEmpty && title.isNotEmpty) return '$code - $title';
+      if (code.isNotEmpty) return code;
+      if (title.isNotEmpty) return title;
+    }
+    for (final job in _jobs) {
+      if (job.id != item.jobId) continue;
+      if (job.jobCode.trim().isNotEmpty && job.title.trim().isNotEmpty) {
+        return '${job.jobCode} - ${job.title}';
+      }
+      return job.title.trim().isEmpty ? '-' : job.title;
+    }
+    return '-';
+  }
+
+  String _displayStatusLabel(OfferRecord item) {
+    if (item.isConverted) return 'Convertită';
+    return item.status.label;
+  }
+
+  Color _offerStatusBaseColor(OfferStatus status) {
+    switch (status) {
+      case OfferStatus.draft:
+        return Colors.blueGrey.shade700;
+      case OfferStatus.sent:
+        return Colors.blue.shade700;
+      case OfferStatus.awaiting:
+        return Colors.orange.shade700;
+      case OfferStatus.accepted:
+        return Colors.green.shade700;
+      case OfferStatus.rejected:
+        return Colors.red.shade700;
+      case OfferStatus.cancelled:
+        return Colors.brown.shade700;
+    }
+  }
+
+  Color _offerStatusColor(OfferRecord item) {
+    if (item.isConverted) {
+      return Colors.teal.shade700;
+    }
+    return _offerStatusBaseColor(item.status);
+  }
+
+  Widget _buildOfferStatusChip(OfferRecord item) {
+    final color = _offerStatusColor(item);
+    return Chip(
+      avatar: Icon(
+        item.isConverted ? Icons.transform_outlined : Icons.flag_outlined,
+        size: 16,
+        color: color,
+      ),
+      label: Text(
+        _displayStatusLabel(item),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      backgroundColor: color.withValues(alpha: 0.14),
+      side: BorderSide(color: color.withValues(alpha: 0.5)),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildExpiryChip(OfferRecord item) {
+    final expiry = item.validUntil;
+    if (expiry == null) return const SizedBox.shrink();
+    if (item.isConverted || item.status == OfferStatus.accepted) {
+      return const SizedBox.shrink();
+    }
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final expiryDay = DateTime(expiry.year, expiry.month, expiry.day);
+    final diff = expiryDay.difference(today).inDays;
+
+    final Color color;
+    final String label;
+    final IconData icon;
+    if (diff < 0) {
+      color = Colors.red;
+      label = 'Expirată (${-diff}z)';
+      icon = Icons.timer_off_outlined;
+    } else if (diff <= 7) {
+      color = Colors.orange;
+      label = 'Expiră în ${diff}z';
+      icon = Icons.timer_outlined;
+    } else {
+      color = Colors.green;
+      label = 'Validă ${diff}z';
+      icon = Icons.check_circle_outline;
+    }
+
+    return Chip(
+      avatar: Icon(icon, size: 16, color: color),
+      label: Text(
+        label,
+        style: TextStyle(color: color, fontWeight: FontWeight.w600),
+      ),
+      backgroundColor: color.withValues(alpha: 0.12),
+      side: BorderSide(color: color.withValues(alpha: 0.4)),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildOfferStatusOptionLabel(OfferStatus status) {
+    final color = _offerStatusBaseColor(status);
+    return Row(
+      children: [
+        Icon(Icons.circle, size: 10, color: color),
+        const SizedBox(width: 8),
+        Text(status.label),
+      ],
+    );
+  }
+
+  bool _isOfferFrozen(OfferRecord item) => item.isConverted;
+
+  void _showConvertedFrozenMessage([OfferRecord? item]) {
+    final jobId = item?.convertedToJobId.trim() ?? '';
+    final suffix = jobId.isEmpty ? '' : ' Lucrarea generată este $jobId.';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text(
+              'Oferta a fost deja convertită în lucrare și nu mai poate fi modificată.$suffix')),
+    );
+  }
+
+  JobRecord? _findJobById(String id) {
+    final normalized = id.trim();
+    if (normalized.isEmpty) return null;
+    for (final job in _jobs) {
+      if (job.id == normalized) return job;
+    }
+    return null;
+  }
+
+  Future<void> _openConvertedJob(OfferRecord item) async {
+    final job = _findJobById(item.convertedToJobId);
+    if (job == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Lucrarea generată pentru oferta ${item.offerNumber} nu a fost găsită în lista curentă.',
+          ),
+        ),
+      );
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LucrareDetaliiPage(
+          repository: widget.repository,
+          job: job,
+          clientName: _resolveClientName(item),
+        ),
+      ),
+    );
+    await _load();
+  }
+
+  String _storageModeHint() {
+    if (_dataSourceLabel != 'local_cache') return '';
+    final reason = (_fallbackReason ?? '').trim();
+    if (reason.isEmpty) return ' Operație salvată în cache local.';
+    return ' Operație salvată în cache local până la revenirea cloud.';
+  }
+
+  double _displayedOfferTotal(OfferRecord offer) {
+    return offer.priceDisplayMode == OfferPriceDisplayMode.withoutVat
+        ? offer.subtotalComercial
+        : offer.totalValue;
+  }
+
+  String _offerPriceSummary(OfferRecord offer) {
+    switch (offer.priceDisplayMode) {
+      case OfferPriceDisplayMode.withoutVat:
+        return 'Preț ofertat fără TVA: ${offer.subtotalComercial.toStringAsFixed(2)}'
+            ' • Total fără TVA: ${offer.subtotalComercial.toStringAsFixed(2)} ${offer.currency}';
+      case OfferPriceDisplayMode.withVat:
+        return 'Preț ofertat cu TVA: ${offer.totalValue.toStringAsFixed(2)}'
+            ' • Total: ${offer.totalValue.toStringAsFixed(2)} ${offer.currency}';
+      case OfferPriceDisplayMode.both:
+        return 'Preț ofertat fără TVA: ${offer.subtotalComercial.toStringAsFixed(2)}'
+            ' • TVA: ${offer.vatValue.toStringAsFixed(2)}'
+            ' • Total: ${offer.totalValue.toStringAsFixed(2)} ${offer.currency}';
+    }
+  }
+
+  String _formatDate(DateTime? value) {
+    if (value == null) return '-';
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    return '$day.$month.${value.year}';
+  }
+
+  Future<void> _openEditor({
+    OfferRecord? existing,
+    TipDocumentDeviz? defaultTipDocument,
+  }) async {
+    if (existing != null && _isOfferFrozen(existing)) {
+      _showConvertedFrozenMessage(existing);
+      return;
+    }
+    await _openEditorInternal(
+      existing: existing,
+      showFeedback: true,
+      defaultTipDocument: defaultTipDocument,
+    );
+  }
+
+  Future<void> _openRequirementAiDialog() async {
+    final nextOfferNumber = await widget.repository.nextOfferNumber();
+    if (!mounted) return;
+    await OfferRequirementAiDialog.show(
+      context: context,
+      aiAssistantService: _aiAssistantService,
+      clients: _clients,
+      jobs: _jobs,
+      defaults: _offerDefaults,
+      nextOfferNumber: nextOfferNumber,
+      currentUserId: widget.currentUserId,
+      currentUserEmail: widget.currentUserEmail,
+      onCreateDraft: _createDraftFromRequirement,
+    );
+  }
+
+  Future<void> _createDraftFromRequirement(OfferRecord draftOffer) async {
+    final saved = await _openEditorInternal(
+      draftOffer: draftOffer,
+      showFeedback: true,
+    );
+    if (!mounted || saved == null) return;
+    await _openDetails(saved);
+  }
+
+  OfferRecord? _findOfferById(String id) {
+    for (final item in _items) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  OfferRecord _buildDuplicateDraft(OfferRecord source) {
+    final now = DateTime.now();
+    final currentUserId = (widget.currentUserId ?? '').trim();
+    final currentUserEmail = (widget.currentUserEmail ?? '').trim();
+    return source.copyWith(
+      id: 'offer-${now.microsecondsSinceEpoch}',
+      offerNumber: '',
+      status: OfferStatus.draft,
+      pdfPath: '',
+      clientSignatureBase64: '',
+      issuerSignatureBase64: '',
+      clearAgreementAcceptedAt: true,
+      registryEntryId: '',
+      registryNumber: '',
+      clearRegisteredAt: true,
+      convertedToJobId: '',
+      clearConvertedAt: true,
+      convertedByUserId: '',
+      smartBillEstimate: const OfferSmartBillDocumentState(
+        documentType: OfferSmartBillDocumentType.estimate,
+      ),
+      smartBillInvoice: const OfferSmartBillDocumentState(
+        documentType: OfferSmartBillDocumentType.invoice,
+      ),
+      createdAt: now,
+      updatedAt: now,
+      createdByUserId:
+          currentUserId.isEmpty ? source.createdByUserId : currentUserId,
+      createdByUserEmail: currentUserEmail.isEmpty
+          ? source.createdByUserEmail
+          : currentUserEmail,
+      lines:
+          source.lines.map((line) => line.copyWith()).toList(growable: false),
+      partners: source.partners
+          .map((partner) => partner.copyWith())
+          .toList(growable: false),
+      partnerWorkers: source.partnerWorkers
+          .map((worker) => worker.copyWith())
+          .toList(growable: false),
+      partnerVehicles: source.partnerVehicles
+          .map((vehicle) => vehicle.copyWith())
+          .toList(growable: false),
+      commercialClauses: source.commercialClauses
+          .map((clause) => clause.copyWith())
+          .toList(growable: false),
+    );
+  }
+
+  Future<OfferRecord?> _duplicateOffer(OfferRecord source) async {
+    final duplicated = _buildDuplicateDraft(source);
+    final saved = await _openEditorInternal(
+      draftOffer: duplicated,
+      showFeedback: true,
+    );
+    if (!mounted || saved == null) {
+      return saved;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Oferta ${source.offerNumber} a fost duplicata ca ${saved.offerNumber}.${_storageModeHint()}',
+        ),
+      ),
+    );
+    return saved;
+  }
+
+  Future<OfferRecord?> _openEditorInternal({
+    OfferRecord? existing,
+    OfferRecord? draftOffer,
+    required bool showFeedback,
+    bool closePageOnSave = false,
+    TipDocumentDeviz? defaultTipDocument,
+  }) async {
+    final creatingNew = existing == null;
+    final nextOfferNumber =
+        existing == null ? await widget.repository.nextOfferNumber() : null;
+    if (!mounted) return null;
+    final savedOffer = await showDialog<OfferRecord>(
+      context: context,
+      builder: (context) => _OfferFormDialog(
+        existing: existing,
+        initialDraft: draftOffer,
+        clients: _clients,
+        jobs: _jobs,
+        laborTemplates: _laborTemplates,
+        clauseTemplates: _clauseTemplates,
+        packageTemplates: _packageTemplates,
+        currentUserId: widget.currentUserId,
+        currentUserEmail: widget.currentUserEmail,
+        nextOfferNumber: nextOfferNumber,
+        defaults: _offerDefaults,
+        onSave: _saveOfferResolved,
+        defaultTipDocument: defaultTipDocument,
+      ),
+    );
+    if (savedOffer != null) {
+      await _load();
+      if (!mounted) return null;
+      final resolved = _findOfferById(savedOffer.id) ?? savedOffer;
+      await widget.onOfferSaved?.call(resolved);
+      if (!mounted) {
+        return resolved;
+      }
+      if (showFeedback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              creatingNew
+                  ? 'Oferta a fost salvata.${_storageModeHint()}'
+                  : 'Oferta a fost actualizata.${_storageModeHint()}',
+            ),
+          ),
+        );
+      }
+      if (closePageOnSave) {
+        Navigator.of(context).pop();
+      }
+      return resolved;
+    }
+    return null;
+  }
+
+  Future<void> _openDetails(OfferRecord offer) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OfertaDetaliuPage(
+          repository: widget.repository,
+          initialOffer: offer,
+          clients: _clients,
+          jobs: _jobs,
+          laborTemplates: _laborTemplates,
+          clauseTemplates: _clauseTemplates,
+          packageTemplates: _packageTemplates,
+          onSaveOffer: _saveOfferResolved,
+          currentUserEmail: widget.currentUserEmail,
+          onEditOffer: (current) =>
+              _openEditorInternal(existing: current, showFeedback: false),
+          onDuplicateOffer: _duplicateOffer,
+          onConvertToJob: _convertOfferToJob,
+        ),
+      ),
+    );
+    await _load();
+  }
+
+  Future<OfferRecord?> _convertOfferToJob(OfferRecord offer) async {
+    if (offer.status != OfferStatus.accepted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Oferta trebuie sa fie acceptata pentru transformare in lucrare.',
+            ),
+          ),
+        );
+      }
+      return null;
+    }
+
+    if (offer.convertedToJobId.trim().isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Oferta este deja transformata in lucrare (${offer.convertedToJobId}).',
+            ),
+          ),
+        );
+      }
+      return offer;
+    }
+
+    final now = DateTime.now();
+    String nextJobCode = '';
+    try {
+      nextJobCode = await widget.repository.nextJobCode();
+    } catch (_) {
+      final stamp = now.millisecondsSinceEpoch.toString();
+      final tail = stamp.length > 4 ? stamp.substring(stamp.length - 4) : stamp;
+      nextJobCode = 'JOB-$tail';
+    }
+    final title = offer.jobTitle.trim().isNotEmpty
+        ? offer.jobTitle.trim()
+        : offer.title.trim();
+    final notes = [
+      if (offer.notes.trim().isNotEmpty) offer.notes.trim(),
+      'Sursa oferta: ${offer.offerNumber}',
+    ].join('\n');
+
+    final job = JobRecord(
+      id: 'job-${now.microsecondsSinceEpoch}',
+      jobCode: nextJobCode.trim(),
+      clientId: offer.clientId,
+      title: title.isEmpty ? 'Lucrare din oferta ${offer.offerNumber}' : title,
+      location: '',
+      city: '',
+      county: '',
+      contactPerson: offer.contactPersonName.trim(),
+      contactPhone: offer.contactPersonPhone.trim(),
+      clientDepartmentId: offer.departmentId.trim(),
+      clientDepartmentName: offer.departmentName.trim(),
+      contactPersonId: offer.contactPersonId.trim(),
+      contactPersonEmail: offer.contactPersonEmail.trim(),
+      description: 'Generata din oferta ${offer.offerNumber}',
+      category: 'oferta',
+      status: JobStatus.ofertata,
+      startDate: null,
+      dueDate: null,
+      closedDate: null,
+      estimatedValue:
+          _displayedOfferTotal(offer) > 0 ? _displayedOfferTotal(offer) : null,
+      notes: notes,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+      sourceOfferId: offer.id,
+      sourceOfferNumber: offer.offerNumber,
+      sourceOfferTitle: offer.title,
+      createdByUserId: offer.createdByUserId,
+      createdByUserEmail: offer.createdByUserEmail,
+    );
+
+    await _saveJobResolved(job);
+
+    final savedJobs = await widget.repository.listJobs();
+    final savedJob = savedJobs
+        .where((item) => item.id == job.id)
+        .fold<JobRecord?>(null, (prev, item) => prev ?? item);
+    final convertedJobId = savedJob?.id ?? job.id;
+
+    final updatedOffer = offer.copyWith(
+      convertedToJobId: convertedJobId,
+      convertedAt: now,
+      convertedByUserId: (widget.currentUserId ?? '').trim(),
+      updatedAt: now,
+    );
+    await _saveOfferResolved(updatedOffer);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Oferta transformata in lucrare (${savedJob?.jobCode.isNotEmpty == true ? savedJob!.jobCode : convertedJobId}).${_storageModeHint()}',
+          ),
+        ),
+      );
+    }
+    return updatedOffer;
+  }
+
+  Future<void> _deleteOffer(OfferRecord item) async {
+    if (_isOfferFrozen(item)) {
+      _showConvertedFrozenMessage(item);
+      return;
+    }
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Ștergere ofertă'),
+        content: Text(
+          'Sigur vrei sa stergi oferta ${item.offerNumber}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await _deleteOfferResolved(item.id);
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Oferta a fost stearsa.${_storageModeHint()}')),
+    );
+  }
+
+  Future<void> _openOfferDefaults() async {
+    final updated = await showDialog<OfferEditorDefaults>(
+      context: context,
+      builder: (context) => _OfferDefaultsDialog(initial: _offerDefaults),
+    );
+    if (updated == null) return;
+    await _defaultsStore.save(updated);
+    if (!mounted) return;
+    setState(() => _offerDefaults = updated);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Valorile implicite pentru ofertă au fost salvate.')),
+    );
+  }
+
+  Future<void> _openLaborTemplatesManager() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _OfferLaborTemplatesDialog(
+        items: _laborTemplates,
+        onSave: (item) => _standardCatalogService.upsertLaborTemplate(item),
+        onImportRecommended: () =>
+            _standardCatalogService.mergeRecommendedLaborTemplates(),
+      ),
+    );
+    if (saved == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Catalogul de manoperă standard a fost actualizat.')),
+      );
+    }
+  }
+
+  Future<void> _openClauseTemplatesManager() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _OfferCommercialClauseTemplatesDialog(
+        items: _clauseTemplates,
+        onSave: (item) => _standardCatalogService.upsertClauseTemplate(item),
+      ),
+    );
+    if (saved == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content:
+                Text('Catalogul de condiții comerciale a fost actualizat.')),
+      );
+    }
+  }
+
+  Future<void> _openPackageTemplatesManager() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _OfferCommercialPackageTemplatesDialog(
+        items: _packageTemplates,
+        laborTemplates: _laborTemplates,
+        clauseTemplates: _clauseTemplates,
+        onSave: (item) => _standardCatalogService.upsertPackageTemplate(item),
+      ),
+    );
+    if (saved == true) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content:
+                Text('Pachetele comerciale standard au fost actualizate.')),
+      );
+    }
+  }
+
+  Future<void> _openCompanyCostProfileManager() async {
+    final initial = await _companyCostProfileService.load();
+    if (!mounted) {
+      return;
+    }
+    final saved = await showDialog<CompanyCostProfile>(
+      context: context,
+      builder: (context) => _CompanyCostProfileDialog(initial: initial),
+    );
+    if (saved == null) {
+      return;
+    }
+    await _companyCostProfileService.save(saved);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text(
+              'Costurile reale ale societății au fost salvate.${_storageModeHint()}')),
+    );
+  }
+
+  int _statusCount(OfferStatus status) =>
+      _items.where((item) => item.status == status).length;
+
+  Widget _summaryChip(
+    String label,
+    String value, {
+    IconData? icon,
+    Color? color,
+  }) {
+    return Chip(
+      avatar: icon == null ? null : Icon(icon, size: 16, color: color),
+      label: Text('$label: $value'),
+      backgroundColor: color?.withValues(alpha: 0.12),
+      side: color == null
+          ? null
+          : BorderSide(color: color.withValues(alpha: 0.45)),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+
+  Widget _buildOffersSidePanel(List<OfferRecord> items) {
+    return SidePanelCard(
+      title: 'Panou Oferte',
+      footer: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.end,
+        children: [
+          FilledButton.tonalIcon(
+            onPressed: _openRequirementAiDialog,
+            icon: const Icon(Icons.auto_awesome_outlined),
+            label: const Text('Oferta din cerinta client'),
+          ),
+          OutlinedButton.icon(
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Reincarca'),
+          ),
+          TextButton.icon(
+            onPressed: () => setState(() {
+              _searchController.clear();
+              _statusFilter = null;
+              _clientFilter = null;
+            }),
+            icon: const Icon(Icons.filter_alt_off_outlined),
+            label: const Text('Reset filtre'),
+          ),
+        ],
+      ),
+      child: ListView(
+        shrinkWrap: true,
+        children: [
+          TextField(
+            textCapitalization: TextCapitalization.sentences,
+            controller: _searchController,
+            decoration: const InputDecoration(
+              labelText: 'Cauta dupa numar, titlu, client',
+              prefixIcon: Icon(Icons.search),
+            ),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<OfferStatus?>(
+            initialValue: _statusFilter,
+            decoration: const InputDecoration(labelText: 'Filtru status'),
+            items: [
+              const DropdownMenuItem<OfferStatus?>(
+                value: null,
+                child: Text('Toate statusurile'),
+              ),
+              ...OfferStatus.values.map(
+                (item) => DropdownMenuItem<OfferStatus?>(
+                  value: item,
+                  child: _buildOfferStatusOptionLabel(item),
+                ),
+              ),
+            ],
+            onChanged: (value) => setState(() => _statusFilter = value),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String?>(
+            initialValue: _normalizeClientFilter(),
+            decoration: const InputDecoration(labelText: 'Filtru client'),
+            items: [
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('Toti clientii'),
+              ),
+              ..._clients.map(
+                (item) => DropdownMenuItem<String?>(
+                  value: item.id,
+                  child: Text(item.name),
+                ),
+              ),
+            ],
+            onChanged: (value) => setState(() => _clientFilter = value),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _summaryChip(
+                'Oferte filtrate',
+                items.length.toString(),
+                icon: Icons.request_quote_outlined,
+              ),
+              _summaryChip(
+                'Draft',
+                _statusCount(OfferStatus.draft).toString(),
+                icon: Icons.edit_note_outlined,
+                color: _offerStatusBaseColor(OfferStatus.draft),
+              ),
+              _summaryChip(
+                'Trimise',
+                _statusCount(OfferStatus.sent).toString(),
+                icon: Icons.send_outlined,
+                color: _offerStatusBaseColor(OfferStatus.sent),
+              ),
+              _summaryChip(
+                'Acceptate',
+                _statusCount(OfferStatus.accepted).toString(),
+                icon: Icons.check_circle_outline,
+                color: _offerStatusBaseColor(OfferStatus.accepted),
+              ),
+              _summaryChip(
+                'Convertite',
+                _items.where((item) => item.isConverted).length.toString(),
+                icon: Icons.transform_outlined,
+              ),
+              Chip(
+                label: Text('Sursa date: ${_dataSourceUiLabel()}'),
+                visualDensity: VisualDensity.compact,
+              ),
+              if (_dataSourceLabel == 'local_cache' &&
+                  (_fallbackReason ?? '').trim().isNotEmpty)
+                Chip(
+                  avatar: const Icon(Icons.cloud_off, size: 16),
+                  label: Text(
+                    'Motiv fallback: ${_shortCloudError(_fallbackReason!)}',
+                  ),
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _openOfferDefaults,
+                icon: const Icon(Icons.tune),
+                label: const Text('Valori implicite oferta'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _openLaborTemplatesManager,
+                icon: const Icon(Icons.build_circle_outlined),
+                label: const Text('Catalog manopera standard'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _openClauseTemplatesManager,
+                icon: const Icon(Icons.notes_outlined),
+                label: const Text('Condiții comerciale standard'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _openPackageTemplatesManager,
+                icon: const Icon(Icons.inventory_outlined),
+                label: const Text('Pachete comerciale standard'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _openCompanyCostProfileManager,
+                icon: const Icon(Icons.account_balance_wallet_outlined),
+                label: const Text('Costuri reale societate'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOffersToolbar({required bool showPanelButton}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              FilledButton.icon(
+                onPressed: _openRequirementAiDialog,
+                icon: const Icon(Icons.auto_awesome_outlined),
+                label: const Text('Oferta din cerinta client'),
+              ),
+              if (showPanelButton)
+                Builder(
+                  builder: (context) => FilledButton.tonalIcon(
+                    onPressed: () => Scaffold.of(context).openEndDrawer(),
+                    icon: const Icon(Icons.tune_outlined),
+                    label: const Text('Filtre si panou'),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final items = _filteredItems;
+    final width = MediaQuery.sizeOf(context).width;
+    final showInlineSidePanel = width >= 1280;
+    final sideDrawerWidth = width >= 900 ? 380.0 : width * 0.92;
+
+    return Scaffold(
+      appBar: widget.hideAppBar
+          ? null
+          : AppBar(
+              title: const Text('Oferte'),
+              actions: [
+                IconButton(
+                  tooltip: 'Baza proprie de norme',
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => const DevizArticoleBazaPage(),
+                    ),
+                  ),
+                  icon: const Icon(Icons.auto_fix_high_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Ofertă din cerință client',
+                  onPressed: _openRequirementAiDialog,
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                ),
+                HelpButton(content: AppHelp.oferte),
+                if (!showInlineSidePanel)
+                  Builder(
+                    builder: (context) => IconButton(
+                      tooltip: 'Filtre și panou',
+                      onPressed: () => Scaffold.of(context).openEndDrawer(),
+                      icon: const Icon(Icons.tune_outlined),
+                    ),
+                  ),
+              ],
+            ),
+      endDrawer: showInlineSidePanel
+          ? null
+          : Drawer(
+              width: sideDrawerWidth,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _buildOffersSidePanel(items),
+                ),
+              ),
+            ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openEditor(),
+        icon: const Icon(Icons.add),
+        label: const Text('Adaugă ofertă'),
+      ),
+      body: AdaptiveSidePanelLayout(
+        showSidePanel: showInlineSidePanel,
+        sidePanelWidth: width >= 1480 ? 388 : 360,
+        sidePanel: Padding(
+          padding: const EdgeInsets.fromLTRB(0, 12, 16, 16),
+          child: _buildOffersSidePanel(items),
+        ),
+        mainContent: Padding(
+          padding: EdgeInsets.only(
+            bottom: AppViewportGuard.bottomSpacing(reserveForFab: true),
+          ),
+          child: Column(
+            children: [
+              _buildOffersToolbar(showPanelButton: !showInlineSidePanel),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: items.isEmpty
+                      ? Center(child: Text(_emptyStateMessage()))
+                      : ListView.separated(
+                          itemCount: items.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final item = items[index];
+                            final statusColor = _offerStatusColor(item);
+                            return _buildOfferCard(item, statusColor);
+                          },
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Card ofertă — layout compact pentru telefoane mici.
+  /// Acțiunile sunt grupate într-un singur meniu ⋮ pentru a nu ocupa spațiu horizontal.
+  Widget _buildOfferCard(OfferRecord item, Color statusColor) {
+    final clientName = _resolveClientName(item);
+    final dept = _resolveDepartmentLabel(item);
+    final contact = _resolveContactLabel(item);
+    final job = _resolveJobLabel(item);
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: statusColor.withValues(alpha: 0.55), width: 1.5),
+      ),
+      child: InkWell(
+        onTap: () => _openDetails(item),
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border(left: BorderSide(color: statusColor, width: 5)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Rând 1: număr + titlu + meniu acțiuni ──────────────────
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${item.offerNumber}${item.title.trim().isNotEmpty ? ' — ${item.title.trim()}' : ''}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 2,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    // Meniu compact ⋮ — toate acțiunile în popup
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: PopupMenuButton<String>(
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.more_vert, size: 20),
+                        tooltip: 'Acțiuni',
+                        onSelected: (value) {
+                          switch (value) {
+                            case 'open':
+                              _openDetails(item);
+                            case 'edit':
+                              _openEditor(existing: item);
+                            case 'duplicate':
+                              _duplicateOffer(item);
+                            case 'convert':
+                              _convertOfferToJob(item);
+                            case 'open_job':
+                              _openConvertedJob(item);
+                            case 'delete':
+                              _deleteOffer(item);
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(
+                            value: 'open',
+                            child: ListTile(
+                              leading: Icon(Icons.visibility_outlined),
+                              title: Text('Deschide detaliu'),
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          if (item.isConverted)
+                            const PopupMenuItem(
+                              value: 'open_job',
+                              child: ListTile(
+                                leading: Icon(Icons.open_in_new_outlined),
+                                title: Text('Deschide lucrarea'),
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            )
+                          else ...[
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: ListTile(
+                                leading: Icon(Icons.edit_outlined),
+                                title: Text('Editează'),
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'duplicate',
+                              child: ListTile(
+                                leading: Icon(Icons.content_copy_outlined),
+                                title: Text('Duplică'),
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            if (item.status == OfferStatus.accepted)
+                              const PopupMenuItem(
+                                value: 'convert',
+                                child: ListTile(
+                                  leading: Icon(Icons.published_with_changes_outlined),
+                                  title: Text('Convertește în lucrare'),
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: ListTile(
+                                leading: Icon(Icons.delete_outline, color: Colors.red),
+                                title: Text('Șterge', style: TextStyle(color: Colors.red)),
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                // ── Rând 2: client ───────────────────────────────────────
+                if (clientName.isNotEmpty) ...[
+                  Row(
+                    children: [
+                      const Icon(Icons.person_outline, size: 13),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          clientName,
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                ],
+                // ── Rând 3: departament + contact (dacă există) ───────────
+                if (dept != '-' || contact != '-') ...[
+                  Text(
+                    [
+                      if (dept != '-') 'Dept: $dept',
+                      if (contact != '-') 'Contact: $contact',
+                    ].join(' • '),
+                    style: const TextStyle(fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  const SizedBox(height: 2),
+                ],
+                // ── Rând 4: lucrare (dacă există) ─────────────────────────
+                if (job != '-') ...[
+                  Text(
+                    'Lucrare: $job',
+                    style: const TextStyle(fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  const SizedBox(height: 2),
+                ],
+                // ── Rând 5: date + preț ───────────────────────────────────
+                Text(
+                  '${_formatDate(item.issueDate)} → ${_formatDate(item.validUntil)}  •  ${_offerPriceSummary(item)}',
+                  style: const TextStyle(fontSize: 11),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                const SizedBox(height: 6),
+                // ── Rând 6: status + expirare + meniu status rapid ─────────
+                Row(
+                  children: [
+                    _buildOfferStatusChip(item),
+                    const SizedBox(width: 6),
+                    _buildExpiryChip(item),
+                    const Spacer(),
+                    _buildOfferStatusMenu(item),
+                  ],
+                ),
+                // ── Registratură / reclamație (dacă există) ───────────────
+                if (item.registryNumber.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Reg: ${item.registryNumber}',
+                    style: const TextStyle(fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (item.complaintId.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Reclamație: ${item.complaintNumber.trim().isEmpty ? item.complaintId.trim() : item.complaintNumber.trim()}',
+                    style: const TextStyle(fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+                if (item.isConverted) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Convertit în lucrare',
+                    style: TextStyle(fontSize: 11, color: Colors.green.shade700),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String? _normalizeClientFilter() {
+    if (_clientFilter == null) return null;
+    final exists = _clients.any((item) => item.id == _clientFilter);
+    return exists ? _clientFilter : null;
+  }
+}
+
+class _OfferDefaultsDialog extends StatefulWidget {
+  const _OfferDefaultsDialog({required this.initial});
+
+  final OfferEditorDefaults initial;
+
+  @override
+  State<_OfferDefaultsDialog> createState() => _OfferDefaultsDialogState();
+}
+
+class _OfferDefaultsDialogState extends State<_OfferDefaultsDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _vatController = TextEditingController();
+  final _regieController = TextEditingController();
+  final _profitController = TextEditingController();
+  final _exchangeCommissionController = TextEditingController();
+
+  late String _currency;
+  late OfferExchangeRateSource _exchangeRateSource;
+
+  @override
+  void initState() {
+    super.initState();
+    _currency = widget.initial.currency;
+    _exchangeRateSource = widget.initial.exchangeRateSource;
+    _vatController.text = widget.initial.vatPercent.toStringAsFixed(2);
+    _regieController.text = widget.initial.regiePercent.toStringAsFixed(2);
+    _profitController.text = widget.initial.profitPercent.toStringAsFixed(2);
+    _exchangeCommissionController.text =
+        widget.initial.exchangeCommissionPercent.toStringAsFixed(2);
+  }
+
+  @override
+  void dispose() {
+    _vatController.dispose();
+    _regieController.dispose();
+    _profitController.dispose();
+    _exchangeCommissionController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop(
+      OfferEditorDefaults(
+        vatPercent: _asDouble(_vatController.text, 21),
+        regiePercent: _asDouble(_regieController.text, 0),
+        profitPercent: _asDouble(_profitController.text, 0),
+        currency: _currency,
+        exchangeRateSource: _exchangeRateSource,
+        exchangeCommissionPercent:
+            _asDouble(_exchangeCommissionController.text, 0),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Valori implicite ofertă'),
+      content: SizedBox(
+        width: 520,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _currency,
+                      decoration:
+                          const InputDecoration(labelText: 'Monedă implicită'),
+                      items: const <DropdownMenuItem<String>>[
+                        DropdownMenuItem<String>(
+                          value: 'RON',
+                          child: Text('RON'),
+                        ),
+                        DropdownMenuItem<String>(
+                          value: 'EUR',
+                          child: Text('EUR'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => _currency = value);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonFormField<OfferExchangeRateSource>(
+                      initialValue: _exchangeRateSource,
+                      decoration: const InputDecoration(
+                          labelText: 'Sursa curs implicită'),
+                      items: OfferExchangeRateSource.values
+                          .map(
+                            (item) => DropdownMenuItem<OfferExchangeRateSource>(
+                              value: item,
+                              child: Text(item.label),
+                            ),
+                          )
+                          .toList(growable: false),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setState(() => _exchangeRateSource = value);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _vatController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                          const InputDecoration(labelText: 'TVA % implicit'),
+                      validator: (value) {
+                        final parsed = _asDouble(value ?? '', -1);
+                        if (parsed < 0) return 'TVA trebuie să fie >= 0';
+                        return null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _regieController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                          const InputDecoration(labelText: 'Regie % implicită'),
+                      validator: (value) {
+                        final parsed = _asDouble(value ?? '', -1);
+                        if (parsed < 0) return 'Regia trebuie să fie >= 0';
+                        return null;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _profitController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                          const InputDecoration(labelText: 'Profit % implicit'),
+                      validator: (value) {
+                        final parsed = _asDouble(value ?? '', -1);
+                        if (parsed < 0) return 'Profitul trebuie să fie >= 0';
+                        return null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _exchangeCommissionController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                          labelText: 'Comision curs % implicit'),
+                      validator: (value) {
+                        final parsed = _asDouble(value ?? '', -1);
+                        if (parsed < 0) return 'Comisionul trebuie să fie >= 0';
+                        return null;
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _CompanyCostProfileDialog extends StatefulWidget {
+  const _CompanyCostProfileDialog({required this.initial});
+
+  final CompanyCostProfile initial;
+
+  @override
+  State<_CompanyCostProfileDialog> createState() =>
+      _CompanyCostProfileDialogState();
+}
+
+class _CompanyCostProfileDialogState extends State<_CompanyCostProfileDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _administrativeController;
+  late final TextEditingController _rentController;
+  late final TextEditingController _utilitiesController;
+  late final TextEditingController _fuelController;
+  late final TextEditingController _telecomController;
+  late final TextEditingController _accountingController;
+  late final TextEditingController _softwareController;
+  late final TextEditingController _leasingController;
+  late final TextEditingController _insuranceController;
+  late final TextEditingController _otherIndirectController;
+  late final TextEditingController _productiveEmployeesController;
+  late final TextEditingController _productiveHoursController;
+  late final TextEditingController _productivityCoefficientController;
+  late final TextEditingController _employerContributionController;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initial;
+    _administrativeController = TextEditingController(
+      text: initial.administrativeMonthlyCosts.toStringAsFixed(2),
+    );
+    _rentController =
+        TextEditingController(text: initial.rent.toStringAsFixed(2));
+    _utilitiesController =
+        TextEditingController(text: initial.utilities.toStringAsFixed(2));
+    _fuelController =
+        TextEditingController(text: initial.generalFuel.toStringAsFixed(2));
+    _telecomController =
+        TextEditingController(text: initial.telecomInternet.toStringAsFixed(2));
+    _accountingController =
+        TextEditingController(text: initial.accounting.toStringAsFixed(2));
+    _softwareController = TextEditingController(
+        text: initial.softwareLicenses.toStringAsFixed(2));
+    _leasingController = TextEditingController(
+      text: initial.operationalLeasing.toStringAsFixed(2),
+    );
+    _insuranceController =
+        TextEditingController(text: initial.insurance.toStringAsFixed(2));
+    _otherIndirectController = TextEditingController(
+      text: initial.otherIndirectCosts.toStringAsFixed(2),
+    );
+    _productiveEmployeesController = TextEditingController(
+      text: initial.productiveEmployeeCount.toString(),
+    );
+    _productiveHoursController = TextEditingController(
+      text: initial.productiveHoursPerMonth.toStringAsFixed(2),
+    );
+    _productivityCoefficientController = TextEditingController(
+      text: initial.productivityCoefficient.toStringAsFixed(2),
+    );
+    _employerContributionController = TextEditingController(
+      text: initial.employerContributionPercent.toStringAsFixed(2),
+    );
+  }
+
+  @override
+  void dispose() {
+    _administrativeController.dispose();
+    _rentController.dispose();
+    _utilitiesController.dispose();
+    _fuelController.dispose();
+    _telecomController.dispose();
+    _accountingController.dispose();
+    _softwareController.dispose();
+    _leasingController.dispose();
+    _insuranceController.dispose();
+    _otherIndirectController.dispose();
+    _productiveEmployeesController.dispose();
+    _productiveHoursController.dispose();
+    _productivityCoefficientController.dispose();
+    _employerContributionController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  int _asInt(String raw, [int fallback = 0]) {
+    return int.tryParse(raw.trim()) ?? fallback;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = CompanyCostProfile(
+      administrativeMonthlyCosts: _asDouble(_administrativeController.text, 0),
+      rent: _asDouble(_rentController.text, 0),
+      utilities: _asDouble(_utilitiesController.text, 0),
+      generalFuel: _asDouble(_fuelController.text, 0),
+      telecomInternet: _asDouble(_telecomController.text, 0),
+      accounting: _asDouble(_accountingController.text, 0),
+      softwareLicenses: _asDouble(_softwareController.text, 0),
+      operationalLeasing: _asDouble(_leasingController.text, 0),
+      insurance: _asDouble(_insuranceController.text, 0),
+      otherIndirectCosts: _asDouble(_otherIndirectController.text, 0),
+      productiveEmployeeCount: _asInt(_productiveEmployeesController.text, 0),
+      productiveHoursPerMonth: _asDouble(_productiveHoursController.text, 168),
+      productivityCoefficient:
+          _asDouble(_productivityCoefficientController.text, 1),
+      employerContributionPercent:
+          _asDouble(_employerContributionController.text, 2.25),
+    );
+    return AlertDialog(
+      title: const Text('Costuri reale societate'),
+      content: SizedBox(
+        width: 760,
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _costRow(
+                  _administrativeController,
+                  'Cheltuieli administrative lunare',
+                ),
+                const SizedBox(height: 8),
+                _costRow(_rentController, 'Chirie'),
+                const SizedBox(height: 8),
+                _costRow(_utilitiesController, 'Utilitati'),
+                const SizedBox(height: 8),
+                _costRow(_fuelController, 'Combustibil general'),
+                const SizedBox(height: 8),
+                _costRow(_telecomController, 'Telefonie / internet'),
+                const SizedBox(height: 8),
+                _costRow(_accountingController, 'Contabilitate'),
+                const SizedBox(height: 8),
+                _costRow(_softwareController, 'Software / licente'),
+                const SizedBox(height: 8),
+                _costRow(_leasingController, 'Leasinguri / rate operationale'),
+                const SizedBox(height: 8),
+                _costRow(_insuranceController, 'Asigurari'),
+                const SizedBox(height: 8),
+                _costRow(_otherIndirectController, 'Alte costuri indirecte'),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _productiveEmployeesController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Numar angajati productivi',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _productiveHoursController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Ore productive lunare standard',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _productivityCoefficientController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Coeficient productivitate',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _employerContributionController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Contributii angajator %',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Total indirect lunar: ${preview.totalIndirectMonthlyCost.toStringAsFixed(2)} • '
+                    'Ore productive efective: ${preview.effectiveProductiveHoursPerMonth.toStringAsFixed(2)}',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            Navigator.of(context).pop(
+              widget.initial.copyWith(
+                administrativeMonthlyCosts:
+                    _asDouble(_administrativeController.text, 0),
+                rent: _asDouble(_rentController.text, 0),
+                utilities: _asDouble(_utilitiesController.text, 0),
+                generalFuel: _asDouble(_fuelController.text, 0),
+                telecomInternet: _asDouble(_telecomController.text, 0),
+                accounting: _asDouble(_accountingController.text, 0),
+                softwareLicenses: _asDouble(_softwareController.text, 0),
+                operationalLeasing: _asDouble(_leasingController.text, 0),
+                insurance: _asDouble(_insuranceController.text, 0),
+                otherIndirectCosts: _asDouble(_otherIndirectController.text, 0),
+                productiveEmployeeCount:
+                    _asInt(_productiveEmployeesController.text, 0),
+                productiveHoursPerMonth:
+                    _asDouble(_productiveHoursController.text, 168),
+                productivityCoefficient:
+                    _asDouble(_productivityCoefficientController.text, 1),
+                employerContributionPercent:
+                    _asDouble(_employerContributionController.text, 2.25),
+                updatedAt: DateTime.now(),
+              ),
+            );
+          },
+          child: const Text('Salveaza'),
+        ),
+      ],
+    );
+  }
+
+  Widget _costRow(TextEditingController controller, String label) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(labelText: label),
+    );
+  }
+}
+
+class _OfferFormDialog extends StatefulWidget {
+  const _OfferFormDialog({
+    required this.clients,
+    required this.jobs,
+    required this.onSave,
+    required this.defaults,
+    required this.laborTemplates,
+    required this.clauseTemplates,
+    required this.packageTemplates,
+    this.existing,
+    this.initialDraft,
+    this.nextOfferNumber,
+    this.currentUserId,
+    this.currentUserEmail,
+    this.defaultTipDocument,
+  });
+
+  final OfferRecord? existing;
+  final OfferRecord? initialDraft;
+  final List<ClientRecord> clients;
+  final List<JobRecord> jobs;
+  final Future<void> Function(OfferRecord offer) onSave;
+  final OfferEditorDefaults defaults;
+  final List<OfferLaborTemplate> laborTemplates;
+  final List<OfferCommercialClauseTemplate> clauseTemplates;
+  final List<OfferCommercialPackageTemplate> packageTemplates;
+  final String? nextOfferNumber;
+  final String? currentUserId;
+  final String? currentUserEmail;
+  final TipDocumentDeviz? defaultTipDocument;
+
+  @override
+  State<_OfferFormDialog> createState() => _OfferFormDialogState();
+}
+
+class _OfferFormDialogState extends State<_OfferFormDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _titleController = TextEditingController();
+  final _vatPercentController = TextEditingController();
+  final _regiePercentController = TextEditingController();
+  final _profitPercentController = TextEditingController();
+  final _manualRateController = TextEditingController();
+  final _exchangeCommissionController = TextEditingController();
+  final _notesController = TextEditingController();
+  final ScrollController _dialogScrollController = ScrollController();
+  final BnrExchangeRateService _bnrService = const BnrExchangeRateService();
+
+  bool _saving = false;
+  bool _loadingBnrRate = false;
+  bool _manualClientSelection = false;
+  String? _selectedClientId;
+  String? _selectedDepartmentId;
+  String? _selectedContactPersonId;
+  String? _selectedJobId;
+  OfferStatus _selectedStatus = OfferStatus.draft;
+  OfferPriceDisplayMode _priceDisplayMode = OfferPriceDisplayMode.both;
+  String _selectedCurrency = 'RON';
+  OfferExchangeRateSource _exchangeRateSource = OfferExchangeRateSource.manual;
+  double _bnrRateValue = 0;
+  DateTime _issueDate = DateTime.now();
+  DateTime? _validUntil;
+  String _offerNumber = '';
+  List<OfferCommercialClause> _commercialClauses = <OfferCommercialClause>[];
+  bool _priceDisplayModeTouched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final seed = widget.existing ?? widget.initialDraft;
+    if (seed != null) {
+      _offerNumber = widget.existing == null && seed.offerNumber.trim().isEmpty
+          ? (widget.nextOfferNumber ?? '').trim()
+          : seed.offerNumber;
+      _titleController.text = seed.title;
+      _selectedClientId = _normalizeClientId(seed.clientId);
+      _selectedDepartmentId =
+          _normalizeDepartmentId(_selectedClientId, seed.departmentId);
+      _selectedContactPersonId =
+          _normalizeContactPersonId(_selectedClientId, seed.contactPersonId);
+      _selectedJobId = _normalizeJobId(seed.jobId);
+      _selectedStatus = seed.status;
+      _priceDisplayMode = seed.priceDisplayMode;
+      _issueDate = seed.issueDate;
+      _validUntil = seed.validUntil;
+      _selectedCurrency = OfferCurrencyConverter.normalizeCurrency(
+        seed.currency,
+      );
+      _exchangeRateSource = seed.exchangeRateSource;
+      _bnrRateValue = seed.bnrRate;
+      _manualRateController.text =
+          seed.manualRate > 0 ? seed.manualRate.toStringAsFixed(4) : '';
+      _exchangeCommissionController.text =
+          seed.exchangeCommissionPercent.toStringAsFixed(2);
+      _vatPercentController.text = seed.vatPercent.toStringAsFixed(2);
+      _regiePercentController.text = seed.regiePercent.toStringAsFixed(2);
+      _profitPercentController.text = seed.profitPercent.toStringAsFixed(2);
+      _notesController.text = seed.notes;
+      _commercialClauses = seed.commercialClauses
+          .map((item) => item.copyWith())
+          .toList(growable: true);
+      _manualClientSelection = _selectedClientId != null;
+      _priceDisplayModeTouched = true;
+    } else {
+      _offerNumber = (widget.nextOfferNumber ?? '').trim();
+      _selectedCurrency = widget.defaults.currency;
+      _exchangeRateSource = widget.defaults.exchangeRateSource;
+      _manualRateController.text = '5.0000';
+      _exchangeCommissionController.text =
+          widget.defaults.exchangeCommissionPercent.toStringAsFixed(2);
+      _vatPercentController.text =
+          widget.defaults.vatPercent.toStringAsFixed(2);
+      _regiePercentController.text =
+          widget.defaults.regiePercent.toStringAsFixed(2);
+      _profitPercentController.text =
+          widget.defaults.profitPercent.toStringAsFixed(2);
+      _selectedStatus = OfferStatus.draft;
+      _priceDisplayMode = OfferPriceDisplayMode.withoutVat;
+      _validUntil = _issueDate.add(const Duration(days: 30));
+      _manualClientSelection = false;
+      _priceDisplayModeTouched = false;
+      _commercialClauses = <OfferCommercialClause>[];
+      final preselectedClient = _clientById(_selectedClientId);
+      if (preselectedClient != null) {
+        _applyClientDependentDefaults(preselectedClient);
+      }
+    }
+    if (_exchangeRateSource == OfferExchangeRateSource.bnr) {
+      _refreshBnrRate();
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _vatPercentController.dispose();
+    _regiePercentController.dispose();
+    _profitPercentController.dispose();
+    _manualRateController.dispose();
+    _exchangeCommissionController.dispose();
+    _notesController.dispose();
+    _dialogScrollController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  OfferTotals get _computedTotals {
+    final lines = (widget.existing ?? widget.initialDraft)?.lines ??
+        const <OfferLineItem>[];
+    final vat = _asDouble(_vatPercentController.text, 21);
+    final regie = _asDouble(_regiePercentController.text, 0);
+    final profit = _asDouble(_profitPercentController.text, 0);
+    return OfferRecord.computeTotals(
+      lines: lines,
+      vatPercent: vat,
+      regiePercent: regie,
+      profitPercent: profit,
+    );
+  }
+
+  double get _manualRateValue => _asDouble(_manualRateController.text, 0);
+  double get _exchangeCommissionPercent =>
+      _asDouble(_exchangeCommissionController.text, 0);
+
+  double get _baseExchangeRate {
+    if (_selectedCurrency != 'EUR') return 0;
+    if (_exchangeRateSource == OfferExchangeRateSource.bnr) {
+      return _bnrRateValue > 0 ? _bnrRateValue : _manualRateValue;
+    }
+    return _manualRateValue;
+  }
+
+  double get _effectiveExchangeRate {
+    if (_selectedCurrency != 'EUR') return 1;
+    return OfferCurrencyConverter.computeEffectiveRate(
+      baseRate: _baseExchangeRate,
+      commissionPercent: _exchangeCommissionPercent,
+    );
+  }
+
+  Future<void> _refreshBnrRate() async {
+    if (_loadingBnrRate) return;
+    setState(() => _loadingBnrRate = true);
+    try {
+      final fetched = await _bnrService.fetchOrCachedEurRate();
+      if (!mounted) return;
+      if (fetched != null && fetched > 0) {
+        setState(() => _bnrRateValue = fetched);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loadingBnrRate = false);
+      }
+    }
+  }
+
+  String? _normalizeClientId(String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return null;
+    final exists = widget.clients.any((item) => item.id == value);
+    return exists ? value : null;
+  }
+
+  String? _normalizeJobId(String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return null;
+    final exists = widget.jobs.any((item) => item.id == value);
+    return exists ? value : null;
+  }
+
+  JobRecord? _jobById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.jobs) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  ClientRecord? _clientById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.clients) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  List<ClientDepartment> _departmentsForClient(String? clientId) {
+    final client = _clientById(clientId);
+    return client?.departments ?? const <ClientDepartment>[];
+  }
+
+  List<ClientContactPerson> _contactsForClient(String? clientId) {
+    final client = _clientById(clientId);
+    return client?.contactPeople ?? const <ClientContactPerson>[];
+  }
+
+  String? _normalizeDepartmentId(String? clientId, String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return null;
+    final exists =
+        _departmentsForClient(clientId).any((item) => item.id == value);
+    return exists ? value : null;
+  }
+
+  String? _normalizeContactPersonId(String? clientId, String? raw) {
+    final value = (raw ?? '').trim();
+    if (value.isEmpty) return null;
+    final exists = _contactsForClient(clientId).any((item) => item.id == value);
+    return exists ? value : null;
+  }
+
+  ClientDepartment? _departmentById(String? clientId, String? departmentId) {
+    final value = (departmentId ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in _departmentsForClient(clientId)) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  ClientContactPerson? _contactById(String? clientId, String? contactId) {
+    final value = (contactId ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in _contactsForClient(clientId)) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  List<ClientContactPerson> _filteredContactsForSelection() {
+    final contacts = _contactsForClient(_selectedClientId);
+    final departmentId = (_selectedDepartmentId ?? '').trim();
+    if (departmentId.isEmpty) return contacts;
+    final filtered = contacts
+        .where(
+          (item) =>
+              item.departmentId.trim().isEmpty ||
+              item.departmentId.trim() == departmentId,
+        )
+        .toList(growable: false);
+    return filtered.isEmpty ? contacts : filtered;
+  }
+
+  OfferPriceDisplayMode _defaultPriceDisplayModeForClient(
+      ClientRecord? client) {
+    if (client == null) return OfferPriceDisplayMode.withoutVat;
+    return client.type == ClientType.persoanaJuridica
+        ? OfferPriceDisplayMode.withoutVat
+        : OfferPriceDisplayMode.withVat;
+  }
+
+  void _applyClientDependentDefaults(ClientRecord? client) {
+    final departments = client?.departments ?? const <ClientDepartment>[];
+    final contacts = client?.contactPeople ?? const <ClientContactPerson>[];
+    _selectedDepartmentId =
+        _normalizeDepartmentId(client?.id, _selectedDepartmentId);
+    _selectedContactPersonId =
+        _normalizeContactPersonId(client?.id, _selectedContactPersonId);
+
+    if (_selectedDepartmentId == null && departments.length == 1) {
+      _selectedDepartmentId = departments.first.id;
+    }
+
+    final selectedContact = _contactById(client?.id, _selectedContactPersonId);
+    if (selectedContact != null &&
+        selectedContact.departmentId.trim().isNotEmpty) {
+      _selectedDepartmentId = _normalizeDepartmentId(
+        client?.id,
+        selectedContact.departmentId,
+      );
+    }
+
+    final selectableContacts = _filteredContactsForSelection();
+    if (_selectedContactPersonId == null && selectableContacts.length == 1) {
+      _selectedContactPersonId = selectableContacts.first.id;
+      final onlyContact = selectableContacts.first;
+      if (onlyContact.departmentId.trim().isNotEmpty) {
+        _selectedDepartmentId = _normalizeDepartmentId(
+          client?.id,
+          onlyContact.departmentId,
+        );
+      }
+    }
+
+    if (_selectedContactPersonId != null &&
+        !_filteredContactsForSelection()
+            .any((item) => item.id == _selectedContactPersonId)) {
+      _selectedContactPersonId = null;
+    }
+
+    if (_selectedContactPersonId == null &&
+        _selectedDepartmentId == null &&
+        contacts.length == 1 &&
+        contacts.first.departmentId.trim().isNotEmpty) {
+      _selectedDepartmentId = _normalizeDepartmentId(
+        client?.id,
+        contacts.first.departmentId,
+      );
+      _selectedContactPersonId = contacts.first.id;
+    }
+
+    if (!_priceDisplayModeTouched && widget.existing == null) {
+      _priceDisplayMode = _defaultPriceDisplayModeForClient(client);
+    }
+  }
+
+  Future<void> _pickIssueDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _issueDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() => _issueDate = picked);
+  }
+
+  Future<void> _pickValidUntil() async {
+    final initial = _validUntil ?? _issueDate;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+    setState(() => _validUntil = picked);
+  }
+
+  String _formatDate(DateTime? value) {
+    if (value == null) return '-';
+    final day = value.day.toString().padLeft(2, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    return '$day.$month.${value.year}';
+  }
+
+  List<OfferCommercialClauseTemplate> get _activeClauseTemplates =>
+      widget.clauseTemplates
+          .where((item) => item.isActive)
+          .toList(growable: false);
+
+  Future<void> _addCommercialClause() async {
+    final saved = await showDialog<OfferCommercialClause>(
+      context: context,
+      builder: (context) => _OfferCommercialClauseDialog(
+        templates: _activeClauseTemplates,
+        initialSortOrder: _commercialClauses.length + 1,
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    setState(() {
+      _commercialClauses = [
+        ..._commercialClauses,
+        saved.copyWith(sortOrder: _commercialClauses.length + 1),
+      ];
+    });
+  }
+
+  Future<void> _editCommercialClause(OfferCommercialClause clause) async {
+    final saved = await showDialog<OfferCommercialClause>(
+      context: context,
+      builder: (context) => _OfferCommercialClauseDialog(
+        templates: widget.clauseTemplates,
+        initialSortOrder: clause.sortOrder,
+        existing: clause,
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    setState(() {
+      _commercialClauses = _commercialClauses
+          .map((item) => item.id == clause.id ? saved : item)
+          .toList(growable: false);
+    });
+  }
+
+  void _deleteCommercialClause(OfferCommercialClause clause) {
+    setState(() {
+      final remaining = _commercialClauses
+          .where((item) => item.id != clause.id)
+          .toList(growable: false);
+      _commercialClauses = [
+        for (var i = 0; i < remaining.length; i++)
+          remaining[i].copyWith(sortOrder: i + 1),
+      ];
+    });
+  }
+
+  void _onClientChanged(String? value) {
+    setState(() {
+      _selectedClientId = value;
+      _manualClientSelection = true;
+      _selectedDepartmentId = null;
+      _selectedContactPersonId = null;
+      _applyClientDependentDefaults(_clientById(value));
+    });
+  }
+
+  void _onDepartmentChanged(String? value) {
+    setState(() {
+      _selectedDepartmentId = _normalizeDepartmentId(_selectedClientId, value);
+      final currentContact = _contactById(
+        _selectedClientId,
+        _selectedContactPersonId,
+      );
+      if (currentContact != null &&
+          currentContact.departmentId.trim().isNotEmpty &&
+          currentContact.departmentId.trim() !=
+              (_selectedDepartmentId ?? '').trim()) {
+        _selectedContactPersonId = null;
+      }
+      final filteredContacts = _filteredContactsForSelection();
+      if (_selectedContactPersonId == null && filteredContacts.length == 1) {
+        _selectedContactPersonId = filteredContacts.first.id;
+      }
+    });
+  }
+
+  void _onContactChanged(String? value) {
+    setState(() {
+      _selectedContactPersonId =
+          _normalizeContactPersonId(_selectedClientId, value);
+      final selectedContact = _contactById(
+        _selectedClientId,
+        _selectedContactPersonId,
+      );
+      if (selectedContact != null &&
+          selectedContact.departmentId.trim().isNotEmpty) {
+        _selectedDepartmentId = _normalizeDepartmentId(
+          _selectedClientId,
+          selectedContact.departmentId,
+        );
+      }
+    });
+  }
+
+  void _onJobChanged(String? value) {
+    setState(() {
+      _selectedJobId = value;
+      if (_manualClientSelection) return;
+      final job = _jobById(value);
+      if (job == null) return;
+      final jobClient = _normalizeClientId(job.clientId);
+      if (jobClient != null) {
+        _selectedClientId = jobClient;
+        _selectedDepartmentId = null;
+        _selectedContactPersonId = null;
+        _applyClientDependentDefaults(_clientById(jobClient));
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    if (!_formKey.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _saving = true);
+    final now = DateTime.now();
+    final existing = widget.existing;
+    final seed = existing ?? widget.initialDraft;
+    final selectedJob = _jobById(_selectedJobId);
+    final selectedClient = _clientById(_selectedClientId);
+    final selectedDepartment =
+        _departmentById(_selectedClientId, _selectedDepartmentId);
+    final selectedContact =
+        _contactById(_selectedClientId, _selectedContactPersonId);
+    final vatPercent = _asDouble(_vatPercentController.text, 21);
+    final regiePercent = _asDouble(_regiePercentController.text, 0);
+    final profitPercent = _asDouble(_profitPercentController.text, 0);
+    final exchangeCommissionPercent = _exchangeCommissionPercent;
+    final manualRate = _manualRateValue;
+    final bnrRate = _bnrRateValue;
+    final effectiveExchangeRate = _effectiveExchangeRate;
+    if (_selectedCurrency == 'EUR' && effectiveExchangeRate <= 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Completeaza un curs EUR valid (manual sau BNR).'),
+          ),
+        );
+      }
+      setState(() => _saving = false);
+      return;
+    }
+    final lines = seed?.lines ?? const <OfferLineItem>[];
+    final normalizedClauses = [
+      for (var i = 0; i < _commercialClauses.length; i++)
+        _commercialClauses[i].copyWith(sortOrder: i + 1),
+    ];
+    final totals = OfferRecord.computeTotals(
+      lines: lines,
+      vatPercent: vatPercent,
+      regiePercent: regiePercent,
+      profitPercent: profitPercent,
+    );
+
+    String resolvedClientId = _selectedClientId ?? '';
+    String resolvedClientName =
+        selectedClient?.name ?? (seed?.clientName ?? '');
+    if (resolvedClientId.isEmpty && selectedJob != null) {
+      final jobClient = _clientById(selectedJob.clientId);
+      if (jobClient != null) {
+        resolvedClientId = jobClient.id;
+        resolvedClientName = jobClient.name;
+      }
+    }
+
+    final offer = OfferRecord(
+      id: seed?.id ?? 'offer-${now.microsecondsSinceEpoch}',
+      offerNumber: _offerNumber,
+      title: _titleController.text.trim(),
+      clientId: resolvedClientId,
+      clientName: resolvedClientName,
+      departmentId: selectedDepartment?.id ?? '',
+      departmentName: selectedDepartment?.name ?? '',
+      contactPersonId: selectedContact?.id ?? '',
+      contactPersonName:
+          selectedContact?.fullName ?? (seed?.contactPersonName ?? ''),
+      contactPersonEmail:
+          selectedContact?.email ?? (seed?.contactPersonEmail ?? ''),
+      contactPersonPhone:
+          selectedContact?.phone ?? (seed?.contactPersonPhone ?? ''),
+      beneficiaryClientId: seed?.beneficiaryClientId ?? '',
+      beneficiaryName: seed?.beneficiaryName ?? '',
+      commercialRecipientClientId:
+          seed?.commercialRecipientClientId ?? resolvedClientId,
+      commercialRecipientName:
+          seed?.commercialRecipientName ?? resolvedClientName,
+      complaintId: seed?.complaintId ?? '',
+      complaintNumber: seed?.complaintNumber ?? '',
+      appointmentId: seed?.appointmentId ?? '',
+      equipmentType: seed?.equipmentType ?? '',
+      equipmentBrand: seed?.equipmentBrand ?? '',
+      equipmentModel: seed?.equipmentModel ?? '',
+      outdoorUnitSerial: seed?.outdoorUnitSerial ?? '',
+      indoorUnitSerials: seed?.indoorUnitSerials ?? '',
+      equipmentDetails: seed?.equipmentDetails ?? '',
+      jobId: selectedJob?.id ?? '',
+      jobCode: selectedJob?.jobCode ?? (seed?.jobCode ?? ''),
+      jobTitle: selectedJob?.title ?? (seed?.jobTitle ?? ''),
+      status: _selectedStatus,
+      priceDisplayMode: _priceDisplayMode,
+      issueDate: _issueDate,
+      validUntil: _validUntil,
+      currency: _selectedCurrency,
+      exchangeRateSource: _exchangeRateSource,
+      bnrRate: bnrRate,
+      manualRate: manualRate,
+      exchangeCommissionPercent: exchangeCommissionPercent,
+      effectiveExchangeRate: effectiveExchangeRate,
+      notes: _notesController.text.trim(),
+      materialSubtotal: totals.materialSubtotal,
+      laborSubtotal: totals.laborSubtotal,
+      subtotalDirect: totals.subtotalDirect,
+      regiePercent: totals.regiePercent,
+      regieValue: totals.regieValue,
+      profitPercent: totals.profitPercent,
+      profitValue: totals.profitValue,
+      subtotalComercial: totals.subtotalComercial,
+      subtotal: totals.subtotalComercial,
+      vatPercent: totals.vatPercent,
+      vatValue: totals.vatValue,
+      totalValue: totals.totalValue,
+      lines: lines,
+      commercialClauses: normalizedClauses,
+      createdAt: seed?.createdAt ?? now,
+      updatedAt: now,
+      createdByUserId:
+          seed?.createdByUserId ?? (widget.currentUserId ?? '').trim(),
+      createdByUserEmail:
+          seed?.createdByUserEmail ?? (widget.currentUserEmail ?? '').trim(),
+      convertedToJobId: seed?.convertedToJobId ?? '',
+      convertedAt: seed?.convertedAt,
+      convertedByUserId: seed?.convertedByUserId ?? '',
+      tipDocument: seed?.tipDocument ??
+          widget.defaultTipDocument ??
+          TipDocumentDeviz.devizLucrari,
+    );
+
+    try {
+      await widget.onSave(offer);
+      if (!mounted) return;
+      Navigator.of(context).pop(offer);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la salvare: $e')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tipDoc = widget.existing?.tipDocument ??
+        widget.initialDraft?.tipDocument ??
+        widget.defaultTipDocument ??
+        TipDocumentDeviz.devizLucrari;
+    final docLabel = tipDoc == TipDocumentDeviz.ofertaLucrari
+        ? 'ofertă'
+        : tipDoc == TipDocumentDeviz.situatieLucrari
+            ? 'situație de lucrări'
+            : 'deviz';
+    return AlertDialog(
+      title: Text(widget.existing == null
+          ? 'Adaugă $docLabel'
+          : 'Editează $docLabel'),
+      content: SizedBox(
+        width: 760,
+        child: SingleChildScrollView(
+          controller: _dialogScrollController,
+          primary: false,
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  initialValue: _offerNumber,
+                  enabled: false,
+                  decoration: const InputDecoration(labelText: 'Număr ofertă'),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _titleController,
+                  decoration: const InputDecoration(labelText: 'Titlu ofertă'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completează titlul ofertei.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String?>(
+                  initialValue: _selectedJobId,
+                  decoration:
+                      const InputDecoration(labelText: 'Lucrare asociată'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Fără lucrare asociată'),
+                    ),
+                    ...widget.jobs.map(
+                      (item) => DropdownMenuItem<String?>(
+                        value: item.id,
+                        child: Text(item.jobCode.trim().isEmpty
+                            ? item.title
+                            : '${item.jobCode} - ${item.title}'),
+                      ),
+                    ),
+                  ],
+                  onChanged: _onJobChanged,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String?>(
+                  initialValue: _selectedClientId,
+                  decoration: const InputDecoration(labelText: 'Client'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Selectează client'),
+                    ),
+                    ...widget.clients.map(
+                      (item) => DropdownMenuItem<String?>(
+                        value: item.id,
+                        child: Text(item.name),
+                      ),
+                    ),
+                  ],
+                  onChanged: _onClientChanged,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String?>(
+                  initialValue: _normalizeDepartmentId(
+                    _selectedClientId,
+                    _selectedDepartmentId,
+                  ),
+                  decoration:
+                      const InputDecoration(labelText: 'Departament client'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Fara departament'),
+                    ),
+                    ..._departmentsForClient(_selectedClientId).map(
+                      (item) => DropdownMenuItem<String?>(
+                        value: item.id,
+                        child: Text(item.name),
+                      ),
+                    ),
+                  ],
+                  onChanged: (_selectedClientId ?? '').trim().isEmpty
+                      ? null
+                      : _onDepartmentChanged,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String?>(
+                  initialValue: _normalizeContactPersonId(
+                    _selectedClientId,
+                    _selectedContactPersonId,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Persoana de contact',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Fara persoana de contact'),
+                    ),
+                    ..._filteredContactsForSelection().map(
+                      (item) => DropdownMenuItem<String?>(
+                        value: item.id,
+                        child: Text(
+                          item.role.trim().isEmpty
+                              ? item.fullName
+                              : '${item.fullName} - ${item.role.trim()}',
+                        ),
+                      ),
+                    ),
+                  ],
+                  onChanged: (_selectedClientId ?? '').trim().isEmpty
+                      ? null
+                      : _onContactChanged,
+                ),
+                if (_contactById(_selectedClientId, _selectedContactPersonId) !=
+                    null) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      [
+                        if ((_contactById(
+                                  _selectedClientId,
+                                  _selectedContactPersonId,
+                                )?.email ??
+                                '')
+                            .trim()
+                            .isNotEmpty)
+                          'Email: ${_contactById(_selectedClientId, _selectedContactPersonId)!.email.trim()}',
+                        if ((_contactById(
+                                  _selectedClientId,
+                                  _selectedContactPersonId,
+                                )?.phone ??
+                                '')
+                            .trim()
+                            .isNotEmpty)
+                          'Tel: ${_contactById(_selectedClientId, _selectedContactPersonId)!.phone.trim()}',
+                      ].join(' | '),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                DropdownButtonFormField<OfferStatus>(
+                  initialValue: _selectedStatus,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: OfferStatus.values
+                      .map(
+                        (item) => DropdownMenuItem<OfferStatus>(
+                          value: item,
+                          child: Text(item.label),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _selectedStatus = value);
+                  },
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<OfferPriceDisplayMode>(
+                  initialValue: _priceDisplayMode,
+                  decoration: const InputDecoration(
+                    labelText: 'Afișare prețuri',
+                  ),
+                  items: OfferPriceDisplayMode.values
+                      .map(
+                        (item) => DropdownMenuItem<OfferPriceDisplayMode>(
+                          value: item,
+                          child: Text(item.label),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() {
+                      _priceDisplayMode = value;
+                      _priceDisplayModeTouched = true;
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _pickIssueDate,
+                        icon: const Icon(Icons.calendar_today_outlined),
+                        label: Text('Data emitere: ${_formatDate(_issueDate)}'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _pickValidUntil,
+                        icon: const Icon(Icons.event_available_outlined),
+                        label: Text(
+                          'Valabil până la: ${_formatDate(_validUntil)}',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_validUntil != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => setState(() => _validUntil = null),
+                      icon: const Icon(Icons.clear),
+                      label: const Text('Șterge valabilitatea'),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _selectedCurrency,
+                        decoration: const InputDecoration(labelText: 'Moneda'),
+                        items: const <DropdownMenuItem<String>>[
+                          DropdownMenuItem<String>(
+                            value: 'RON',
+                            child: Text('RON'),
+                          ),
+                          DropdownMenuItem<String>(
+                            value: 'EUR',
+                            child: Text('EUR'),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() => _selectedCurrency = value);
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: DropdownButtonFormField<OfferExchangeRateSource>(
+                        initialValue: _exchangeRateSource,
+                        decoration:
+                            const InputDecoration(labelText: 'Sursa curs'),
+                        items: OfferExchangeRateSource.values
+                            .map(
+                              (item) =>
+                                  DropdownMenuItem<OfferExchangeRateSource>(
+                                value: item,
+                                child: Text(item.label),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() => _exchangeRateSource = value);
+                          if (value == OfferExchangeRateSource.bnr) {
+                            _refreshBnrRate();
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                if (_selectedCurrency == 'EUR') ...[
+                  const SizedBox(height: 8),
+                  if (_exchangeRateSource == OfferExchangeRateSource.manual)
+                    TextFormField(
+                      controller: _manualRateController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Curs manual RON/EUR',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                      validator: (value) {
+                        if (_selectedCurrency != 'EUR') return null;
+                        if (_exchangeRateSource !=
+                            OfferExchangeRateSource.manual) {
+                          return null;
+                        }
+                        final rate = _asDouble(value ?? '', -1);
+                        if (rate <= 0) return 'Introdu un curs manual valid.';
+                        return null;
+                      },
+                    ),
+                  if (_exchangeRateSource == OfferExchangeRateSource.bnr)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Curs BNR RON/EUR',
+                            ),
+                            child: Text(
+                              _bnrRateValue > 0
+                                  ? _bnrRateValue.toStringAsFixed(4)
+                                  : '-',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: _loadingBnrRate ? null : _refreshBnrRate,
+                          icon: const Icon(Icons.refresh),
+                          label: Text(_loadingBnrRate ? '...' : 'Refresh BNR'),
+                        ),
+                      ],
+                    ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: _exchangeCommissionController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Comision curs %',
+                    ),
+                    onChanged: (_) => setState(() {}),
+                    validator: (value) {
+                      if (_selectedCurrency != 'EUR') return null;
+                      final commission = _asDouble(value ?? '', -1);
+                      if (commission < 0) {
+                        return 'Comisionul trebuie să fie >= 0.';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Curs baza: ${_baseExchangeRate > 0 ? _baseExchangeRate.toStringAsFixed(4) : '-'} | '
+                      'Curs efectiv: ${_effectiveExchangeRate > 0 ? _effectiveExchangeRate.toStringAsFixed(4) : '-'}',
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _vatPercentController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(labelText: 'TVA %'),
+                  onChanged: (_) => setState(() {}),
+                  validator: (value) {
+                    final vat = _asDouble(value ?? '', -1);
+                    if (vat < 0) return 'TVA trebuie să fie >= 0.';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _regiePercentController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(labelText: 'Regie %'),
+                        onChanged: (_) => setState(() {}),
+                        validator: (value) {
+                          final regie = _asDouble(value ?? '', -1);
+                          if (regie < 0) return 'Regia trebuie sa fie >= 0.';
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _profitPercentController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration:
+                            const InputDecoration(labelText: 'Profit %'),
+                        onChanged: (_) => setState(() {}),
+                        validator: (value) {
+                          final profit = _asDouble(value ?? '', -1);
+                          if (profit < 0) {
+                            return 'Profitul trebuie sa fie >= 0.';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Subtotal materiale: ${_computedTotals.materialSubtotal.toStringAsFixed(2)}'
+                    ' • Subtotal manopera: ${_computedTotals.laborSubtotal.toStringAsFixed(2)}\n'
+                    'Subtotal direct: ${_computedTotals.subtotalDirect.toStringAsFixed(2)}'
+                    ' • Regie: ${_computedTotals.regieValue.toStringAsFixed(2)}'
+                    ' • Profit: ${_computedTotals.profitValue.toStringAsFixed(2)}\n'
+                    '${_priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Subtotal comercial / total fără TVA: ${_computedTotals.subtotalComercial.toStringAsFixed(2)}' : _priceDisplayMode == OfferPriceDisplayMode.withVat ? 'Preț ofertat / total: ${_computedTotals.totalValue.toStringAsFixed(2)}' : 'Subtotal comercial: ${_computedTotals.subtotalComercial.toStringAsFixed(2)} • TVA: ${_computedTotals.vatValue.toStringAsFixed(2)} • Total: ${_computedTotals.totalValue.toStringAsFixed(2)}'}',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              'Servicii incluse / Condiții comerciale',
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const Spacer(),
+                            OutlinedButton.icon(
+                              onPressed: _addCommercialClause,
+                              icon: const Icon(Icons.add),
+                              label: const Text('Adaugă din șablon'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        if (_commercialClauses.isEmpty)
+                          const Text(
+                            'Nu există condiții comerciale selectate pentru această ofertă.',
+                          )
+                        else
+                          Column(
+                            children: _commercialClauses
+                                .toList(growable: false)
+                                .map(
+                                  (item) => Card(
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    child: ListTile(
+                                      title: Text(item.title.trim().isEmpty
+                                          ? 'Condiție comercială'
+                                          : item.title.trim()),
+                                      subtitle: Text(
+                                        item.content.trim().isEmpty
+                                            ? '-'
+                                            : item.content.trim(),
+                                      ),
+                                      trailing: Wrap(
+                                        spacing: 8,
+                                        children: [
+                                          IconButton(
+                                            tooltip: 'Editează',
+                                            onPressed: () =>
+                                                _editCommercialClause(item),
+                                            icon:
+                                                const Icon(Icons.edit_outlined),
+                                          ),
+                                          IconButton(
+                                            tooltip: 'Șterge',
+                                            onPressed: () =>
+                                                _deleteCommercialClause(item),
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                )
+                                .toList(growable: false),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _notesController,
+                  maxLines: 4,
+                  decoration: const InputDecoration(labelText: 'Observații'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Salvare...' : 'Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferCommercialClauseDialog extends StatefulWidget {
+  const _OfferCommercialClauseDialog({
+    required this.templates,
+    required this.initialSortOrder,
+    this.existing,
+  });
+
+  final List<OfferCommercialClauseTemplate> templates;
+  final int initialSortOrder;
+  final OfferCommercialClause? existing;
+
+  @override
+  State<_OfferCommercialClauseDialog> createState() =>
+      _OfferCommercialClauseDialogState();
+}
+
+class _OfferCommercialClauseDialogState
+    extends State<_OfferCommercialClauseDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _titleController = TextEditingController();
+  final _contentController = TextEditingController();
+
+  String? _selectedTemplateId;
+  String _category = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _selectedTemplateId =
+          existing.templateId.trim().isEmpty ? null : existing.templateId;
+      _titleController.text = existing.title;
+      _contentController.text = existing.content;
+      _category = existing.category;
+    } else if (widget.templates.length == 1) {
+      final template = widget.templates.first;
+      _selectedTemplateId = template.id;
+      _applyTemplate(template);
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  OfferCommercialClauseTemplate? _templateById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) {
+      return null;
+    }
+    for (final item in widget.templates) {
+      if (item.id == value) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  void _applyTemplate(OfferCommercialClauseTemplate template) {
+    _titleController.text = template.title.trim();
+    _contentController.text = template.content.trim();
+    _category = template.category.trim();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.existing == null
+            ? 'Adaugă condiție comercială'
+            : 'Editează condiție comercială',
+      ),
+      content: SizedBox(
+        width: 640,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String?>(
+                  initialValue: _selectedTemplateId != null &&
+                          widget.templates.any(
+                            (item) => item.id == _selectedTemplateId,
+                          )
+                      ? _selectedTemplateId
+                      : null,
+                  decoration:
+                      const InputDecoration(labelText: 'Șablon comercial'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Fără șablon'),
+                    ),
+                    ...widget.templates
+                        .where((item) =>
+                            item.isActive || item.id == _selectedTemplateId)
+                        .map(
+                          (item) => DropdownMenuItem<String?>(
+                            value: item.id,
+                            child: Text(item.title),
+                          ),
+                        ),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedTemplateId = value;
+                      final template = _templateById(value);
+                      if (template != null) {
+                        _applyTemplate(template);
+                      }
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _titleController,
+                  decoration: const InputDecoration(labelText: 'Titlu'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completează titlul condiției comerciale.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _contentController,
+                  maxLines: 6,
+                  decoration: const InputDecoration(labelText: 'Conținut'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completează conținutul condiției comerciale.';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            Navigator.of(context).pop(
+              OfferCommercialClause(
+                id: widget.existing?.id ??
+                    'clause-${DateTime.now().microsecondsSinceEpoch}',
+                title: _titleController.text.trim(),
+                content: _contentController.text.trim(),
+                templateId: (_selectedTemplateId ?? '').trim(),
+                category: _category.trim(),
+                sortOrder:
+                    widget.existing?.sortOrder ?? widget.initialSortOrder,
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferLaborTemplatesDialog extends StatefulWidget {
+  const _OfferLaborTemplatesDialog({
+    required this.items,
+    required this.onSave,
+    required this.onImportRecommended,
+  });
+
+  final List<OfferLaborTemplate> items;
+  final Future<void> Function(OfferLaborTemplate item) onSave;
+  final Future<int> Function() onImportRecommended;
+
+  @override
+  State<_OfferLaborTemplatesDialog> createState() =>
+      _OfferLaborTemplatesDialogState();
+}
+
+class _OfferLaborTemplatesDialogState
+    extends State<_OfferLaborTemplatesDialog> {
+  bool _saving = false;
+
+  Future<void> _editTemplate([OfferLaborTemplate? existing]) async {
+    final saved = await showDialog<OfferLaborTemplate>(
+      context: context,
+      builder: (context) => _OfferLaborTemplateEditorDialog(existing: existing),
+    );
+    if (saved == null || _saving) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(saved);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<void> _importRecommended() async {
+    if (_saving) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.onImportRecommended();
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [...widget.items]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return AlertDialog(
+      title: const Text('Catalog manoperă standard'),
+      content: SizedBox(
+        width: 760,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _importRecommended,
+                    icon: const Icon(Icons.playlist_add_check_outlined),
+                    label: const Text('Importă set recomandat'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : () => _editTemplate(),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Adaugă'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: items.isEmpty
+                  ? const Center(
+                      child: Text('Nu există șabloane de manoperă standard.'),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                          title: Text(item.name),
+                          subtitle: Text(
+                            'Categorie: ${item.category.trim().isEmpty ? '-' : item.category.trim()}\n'
+                            '${item.description.trim().isEmpty ? '-' : item.description.trim()}\n'
+                            'UM: ${item.unit} • Cantitate implicită: ${item.defaultQuantity.toStringAsFixed(2)} • Preț unitar: ${item.defaultUnitPrice.toStringAsFixed(2)}\n'
+                            'Incluse: ${item.includedServices.trim().isEmpty ? '-' : item.includedServices.trim()}\n'
+                            'Sugestii produse: ${item.suggestedProductKeywords.trim().isEmpty ? '-' : item.suggestedProductKeywords.trim()}\n'
+                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
+                          ),
+                          isThreeLine: false,
+                          trailing: IconButton(
+                            tooltip: 'Editează',
+                            onPressed:
+                                _saving ? null : () => _editTemplate(item),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Închide'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferLaborTemplateEditorDialog extends StatefulWidget {
+  const _OfferLaborTemplateEditorDialog({this.existing});
+
+  final OfferLaborTemplate? existing;
+
+  @override
+  State<_OfferLaborTemplateEditorDialog> createState() =>
+      _OfferLaborTemplateEditorDialogState();
+}
+
+class _OfferLaborTemplateEditorDialogState
+    extends State<_OfferLaborTemplateEditorDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _categoryController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _unitController = TextEditingController();
+  final _quantityController = TextEditingController();
+  final _unitPriceController = TextEditingController();
+  final _includedServicesController = TextEditingController();
+  final _suggestedProductKeywordsController = TextEditingController();
+  final _notesController = TextEditingController();
+  bool _isActive = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _nameController.text = existing.name;
+      _categoryController.text = existing.category;
+      _descriptionController.text = existing.description;
+      _unitController.text = existing.unit;
+      _quantityController.text = existing.defaultQuantity.toStringAsFixed(2);
+      _unitPriceController.text = existing.defaultUnitPrice.toStringAsFixed(2);
+      _includedServicesController.text = existing.includedServices;
+      _suggestedProductKeywordsController.text =
+          existing.suggestedProductKeywords;
+      _notesController.text = existing.notes;
+      _isActive = existing.isActive;
+    } else {
+      _categoryController.text = 'servicii_baza';
+      _unitController.text = 'ore';
+      _quantityController.text = '1';
+      _unitPriceController.text = '0';
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _categoryController.dispose();
+    _descriptionController.dispose();
+    _unitController.dispose();
+    _quantityController.dispose();
+    _unitPriceController.dispose();
+    _includedServicesController.dispose();
+    _suggestedProductKeywordsController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.existing == null
+            ? 'Adaugă șablon manoperă'
+            : 'Editează șablon manoperă',
+      ),
+      content: SizedBox(
+        width: 640,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'Denumire'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completează denumirea.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _categoryController,
+                  decoration: const InputDecoration(
+                    labelText: 'Categorie serviciu',
+                    helperText:
+                        'Exemple: montaj, traseu_frigorific, pif, servicii_baza',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _descriptionController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Descriere'),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: _unitController,
+                        decoration: const InputDecoration(labelText: 'UM'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _quantityController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Cantitate implicită',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _unitPriceController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: const InputDecoration(
+                          labelText: 'Preț unitar implicit',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _includedServicesController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Servicii incluse implicite',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _suggestedProductKeywordsController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Cuvinte-cheie sugestie produse',
+                    helperText:
+                        'Separate prin virgula: ex. aer conditionat, 12000 btu, inverter',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _notesController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Conditii comerciale / note',
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _isActive,
+                  onChanged: (value) => setState(() => _isActive = value),
+                  title: const Text('Activ'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            final now = DateTime.now();
+            Navigator.of(context).pop(
+              OfferLaborTemplate(
+                id: widget.existing?.id ??
+                    'labor-template-${now.microsecondsSinceEpoch}',
+                name: _nameController.text.trim(),
+                category: _categoryController.text.trim(),
+                description: _descriptionController.text.trim(),
+                unit: _unitController.text.trim().isEmpty
+                    ? 'ore'
+                    : _unitController.text.trim(),
+                defaultQuantity: _asDouble(_quantityController.text, 1),
+                defaultUnitPrice: _asDouble(_unitPriceController.text, 0),
+                isActive: _isActive,
+                notes: _notesController.text.trim(),
+                includedServices: _includedServicesController.text.trim(),
+                suggestedProductKeywords:
+                    _suggestedProductKeywordsController.text.trim(),
+                createdAt: widget.existing?.createdAt ?? now,
+                updatedAt: now,
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferCommercialClauseTemplatesDialog extends StatefulWidget {
+  const _OfferCommercialClauseTemplatesDialog({
+    required this.items,
+    required this.onSave,
+  });
+
+  final List<OfferCommercialClauseTemplate> items;
+  final Future<void> Function(OfferCommercialClauseTemplate item) onSave;
+
+  @override
+  State<_OfferCommercialClauseTemplatesDialog> createState() =>
+      _OfferCommercialClauseTemplatesDialogState();
+}
+
+class _OfferCommercialClauseTemplatesDialogState
+    extends State<_OfferCommercialClauseTemplatesDialog> {
+  bool _saving = false;
+
+  Future<void> _editTemplate([OfferCommercialClauseTemplate? existing]) async {
+    final saved = await showDialog<OfferCommercialClauseTemplate>(
+      context: context,
+      builder: (context) =>
+          _OfferCommercialClauseTemplateEditorDialog(existing: existing),
+    );
+    if (saved == null || _saving) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(saved);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [...widget.items]
+      ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+    return AlertDialog(
+      title: const Text('Condiții comerciale standard'),
+      content: SizedBox(
+        width: 760,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : () => _editTemplate(),
+                icon: const Icon(Icons.add),
+                label: const Text('Adaugă'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: items.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'Nu există șabloane de condiții comerciale.',
+                      ),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                          title: Text(item.title),
+                          subtitle: Text(
+                            '${item.category.trim().isEmpty ? 'Fără categorie' : item.category.trim()}\n'
+                            '${item.content.trim().isEmpty ? '-' : item.content.trim()}\n'
+                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
+                          ),
+                          isThreeLine: true,
+                          trailing: IconButton(
+                            tooltip: 'Editează',
+                            onPressed:
+                                _saving ? null : () => _editTemplate(item),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Închide'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferCommercialClauseTemplateEditorDialog extends StatefulWidget {
+  const _OfferCommercialClauseTemplateEditorDialog({this.existing});
+
+  final OfferCommercialClauseTemplate? existing;
+
+  @override
+  State<_OfferCommercialClauseTemplateEditorDialog> createState() =>
+      _OfferCommercialClauseTemplateEditorDialogState();
+}
+
+class _OfferCommercialClauseTemplateEditorDialogState
+    extends State<_OfferCommercialClauseTemplateEditorDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _titleController = TextEditingController();
+  final _contentController = TextEditingController();
+  final _categoryController = TextEditingController();
+  bool _isActive = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _titleController.text = existing.title;
+      _contentController.text = existing.content;
+      _categoryController.text = existing.category;
+      _isActive = existing.isActive;
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _contentController.dispose();
+    _categoryController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.existing == null
+            ? 'Adaugă șablon comercial'
+            : 'Editează șablon comercial',
+      ),
+      content: SizedBox(
+        width: 640,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _titleController,
+                  decoration: const InputDecoration(labelText: 'Titlu'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completează titlul.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _categoryController,
+                  decoration: const InputDecoration(labelText: 'Categorie'),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _contentController,
+                  maxLines: 6,
+                  decoration: const InputDecoration(labelText: 'Conținut'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completează conținutul.';
+                    }
+                    return null;
+                  },
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _isActive,
+                  onChanged: (value) => setState(() => _isActive = value),
+                  title: const Text('Activ'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            final now = DateTime.now();
+            Navigator.of(context).pop(
+              OfferCommercialClauseTemplate(
+                id: widget.existing?.id ??
+                    'clause-template-${now.microsecondsSinceEpoch}',
+                title: _titleController.text.trim(),
+                content: _contentController.text.trim(),
+                isActive: _isActive,
+                category: _categoryController.text.trim(),
+                createdAt: widget.existing?.createdAt ?? now,
+                updatedAt: now,
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferCommercialPackageTemplatesDialog extends StatefulWidget {
+  const _OfferCommercialPackageTemplatesDialog({
+    required this.items,
+    required this.laborTemplates,
+    required this.clauseTemplates,
+    required this.onSave,
+  });
+
+  final List<OfferCommercialPackageTemplate> items;
+  final List<OfferLaborTemplate> laborTemplates;
+  final List<OfferCommercialClauseTemplate> clauseTemplates;
+  final Future<void> Function(OfferCommercialPackageTemplate item) onSave;
+
+  @override
+  State<_OfferCommercialPackageTemplatesDialog> createState() =>
+      _OfferCommercialPackageTemplatesDialogState();
+}
+
+class _OfferCommercialPackageTemplatesDialogState
+    extends State<_OfferCommercialPackageTemplatesDialog> {
+  bool _saving = false;
+
+  Future<void> _editTemplate([OfferCommercialPackageTemplate? existing]) async {
+    final saved = await showDialog<OfferCommercialPackageTemplate>(
+      context: context,
+      builder: (context) => _OfferCommercialPackageTemplateEditorDialog(
+        existing: existing,
+        laborTemplates: widget.laborTemplates,
+        clauseTemplates: widget.clauseTemplates,
+      ),
+    );
+    if (saved == null || _saving) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(saved);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [...widget.items]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return AlertDialog(
+      title: const Text('Pachete comerciale standard'),
+      content: SizedBox(
+        width: 820,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : () => _editTemplate(),
+                icon: const Icon(Icons.add),
+                label: const Text('Adaugă'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: items.isEmpty
+                  ? const Center(
+                      child: Text('Nu există pachete comerciale standard.'),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                          title: Text(item.name),
+                          subtitle: Text(
+                            '${item.description.trim().isEmpty ? '-' : item.description.trim()}\n'
+                            'Materiale: ${item.materials.length} • Manoperă standard: ${item.standardLabor.length} • Condiții: ${item.commercialClauses.length}\n'
+                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
+                          ),
+                          isThreeLine: true,
+                          trailing: IconButton(
+                            tooltip: 'Editează',
+                            onPressed:
+                                _saving ? null : () => _editTemplate(item),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Închide'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferCommercialPackageTemplateEditorDialog extends StatefulWidget {
+  const _OfferCommercialPackageTemplateEditorDialog({
+    this.existing,
+    required this.laborTemplates,
+    required this.clauseTemplates,
+  });
+
+  final OfferCommercialPackageTemplate? existing;
+  final List<OfferLaborTemplate> laborTemplates;
+  final List<OfferCommercialClauseTemplate> clauseTemplates;
+
+  @override
+  State<_OfferCommercialPackageTemplateEditorDialog> createState() =>
+      _OfferCommercialPackageTemplateEditorDialogState();
+}
+
+class _OfferCommercialPackageTemplateEditorDialogState
+    extends State<_OfferCommercialPackageTemplateEditorDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+
+  bool _isActive = true;
+  List<OfferCommercialPackageMaterialTemplate> _materials =
+      <OfferCommercialPackageMaterialTemplate>[];
+  List<OfferCommercialPackageLaborTemplate> _labor =
+      <OfferCommercialPackageLaborTemplate>[];
+  List<OfferCommercialPackageClauseTemplate> _clauses =
+      <OfferCommercialPackageClauseTemplate>[];
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _nameController.text = existing.name;
+      _descriptionController.text = existing.description;
+      _isActive = existing.isActive;
+      _materials = existing.materials.map((item) => item.copyWith()).toList();
+      _labor = existing.standardLabor.map((item) => item.copyWith()).toList();
+      _clauses =
+          existing.commercialClauses.map((item) => item.copyWith()).toList();
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addMaterial(
+      [OfferCommercialPackageMaterialTemplate? existing]) async {
+    final saved = await showDialog<OfferCommercialPackageMaterialTemplate>(
+      context: context,
+      builder: (context) => _OfferCommercialPackageMaterialDialog(
+        existing: existing,
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    setState(() {
+      if (existing == null) {
+        _materials = [..._materials, saved];
+      } else {
+        _materials = _materials
+            .map((item) => item.id == existing.id ? saved : item)
+            .toList(growable: false);
+      }
+    });
+  }
+
+  Future<void> _addLabor(
+      [OfferCommercialPackageLaborTemplate? existing]) async {
+    final saved = await showDialog<OfferCommercialPackageLaborTemplate>(
+      context: context,
+      builder: (context) => _OfferCommercialPackageLaborDialog(
+        existing: existing,
+        laborTemplates: widget.laborTemplates,
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    setState(() {
+      if (existing == null) {
+        _labor = [..._labor, saved];
+      } else {
+        _labor = _labor
+            .map((item) => item.id == existing.id ? saved : item)
+            .toList(growable: false);
+      }
+    });
+  }
+
+  Future<void> _addClause(
+      [OfferCommercialPackageClauseTemplate? existing]) async {
+    final saved = await showDialog<OfferCommercialPackageClauseTemplate>(
+      context: context,
+      builder: (context) => _OfferCommercialPackageClauseDialog(
+        existing: existing,
+        clauseTemplates: widget.clauseTemplates,
+      ),
+    );
+    if (saved == null) {
+      return;
+    }
+    setState(() {
+      if (existing == null) {
+        _clauses = [..._clauses, saved];
+      } else {
+        _clauses = _clauses
+            .map((item) => item.id == existing.id ? saved : item)
+            .toList(growable: false);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.existing == null
+            ? 'Adaugă pachet comercial'
+            : 'Editează pachet comercial',
+      ),
+      content: SizedBox(
+        width: 860,
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _nameController,
+                  decoration:
+                      const InputDecoration(labelText: 'Denumire pachet'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completează denumirea pachetului.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _descriptionController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Descriere'),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _isActive,
+                  onChanged: (value) => setState(() => _isActive = value),
+                  title: const Text('Activ'),
+                ),
+                _packageSection<OfferCommercialPackageMaterialTemplate>(
+                  title: 'Materiale standard',
+                  onAdd: () => _addMaterial(),
+                  items: _materials,
+                  itemLabel: (item) =>
+                      '${item.name} • ${item.quantity.toStringAsFixed(2)} ${item.unit} • ${item.unitPrice.toStringAsFixed(2)}',
+                  onEdit: (item) => _addMaterial(item),
+                  onDelete: (item) => setState(
+                    () => _materials = _materials
+                        .where((row) => row.id != item.id)
+                        .toList(growable: false),
+                  ),
+                ),
+                _packageSection<OfferCommercialPackageLaborTemplate>(
+                  title: 'Manoperă standard',
+                  onAdd: () => _addLabor(),
+                  items: _labor,
+                  itemLabel: (item) =>
+                      '${item.name} • ${item.quantity.toStringAsFixed(2)} ${item.unit} • ${item.unitPrice.toStringAsFixed(2)}',
+                  onEdit: (item) => _addLabor(item),
+                  onDelete: (item) => setState(
+                    () => _labor = _labor
+                        .where((row) => row.id != item.id)
+                        .toList(growable: false),
+                  ),
+                ),
+                _packageSection<OfferCommercialPackageClauseTemplate>(
+                  title: 'Condiții comerciale',
+                  onAdd: () => _addClause(),
+                  items: _clauses,
+                  itemLabel: (item) => item.title,
+                  onEdit: (item) => _addClause(item),
+                  onDelete: (item) => setState(
+                    () => _clauses = _clauses
+                        .where((row) => row.id != item.id)
+                        .toList(growable: false),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            final now = DateTime.now();
+            Navigator.of(context).pop(
+              OfferCommercialPackageTemplate(
+                id: widget.existing?.id ??
+                    'package-template-${now.microsecondsSinceEpoch}',
+                name: _nameController.text.trim(),
+                description: _descriptionController.text.trim(),
+                isActive: _isActive,
+                materials: _materials,
+                standardLabor: _labor,
+                commercialClauses: _clauses,
+                createdAt: widget.existing?.createdAt ?? now,
+                updatedAt: now,
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+
+  Widget _packageSection<T>({
+    required String title,
+    required VoidCallback onAdd,
+    required List<T> items,
+    required String Function(T item) itemLabel,
+    required Future<void> Function(T item) onEdit,
+    required void Function(T item) onDelete,
+  }) {
+    return Card(
+      margin: const EdgeInsets.only(top: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleSmall),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Adaugă'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (items.isEmpty)
+              const Text('Nu există elemente în această secțiune.')
+            else
+              Column(
+                children: items
+                    .map(
+                      (item) => ListTile(
+                        title: Text(itemLabel(item)),
+                        trailing: Wrap(
+                          spacing: 8,
+                          children: [
+                            IconButton(
+                              onPressed: () => onEdit(item),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                            IconButton(
+                              onPressed: () => onDelete(item),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OfferCommercialPackageMaterialDialog extends StatefulWidget {
+  const _OfferCommercialPackageMaterialDialog({this.existing});
+
+  final OfferCommercialPackageMaterialTemplate? existing;
+
+  @override
+  State<_OfferCommercialPackageMaterialDialog> createState() =>
+      _OfferCommercialPackageMaterialDialogState();
+}
+
+class _OfferCommercialPackageMaterialDialogState
+    extends State<_OfferCommercialPackageMaterialDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _unitController = TextEditingController();
+  final _quantityController = TextEditingController();
+  final _unitPriceController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _nameController.text = existing.name;
+      _descriptionController.text = existing.description;
+      _unitController.text = existing.unit;
+      _quantityController.text = existing.quantity.toStringAsFixed(2);
+      _unitPriceController.text = existing.unitPrice.toStringAsFixed(2);
+    } else {
+      _unitController.text = 'buc';
+      _quantityController.text = '1';
+      _unitPriceController.text = '0';
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    _unitController.dispose();
+    _quantityController.dispose();
+    _unitPriceController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+          widget.existing == null ? 'Adaugă material' : 'Editează material'),
+      content: SizedBox(
+        width: 640,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Denumire'),
+                validator: (value) => (value ?? '').trim().isEmpty
+                    ? 'Completează denumirea.'
+                    : null,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _descriptionController,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: 'Descriere'),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _unitController,
+                      decoration: const InputDecoration(labelText: 'UM'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _quantityController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(labelText: 'Cantitate'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _unitPriceController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration:
+                          const InputDecoration(labelText: 'Preț unitar'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            Navigator.of(context).pop(
+              OfferCommercialPackageMaterialTemplate(
+                id: widget.existing?.id ??
+                    'pkg-material-${DateTime.now().microsecondsSinceEpoch}',
+                name: _nameController.text.trim(),
+                description: _descriptionController.text.trim(),
+                unit: _unitController.text.trim().isEmpty
+                    ? 'buc'
+                    : _unitController.text.trim(),
+                quantity: _asDouble(_quantityController.text, 1),
+                unitPrice: _asDouble(_unitPriceController.text, 0),
+                materialId: widget.existing?.materialId ?? '',
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferCommercialPackageLaborDialog extends StatefulWidget {
+  const _OfferCommercialPackageLaborDialog({
+    this.existing,
+    required this.laborTemplates,
+  });
+
+  final OfferCommercialPackageLaborTemplate? existing;
+  final List<OfferLaborTemplate> laborTemplates;
+
+  @override
+  State<_OfferCommercialPackageLaborDialog> createState() =>
+      _OfferCommercialPackageLaborDialogState();
+}
+
+class _OfferCommercialPackageLaborDialogState
+    extends State<_OfferCommercialPackageLaborDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _unitController = TextEditingController();
+  final _quantityController = TextEditingController();
+  final _unitPriceController = TextEditingController();
+  String? _selectedTemplateId;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _selectedTemplateId = existing.laborTemplateId.trim().isEmpty
+          ? null
+          : existing.laborTemplateId;
+      _nameController.text = existing.name;
+      _descriptionController.text = existing.description;
+      _unitController.text = existing.unit;
+      _quantityController.text = existing.quantity.toStringAsFixed(2);
+      _unitPriceController.text = existing.unitPrice.toStringAsFixed(2);
+    } else {
+      _unitController.text = 'ore';
+      _quantityController.text = '1';
+      _unitPriceController.text = '0';
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _descriptionController.dispose();
+    _unitController.dispose();
+    _quantityController.dispose();
+    _unitPriceController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  OfferLaborTemplate? _templateById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.laborTemplates) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  void _applyTemplate(OfferLaborTemplate template) {
+    _nameController.text = template.name;
+    _descriptionController.text = template.description.trim().isEmpty
+        ? template.notes.trim()
+        : template.description.trim();
+    _unitController.text = template.unit.trim().isEmpty ? 'ore' : template.unit;
+    _quantityController.text = template.defaultQuantity.toStringAsFixed(2);
+    _unitPriceController.text = template.defaultUnitPrice.toStringAsFixed(2);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.existing == null
+            ? 'Adaugă manoperă standard'
+            : 'Editează manoperă standard',
+      ),
+      content: SizedBox(
+        width: 640,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String?>(
+                  initialValue: _selectedTemplateId != null &&
+                          widget.laborTemplates.any(
+                            (item) => item.id == _selectedTemplateId,
+                          )
+                      ? _selectedTemplateId
+                      : null,
+                  decoration:
+                      const InputDecoration(labelText: 'Șablon manoperă'),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('Fără șablon'),
+                    ),
+                    ...widget.laborTemplates
+                        .where((item) =>
+                            item.isActive || item.id == _selectedTemplateId)
+                        .map(
+                          (item) => DropdownMenuItem<String?>(
+                            value: item.id,
+                            child: Text(item.name),
+                          ),
+                        ),
+                  ],
+                  onChanged: (value) {
+                    setState(() {
+                      _selectedTemplateId = value;
+                      final template = _templateById(value);
+                      if (template != null) {
+                        _applyTemplate(template);
+                      }
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'Denumire'),
+                  validator: (value) => (value ?? '').trim().isEmpty
+                      ? 'Completează denumirea.'
+                      : null,
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _descriptionController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Descriere'),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: _unitController,
+                        decoration: const InputDecoration(labelText: 'UM'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _quantityController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration:
+                            const InputDecoration(labelText: 'Cantitate'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _unitPriceController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration:
+                            const InputDecoration(labelText: 'Preț unitar'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            Navigator.of(context).pop(
+              OfferCommercialPackageLaborTemplate(
+                id: widget.existing?.id ??
+                    'pkg-labor-${DateTime.now().microsecondsSinceEpoch}',
+                name: _nameController.text.trim(),
+                description: _descriptionController.text.trim(),
+                unit: _unitController.text.trim().isEmpty
+                    ? 'ore'
+                    : _unitController.text.trim(),
+                quantity: _asDouble(_quantityController.text, 1),
+                unitPrice: _asDouble(_unitPriceController.text, 0),
+                laborTemplateId: (_selectedTemplateId ?? '').trim(),
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OfferCommercialPackageClauseDialog extends StatefulWidget {
+  const _OfferCommercialPackageClauseDialog({
+    this.existing,
+    required this.clauseTemplates,
+  });
+
+  final OfferCommercialPackageClauseTemplate? existing;
+  final List<OfferCommercialClauseTemplate> clauseTemplates;
+
+  @override
+  State<_OfferCommercialPackageClauseDialog> createState() =>
+      _OfferCommercialPackageClauseDialogState();
+}
+
+class _OfferCommercialPackageClauseDialogState
+    extends State<_OfferCommercialPackageClauseDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _titleController = TextEditingController();
+  final _contentController = TextEditingController();
+  String _category = '';
+  String? _selectedTemplateId;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _titleController.text = existing.title;
+      _contentController.text = existing.content;
+      _selectedTemplateId =
+          existing.templateId.trim().isEmpty ? null : existing.templateId;
+      _category = existing.category;
+    }
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _contentController.dispose();
+    super.dispose();
+  }
+
+  OfferCommercialClauseTemplate? _templateById(String? id) {
+    final value = (id ?? '').trim();
+    if (value.isEmpty) return null;
+    for (final item in widget.clauseTemplates) {
+      if (item.id == value) return item;
+    }
+    return null;
+  }
+
+  void _applyTemplate(OfferCommercialClauseTemplate template) {
+    _titleController.text = template.title;
+    _contentController.text = template.content;
+    _category = template.category;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+          widget.existing == null ? 'Adaugă condiție' : 'Editează condiție'),
+      content: SizedBox(
+        width: 640,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String?>(
+                initialValue: _selectedTemplateId != null &&
+                        widget.clauseTemplates.any(
+                          (item) => item.id == _selectedTemplateId,
+                        )
+                    ? _selectedTemplateId
+                    : null,
+                decoration: const InputDecoration(labelText: 'Șablon condiție'),
+                items: [
+                  const DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('Fără șablon'),
+                  ),
+                  ...widget.clauseTemplates
+                      .where((item) =>
+                          item.isActive || item.id == _selectedTemplateId)
+                      .map(
+                        (item) => DropdownMenuItem<String?>(
+                          value: item.id,
+                          child: Text(item.title),
+                        ),
+                      ),
+                ],
+                onChanged: (value) {
+                  setState(() {
+                    _selectedTemplateId = value;
+                    final template = _templateById(value);
+                    if (template != null) {
+                      _applyTemplate(template);
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _titleController,
+                decoration: const InputDecoration(labelText: 'Titlu'),
+                validator: (value) =>
+                    (value ?? '').trim().isEmpty ? 'Completează titlul.' : null,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _contentController,
+                maxLines: 5,
+                decoration: const InputDecoration(labelText: 'Conținut'),
+                validator: (value) => (value ?? '').trim().isEmpty
+                    ? 'Completează conținutul.'
+                    : null,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            Navigator.of(context).pop(
+              OfferCommercialPackageClauseTemplate(
+                id: widget.existing?.id ??
+                    'pkg-clause-${DateTime.now().microsecondsSinceEpoch}',
+                title: _titleController.text.trim(),
+                content: _contentController.text.trim(),
+                templateId: (_selectedTemplateId ?? '').trim(),
+                category: _category.trim(),
+              ),
+            );
+          },
+          child: const Text('Salvează'),
+        ),
+      ],
+    );
+  }
+}
