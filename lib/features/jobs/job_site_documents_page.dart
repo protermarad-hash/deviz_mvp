@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -1263,7 +1263,7 @@ class _JobSiteDocumentEditorDialogState
   Future<void> _importAnnexesFromFile() async {
     setState(() => _isImporting = true);
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         withData: true,
         allowMultiple: false,
         type: FileType.custom,

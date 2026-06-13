@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -329,7 +329,7 @@ class MonthlyTimesheetExcelService {
 
   static Future<String?> _trySaveAs(String fileName) async {
     try {
-      return await FilePicker.platform.saveFile(
+      return await FilePicker.saveFile(
         dialogTitle: 'Salveaza Excel',
         fileName: fileName,
         type: FileType.custom,
@@ -342,7 +342,7 @@ class MonthlyTimesheetExcelService {
 
   static Future<String?> _tryPickDirectory() async {
     try {
-      return await FilePicker.platform.getDirectoryPath(
+      return await FilePicker.getDirectoryPath(
         dialogTitle: 'Alege folder pentru Excel',
       );
     } catch (_) {

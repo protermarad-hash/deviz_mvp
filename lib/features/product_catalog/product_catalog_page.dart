@@ -3219,7 +3219,7 @@ class _ProductDialogState extends State<_ProductDialog> {
     required FileType type,
     List<String>? allowedExtensions,
   }) async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       allowMultiple: true,
       type: type,
       allowedExtensions: allowedExtensions,

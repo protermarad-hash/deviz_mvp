@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -1719,7 +1719,7 @@ class _RepairReportTemplateDialogState
   Future<void> _importJsonTemplate() async {
     setState(() => _importing = true);
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: const <String>['json'],
       );

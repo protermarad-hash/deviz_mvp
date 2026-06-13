@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -391,7 +391,7 @@ class _CompanySettingsPageState extends State<CompanySettingsPage> {
   }
 
   Future<void> _pickLogo() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       type: FileType.image,
       withData: true,
     );
@@ -417,7 +417,7 @@ class _CompanySettingsPageState extends State<CompanySettingsPage> {
   }
 
   Future<void> _pickFolder(ValueSetter<String> onSelected) async {
-    final result = await FilePicker.platform.getDirectoryPath(
+    final result = await FilePicker.getDirectoryPath(
       dialogTitle: 'Alege folderul pentru PDF-uri',
     );
     if (result == null || result.trim().isEmpty) return;

@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -1767,7 +1767,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
   }
 
   Future<AppointmentLinkedDocument?> _pickAppointmentLinkedDocument() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       type: FileType.any,
       allowMultiple: false,
       withData: false,
@@ -3750,6 +3750,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
     final kitOptions = _availableMaterialKitsForAppointment(item);
     String selectedKitId = item.materialUsage.kitTemplateId.trim();
     var extraLines = extraLinesForKit(selectedKitId);
+    bool facturabilPartener = item.materialUsage.facturabilPartener;
+    // Afișăm toggle-ul doar dacă programarea are un partener beneficiar setat
+    final hasForPartner = item.forPartnerId.trim().isNotEmpty;
 
     final linearMetersController = TextEditingController(
       text: item.materialUsage.linearMetersUsed > 0
@@ -3771,7 +3774,10 @@ class _ProgramariPageState extends State<ProgramariPage> {
         notes: notesController.text,
       );
       // Combină liniile din kit cu produsele suplimentare
-      return kitUsage.copyWith(lines: [...kitUsage.lines, ...extraLines]);
+      return kitUsage.copyWith(
+        lines: [...kitUsage.lines, ...extraLines],
+        facturabilPartener: facturabilPartener,
+      );
     }
 
     final saved = await showDialog<bool>(
@@ -3863,74 +3869,101 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         const Divider(height: 24),
                       ],
 
-                      // ── Secțiunea Produse suplimentare ──
-                      Row(
-                        children: [
-                          Text(
-                            'Produse suplimentare',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          const Spacer(),
-                          TextButton.icon(
-                            onPressed: () async {
-                              final newLine =
-                                  await _showPickProductFromCatalogDialog(
-                                      allCatalogProducts);
-                              if (newLine != null) {
-                                setDialogState(
-                                    () => extraLines = [...extraLines, newLine]);
-                              }
-                            },
-                            icon: const Icon(Icons.add_outlined, size: 18),
-                            label: const Text('Adaugă din catalog'),
-                          ),
-                        ],
-                      ),
-                      if (extraLines.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Text(
-                            'Niciun produs suplimentar. Apasă „Adaugă din catalog" pentru a adăuga.',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        )
-                      else
-                        for (var i = 0; i < extraLines.length; i++)
-                          ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(extraLines[i].name),
-                            subtitle: Text(
-                              '${extraLines[i].quantity.toStringAsFixed(extraLines[i].quantity == extraLines[i].quantity.roundToDouble() ? 0 : 2)} ${extraLines[i].unit} × ${extraLines[i].unitCost.toStringAsFixed(2)} RON',
+                      // ── Secțiunea Produse suplimentare — doar admin ──
+                      if (_canManageAppointmentMaterialKits) ...[
+                        Row(
+                          children: [
+                            Text(
+                              'Produse suplimentare',
+                              style: Theme.of(context).textTheme.titleSmall,
                             ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '${extraLines[i].totalCost.toStringAsFixed(2)} RON',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 13),
-                                ),
-                                IconButton(
-                                  tooltip: 'Șterge',
-                                  icon: const Icon(Icons.delete_outline,
-                                      size: 18),
-                                  onPressed: () {
-                                    final updated = List<
-                                            AppointmentMaterialUsageLine>.from(
-                                        extraLines)
-                                      ..removeAt(i);
-                                    setDialogState(() => extraLines = updated);
-                                  },
-                                ),
-                              ],
+                            const Spacer(),
+                            TextButton.icon(
+                              onPressed: () async {
+                                final newLine =
+                                    await _showPickProductFromCatalogDialog(
+                                        allCatalogProducts);
+                                if (newLine != null) {
+                                  setDialogState(
+                                      () => extraLines = [...extraLines, newLine]);
+                                }
+                              },
+                              icon: const Icon(Icons.add_outlined, size: 18),
+                              label: const Text('Adaugă din catalog'),
                             ),
-                          ),
+                          ],
+                        ),
+                        if (extraLines.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text(
+                              'Niciun produs suplimentar. Apasă „Adaugă din catalog" pentru a adăuga.',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          )
+                        else
+                          for (var i = 0; i < extraLines.length; i++)
+                            ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(extraLines[i].name),
+                              subtitle: Text(
+                                '${extraLines[i].quantity.toStringAsFixed(extraLines[i].quantity == extraLines[i].quantity.roundToDouble() ? 0 : 2)} ${extraLines[i].unit} × ${extraLines[i].unitCost.toStringAsFixed(2)} RON',
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '${extraLines[i].totalCost.toStringAsFixed(2)} RON',
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Șterge',
+                                    icon: const Icon(Icons.delete_outline,
+                                        size: 18),
+                                    onPressed: () {
+                                      final updated = List<
+                                              AppointmentMaterialUsageLine>.from(
+                                          extraLines)
+                                        ..removeAt(i);
+                                      setDialogState(() => extraLines = updated);
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                        const Divider(height: 24),
+                      ],
 
-                      const Divider(height: 24),
+                      // ── Toggle facturare partener (vizibil doar cu partener) ──
+                      if (hasForPartner) ...[
+                        const Divider(height: 24),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            'Se facturează partenerului?',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          subtitle: Text(
+                            facturabilPartener
+                                ? 'Costul materialelor intră în soldul de recuperat (${item.forPartnerName.trim().isNotEmpty ? item.forPartnerName.trim() : "partener"})'
+                                : 'Materiale suportate intern — nu modifică soldul partenerului',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: facturabilPartener
+                                  ? Colors.green.shade700
+                                  : Colors.orange.shade700,
+                            ),
+                          ),
+                          value: facturabilPartener,
+                          onChanged: (v) =>
+                              setDialogState(() => facturabilPartener = v),
+                        ),
+                      ],
 
                       // ── Observații ──
+                      const SizedBox(height: 8),
                       TextField(
                         textCapitalization: TextCapitalization.sentences,
                         controller: notesController,

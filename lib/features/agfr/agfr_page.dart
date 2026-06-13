@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -507,7 +507,7 @@ class _AgfrPageState extends State<AgfrPage> {
   }
 
   Future<String> _pickAttachmentPath() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowMultiple: false,
       allowedExtensions: const <String>[
@@ -2444,7 +2444,7 @@ class _AgfrPageState extends State<AgfrPage> {
     String? formError;
 
     Future<void> importCsv(StateSetter setDialogState) async {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowMultiple: false,
         allowedExtensions: const <String>['csv', 'txt'],

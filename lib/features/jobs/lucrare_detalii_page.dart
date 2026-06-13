@@ -1,4 +1,4 @@
-// ignore_for_file: dead_code, unused_element, unused_local_variable, unused_field, prefer_final_locals, unnecessary_string_interpolations, no_leading_underscores_for_local_identifiers, unnecessary_brace_in_string_interps
+﻿// ignore_for_file: dead_code, unused_element, unused_local_variable, unused_field, prefer_final_locals, unnecessary_string_interpolations, no_leading_underscores_for_local_identifiers, unnecessary_brace_in_string_interps
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:archive/archive.dart';
@@ -3744,7 +3744,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Future<void> _onImportBeneficiaryMaterials() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       type: FileType.custom,
       allowMultiple: false,
       withData: true,
@@ -10117,7 +10117,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
                       onPressed: () async {
-                        final result = await FilePicker.platform.pickFiles(
+                        final result = await FilePicker.pickFiles(
                           type: FileType.custom,
                           allowedExtensions: const <String>[
                             'pdf',
@@ -10345,7 +10345,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
                       onPressed: () async {
-                        final result = await FilePicker.platform.pickFiles(
+                        final result = await FilePicker.pickFiles(
                           type: FileType.custom,
                           allowedExtensions: const <String>[
                             'pdf',

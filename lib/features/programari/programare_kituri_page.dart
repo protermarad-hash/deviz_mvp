@@ -23,6 +23,7 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
   final MaterialsCatalogService _materialsService = MaterialsCatalogService();
 
   bool _loading = true;
+  bool _propagating = false;
   List<AppointmentMaterialKitTemplate> _items =
       const <AppointmentMaterialKitTemplate>[];
   List<MasterMaterial> _materials = const <MasterMaterial>[];
@@ -377,6 +378,71 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
     await _load();
   }
 
+  Future<void> _propagateKit(AppointmentMaterialKitTemplate item) async {
+    final repo = widget.repository;
+    if (repo == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Repository indisponibil — recalculare imposibilă.')),
+      );
+      return;
+    }
+    final affected = await KitPropagationService.instance
+        .countAffectedAppointments(item.id);
+    if (!mounted) return;
+    if (affected == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nicio programare locală nu folosește kitul "${item.name}".')),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Recalculează în programări'),
+        content: Text(
+          'Kitul "${item.name}" va fi re-aplicat în $affected programări locale.\n\n'
+          'Componentele și prețurile din programări vor fi actualizate cu rețeta curentă.\n'
+          'Cantitățile (ml folosiți) rămân neschimbate.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Recalculează toate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _propagating = true);
+    try {
+      final result = await KitPropagationService.instance
+          .propagateKitChanges(item, repo);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Recalculat în ${result.updatedCount} programări.'
+            '${result.skippedCount > 0 ? ' (${result.skippedCount} erori ignorate)' : ''}',
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare recalculare: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _propagating = false);
+    }
+  }
+
   Future<void> _deleteTemplate(AppointmentMaterialKitTemplate item) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -483,10 +549,25 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
                                 subtitle: Text(
                                   '${item.description.isEmpty ? 'Fara descriere' : item.description}\nComponente fixe: $fixedItems | componente variabile: $variableItems | cost estimat la ml implicit: ${estimatedDefaultCost.toStringAsFixed(2)} RON',
                                 ),
-                                trailing: PopupMenuButton<String>(
+                                trailing: _propagating
+                                    ? const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(strokeWidth: 2),
+                                      )
+                                    : PopupMenuButton<String>(
                                   icon: const Icon(Icons.more_vert),
                                   tooltip: 'Acțiuni',
                                   itemBuilder: (_) => const [
+                                    PopupMenuItem(
+                                      value: 'propagate',
+                                      child: ListTile(
+                                        leading: Icon(Icons.update_outlined),
+                                        title: Text('Recalculează în programări'),
+                                        subtitle: Text('Aplică rețeta curentă în programările existente'),
+                                        contentPadding: EdgeInsets.zero,
+                                      ),
+                                    ),
                                     PopupMenuItem(
                                       value: 'duplicate',
                                       child: ListTile(
@@ -514,6 +595,8 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
                                   ],
                                   onSelected: (value) {
                                     switch (value) {
+                                      case 'propagate':
+                                        _propagateKit(item);
                                       case 'duplicate':
                                         _editTemplate(
                                             existing: item, duplicate: true);

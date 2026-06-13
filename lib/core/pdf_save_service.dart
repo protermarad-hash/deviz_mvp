@@ -70,7 +70,7 @@ class PdfSaveService {
 
   static Future<String?> _trySaveAs(String fileName) async {
     try {
-      return await FilePicker.platform.saveFile(
+      return await FilePicker.saveFile(
         dialogTitle: 'Salveaza PDF',
         fileName: fileName,
         type: FileType.custom,
@@ -83,7 +83,7 @@ class PdfSaveService {
 
   static Future<String?> _tryPickDirectory() async {
     try {
-      return await FilePicker.platform.getDirectoryPath(
+      return await FilePicker.getDirectoryPath(
         dialogTitle: 'Alege folder pentru PDF',
       );
     } catch (_) {

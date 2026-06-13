@@ -316,6 +316,7 @@ class AppointmentMaterialUsage {
     this.linearMetersUsed = 0,
     this.lines = const <AppointmentMaterialUsageLine>[],
     this.notes = '',
+    this.facturabilPartener = true,
   });
 
   final String kitTemplateId;
@@ -323,6 +324,10 @@ class AppointmentMaterialUsage {
   final double linearMetersUsed;
   final List<AppointmentMaterialUsageLine> lines;
   final String notes;
+  /// Dacă true (default), costul materialelor/kitului se recuperează de la
+  /// partenerul beneficiar și apare în soldul "De încasat". Dacă false,
+  /// materialele sunt suportate intern — nu modifică soldul partenerului.
+  final bool facturabilPartener;
 
   AppointmentMaterialUsage copyWith({
     String? kitTemplateId,
@@ -330,6 +335,7 @@ class AppointmentMaterialUsage {
     double? linearMetersUsed,
     List<AppointmentMaterialUsageLine>? lines,
     String? notes,
+    bool? facturabilPartener,
   }) {
     return AppointmentMaterialUsage(
       kitTemplateId: kitTemplateId ?? this.kitTemplateId,
@@ -337,6 +343,7 @@ class AppointmentMaterialUsage {
       linearMetersUsed: linearMetersUsed ?? this.linearMetersUsed,
       lines: lines ?? this.lines,
       notes: notes ?? this.notes,
+      facturabilPartener: facturabilPartener ?? this.facturabilPartener,
     );
   }
 
@@ -350,6 +357,7 @@ class AppointmentMaterialUsage {
       'linear_meters_used': linearMetersUsed,
       'lines': lines.map((line) => line.toMap()).toList(growable: false),
       'notes': notes,
+      'facturabil_partener': facturabilPartener,
     };
   }
 
@@ -381,6 +389,8 @@ class AppointmentMaterialUsage {
       ),
       lines: lines,
       notes: (map['notes'] ?? '').toString(),
+      // Backward compat: documente vechi fără câmp → default true (comportament neschimbat)
+      facturabilPartener: map['facturabil_partener'] != false,
     );
   }
 }

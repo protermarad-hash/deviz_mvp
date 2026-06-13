@@ -11,6 +11,7 @@ import '../../core/help/help_module_button.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../notifications/notification_runtime_service.dart';
+import '../programari/appointment_models.dart';
 import 'partner_decont_pdf_service.dart';
 import 'partner_financial_models.dart';
 import 'partner_financial_repository.dart';
@@ -71,22 +72,26 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
   Future<void> _load() async {
     if (!mounted) return;
     setState(() => _loading = true);
-    await _syncFromAppointments();
-    // Migrează datele vechi (adaugă financial_direction dacă lipsește)
-    await _repository.migrateTransactions();
-    final transactions =
-        await _repository.listTransactionsForPartner(widget.partnerId);
-    // rebuildSummary() calculează din cache local — întotdeauna consistent cu lista afișată
-    final summary =
-        await _repository.rebuildSummary(widget.partnerId, widget.partnerName);
-    final settlements = await _repository.listSettlementsForPartner(widget.partnerId);
-    if (!mounted) return;
-    setState(() {
-      _transactions = transactions;
-      _summary = summary;
-      _settlements = settlements;
-      _loading = false;
-    });
+    try {
+      await _syncFromAppointments();
+      await _repository.migrateTransactions();
+      final transactions =
+          await _repository.listTransactionsForPartner(widget.partnerId);
+      final summary =
+          await _repository.rebuildSummary(widget.partnerId, widget.partnerName);
+      final settlements =
+          await _repository.listSettlementsForPartner(widget.partnerId);
+      if (!mounted) return;
+      setState(() {
+        _transactions = transactions;
+        _summary = summary;
+        _settlements = settlements;
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('[FinanciarPartener] _load error: $e');
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   /// Citește programările din Firestore care implică acest partener
@@ -101,6 +106,21 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
       final collection =
           FirebaseFirestore.instance.collection('appointments');
       final now = DateTime.now();
+
+      // BUG 7 pattern: construim harta cache-ului local ÎNAINTE de query Firestore.
+      // Cache-ul local = sursa de adevăr pentru material_usage (identic cu
+      // popup-ul "Materiale consumate" din programări). Firestore poate avea
+      // un snapshot vechi (ex: componente greșite din template-ul kitului).
+      final localById = <String, Appointment>{};
+      final repo = widget.appRepository;
+      if (repo != null) {
+        try {
+          final allLocal = await repo.listAppointments();
+          for (final a in allLocal) {
+            localById[a.id] = a;
+          }
+        } catch (_) {}
+      }
 
       final results = await Future.wait([
         collection.where('for_partner_id', isEqualTo: widget.partnerId).get(),
@@ -124,6 +144,8 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
       for (final doc in docs) {
         final raw = doc.data();
         final id = doc.id;
+        // BUG 7: preferă versiunea locală dacă există (mai recentă, corectă)
+        final localApt = localById[id];
 
         double parseNum(dynamic v) =>
             v is num ? v.toDouble() : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
@@ -172,56 +194,56 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
             ));
           }
 
-          // Materiale/kituri folosite pentru lucrarea partenerului
-          final rawUsage = raw['material_usage'] ?? raw['materialUsage'];
-          if (rawUsage is Map) {
-            final rawLines = rawUsage['lines'];
-            if (rawLines is List && rawLines.isNotEmpty) {
-              final matLines = rawLines
-                  .whereType<Map>()
-                  .map((item) {
-                    final m = Map<String, dynamic>.from(item);
-                    double pn(dynamic v) => v is num
-                        ? v.toDouble()
-                        : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
-                    return PartnerMaterialLine(
-                      name: (m['name'] ?? '').toString(),
-                      unit: (m['unit'] ?? '').toString(),
-                      quantity: pn(m['quantity']),
-                      unitCost: pn(m['unit_cost'] ?? m['unitCost']),
-                    );
-                  })
-                  .where((l) => l.quantity > 0)
-                  .toList(growable: false);
+          // Materiale/kituri — folosim versiunea LOCALĂ dacă disponibilă.
+          // Motivul: Firestore poate conține un snapshot vechi (ex: preț greșit
+          // din template-ul kitului), în timp ce cache-ul local are datele reale
+          // salvate de angajat (identic cu popup-ul "Materiale consumate").
+          final AppointmentMaterialUsage usage;
+          if (localApt != null) {
+            usage = localApt.materialUsage;
+          } else {
+            // Fallback: parsează direct din Firestore (ex: programare de pe alt device)
+            final rawUsage = raw['material_usage'] ?? raw['materialUsage'];
+            usage = rawUsage is Map
+                ? AppointmentMaterialUsage.fromMap(
+                    Map<String, dynamic>.from(rawUsage))
+                : const AppointmentMaterialUsage();
+          }
 
-              final totalMat =
-                  matLines.fold<double>(0, (acc, l) => acc + l.totalCost);
-              if (totalMat > 0) {
-                final kitName = (rawUsage['kit_template_name'] ??
-                        rawUsage['kitTemplateName'] ??
-                        '')
-                    .toString();
-                toUpsert.add(PartnerTransaction(
-                  id: 'ptxn_${id}_materials',
-                  partnerId: widget.partnerId,
-                  partnerName: widget.partnerName,
-                  type: PartnerTransactionType.consumMateriale,
-                  // Kiturile/materialele sunt puse de noi (PRO TERM) la
-                  // lucrările partenerului — partenerul ne datorează costul
-                  // → intrare (De încasat de la partener).
-                  direction: PartnerTransactionDirection.intrare,
-                  amount: totalMat,
-                  date: scheduledDate,
-                  description:
-                      'Materiale${kitName.isNotEmpty ? ' · Kit: $kitName' : ''} — $label',
-                  referenceId: id,
-                  referenceType: 'programare',
-                  kitName: kitName,
-                  materialLines: matLines,
-                  createdAt: now,
-                  updatedAt: now,
-                ));
-              }
+          if (usage.facturabilPartener && usage.lines.isNotEmpty) {
+            final matLines = usage.lines
+                .where((l) => l.quantity > 0)
+                .map((l) => PartnerMaterialLine(
+                      name: l.name,
+                      unit: l.unit,
+                      quantity: l.quantity,
+                      unitCost: l.unitCost,
+                    ))
+                .toList(growable: false);
+
+            final totalMat =
+                matLines.fold<double>(0, (acc, l) => acc + l.totalCost);
+            if (totalMat > 0) {
+              toUpsert.add(PartnerTransaction(
+                id: 'ptxn_${id}_materials',
+                partnerId: widget.partnerId,
+                partnerName: widget.partnerName,
+                type: PartnerTransactionType.consumMateriale,
+                // Kiturile/materialele sunt puse de noi (PRO TERM) la
+                // lucrările partenerului — partenerul ne datorează costul
+                // → intrare (De încasat de la partener).
+                direction: PartnerTransactionDirection.intrare,
+                amount: totalMat,
+                date: scheduledDate,
+                description:
+                    'Materiale${usage.kitTemplateName.isNotEmpty ? ' · Kit: ${usage.kitTemplateName}' : ''} — $label',
+                referenceId: id,
+                referenceType: 'programare',
+                kitName: usage.kitTemplateName,
+                materialLines: matLines,
+                createdAt: now,
+                updatedAt: now,
+              ));
             }
           }
         }
