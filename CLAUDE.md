@@ -59,6 +59,40 @@ sau implementezi diferit față de ce există deja în proiect.
 
 ---
 
+## 🛡️ REGULI DE SIGURANȚĂ — PRODUCȚIE (OBLIGATORII ÎNAINTE DE MODIFICĂRI CU RISC)
+
+Aplicația rulează LIVE cu date reale (clienți, oferte, programări, devize, financiar).
+NU se pierde NICIODATĂ nimic din ce e implementat sau din datele utilizatorului.
+
+**Înainte de orice modificare cu risc** (upgrade pachete, refactor mare, schimbări
+de model de date, migrări, modificări la sincronizare offline):
+
+1. **git status** — confirmă working tree curat (sau commitează modificările existente)
+2. **git commit checkpoint** — `git commit -m "checkpoint inainte de <descriere>"` — chiar dacă nu e task finalizat
+3. **git branch backup-<nume-descriptiv>** — branch de siguranță pentru revenire instant:
+   ```
+   git checkout master && git reset --hard backup-<nume-descriptiv>
+   ```
+4. **Backup .bak la fiecare fișier modificat** — regulă existentă, se aplică și aici
+5. **NU rula comenzi care șterg/modifică date din Firebase sau SharedPreferences**
+   fără confirmare explicită din partea utilizatorului
+6. **NU face commit final automat după modificări mari** — lasă utilizatorul să testeze
+   manual înainte de commit final
+7. **La final, listează exact ce trebuie testat manual** — funcționalitățile afectate,
+   cu pași concreti (ex: "testează upload poză în Poze Teren", "testează salvare PDF")
+
+**Dacă o modificare schimbă un model de date** (Firestore sau local SharedPreferences):
+- Verifică ÎNTÂI compatibilitatea cu datele existente (backward compat `fromMap()`)
+- Nu presupune că toate documentele din Firestore au structura nouă
+
+**Modificări cu risc care declanșează OBLIGATORIU pașii de mai sus:**
+- Upgrade dependențe (pachete pub.dev)
+- Refactorizare fișiere > 300 linii sau cu > 5 importuri în alte module
+- Orice modificare la `cloud_sync_models.dart`, `offline_sync_runtime.dart`, `cloud_sync_bridge.dart`
+- Orice modificare la structura `toMap()` / `fromMap()` a unui model de date
+
+---
+
 ## ⚠️ REGULI ABSOLUTE — APLICAȚIE ÎN PRODUCȚIE
 
 Această aplicație este folosită REAL. Orice greșeală poate afecta date reale.
