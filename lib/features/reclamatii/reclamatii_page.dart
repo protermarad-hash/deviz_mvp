@@ -239,6 +239,20 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
     // Queue apelat din repository (CLAUDE.md: nu din pagini)
   }
 
+  void _logComplaintUi(String message) {
+    assert(() {
+      debugPrint('[Reclamatii] $message');
+      return true;
+    }());
+  }
+
+  void _selectComplaint(ComplaintRecord item, {required String source}) {
+    _logComplaintUi('selected complaint id=${item.id} source=$source');
+    setState(() {
+      _selectedComplaint = item;
+    });
+  }
+
   String _fileNameFromPath(String path) {
     final normalized = path.replaceAll('\\', '/');
     final segments = normalized.split('/');
@@ -561,6 +575,7 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
   }
 
   Future<void> _load() async {
+    _logComplaintUi('loading state changed: start');
     try {
       await OfflineSyncRuntime.instance.syncPending();
       final results = await Future.wait<dynamic>(<Future<dynamic>>[
@@ -632,6 +647,9 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
           _loading = false;
         });
       }
+      _logComplaintUi(
+        'loading state changed: end selected=${_selectedComplaint?.id ?? '-'} items=${_items.length}',
+      );
     }
   }
 
@@ -990,6 +1008,50 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
         .where((employee) => employee.id == employeeId)
         .map((employee) => employee.name)
         .fold('-', (previous, name) => previous == '-' ? name : previous);
+  }
+
+  // Rezolvă numele unui angajat din mai multe surse: lista employees, user curent,
+  // ID-ul de autentificare. Returnează '' dacă nu se poate rezolva (nu ID brut).
+  String _resolveEmployeeDisplayName(String primaryId, String fallbackId) {
+    for (final id in <String>[primaryId, fallbackId]) {
+      final trimmed = id.trim();
+      if (trimmed.isEmpty) continue;
+      final found = _employees
+          .where((e) => e.id == trimmed)
+          .map((e) => e.name.trim())
+          .firstWhere((name) => name.isNotEmpty, orElse: () => '');
+      if (found.isNotEmpty) return found;
+    }
+    // Fallback: utilizatorul curent (admin sau birou poate fi absent din _employees)
+    final user = _currentUser;
+    if (user != null && user.displayName.trim().isNotEmpty) {
+      final uid = user.id.trim();
+      if (uid == primaryId.trim() || uid == fallbackId.trim()) {
+        return user.displayName.trim();
+      }
+    }
+    // Fallback: fieldAuthUserId (sesiunea curentă)
+    final authId = (widget.fieldAuthUserId ?? '').trim();
+    if (authId.isNotEmpty &&
+        (authId == primaryId.trim() || authId == fallbackId.trim())) {
+      final label = (widget.fieldAuthUserLabel ?? '').trim();
+      if (label.isNotEmpty) return label;
+    }
+    return '';
+  }
+
+  // Rezolvă numele echipei din lista teams. Returnează '' dacă nu se poate rezolva.
+  String _resolveTeamDisplayName(String primaryId, String fallbackId) {
+    for (final id in <String>[primaryId, fallbackId]) {
+      final trimmed = id.trim();
+      if (trimmed.isEmpty) continue;
+      final found = _teams
+          .where((t) => t.id == trimmed)
+          .map((t) => t.name.trim())
+          .firstWhere((name) => name.isNotEmpty, orElse: () => '');
+      if (found.isNotEmpty) return found;
+    }
+    return '';
   }
 
   String _jobLabel(String jobId) {
@@ -2533,6 +2595,7 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
     }
     final existing = _warrantyInterventionReportForComplaint(item.id);
     final ticket = _ticketForComplaintCertificate(item, certificate);
+    final appointment = _primaryAppointmentForComplaint(item);
     final saved =
         await Navigator.of(context).push<WarrantyInterventionReportRecord>(
       MaterialPageRoute<WarrantyInterventionReportRecord>(
@@ -2541,8 +2604,24 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
           complaint: item,
           jobTitle: item.jobId.trim().isEmpty ? '' : _jobLabel(item.jobId),
           certificate: certificate,
+          appointment: appointment,
           existingTicket: ticket,
           currentReport: existing,
+          resolvedBeneficiaryName: _resolvedBeneficiaryName(item),
+          resolvedContractorName: _resolvedContractorName(item),
+          resolvedTechnicianName: _resolveEmployeeDisplayName(
+            item.fieldTechnicianId,
+            item.assignedEmployeeId,
+          ),
+          resolvedTeamName: _resolveTeamDisplayName(
+            item.fieldTeamId,
+            item.assignedTeamId,
+          ),
+          resolvedAgfrEquipmentLabel: _agfrEquipmentLabel(item.agfrEquipmentId),
+          resolvedAgfrInterventionLabel:
+              _agfrInterventionLabel(item.agfrInterventionId),
+          resolvedAgfrReportLabel: _agfrReportLabel(item.agfrReportId),
+          resolvedOfferLabel: _offerLabel(item),
         ),
       ),
     );
@@ -3474,9 +3553,9 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
   }
 
   Future<void> _openComplaintDetails(ComplaintRecord item) async {
-    setState(() {
-      _selectedComplaint = item;
-    });
+    _logComplaintUi('card button tapped: details id=${item.id}');
+    _selectComplaint(item, source: 'details');
+    _logComplaintUi('open details start id=${item.id}');
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -3595,6 +3674,7 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
         ],
       ),
     );
+    _logComplaintUi('open details end id=${item.id}');
   }
 
   Future<void> _openComplaintFieldPhotos(ComplaintRecord item) async {
@@ -3781,6 +3861,7 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
     }
 
     Future<void> save(BuildContext dialogContext) async {
+      _logComplaintUi('saving start id=${current?.id ?? 'new'}');
       final messenger = ScaffoldMessenger.of(context);
       final selectedCertificate =
           _warrantyCertificateById(selectedWarrantyCertificateId.value);
@@ -3860,6 +3941,9 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                   (previous, item) => item,
                 );
       });
+      _logComplaintUi(
+        'saving end id=${saved.id} selected=${_selectedComplaint?.id ?? '-'}',
+      );
       messenger.showSnackBar(
         SnackBar(
           content: Text(
@@ -5244,12 +5328,9 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                               ),
                             ),
                             margin: EdgeInsets.only(bottom: 12 * zoom),
-                            child: InkWell(
-                              onTap: () =>
-                                  setState(() => _selectedComplaint = item),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
                                   Container(
                                     width: compact ? 5 : 7,
                                     decoration: BoxDecoration(
@@ -5260,13 +5341,26 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                       ),
                                     ),
                                   ),
-                                  Expanded(
-                                    child: Padding(
-                                      padding: EdgeInsets.all(cardPadding),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
+                                Expanded(
+                                  child: Padding(
+                                    padding: EdgeInsets.all(cardPadding),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        InkWell(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          onTap: () => _selectComplaint(
+                                            item,
+                                            source: 'card',
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(4),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
                                           Row(
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.start,
@@ -5498,15 +5592,24 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                             overflow: TextOverflow.ellipsis,
                                             style: subtitleStyle,
                                           ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
                                           SizedBox(height: 10 * zoom),
                                           Wrap(
                                             spacing: 8,
                                             runSpacing: 8,
                                             children: [
                                               OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _openComplaintStatusPicker(
-                                                        item),
+                                                onPressed: () {
+                                                  _logComplaintUi(
+                                                    'card button tapped: status id=${item.id}',
+                                                  );
+                                                  _openComplaintStatusPicker(
+                                                    item,
+                                                  );
+                                                },
                                                 icon: const Icon(
                                                     Icons.flag_outlined),
                                                 label: const Text('Status'),
@@ -5519,10 +5622,14 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                                 label: const Text('Detaliu'),
                                               ),
                                               OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _openLinkedDocumentsManagerForComplaint(
-                                                  item,
-                                                ),
+                                                onPressed: () {
+                                                  _logComplaintUi(
+                                                    'card button tapped: documents id=${item.id}',
+                                                  );
+                                                  _openLinkedDocumentsManagerForComplaint(
+                                                    item,
+                                                  );
+                                                },
                                                 icon: Icon(
                                                   item.linkedDocuments.isEmpty
                                                       ? Icons
@@ -5537,8 +5644,12 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                                 ),
                                               ),
                                               FilledButton.tonalIcon(
-                                                onPressed: () =>
-                                                    _scheduleComplaint(item),
+                                                onPressed: () {
+                                                  _logComplaintUi(
+                                                    'card button tapped: schedule id=${item.id}',
+                                                  );
+                                                  _scheduleComplaint(item);
+                                                },
                                                 icon: Icon(
                                                   _hasAppointment(item)
                                                       ? Icons
@@ -5554,11 +5665,15 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                               ),
                                               if (_hasAppointment(item))
                                                 OutlinedButton.icon(
-                                                  onPressed: () =>
-                                                      _scheduleComplaint(
-                                                    item,
-                                                    forceNew: true,
-                                                  ),
+                                                  onPressed: () {
+                                                    _logComplaintUi(
+                                                      'card button tapped: new-visit id=${item.id}',
+                                                    );
+                                                    _scheduleComplaint(
+                                                      item,
+                                                      forceNew: true,
+                                                    );
+                                                  },
                                                   icon: const Icon(
                                                     Icons.add_task_outlined,
                                                   ),
@@ -5566,8 +5681,12 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                                       const Text('Vizita noua'),
                                                 ),
                                               OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _openComplaintOffer(item),
+                                                onPressed: () {
+                                                  _logComplaintUi(
+                                                    'card button tapped: offer id=${item.id}',
+                                                  );
+                                                  _openComplaintOffer(item);
+                                                },
                                                 icon: const Icon(Icons
                                                     .request_quote_outlined),
                                                 label: Text(
@@ -5577,8 +5696,12 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                                 ),
                                               ),
                                               OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _openRepairReport(item),
+                                                onPressed: () {
+                                                  _logComplaintUi(
+                                                    'card button tapped: report id=${item.id}',
+                                                  );
+                                                  _openRepairReport(item);
+                                                },
                                                 icon: const Icon(
                                                     Icons.description_outlined),
                                                 label: Text(
@@ -5590,9 +5713,14 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                                 ),
                                               ),
                                               OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _openWarrantyInterventionReport(
-                                                        item),
+                                                onPressed: () {
+                                                  _logComplaintUi(
+                                                    'card button tapped: warranty-report id=${item.id}',
+                                                  );
+                                                  _openWarrantyInterventionReport(
+                                                    item,
+                                                  );
+                                                },
                                                 icon: const Icon(
                                                   Icons.assignment_outlined,
                                                 ),
@@ -5605,16 +5733,24 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                                 ),
                                               ),
                                               OutlinedButton.icon(
-                                                onPressed: () =>
-                                                    _openComplaintForm(item),
+                                                onPressed: () {
+                                                  _logComplaintUi(
+                                                    'card button tapped: edit id=${item.id}',
+                                                  );
+                                                  _openComplaintForm(item);
+                                                },
                                                 icon: const Icon(
                                                     Icons.edit_outlined),
                                                 label: const Text('Editeaza'),
                                               ),
                                               if (_canManageComplaintsWide)
                                                 OutlinedButton.icon(
-                                                  onPressed: () =>
-                                                      _deleteComplaint(item),
+                                                  onPressed: () {
+                                                    _logComplaintUi(
+                                                      'card button tapped: delete id=${item.id}',
+                                                    );
+                                                    _deleteComplaint(item);
+                                                  },
                                                   icon: const Icon(
                                                     Icons.delete_outline,
                                                   ),
@@ -5628,7 +5764,6 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
                                   ),
                                 ],
                               ),
-                            ),
                           );
                         },
                       ),

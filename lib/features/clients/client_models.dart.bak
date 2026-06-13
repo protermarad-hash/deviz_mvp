@@ -155,6 +155,8 @@ class ClientRecord {
     required this.name,
     required this.contactPerson,
     required this.phone,
+    this.phone2 = '',
+    this.phone3 = '',
     required this.email,
     required this.address,
     required this.city,
@@ -179,6 +181,8 @@ class ClientRecord {
   final String name;
   final String contactPerson;
   final String phone;
+  final String phone2;
+  final String phone3;
   final String email;
   final String cui;
   final String regCom;
@@ -203,6 +207,8 @@ class ClientRecord {
     String? name,
     String? contactPerson,
     String? phone,
+    String? phone2,
+    String? phone3,
     String? email,
     String? cui,
     String? regCom,
@@ -227,6 +233,8 @@ class ClientRecord {
       name: name ?? this.name,
       contactPerson: contactPerson ?? this.contactPerson,
       phone: phone ?? this.phone,
+      phone2: phone2 ?? this.phone2,
+      phone3: phone3 ?? this.phone3,
       email: email ?? this.email,
       cui: cui ?? this.cui,
       regCom: regCom ?? this.regCom,
@@ -254,6 +262,8 @@ class ClientRecord {
       'name': name,
       'contact_person': contactPerson,
       'phone': phone,
+      'phone2': phone2,
+      'phone3': phone3,
       'email': email,
       'cui': cui,
       'reg_com': regCom,
@@ -325,6 +335,8 @@ class ClientRecord {
         const ['contact_person', 'contact_name', 'person', 'persoana_contact'],
       ),
       phone: pick(const ['phone', 'telefon']),
+      phone2: pick(const ['phone2', 'telefon2']),
+      phone3: pick(const ['phone3', 'telefon3']),
       email: pick(const ['email']),
       cui: pick(const ['cui']),
       regCom: pick(const ['reg_com', 'trade_register']),

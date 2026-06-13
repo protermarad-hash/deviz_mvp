@@ -1,6 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/company_profile.dart';
+import '../../core/help/help_module_button.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/app_viewport_guard.dart';
@@ -30,6 +34,7 @@ class _WarrantyCertificatesPageState extends State<WarrantyCertificatesPage> {
   final TextEditingController _searchController = TextEditingController();
 
   bool _loading = true;
+  bool _isRegenerating = false;
   List<WarrantyCertificateRecord> _certificates =
       const <WarrantyCertificateRecord>[];
   List<ClientRecord> _clients = const <ClientRecord>[];
@@ -400,6 +405,148 @@ class _WarrantyCertificatesPageState extends State<WarrantyCertificatesPage> {
     await _load();
   }
 
+  Future<String> _regenerateOutputDir() async {
+    if (Platform.isWindows) {
+      final userProfile = Platform.environment['USERPROFILE'] ?? '';
+      if (userProfile.isNotEmpty) {
+        final dir =
+            Directory('$userProfile\\Downloads\\DevizPro\\Garantii');
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        return dir.path;
+      }
+    }
+    if (Platform.isAndroid) {
+      const path =
+          '/storage/emulated/0/Download/DevizPro/Garantii';
+      final dir = Directory(path);
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      return path;
+    }
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docs.path}/warranty_certs');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir.path;
+  }
+
+  Future<void> _onRegenerateAll() async {
+    final count = _certificates.length;
+    if (count == 0) return;
+
+    // Dialog confirmare — folosim dialogContext pentru pop corect
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Regenereaza toate certificatele?'),
+        content: Text(
+          'Se vor regenera PDF-urile pentru toate $count certificate'
+          ' cu noul template. PDF-urile existente vor fi inlocuite.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Anuleaza'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Regenereaza toate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    setState(() => _isRegenerating = true);
+    int success = 0;
+    int failed = 0;
+    final total = _certificates.length;
+
+    // Determinăm directorul de ieșire O SINGURĂ DATĂ
+    // Evităm complet PdfSaveService (care poate deschide dialog de fișiere
+    // dacă company profile are askEveryTime=true).
+    String outputDir;
+    try {
+      outputDir = await _regenerateOutputDir();
+    } catch (e) {
+      outputDir = '';
+    }
+
+    for (int i = 0; i < total; i++) {
+      final cert = _certificates[i];
+      debugPrint(
+          '[Regen ${i + 1}/$total] START id=${cert.id} nr=${cert.fullCertificateNumber}');
+      try {
+        final bytes = await WarrantyCertificatePdfService.generateBytes(cert)
+            .timeout(const Duration(seconds: 30));
+
+        if (bytes.isEmpty) {
+          debugPrint('[Regen ${i + 1}/$total] SKIP: bytes goale');
+          failed++;
+          if (mounted) setState(() {});
+          continue;
+        }
+
+        // Filename UNIC: include cert.id pentru a evita suprascrierea
+        // între certificate cu același număr de serie
+        final safeNum = cert.fullCertificateNumber
+            .replaceAll(RegExp(r'[^A-Za-z0-9_\- ]+'), '_')
+            .replaceAll(' ', '_');
+        final safeId = cert.id
+            .replaceAll(RegExp(r'[^A-Za-z0-9]'), '')
+            .substring(0, cert.id.length.clamp(0, 8));
+        final baseName =
+            safeNum.isEmpty ? safeId : '${safeNum}_$safeId';
+        final fileName = 'certificat_garantie_$baseName.pdf';
+
+        String filePath;
+        if (outputDir.isNotEmpty) {
+          filePath = '$outputDir${Platform.pathSeparator}$fileName';
+        } else if (cert.generatedDocumentPath.trim().isNotEmpty) {
+          filePath = cert.generatedDocumentPath.trim();
+        } else {
+          debugPrint('[Regen ${i + 1}/$total] SKIP: fara director');
+          failed++;
+          if (mounted) setState(() {});
+          continue;
+        }
+
+        debugPrint('[Regen ${i + 1}/$total] Salvez la: $filePath');
+        await File(filePath).writeAsBytes(bytes, flush: true);
+
+        await _service.saveWarrantyCertificate(
+          cert.copyWith(
+            generatedDocumentPath: filePath,
+            generatedDocumentFileName: _fileNameFromPath(filePath),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        success++;
+        debugPrint('[Regen ${i + 1}/$total] SUCCESS');
+      } catch (e, st) {
+        debugPrint('[Regen ${i + 1}/$total] EROARE: $e');
+        debugPrint('[Regen ${i + 1}/$total] Stack: $st');
+        failed++;
+        // NU return, NU break — continuă cu certificatul următor
+      }
+
+      if (mounted) setState(() {});
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
+    if (!mounted) return;
+    setState(() => _isRegenerating = false);
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(
+        'Regenerare: $success reusit'
+        '${failed > 0 ? ", $failed esuat" : ""}',
+      ),
+      backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+      duration: const Duration(seconds: 5),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -412,11 +559,28 @@ class _WarrantyCertificatesPageState extends State<WarrantyCertificatesPage> {
       appBar: AppBar(
         title: const Text('Taloane garantie'),
         actions: [
+          if (_isRegenerating)
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              tooltip: 'Regenereaza toate PDF-urile cu template nou',
+              onPressed:
+                  (_loading || _certificates.isEmpty) ? null : _onRegenerateAll,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+            ),
           IconButton(
             tooltip: 'Reincarca',
-            onPressed: _load,
+            onPressed: _loading ? null : _load,
             icon: const Icon(Icons.refresh),
           ),
+          const HelpModuleButton(moduleId: 'garantii'),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -428,6 +592,12 @@ class _WarrantyCertificatesPageState extends State<WarrantyCertificatesPage> {
         padding: AppViewportGuard.scrollablePadding(reserveForFab: true),
         child: Column(
           children: [
+            if (_isRegenerating)
+              LinearProgressIndicator(
+                backgroundColor: Colors.grey[200],
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                    Color(0xFFC62828)),
+              ),
             Card(
               margin: EdgeInsets.zero,
               child: Padding(

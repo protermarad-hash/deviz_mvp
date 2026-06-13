@@ -1,0 +1,449 @@
+import 'package:uuid/uuid.dart';
+
+enum PartnerTransactionType {
+  incasareProgramare,
+  plataProgramare,
+  vanzareProdus,
+  achizitieProodus,
+  plataManuala,
+  incasareManuala,
+  consumMateriale; // materiale/kituri folosite pentru lucrarea partenerului
+
+  String get value {
+    switch (this) {
+      case PartnerTransactionType.incasareProgramare:
+        return 'incasare_programare';
+      case PartnerTransactionType.plataProgramare:
+        return 'plata_programare';
+      case PartnerTransactionType.vanzareProdus:
+        return 'vanzare_produs';
+      case PartnerTransactionType.achizitieProodus:
+        return 'achizitie_produs';
+      case PartnerTransactionType.plataManuala:
+        return 'plata_manuala';
+      case PartnerTransactionType.incasareManuala:
+        return 'incasare_manuala';
+      case PartnerTransactionType.consumMateriale:
+        return 'consum_materiale';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case PartnerTransactionType.incasareProgramare:
+        return 'Încasare programare';
+      case PartnerTransactionType.plataProgramare:
+        return 'Plată programare';
+      case PartnerTransactionType.vanzareProdus:
+        return 'Vânzare produs';
+      case PartnerTransactionType.achizitieProodus:
+        return 'Achiziție produs';
+      case PartnerTransactionType.plataManuala:
+        return 'Plată manuală';
+      case PartnerTransactionType.incasareManuala:
+        return 'Încasare manuală';
+      case PartnerTransactionType.consumMateriale:
+        return 'Materiale folosite';
+    }
+  }
+
+  static PartnerTransactionType fromValue(String? raw) {
+    final v = (raw ?? '').trim().toLowerCase();
+    for (final item in PartnerTransactionType.values) {
+      if (item.value == v) return item;
+    }
+    return PartnerTransactionType.incasareManuala;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Linie de material (pentru transparență în fișa partenerului)
+// ---------------------------------------------------------------------------
+
+class PartnerMaterialLine {
+  const PartnerMaterialLine({
+    required this.name,
+    required this.unit,
+    required this.quantity,
+    required this.unitCost,
+  });
+
+  final String name;
+  final String unit;
+  final double quantity;
+  final double unitCost;
+
+  double get totalCost => quantity * unitCost;
+
+  Map<String, dynamic> toMap() => {
+        'name': name,
+        'unit': unit,
+        'quantity': quantity,
+        'unit_cost': unitCost,
+      };
+
+  factory PartnerMaterialLine.fromMap(Map<String, dynamic> map) {
+    double parseDouble(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      return double.tryParse('${raw ?? '0'}'.replaceAll(',', '.')) ?? 0;
+    }
+
+    return PartnerMaterialLine(
+      name: (map['name'] ?? '').toString(),
+      unit: (map['unit'] ?? '').toString(),
+      quantity: parseDouble(map['quantity']),
+      unitCost: parseDouble(map['unit_cost'] ?? map['unitCost']),
+    );
+  }
+}
+
+enum PartnerTransactionDirection {
+  intrare,
+  iesire;
+
+  String get value => name;
+
+  String get label {
+    switch (this) {
+      case PartnerTransactionDirection.intrare:
+        return 'Intrare';
+      case PartnerTransactionDirection.iesire:
+        return 'Ieșire';
+    }
+  }
+
+  static PartnerTransactionDirection fromValue(String? raw) {
+    final v = (raw ?? '').trim().toLowerCase();
+    return v == 'iesire'
+        ? PartnerTransactionDirection.iesire
+        : PartnerTransactionDirection.intrare;
+  }
+}
+
+enum PartnerTransactionPaymentMethod {
+  cash,
+  transfer,
+  card;
+
+  String get value => name;
+
+  String get label {
+    switch (this) {
+      case PartnerTransactionPaymentMethod.cash:
+        return 'Numerar';
+      case PartnerTransactionPaymentMethod.transfer:
+        return 'Transfer bancar';
+      case PartnerTransactionPaymentMethod.card:
+        return 'Card';
+    }
+  }
+
+  static PartnerTransactionPaymentMethod fromValue(String? raw) {
+    final v = (raw ?? '').trim().toLowerCase();
+    for (final item in PartnerTransactionPaymentMethod.values) {
+      if (item.value == v) return item;
+    }
+    return PartnerTransactionPaymentMethod.cash;
+  }
+}
+
+enum PartnerTransactionStatus {
+  neplatit,
+  partial,
+  platit;
+
+  String get value => name;
+
+  String get label {
+    switch (this) {
+      case PartnerTransactionStatus.neplatit:
+        return 'Neîncasat';
+      case PartnerTransactionStatus.partial:
+        return 'Parțial';
+      case PartnerTransactionStatus.platit:
+        return 'Plătit';
+    }
+  }
+
+  static PartnerTransactionStatus fromValue(String? raw) {
+    final v = (raw ?? '').trim().toLowerCase();
+    for (final item in PartnerTransactionStatus.values) {
+      if (item.value == v) return item;
+    }
+    return PartnerTransactionStatus.neplatit;
+  }
+}
+
+class PartnerTransaction {
+  PartnerTransaction({
+    required this.id,
+    required this.partnerId,
+    required this.partnerName,
+    required this.type,
+    required this.direction,
+    required this.amount,
+    required this.date,
+    required this.description,
+    this.referenceId = '',
+    this.referenceType = '',
+    this.paymentMethod = PartnerTransactionPaymentMethod.cash,
+    this.status = PartnerTransactionStatus.neplatit,
+    this.createdBy = '',
+    this.notes = '',
+    this.kitName = '',
+    this.materialLines = const <PartnerMaterialLine>[],
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String partnerId;
+  final String partnerName;
+  final PartnerTransactionType type;
+  final PartnerTransactionDirection direction;
+  final double amount;
+  final DateTime date;
+  final String description;
+  final String referenceId;
+  final String referenceType;
+  final PartnerTransactionPaymentMethod paymentMethod;
+  final PartnerTransactionStatus status;
+  final String createdBy;
+  final String notes;
+  /// Numele kitului folosit (dacă tipul e consumMateriale)
+  final String kitName;
+  /// Linii de materiale detaliate (backward compatible — default [])
+  final List<PartnerMaterialLine> materialLines;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  static String generateId() => const Uuid().v4();
+
+  PartnerTransaction copyWith({
+    String? id,
+    String? partnerId,
+    String? partnerName,
+    PartnerTransactionType? type,
+    PartnerTransactionDirection? direction,
+    double? amount,
+    DateTime? date,
+    String? description,
+    String? referenceId,
+    String? referenceType,
+    PartnerTransactionPaymentMethod? paymentMethod,
+    PartnerTransactionStatus? status,
+    String? createdBy,
+    String? notes,
+    String? kitName,
+    List<PartnerMaterialLine>? materialLines,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) {
+    return PartnerTransaction(
+      id: id ?? this.id,
+      partnerId: partnerId ?? this.partnerId,
+      partnerName: partnerName ?? this.partnerName,
+      type: type ?? this.type,
+      direction: direction ?? this.direction,
+      amount: amount ?? this.amount,
+      date: date ?? this.date,
+      description: description ?? this.description,
+      referenceId: referenceId ?? this.referenceId,
+      referenceType: referenceType ?? this.referenceType,
+      paymentMethod: paymentMethod ?? this.paymentMethod,
+      status: status ?? this.status,
+      createdBy: createdBy ?? this.createdBy,
+      notes: notes ?? this.notes,
+      kitName: kitName ?? this.kitName,
+      materialLines: materialLines ?? this.materialLines,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'partner_id': partnerId,
+      'partner_name': partnerName,
+      'type': type.value,
+      'direction': direction.value,
+      'amount': amount,
+      'date': date.toIso8601String(),
+      'description': description,
+      'reference_id': referenceId,
+      'reference_type': referenceType,
+      'payment_method': paymentMethod.value,
+      'status': status.value,
+      'created_by': createdBy,
+      'notes': notes,
+      'kit_name': kitName,
+      'material_lines':
+          materialLines.map((l) => l.toMap()).toList(growable: false),
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+    };
+  }
+
+  factory PartnerTransaction.fromMap(Map<String, dynamic> map) {
+    final now = DateTime.now();
+
+    double parseDouble(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      return double.tryParse('${raw ?? '0'}'.replaceAll(',', '.')) ?? 0;
+    }
+
+    String pick(List<String> keys) {
+      for (final key in keys) {
+        final value = (map[key] ?? '').toString().trim();
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
+
+    // Parsează liniile de materiale (backward compatible — default [])
+    final rawLines = map['material_lines'] ?? map['materialLines'];
+    final materialLines = rawLines is List
+        ? rawLines
+            .whereType<Map>()
+            .map((item) => PartnerMaterialLine.fromMap(
+                  Map<String, dynamic>.from(item),
+                ))
+            .toList(growable: false)
+        : const <PartnerMaterialLine>[];
+
+    return PartnerTransaction(
+      id: pick(const ['id']),
+      partnerId: pick(const ['partner_id', 'partnerId']),
+      partnerName: pick(const ['partner_name', 'partnerName']),
+      type: PartnerTransactionType.fromValue(
+        pick(const ['type']),
+      ),
+      direction: PartnerTransactionDirection.fromValue(
+        pick(const ['direction']),
+      ),
+      amount: parseDouble(map['amount']),
+      date: DateTime.tryParse(pick(const ['date'])) ?? now,
+      description: pick(const ['description']),
+      referenceId: pick(const ['reference_id', 'referenceId']),
+      referenceType: pick(const ['reference_type', 'referenceType']),
+      paymentMethod: PartnerTransactionPaymentMethod.fromValue(
+        pick(const ['payment_method', 'paymentMethod']),
+      ),
+      status: PartnerTransactionStatus.fromValue(
+        pick(const ['status']),
+      ),
+      createdBy: pick(const ['created_by', 'createdBy']),
+      notes: pick(const ['notes']),
+      kitName: pick(const ['kit_name', 'kitName']),
+      materialLines: materialLines,
+      createdAt: DateTime.tryParse(pick(const ['created_at'])) ?? now,
+      updatedAt: DateTime.tryParse(pick(const ['updated_at'])) ?? now,
+    );
+  }
+}
+
+class PartnerFinancialSummary {
+  const PartnerFinancialSummary({
+    required this.partnerId,
+    this.partnerName = '',
+    this.totalDeIncasat = 0,
+    this.totalDePlata = 0,
+    this.lastTransactionDate,
+    this.transactionCount = 0,
+    required this.updatedAt,
+  });
+
+  final String partnerId;
+  final String partnerName;
+  final double totalDeIncasat;
+  final double totalDePlata;
+  final DateTime? lastTransactionDate;
+  final int transactionCount;
+  final DateTime updatedAt;
+
+  double get soldNet => totalDeIncasat - totalDePlata;
+
+  PartnerFinancialSummary copyWith({
+    String? partnerId,
+    String? partnerName,
+    double? totalDeIncasat,
+    double? totalDePlata,
+    DateTime? lastTransactionDate,
+    bool clearLastTransactionDate = false,
+    int? transactionCount,
+    DateTime? updatedAt,
+  }) {
+    return PartnerFinancialSummary(
+      partnerId: partnerId ?? this.partnerId,
+      partnerName: partnerName ?? this.partnerName,
+      totalDeIncasat: totalDeIncasat ?? this.totalDeIncasat,
+      totalDePlata: totalDePlata ?? this.totalDePlata,
+      lastTransactionDate: clearLastTransactionDate
+          ? null
+          : (lastTransactionDate ?? this.lastTransactionDate),
+      transactionCount: transactionCount ?? this.transactionCount,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'partner_id': partnerId,
+      'partner_name': partnerName,
+      'total_de_incasat': totalDeIncasat,
+      'total_de_plata': totalDePlata,
+      'sold_net': soldNet,
+      'last_transaction_date': lastTransactionDate?.toIso8601String(),
+      'transaction_count': transactionCount,
+      'updated_at': updatedAt.toIso8601String(),
+    };
+  }
+
+  factory PartnerFinancialSummary.fromMap(Map<String, dynamic> map) {
+    final now = DateTime.now();
+
+    double parseDouble(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      return double.tryParse('${raw ?? '0'}'.replaceAll(',', '.')) ?? 0;
+    }
+
+    String pick(List<String> keys) {
+      for (final key in keys) {
+        final value = (map[key] ?? '').toString().trim();
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
+
+    return PartnerFinancialSummary(
+      partnerId: pick(const ['partner_id', 'partnerId']),
+      partnerName: pick(const ['partner_name', 'partnerName']),
+      totalDeIncasat: parseDouble(
+        map['total_de_incasat'] ?? map['totalDeIncasat'],
+      ),
+      totalDePlata: parseDouble(
+        map['total_de_plata'] ?? map['totalDePlata'],
+      ),
+      lastTransactionDate: DateTime.tryParse(
+        pick(const ['last_transaction_date', 'lastTransactionDate']),
+      ),
+      transactionCount:
+          (map['transaction_count'] ?? map['transactionCount'] ?? 0) is int
+              ? (map['transaction_count'] ?? map['transactionCount'] ?? 0) as int
+              : ((map['transaction_count'] ?? map['transactionCount'] ?? 0)
+                      as num)
+                  .toInt(),
+      updatedAt: DateTime.tryParse(pick(const ['updated_at'])) ?? now,
+    );
+  }
+
+  factory PartnerFinancialSummary.empty(String partnerId,
+      {String partnerName = ''}) {
+    return PartnerFinancialSummary(
+      partnerId: partnerId,
+      partnerName: partnerName,
+      updatedAt: DateTime.now(),
+    );
+  }
+}

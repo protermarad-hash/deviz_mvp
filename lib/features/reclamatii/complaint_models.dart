@@ -1,3 +1,5 @@
+import 'package:uuid/uuid.dart';
+
 import '../product_catalog/product_sales_models.dart';
 
 enum ComplaintInterventionOutcome {
@@ -418,6 +420,15 @@ class ComplaintRecord {
     required this.updatedAt,
     this.beneficiaryClientId = '',
     this.contractorClientId = '',
+    // Câmpuri sursă reclamație (iun 2026) — backward compatible
+    this.tipSursa = 'client_direct',
+    this.colaboratorId = '',
+    this.colaboratorNume = '',
+    this.colaboratorContact = '',
+    this.colaboratorTelefon = '',
+    this.colaboratorRefNumber = '',
+    this.clientFinalId = '',
+    this.clientFinalNume = '',
     this.jobId = '',
     this.appointmentId = '',
     this.appointmentIds = const <String>[],
@@ -444,6 +455,10 @@ class ComplaintRecord {
     this.fieldTechnicianId = '',
     this.interventionHistory = const <ComplaintInterventionEntry>[],
     this.linkedDocuments = const <ComplaintLinkedDocument>[],
+    this.pvCount = 0,
+    this.lastInterventionDate,
+    this.lastPvNumber = '',
+    this.totalInterventions = 0,
   });
 
   final String id;
@@ -456,6 +471,15 @@ class ComplaintRecord {
   final String beneficiaryName;
   final String contractorClientId;
   final String contractorName;
+  // Câmpuri sursă reclamație (iun 2026)
+  final String tipSursa;
+  final String colaboratorId;
+  final String colaboratorNume;
+  final String colaboratorContact;
+  final String colaboratorTelefon;
+  final String colaboratorRefNumber;
+  final String clientFinalId;
+  final String clientFinalNume;
   final String contactPerson;
   final String phone;
   final String email;
@@ -492,6 +516,10 @@ class ComplaintRecord {
   final List<ComplaintLinkedDocument> linkedDocuments;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int pvCount;
+  final DateTime? lastInterventionDate;
+  final String lastPvNumber;
+  final int totalInterventions;
 
   bool get hasPartner =>
       contractorClientId.trim().isNotEmpty || contractorName.trim().isNotEmpty;
@@ -507,6 +535,14 @@ class ComplaintRecord {
     String? beneficiaryName,
     String? contractorClientId,
     String? contractorName,
+    String? tipSursa,
+    String? colaboratorId,
+    String? colaboratorNume,
+    String? colaboratorContact,
+    String? colaboratorTelefon,
+    String? colaboratorRefNumber,
+    String? clientFinalId,
+    String? clientFinalNume,
     String? contactPerson,
     String? phone,
     String? email,
@@ -545,6 +581,11 @@ class ComplaintRecord {
     List<ComplaintLinkedDocument>? linkedDocuments,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? pvCount,
+    DateTime? lastInterventionDate,
+    bool clearLastInterventionDate = false,
+    String? lastPvNumber,
+    int? totalInterventions,
   }) {
     return ComplaintRecord(
       id: id ?? this.id,
@@ -557,6 +598,14 @@ class ComplaintRecord {
       beneficiaryName: beneficiaryName ?? this.beneficiaryName,
       contractorClientId: contractorClientId ?? this.contractorClientId,
       contractorName: contractorName ?? this.contractorName,
+      tipSursa: tipSursa ?? this.tipSursa,
+      colaboratorId: colaboratorId ?? this.colaboratorId,
+      colaboratorNume: colaboratorNume ?? this.colaboratorNume,
+      colaboratorContact: colaboratorContact ?? this.colaboratorContact,
+      colaboratorTelefon: colaboratorTelefon ?? this.colaboratorTelefon,
+      colaboratorRefNumber: colaboratorRefNumber ?? this.colaboratorRefNumber,
+      clientFinalId: clientFinalId ?? this.clientFinalId,
+      clientFinalNume: clientFinalNume ?? this.clientFinalNume,
       contactPerson: contactPerson ?? this.contactPerson,
       phone: phone ?? this.phone,
       email: email ?? this.email,
@@ -599,6 +648,12 @@ class ComplaintRecord {
       linkedDocuments: linkedDocuments ?? this.linkedDocuments,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      pvCount: pvCount ?? this.pvCount,
+      lastInterventionDate: clearLastInterventionDate
+          ? null
+          : (lastInterventionDate ?? this.lastInterventionDate),
+      lastPvNumber: lastPvNumber ?? this.lastPvNumber,
+      totalInterventions: totalInterventions ?? this.totalInterventions,
     );
   }
 
@@ -614,6 +669,14 @@ class ComplaintRecord {
       'beneficiary_name': beneficiaryName,
       'contractor_client_id': contractorClientId,
       'contractor_name': contractorName,
+      'tip_sursa': tipSursa,
+      'colaborator_id': colaboratorId,
+      'colaborator_nume': colaboratorNume,
+      'colaborator_contact': colaboratorContact,
+      'colaborator_telefon': colaboratorTelefon,
+      'colaborator_ref_number': colaboratorRefNumber,
+      'client_final_id': clientFinalId,
+      'client_final_nume': clientFinalNume,
       'contact_person': contactPerson,
       'phone': phone,
       'email': email,
@@ -651,6 +714,10 @@ class ComplaintRecord {
       'linked_documents': linkedDocuments.map((item) => item.toMap()).toList(),
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'pv_count': pvCount,
+      'last_intervention_date': lastInterventionDate?.toIso8601String(),
+      'last_pv_number': lastPvNumber,
+      'total_interventions': totalInterventions,
     };
   }
 
@@ -745,6 +812,22 @@ class ComplaintRecord {
       contractorName: pick(
         const <String>['contractor_name', 'contractorName'],
       ),
+      tipSursa: pick(const <String>['tip_sursa', 'tipSursa']).isNotEmpty
+          ? pick(const <String>['tip_sursa', 'tipSursa'])
+          : 'client_direct',
+      colaboratorId: pick(const <String>['colaborator_id', 'colaboratorId']),
+      colaboratorNume: pick(
+          const <String>['colaborator_nume', 'colaboratorNume']),
+      colaboratorContact: pick(
+          const <String>['colaborator_contact', 'colaboratorContact']),
+      colaboratorTelefon: pick(
+          const <String>['colaborator_telefon', 'colaboratorTelefon']),
+      colaboratorRefNumber: pick(
+          const <String>['colaborator_ref_number', 'colaboratorRefNumber']),
+      clientFinalId: pick(
+          const <String>['client_final_id', 'clientFinalId']),
+      clientFinalNume: pick(
+          const <String>['client_final_nume', 'clientFinalNume']),
       contactPerson: pick(const <String>['contact_person', 'contactPerson']),
       phone: pick(const <String>['phone', 'telefon']),
       email: pick(const <String>['email']),
@@ -847,6 +930,161 @@ class ComplaintRecord {
       ),
       createdAt: parseDate('created_at', now),
       updatedAt: parseDate('updated_at', now),
+      pvCount: (map['pv_count'] ?? map['pvCount'] ?? 0) as int,
+      lastInterventionDate: DateTime.tryParse(
+        (map['last_intervention_date'] ?? map['lastInterventionDate'] ?? '').toString(),
+      ),
+      lastPvNumber: (map['last_pv_number'] ?? map['lastPvNumber'] ?? '').toString().trim(),
+      totalInterventions: (map['total_interventions'] ?? map['totalInterventions'] ?? 0) as int,
     );
   }
+}
+
+// ── Mini ofertă rapidă per reclamație (iun 2026) ─────────────────────────────
+
+class ComplaintOfferLine {
+  const ComplaintOfferLine({
+    required this.id,
+    required this.denumire,
+    required this.um,
+    required this.cantitate,
+    required this.pretUnitar,
+    required this.categorie,
+    this.productId = '',
+  });
+
+  final String id;
+  final String productId;
+  final String denumire;
+  final String um;
+  final double cantitate;
+  final double pretUnitar;
+  final String categorie; // 'material' | 'manopera' | 'transport' | 'altul'
+
+  double get total => cantitate * pretUnitar;
+
+  static ComplaintOfferLine create({
+    required String denumire,
+    required String um,
+    required double cantitate,
+    required double pretUnitar,
+    required String categorie,
+    String productId = '',
+  }) =>
+      ComplaintOfferLine(
+        id: const Uuid().v4(),
+        denumire: denumire,
+        um: um,
+        cantitate: cantitate,
+        pretUnitar: pretUnitar,
+        categorie: categorie,
+        productId: productId,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'product_id': productId,
+        'denumire': denumire,
+        'um': um,
+        'cantitate': cantitate,
+        'pret_unitar': pretUnitar,
+        'categorie': categorie,
+      };
+
+  factory ComplaintOfferLine.fromMap(Map<String, dynamic> map) =>
+      ComplaintOfferLine(
+        id: (map['id'] ?? '').toString(),
+        productId: (map['product_id'] ?? '').toString(),
+        denumire: (map['denumire'] ?? '').toString(),
+        um: (map['um'] ?? 'buc').toString(),
+        cantitate: (map['cantitate'] as num? ?? 1).toDouble(),
+        pretUnitar: (map['pret_unitar'] as num? ?? 0).toDouble(),
+        categorie: (map['categorie'] ?? 'altul').toString(),
+      );
+}
+
+class ComplaintQuickOffer {
+  const ComplaintQuickOffer({
+    required this.id,
+    required this.complaintId,
+    required this.tipDestinat,
+    required this.linii,
+    required this.tvaPercent,
+    required this.createdAt,
+    required this.createdBy,
+    this.nota = '',
+  });
+
+  final String id;
+  final String complaintId;
+  final String tipDestinat; // 'client' | 'colaborator'
+  final List<ComplaintOfferLine> linii;
+  final double tvaPercent;
+  final String nota;
+  final DateTime createdAt;
+  final String createdBy;
+
+  double get totalFaraTva => linii.fold(0.0, (s, l) => s + l.total);
+  double get totalCuTva => totalFaraTva * (1 + tvaPercent / 100);
+
+  static ComplaintQuickOffer create({
+    required String complaintId,
+    required String tipDestinat,
+    required String createdBy,
+    double tvaPercent = 21.0,
+  }) =>
+      ComplaintQuickOffer(
+        id: const Uuid().v4(),
+        complaintId: complaintId,
+        tipDestinat: tipDestinat,
+        linii: const [],
+        tvaPercent: tvaPercent,
+        createdAt: DateTime.now(),
+        createdBy: createdBy,
+      );
+
+  ComplaintQuickOffer copyWith({
+    List<ComplaintOfferLine>? linii,
+    double? tvaPercent,
+    String? nota,
+  }) =>
+      ComplaintQuickOffer(
+        id: id,
+        complaintId: complaintId,
+        tipDestinat: tipDestinat,
+        linii: linii ?? this.linii,
+        tvaPercent: tvaPercent ?? this.tvaPercent,
+        nota: nota ?? this.nota,
+        createdAt: createdAt,
+        createdBy: createdBy,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'complaint_id': complaintId,
+        'tip_destinat': tipDestinat,
+        'linii': linii.map((l) => l.toMap()).toList(),
+        'tva_percent': tvaPercent,
+        'nota': nota,
+        'created_at': createdAt.toIso8601String(),
+        'created_by': createdBy,
+      };
+
+  factory ComplaintQuickOffer.fromMap(Map<String, dynamic> map) =>
+      ComplaintQuickOffer(
+        id: (map['id'] ?? '').toString(),
+        complaintId: (map['complaint_id'] ?? '').toString(),
+        tipDestinat: (map['tip_destinat'] ?? 'client').toString(),
+        linii: (map['linii'] as List? ?? [])
+            .whereType<Map>()
+            .map((m) =>
+                ComplaintOfferLine.fromMap(Map<String, dynamic>.from(m)))
+            .toList(),
+        tvaPercent: (map['tva_percent'] as num? ?? 21).toDouble(),
+        nota: (map['nota'] ?? '').toString(),
+        createdAt:
+            DateTime.tryParse((map['created_at'] ?? '').toString()) ??
+                DateTime.now(),
+        createdBy: (map['created_by'] ?? '').toString(),
+      );
 }

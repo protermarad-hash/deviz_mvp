@@ -1,12 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/auth/app_role_policy.dart';
-import '../../core/help_content.dart';
-import '../../core/widgets/help_button.dart';
+import '../../core/help/help_module_button.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
+import '../../core/repositories/local_app_data_repository.dart';
 import '../../core/widgets/app_viewport_guard.dart';
+import '../../core/widgets/client_info_card.dart';
+import '../../core/widgets/client_autocomplete_field.dart';
+import '../clients/client_models.dart';
 import '../notifications/notification_models.dart';
 import '../notifications/notification_service.dart';
 import 'firebase_lucrari_repository.dart';
@@ -35,6 +39,8 @@ class JobsPage extends StatefulWidget {
 }
 
 class _JobsPageState extends State<JobsPage> {
+  static const Duration _backgroundJobsRefreshCooldown =
+      Duration(seconds: 15);
   final TextEditingController _searchController = TextEditingController();
   final NotificationCenterService _notificationService =
       NotificationCenterService();
@@ -44,11 +50,28 @@ class _JobsPageState extends State<JobsPage> {
   List<JobRecord> _jobs = const [];
   List<JobRecord> _filteredJobs = const [];
   List<_LookupOption> _clients = const [];
+  Timer? _clientsReloadDebounce;
+  bool _clientsReloading = false;
+  Future<void>? _backgroundJobsRefreshFuture;
+  DateTime? _lastBackgroundJobsRefreshAt;
+  // Recorduri complete pentru afișarea detaliilor client în formular
+  List<dynamic> _fullClientRecords = const [];
+  // Map O(1) pentru lookup rapid în build()
+  Map<String, String> _clientLabelById = const {};
   JobStatus? _statusFilter;
   String? _clientFilter;
   LucrariCloudRepository? _cloudRepository;
   String _dataSourceLabel = 'local';
   String? _cloudFallbackReason;
+  bool _filtersVisible = false;
+
+  int get _activeFilterCount {
+    int count = 0;
+    if (_statusFilter != null) count++;
+    if ((_clientFilter ?? '').isNotEmpty) count++;
+    if (_searchController.text.trim().isNotEmpty) count++;
+    return count;
+  }
 
   AppDataRepository get _repository => widget.repository;
 
@@ -73,7 +96,11 @@ class _JobsPageState extends State<JobsPage> {
     super.initState();
     _refreshCloudRepository();
     _searchController.addListener(_applyFilters);
-    _loadData();
+    LocalAppDataRepository.clientsChangeCount.addListener(_handleClientsChanged);
+    // Reîncarcă din cloud când Firebase devine disponibil după startup
+    // (CLAUDE.md ANTI-PATTERN 4 — pagini care nu se reîncarcă după startup)
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+    Future.microtask(_loadData);
   }
 
   void _refreshCloudRepository() {
@@ -87,8 +114,68 @@ class _JobsPageState extends State<JobsPage> {
 
   @override
   void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
+    LocalAppDataRepository.clientsChangeCount.removeListener(_handleClientsChanged);
+    _clientsReloadDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    if (FirebaseBootstrap.isOnline && mounted && _jobs.isEmpty && !_isLoading) {
+      _loadData();
+    }
+  }
+
+  /// Reîncarcă doar lista de clienți fără a reîncărca lucrările.
+  void _handleClientsChanged() {
+    if (_isLoading) {
+      return;
+    }
+    _clientsReloadDebounce?.cancel();
+    _clientsReloadDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      _reloadClientsOnly();
+    });
+  }
+
+  Future<void> _reloadClientsOnly() async {
+    if (_isLoading || _clientsReloading) {
+      return;
+    }
+    _clientsReloading = true;
+    try {
+      final clientsRaw = await _loadClientsRawSafe();
+      if (!mounted) return;
+      final clients = clientsRaw
+          .map(_LookupOption.fromDynamic)
+          .where((e) => e.id.trim().isNotEmpty)
+          .fold<Map<String, _LookupOption>>(
+            <String, _LookupOption>{},
+            (acc, e) {
+              acc[e.id] = e;
+              return acc;
+            },
+          )
+          .values
+          .toList(growable: false);
+      final clientLabelById = {
+        for (final c in clients)
+          if (c.id.trim().isNotEmpty) c.id: c.label,
+      };
+      final filteredJobs = _computeFilteredJobs(
+        jobs: _jobs,
+        clients: clients,
+        clientLabelById: clientLabelById,
+      );
+      setState(() {
+        _clients = clients;
+        _clientLabelById = clientLabelById;
+        _filteredJobs = filteredJobs;
+      });
+    } finally {
+      _clientsReloading = false;
+    }
   }
 
   Future<void> _loadData() async {
@@ -122,6 +209,12 @@ class _JobsPageState extends State<JobsPage> {
       setState(() {
         _jobs = sortedJobs;
         _clients = clients;
+        _fullClientRecords = normalizedClientsRaw.toList(growable: false);
+        // Map O(1) pentru lookup rapid în build()
+        _clientLabelById = {
+          for (final c in clients)
+            if (c.id.trim().isNotEmpty) c.id: c.label,
+        };
       });
       _applyFilters();
     } catch (_) {
@@ -150,27 +243,81 @@ class _JobsPageState extends State<JobsPage> {
   }
 
   Future<List<JobRecord>> _loadJobsResolved() async {
+    final localJobs = await _loadJobsSafe();
+    _refreshCloudRepository();
+    _scheduleBackgroundJobsRefresh();
+    final cloud = _cloudRepository;
+    if (cloud == null) {
+      _dataSourceLabel = _localLabelWithFallback();
+    } else {
+      _dataSourceLabel = 'local';
+      _cloudFallbackReason = null;
+    }
+    return localJobs;
+  }
+
+  void _scheduleBackgroundJobsRefresh() {
+    if (_backgroundJobsRefreshFuture != null) {
+      return;
+    }
+    final now = DateTime.now();
+    if (_lastBackgroundJobsRefreshAt != null &&
+        now.difference(_lastBackgroundJobsRefreshAt!) <
+            _backgroundJobsRefreshCooldown) {
+      return;
+    }
+    final future = _refreshJobsFromCloudBackground();
+    _backgroundJobsRefreshFuture = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_backgroundJobsRefreshFuture, future)) {
+          _backgroundJobsRefreshFuture = null;
+          _lastBackgroundJobsRefreshAt = DateTime.now();
+        }
+      }),
+    );
+  }
+
+  Future<void> _refreshJobsFromCloudBackground() async {
     await OfflineSyncRuntime.instance.syncPending();
     _refreshCloudRepository();
     final cloud = _cloudRepository;
     if (cloud == null) {
-      _dataSourceLabel = _localLabelWithFallback();
-      return _loadJobsSafe();
+      return;
     }
     try {
       final cloudItems =
           await cloud.listJobs().timeout(const Duration(seconds: 8));
-      _dataSourceLabel = 'cloud';
-      _cloudFallbackReason = null;
-      for (final item in cloudItems) {
-        await _repository.saveJob(item);
+      final repository = _repository;
+      final mergedJobs = repository is LocalAppDataRepository
+          ? await repository.mergeJobsFromCloud(cloudItems)
+          : cloudItems;
+      if (!mounted) {
+        return;
       }
-      return cloudItems;
+      final sortedJobs = List<JobRecord>.from(mergedJobs)
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final filteredJobs = _computeFilteredJobs(
+        jobs: sortedJobs,
+        clients: _clients,
+        clientLabelById: _clientLabelById,
+      );
+      setState(() {
+        _jobs = sortedJobs;
+        _filteredJobs = filteredJobs;
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+        _loadError = null;
+      });
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
-      _cloudFallbackReason = _shortCloudError(error);
-      _dataSourceLabel = _localLabelWithFallback();
-      return _loadJobsSafe();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _cloudFallbackReason = _shortCloudError(error);
+        _dataSourceLabel = _localLabelWithFallback();
+      });
     }
   }
 
@@ -179,7 +326,6 @@ class _JobsPageState extends State<JobsPage> {
     final next = await _repository.saveJob(job);
     _refreshCloudRepository();
     final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
     if (cloud != null) {
       try {
         await cloud.upsertJob(next);
@@ -189,12 +335,10 @@ class _JobsPageState extends State<JobsPage> {
         FirebaseBootstrap.registerRuntimeError(error);
         _cloudFallbackReason = _shortCloudError(error);
         _dataSourceLabel = _localLabelWithFallback();
-        queuedOffline = true;
       }
     }
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueJob(next);
-    }
+    // Queue ÎNTOTDEAUNA — garantează sync chiar și când cloud e disponibil (BUG 1)
+    await OfflineSyncRuntime.instance.queueJob(next);
     await _notifyJobSaved(next, previous: previous);
   }
 
@@ -251,7 +395,6 @@ class _JobsPageState extends State<JobsPage> {
   Future<void> _deleteJobResolved(String jobId) async {
     _refreshCloudRepository();
     final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
     if (cloud != null) {
       try {
         await cloud.deleteJob(jobId);
@@ -261,13 +404,11 @@ class _JobsPageState extends State<JobsPage> {
         FirebaseBootstrap.registerRuntimeError(error);
         _cloudFallbackReason = _shortCloudError(error);
         _dataSourceLabel = _localLabelWithFallback();
-        queuedOffline = true;
       }
     }
     await _repository.deleteJob(jobId);
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueJobDelete(jobId);
-    }
+    // Queue ÎNTOTDEAUNA — garantează sync chiar și când cloud e disponibil (BUG 1)
+    await OfflineSyncRuntime.instance.queueJobDelete(jobId);
   }
 
   Future<Iterable<dynamic>> _loadClientsRawSafe() async {
@@ -297,8 +438,35 @@ class _JobsPageState extends State<JobsPage> {
   }
 
   void _applyFilters() {
+    final filtered = _computeFilteredJobs(
+      jobs: _jobs,
+      clients: _clients,
+      clientLabelById: _clientLabelById,
+    );
+    if (!mounted) return;
+    setState(() => _filteredJobs = filtered);
+  }
+
+  List<JobRecord> _computeFilteredJobs({
+    required List<JobRecord> jobs,
+    required List<_LookupOption> clients,
+    required Map<String, String> clientLabelById,
+  }) {
     final query = _searchController.text.trim().toLowerCase();
-    var filtered = _jobs.where((job) {
+    String clientName(String clientId) {
+      final lookup = clientLabelById[clientId];
+      if (lookup != null && lookup.trim().isNotEmpty) {
+        return lookup;
+      }
+      for (final client in clients) {
+        if (client.id == clientId) {
+          return client.label;
+        }
+      }
+      return 'Client necunoscut';
+    }
+
+    var filtered = jobs.where((job) {
       if (_statusFilter != null && job.status != _statusFilter) {
         return false;
       }
@@ -310,11 +478,11 @@ class _JobsPageState extends State<JobsPage> {
       if (query.isEmpty) {
         return true;
       }
-      final clientName = _clientName(job.clientId).toLowerCase();
+      final resolvedClientName = clientName(job.clientId).toLowerCase();
       return job.jobCode.toLowerCase().contains(query) ||
           job.title.toLowerCase().contains(query) ||
           job.location.toLowerCase().contains(query) ||
-          clientName.contains(query);
+          resolvedClientName.contains(query);
     }).toList(growable: false);
     // Tehnicianul vede doar lucrările echipei sale
     if (_isTechnician && (widget.fieldAuthTeamId ?? '').isNotEmpty) {
@@ -322,8 +490,7 @@ class _JobsPageState extends State<JobsPage> {
           .where((job) => job.assignedTeamId == widget.fieldAuthTeamId)
           .toList(growable: false);
     }
-    if (!mounted) return;
-    setState(() => _filteredJobs = filtered);
+    return filtered;
   }
 
   Future<bool> _openJobForm({JobRecord? existing}) async {
@@ -334,6 +501,7 @@ class _JobsPageState extends State<JobsPage> {
         clients: _clients,
         existing: existing,
         onSave: _saveJobResolved,
+        fullClientRecords: _fullClientRecords,
       ),
     );
     if (saved == true) {
@@ -413,11 +581,56 @@ class _JobsPageState extends State<JobsPage> {
     }
   }
 
+  Widget _filterToggleButton(
+      ColorScheme cs, bool hasFilters, bool isWide) {
+    if (isWide) return const SizedBox.shrink();
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        OutlinedButton.icon(
+          onPressed: () =>
+              setState(() => _filtersVisible = !_filtersVisible),
+          icon: Icon(
+            _filtersVisible ? Icons.filter_list_off : Icons.filter_list,
+            size: 18,
+          ),
+          label: Text(_filtersVisible ? 'Ascunde' : 'Filtre'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: hasFilters ? cs.primary : null,
+            side: hasFilters
+                ? BorderSide(color: cs.primary, width: 1.5)
+                : null,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          ),
+        ),
+        if (hasFilters)
+          Positioned(
+            top: -4,
+            right: -4,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: cs.primary,
+                shape: BoxShape.circle,
+              ),
+              child: Text(
+                '$_activeFilterCount',
+                style: TextStyle(
+                  color: cs.onPrimary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   String _clientName(String id) {
-    for (final client in _clients) {
-      if (client.id == id) return client.label;
-    }
-    return '';
+    // O(1) lookup din Map pre-construit
+    return _clientLabelById[id] ?? '';
   }
 
   @override
@@ -427,87 +640,144 @@ class _JobsPageState extends State<JobsPage> {
         padding: AppViewportGuard.scrollablePadding(reserveForFab: true),
         child: Column(
           children: [
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                SizedBox(
-                  width: 280,
-                  child: TextField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _searchController,
-                    decoration: const InputDecoration(
-                      labelText: 'Caută după cod, titlu, client, locație',
-                      prefixIcon: Icon(Icons.search),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isWide = constraints.maxWidth >= 600;
+                final showFilters = isWide || _filtersVisible;
+                final cs = Theme.of(context).colorScheme;
+                final hasFilters = _activeFilterCount > 0;
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                textCapitalization:
+                                    TextCapitalization.sentences,
+                                controller: _searchController,
+                                decoration: InputDecoration(
+                                  hintText:
+                                      'Caută după cod, titlu, client, locație...',
+                                  prefixIcon: const Icon(Icons.search),
+                                  suffixIcon: _searchController.text
+                                          .trim()
+                                          .isNotEmpty
+                                      ? IconButton(
+                                          icon: const Icon(Icons.clear),
+                                          onPressed: () {
+                                            _searchController.clear();
+                                            _applyFilters();
+                                          },
+                                        )
+                                      : null,
+                                  isDense: true,
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                    horizontal: 12,
+                                  ),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              tooltip: 'Reîncarcă',
+                              onPressed: _isLoading ? null : _loadData,
+                              icon: const Icon(Icons.refresh),
+                            ),
+                            if (!isWide) ...[
+                              const SizedBox(width: 4),
+                              _filterToggleButton(
+                                  cs, hasFilters, isWide),
+                            ],
+                            const SizedBox(width: 4),
+                            const HelpModuleButton(moduleId: 'jobs'),
+                          ],
+                        ),
+                        if (showFilters) ...[
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 8,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 200,
+                                child: DropdownButtonFormField<JobStatus?>(
+                                  initialValue: _statusFilter,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Status'),
+                                  items: [
+                                    const DropdownMenuItem<JobStatus?>(
+                                      value: null,
+                                      child: Text('Toate'),
+                                    ),
+                                    ...JobStatus.values.map(
+                                      (s) => DropdownMenuItem<JobStatus?>(
+                                        value: s,
+                                        child: Text(s.label),
+                                      ),
+                                    ),
+                                  ],
+                                  onChanged: (value) {
+                                    setState(() => _statusFilter = value);
+                                    _applyFilters();
+                                  },
+                                ),
+                              ),
+                              SizedBox(
+                                width: 240,
+                                child: DropdownButtonFormField<String?>(
+                                  initialValue: _normalizeClientFilter(),
+                                  decoration: const InputDecoration(
+                                      labelText: 'Client'),
+                                  items: [
+                                    const DropdownMenuItem<String?>(
+                                      value: null,
+                                      child: Text('Toți clienții'),
+                                    ),
+                                    ..._clients.map(
+                                      (c) => DropdownMenuItem<String?>(
+                                        value: c.id,
+                                        child: Text(c.label),
+                                      ),
+                                    ),
+                                  ],
+                                  onChanged: (value) {
+                                    setState(() => _clientFilter = value);
+                                    _applyFilters();
+                                  },
+                                ),
+                              ),
+                              Chip(
+                                label: Text('Sursă: $_dataSourceLabel'),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              if ((_cloudFallbackReason ?? '')
+                                  .trim()
+                                  .isNotEmpty)
+                                Text(
+                                  'Fallback: ${_shortCloudError(_cloudFallbackReason!)}',
+                                  style:
+                                      Theme.of(context).textTheme.bodySmall,
+                                ),
+                            ],
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                ),
-                SizedBox(
-                  width: 220,
-                  child: DropdownButtonFormField<JobStatus?>(
-                    initialValue: _statusFilter,
-                    decoration:
-                        const InputDecoration(labelText: 'Filtru status'),
-                    items: [
-                      const DropdownMenuItem<JobStatus?>(
-                        value: null,
-                        child: Text('Toate statusurile'),
-                      ),
-                      ...JobStatus.values.map(
-                        (status) => DropdownMenuItem<JobStatus?>(
-                          value: status,
-                          child: Text(status.label),
-                        ),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _statusFilter = value);
-                      _applyFilters();
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: 260,
-                  child: DropdownButtonFormField<String?>(
-                    initialValue: _normalizeClientFilter(),
-                    decoration:
-                        const InputDecoration(labelText: 'Filtru client'),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Toți clienții'),
-                      ),
-                      ..._clients.map(
-                        (client) => DropdownMenuItem<String?>(
-                          value: client.id,
-                          child: Text(client.label),
-                        ),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _clientFilter = value);
-                      _applyFilters();
-                    },
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _isLoading ? null : _loadData,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Reîncarcă'),
-                ),
-                Chip(
-                  label: Text('Sursă date: $_dataSourceLabel'),
-                  visualDensity: VisualDensity.compact,
-                ),
-                if (_dataSourceLabel == 'local' &&
-                    (_cloudFallbackReason ?? '').trim().isNotEmpty)
-                  Text(
-                    'Motiv fallback: ${_shortCloudError(_cloudFallbackReason!)}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                HelpButton(content: AppHelp.lucrari),
-              ],
+                );
+              },
             ),
             const SizedBox(height: 16),
             Expanded(
@@ -613,12 +883,14 @@ class _JobFormDialog extends StatefulWidget {
     required this.clients,
     required this.onSave,
     this.existing,
+    this.fullClientRecords = const [],
   });
 
   final AppDataRepository repository;
   final List<_LookupOption> clients;
   final Future<void> Function(JobRecord job) onSave;
   final JobRecord? existing;
+  final List<dynamic> fullClientRecords;
 
   @override
   State<_JobFormDialog> createState() => _JobFormDialogState();
@@ -720,30 +992,37 @@ class _JobFormDialogState extends State<_JobFormDialog> {
                     _jobCode.isEmpty ? 'Se generează...' : _jobCode),
                 SizedBox(
                   width: 360,
-                  child: DropdownButtonFormField<String?>(
-                    initialValue: _normalizeClient(_selectedClientId),
-                    decoration: InputDecoration(
-                      labelText: 'Client',
-                      helperText: widget.clients.isEmpty
-                          ? 'Nu există clienți salvați.'
-                          : null,
-                    ),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Selectează client'),
-                      ),
-                      ...widget.clients.map(
-                        (client) => DropdownMenuItem<String?>(
-                          value: client.id,
-                          child: Text(client.label),
-                        ),
-                      ),
-                    ],
-                    onChanged: (value) =>
-                        setState(() => _selectedClientId = value),
+                  child: ClientAutocompleteField(
+                    key: ValueKey(
+                        'job-form-client-${_selectedClientId ?? 'none'}'),
+                    clients: _clientRecords,
+                    initialClient: _selectedClientRecord,
+                    labelText: 'Client',
+                    helperText: _clientRecords.isEmpty
+                        ? 'Nu există clienți salvați.'
+                        : null,
+                    onClientSelected: (c) =>
+                        setState(() => _selectedClientId = c?.id),
                   ),
                 ),
+                // Card detalii client — apare când e selectat un client
+                if (_selectedClientId != null)
+                  Builder(
+                    builder: (context) {
+                      final raw = widget.fullClientRecords
+                          .where((r) {
+                            try { return (r as dynamic).id == _selectedClientId; } catch (_) { return false; }
+                          })
+                          .firstOrNull;
+                      if (raw == null || raw is! ClientRecord) {
+                        return const SizedBox.shrink();
+                      }
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: ClientInfoCard(client: raw, compact: true),
+                      );
+                    },
+                  ),
                 SizedBox(
                   width: 360,
                   child: TextFormField(
@@ -1002,6 +1281,13 @@ class _JobFormDialogState extends State<_JobFormDialog> {
     final exists = widget.clients.any((client) => client.id == id);
     return exists ? id : null;
   }
+
+  /// Extrage ClientRecord-urile reale din fullClientRecords
+  List<ClientRecord> get _clientRecords =>
+      widget.fullClientRecords.whereType<ClientRecord>().toList();
+
+  ClientRecord? get _selectedClientRecord =>
+      _clientRecords.where((r) => r.id == _selectedClientId).firstOrNull;
 }
 
 class _LookupOption {

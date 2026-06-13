@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
+
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
@@ -11,6 +13,8 @@ import '../../core/pdf_font_bundle.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../product_catalog/product_sales_models.dart';
+import '../programari/appointment_models.dart';
+import 'complaint_models.dart';
 import 'warranty_intervention_report_models.dart';
 
 class WarrantyInterventionReportPdfService {
@@ -19,13 +23,138 @@ class WarrantyInterventionReportPdfService {
   static Future<Uint8List> buildPdfBytes({
     required CompanyProfile company,
     required WarrantyInterventionReportRecord report,
+    required ComplaintRecord complaint,
+    Appointment? appointment,
     WarrantyCertificateRecord? certificate,
+    String resolvedBeneficiaryName = '',
+    String resolvedContractorName = '',
+    String resolvedTechnicianName = '',
+    String resolvedTeamName = '',
+    String resolvedAgfrEquipmentLabel = '',
+    String resolvedAgfrInterventionLabel = '',
+    String resolvedAgfrReportLabel = '',
+    String resolvedOfferLabel = '',
   }) async {
     final pdfFonts = await PdfFontBundle.load();
     final doc = pw.Document(theme: pdfFonts.theme);
     final branding = DocumentBrandingData.fromCompanyProfile(company);
     final template = company.pdfExportSettings.visualTemplate;
     final palette = resolvePdfTemplatePalette(template);
+    final hasPhotos = report.photoBase64List.isNotEmpty || report.photoUrls.isNotEmpty;
+    final annexPages = hasPhotos
+        ? await _buildPhotoAnnexPages(report, pdfFonts)
+        : <pw.Page>[];
+    final beneficiaryLabel = _pickPreferred(
+      report.clientName,
+      resolvedBeneficiaryName,
+      complaint.beneficiaryName,
+      appointment?.clientName ?? '',
+    );
+    final contractorLabel =
+        _pickPreferred(resolvedContractorName, complaint.contractorName);
+    final technicianLabel = _pickReadable(
+      currentValue: report.technicianName,
+      preferredValue: resolvedTechnicianName,
+      rawValues: <String>[
+        complaint.fieldTechnicianId,
+        complaint.assignedEmployeeId,
+      ],
+    );
+    final teamLabel = _pickReadable(
+      currentValue: report.teamName,
+      preferredValue: resolvedTeamName,
+      rawValues: <String>[
+        complaint.fieldTeamId,
+        complaint.assignedTeamId,
+      ],
+    );
+    final complaintNumber = complaint.complaintNumber.trim().isEmpty
+        ? complaint.id
+        : complaint.complaintNumber.trim();
+    final complaintInfoRows = _buildInfoRows(<List<String>>[
+      <String>['Numar reclamatie', complaintNumber],
+      <String>['Data reclamatie', _date(complaint.complaintDate)],
+      <String>['Status reclamatie', complaint.status.label],
+      <String>['Tip reclamatie', complaint.type.label],
+      <String>['Sursa', complaint.source.label],
+      <String>['Client / beneficiar', beneficiaryLabel],
+      <String>['Contractant / colaborator', contractorLabel],
+      <String>['Persoana contact', complaint.contactPerson],
+      <String>['Telefon', complaint.phone],
+      <String>['Email', complaint.email],
+      <String>['Locatie / adresa', complaint.location],
+      <String>['Lucrare', _pickPreferred(report.jobTitle, report.jobId)],
+    ]);
+    final warrantyRows = _buildInfoRows(<List<String>>[
+      <String>['Status garantie', report.warrantyCoverageStatus.label],
+      <String>[
+        'Certificat garantie',
+        certificate == null
+            ? report.warrantyCertificateId
+            : certificate.fullCertificateNumber,
+      ],
+      <String>[
+        'Perioada garantie',
+        certificate == null ? '' : _warrantyPeriod(certificate),
+      ],
+      <String>['Talon / istoric service', report.warrantyServiceTicketId],
+      <String>['Programare asociata', appointment?.title ?? appointment?.id ?? ''],
+      <String>['Deviz / oferta', resolvedOfferLabel],
+    ]);
+    final equipmentRows = _buildInfoRows(<List<String>>[
+      <String>['Echipament / utilaj', report.equipmentLabel],
+      <String>['Tip echipament', complaint.equipmentType?.label ?? ''],
+      <String>['Brand', _pickPreferred(report.brand, complaint.equipmentBrand)],
+      <String>['Model', _pickPreferred(report.model, complaint.equipmentModel)],
+      <String>[
+        'Serie unitate exterioara',
+        _pickPreferred(report.serialNumberOutdoor, complaint.outdoorUnitSerial),
+      ],
+      <String>[
+        'Serii unitati interioare',
+        _pickPreferred(report.serialNumberIndoor, complaint.indoorUnitSerials),
+      ],
+      <String>['Detalii tehnice', complaint.equipmentDetails],
+    ]);
+    final interventionRows = _buildInfoRows(<List<String>>[
+      <String>[
+        'Data interventiei',
+        _date(
+          report.documentDate ??
+              complaint.fieldInterventionDate ??
+              complaint.updatedAt,
+        ),
+      ],
+      <String>['Echipa teren', teamLabel],
+      <String>['Tehnician', technicianLabel],
+      <String>['Rezultat interventie', _resultLabel(report.resultStatus)],
+    ]);
+    final interventionParagraphs = _buildParagraphs(<List<String>>[
+      <String>['Problema reclamata', complaint.problemDescription],
+      <String>['Constatare in teren', _pickPreferred(report.findings, complaint.fieldFinding)],
+      <String>[
+        'Lucrari efectuate',
+        _pickPreferred(report.workPerformed, complaint.fieldWorkPerformed),
+      ],
+      <String>[
+        'Materiale folosite',
+        _pickPreferred(report.materialsUsedText, complaint.fieldMaterialsUsed),
+      ],
+      <String>[
+        'Piese schimbate',
+        _pickPreferred(report.partsReplacedText, complaint.fieldPartsChanged),
+      ],
+      <String>[
+        'Observatii tehnician',
+        _pickPreferred(report.recommendations, complaint.fieldTechnicianNotes),
+      ],
+      <String>['Observatii interne', complaint.internalNotes],
+    ]);
+    final agfrRows = _buildInfoRows(<List<String>>[
+      <String>['Echipament AGFR', resolvedAgfrEquipmentLabel],
+      <String>['Interventie AGFR', resolvedAgfrInterventionLabel],
+      <String>['Raport AGFR', resolvedAgfrReportLabel],
+    ]);
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
@@ -43,87 +172,45 @@ class WarrantyInterventionReportPdfService {
                     : report.documentNumber.trim(),
               ),
               MapEntry('Data', _date(report.documentDate ?? report.updatedAt)),
-              MapEntry('Tehnician', report.technicianName),
-              MapEntry('Client', report.clientName),
+              MapEntry('Tehnician', technicianLabel),
+              MapEntry('Client', beneficiaryLabel),
             ],
           ),
           pw.SizedBox(height: 16),
-          _section(
-              'Date client / interventie',
-              [
-                _row('Client / beneficiar', report.clientName),
-                _row(
-                  'Reprezentant beneficiar',
-                  report.beneficiaryRepresentative,
-                ),
-                _row('Tehnician', report.technicianName),
-                _row('Echipa', report.teamName),
-                _row(
-                  'Lucrare',
-                  report.jobTitle.trim().isEmpty
-                      ? report.jobId
-                      : report.jobTitle,
-                ),
-              ],
-              palette: palette),
+          _section('Date reclamatie', complaintInfoRows, palette: palette),
+          pw.SizedBox(height: 12),
+          _section('Garantie si documente legate', warrantyRows, palette: palette),
+          pw.SizedBox(height: 12),
+          _section('Echipament', equipmentRows, palette: palette),
           pw.SizedBox(height: 12),
           _section(
-              'Garantie',
-              [
-                _row('Status garantie', report.warrantyCoverageStatus.label),
-                _row(
-                  'Certificat garantie',
-                  certificate == null
-                      ? report.warrantyCertificateId
-                      : certificate.fullCertificateNumber,
-                ),
-                _row(
-                  'Perioada garantie',
-                  certificate == null ? '-' : _warrantyPeriod(certificate),
-                ),
-                _row(
-                  'Talon / istoric service',
-                  report.warrantyServiceTicketId.trim().isEmpty
-                      ? '-'
-                      : report.warrantyServiceTicketId,
-                ),
-              ],
-              palette: palette),
-          pw.SizedBox(height: 12),
-          _section(
-              'Echipament',
-              [
-                _row('Echipament', report.equipmentLabel),
-                _row('Brand', report.brand),
-                _row('Model', report.model),
-                _row('Serie unitate interioara', report.serialNumberIndoor),
-                _row('Serie unitate exterioara', report.serialNumberOutdoor),
-              ],
-              palette: palette),
-          pw.SizedBox(height: 12),
-          _section(
-              'Constatare si interventie',
-              [
-                _paragraph('Constatare', report.findings),
-                _paragraph('Lucrari efectuate', report.workPerformed),
-                _paragraph('Materiale folosite', report.materialsUsedText),
-                _paragraph('Piese inlocuite', report.partsReplacedText),
-                _paragraph('Concluzii / recomandari', report.recommendations),
-                _row('Rezultat interventie', _resultLabel(report.resultStatus)),
-              ],
-              palette: palette),
-          if (_hasAgfr(report)) ...[
+            'Interventie service',
+            [
+              ...interventionRows,
+              if (interventionParagraphs.isNotEmpty) pw.SizedBox(height: 4),
+              ...interventionParagraphs,
+            ],
+            palette: palette,
+          ),
+          if (agfrRows.isNotEmpty) ...[
             pw.SizedBox(height: 12),
-            _section(
-                'Legaturi AGFR',
-                [
-                  _row('Echipament AGFR', report.agfrEquipmentId),
-                  _row('Interventie AGFR', report.agfrInterventionId),
-                  _row('Raport AGFR', report.agfrReportId),
-                ],
-                palette: palette),
+            _section('Legaturi AGFR', agfrRows, palette: palette),
           ],
           pw.SizedBox(height: 18),
+          if (hasPhotos)
+            pw.Container(
+              margin: const pw.EdgeInsets.only(bottom: 12),
+              padding: const pw.EdgeInsets.all(6),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.blue50,
+                border: pw.Border.all(color: PdfColors.blue200),
+                borderRadius: pw.BorderRadius.circular(4),
+              ),
+              child: pw.Text(
+                'Acest document are atașate ${report.photoBase64List.isNotEmpty ? report.photoBase64List.length : report.photoUrls.length} fotografii — vezi Anexa Fotografii (paginile 2+)',
+                style: const pw.TextStyle(fontSize: 8, color: PdfColors.blue800),
+              ),
+            ),
           _signatureSection(
             clientSignature: _tryDecodeBase64(report.clientSignatureBase64),
             technicianSignature:
@@ -132,6 +219,9 @@ class WarrantyInterventionReportPdfService {
         ],
       ),
     );
+    for (final page in annexPages) {
+      doc.addPage(page);
+    }
     return doc.save();
   }
 
@@ -139,14 +229,34 @@ class WarrantyInterventionReportPdfService {
     required AppDataRepository repository,
     required CompanyProfile company,
     required WarrantyInterventionReportRecord report,
+    required ComplaintRecord complaint,
+    Appointment? appointment,
     WarrantyCertificateRecord? certificate,
+    String resolvedBeneficiaryName = '',
+    String resolvedContractorName = '',
+    String resolvedTechnicianName = '',
+    String resolvedTeamName = '',
+    String resolvedAgfrEquipmentLabel = '',
+    String resolvedAgfrInterventionLabel = '',
+    String resolvedAgfrReportLabel = '',
+    String resolvedOfferLabel = '',
     String outputDirectory = '',
     bool saveAs = false,
   }) async {
     final bytes = await buildPdfBytes(
       company: company,
       report: report,
+      complaint: complaint,
+      appointment: appointment,
       certificate: certificate,
+      resolvedBeneficiaryName: resolvedBeneficiaryName,
+      resolvedContractorName: resolvedContractorName,
+      resolvedTechnicianName: resolvedTechnicianName,
+      resolvedTeamName: resolvedTeamName,
+      resolvedAgfrEquipmentLabel: resolvedAgfrEquipmentLabel,
+      resolvedAgfrInterventionLabel: resolvedAgfrInterventionLabel,
+      resolvedAgfrReportLabel: resolvedAgfrReportLabel,
+      resolvedOfferLabel: resolvedOfferLabel,
     );
     return PdfSaveService.savePdf(
       repository: repository,
@@ -164,6 +274,47 @@ class WarrantyInterventionReportPdfService {
         : report.documentNumber.trim();
     final safe = number.replaceAll(RegExp(r'[^A-Za-z0-9_\\-]+'), '_');
     return 'pv_garantie_$safe.pdf';
+  }
+
+  static List<pw.Widget> _buildInfoRows(List<List<String>> rows) {
+    return rows
+        .where((entry) => entry.length >= 2 && entry[1].trim().isNotEmpty)
+        .map((entry) => _row(entry[0], entry[1]))
+        .toList(growable: false);
+  }
+
+  static List<pw.Widget> _buildParagraphs(List<List<String>> rows) {
+    return rows
+        .where((entry) => entry.length >= 2 && entry[1].trim().isNotEmpty)
+        .map((entry) => _paragraph(entry[0], entry[1]))
+        .toList(growable: false);
+  }
+
+  static String _pickPreferred(String first, [String second = '', String third = '', String fourth = '']) {
+    for (final value in <String>[first, second, third, fourth]) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty && trimmed != '-') {
+        return trimmed;
+      }
+    }
+    return '';
+  }
+
+  static String _pickReadable({
+    required String currentValue,
+    required String preferredValue,
+    required Iterable<String> rawValues,
+  }) {
+    final current = currentValue.trim();
+    final preferred = preferredValue.trim();
+    final raw = rawValues
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toSet();
+    if (current.isEmpty || raw.contains(current)) {
+      return preferred;
+    }
+    return current;
   }
 
   static pw.Widget _section(
@@ -317,12 +468,6 @@ class WarrantyInterventionReportPdfService {
     }
   }
 
-  static bool _hasAgfr(WarrantyInterventionReportRecord report) {
-    return report.agfrEquipmentId.trim().isNotEmpty ||
-        report.agfrInterventionId.trim().isNotEmpty ||
-        report.agfrReportId.trim().isNotEmpty;
-  }
-
   static pw.MemoryImage? _tryDecodeBase64(String value) {
     if (value.trim().isEmpty) {
       return null;
@@ -338,5 +483,138 @@ class WarrantyInterventionReportPdfService {
         return null;
       }
     }
+  }
+
+  static Future<List<pw.Page>> _buildPhotoAnnexPages(
+    WarrantyInterventionReportRecord report,
+    PdfFontBundle pdfFonts,
+  ) async {
+    final images = <pw.MemoryImage>[];
+    final captions = <String>[];
+
+    for (int i = 0; i < report.photoBase64List.length; i++) {
+      final b64 = report.photoBase64List[i];
+      if (b64.isEmpty) continue;
+      try {
+        final bytes = Uint8List.fromList(const Base64Decoder().convert(b64));
+        images.add(pw.MemoryImage(bytes));
+        captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
+      } catch (_) {}
+    }
+
+    if (images.isEmpty) {
+      for (int i = 0; i < report.photoUrls.length; i++) {
+        final url = report.photoUrls[i];
+        if (url.isEmpty || !url.startsWith('https://')) continue;
+        try {
+          final response = await http.get(Uri.parse(url))
+              .timeout(const Duration(seconds: 10));
+          if (response.statusCode == 200) {
+            images.add(pw.MemoryImage(response.bodyBytes));
+            captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (images.isEmpty) return [];
+
+    const photosPerPage = 2;
+    final pages = <pw.Page>[];
+    final docNum = report.documentNumber.isEmpty ? report.id : report.documentNumber;
+
+    for (int pageIdx = 0; pageIdx * photosPerPage < images.length; pageIdx++) {
+      final startIdx = pageIdx * photosPerPage;
+      final endIdx = (startIdx + photosPerPage).clamp(0, images.length);
+      final pageImages = images.sublist(startIdx, endIdx);
+      final pageCaptions = captions.sublist(startIdx, endIdx);
+      final totalPhotos = images.length;
+
+      pages.add(pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(15 * PdfPageFormat.mm),
+        build: (context) => pw.Column(
+          children: [
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.red800,
+                borderRadius: pw.BorderRadius.circular(4),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    'ANEXĂ FOTOGRAFII — $docNum',
+                    style: pw.TextStyle(color: PdfColors.white, fontWeight: pw.FontWeight.bold, fontSize: 10, font: pdfFonts.bold),
+                  ),
+                  pw.Text(
+                    'Foto ${startIdx + 1}-$endIdx din $totalPhotos',
+                    style: pw.TextStyle(color: PdfColors.white, fontSize: 8, font: pdfFonts.base),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 10),
+            pw.Expanded(
+              child: pw.Column(
+                children: List.generate(pageImages.length, (imgIdx) {
+                  return pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Expanded(
+                          child: pw.Container(
+                            width: double.infinity,
+                            decoration: pw.BoxDecoration(
+                              border: pw.Border.all(color: PdfColors.grey300),
+                              borderRadius: pw.BorderRadius.circular(4),
+                            ),
+                            child: pw.ClipRRect(
+                              horizontalRadius: 4,
+                              verticalRadius: 4,
+                              child: pw.Image(pageImages[imgIdx], fit: pw.BoxFit.contain),
+                            ),
+                          ),
+                        ),
+                        pw.SizedBox(height: 4),
+                        pw.Row(
+                          children: [
+                            pw.Text('Foto ${startIdx + imgIdx + 1}', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8, font: pdfFonts.bold)),
+                            if (pageCaptions[imgIdx].isNotEmpty) ...[
+                              pw.Text(' — ', style: pw.TextStyle(fontSize: 8, font: pdfFonts.base)),
+                              pw.Text(pageCaptions[imgIdx], style: pw.TextStyle(fontSize: 8, font: pdfFonts.base)),
+                            ],
+                          ],
+                        ),
+                        if (imgIdx < pageImages.length - 1) pw.SizedBox(height: 8),
+                      ],
+                    ),
+                  );
+                }),
+              ),
+            ),
+            pw.Divider(),
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  'Anexă la: $docNum — ${report.clientName}',
+                  style: pw.TextStyle(fontSize: 7, color: PdfColors.grey600, font: pdfFonts.base),
+                ),
+                if (report.documentDate != null)
+                  pw.Text(
+                    'Data: ${report.documentDate!.day.toString().padLeft(2,'0')}.${report.documentDate!.month.toString().padLeft(2,'0')}.${report.documentDate!.year}',
+                    style: pw.TextStyle(fontSize: 7, color: PdfColors.grey600, font: pdfFonts.base),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ));
+    }
+
+    return pages;
   }
 }

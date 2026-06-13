@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/repositories/app_data_repository.dart';
@@ -45,6 +46,8 @@ class _FieldPhotosPageState extends State<FieldPhotosPage> {
   List<FieldPhotoRecord> _photos = const <FieldPhotoRecord>[];
   // Info debug — câte înregistrări există în cache local pt. această entitate
   int _localCacheCount = 0;
+  // Ultima eroare de upload — null dacă nu e eroare activă
+  String? _lastUploadError;
 
   @override
   void initState() {
@@ -126,27 +129,49 @@ class _FieldPhotosPageState extends State<FieldPhotosPage> {
 
       if (result.uploadError != null) {
         // Poza e salvată local dar NU în cloud — avertizăm utilizatorul
+        final errStr = result.uploadError!;
+        final isUnauth = errStr.contains('unauthorized') ||
+            errStr.contains('PERMISSION_DENIED');
+        setState(() => _lastUploadError = errStr);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text(
-              'Poza salvată local, dar NU s-a încărcat în cloud. '
-              'Apasă ⬆ lângă poză pentru a reîncerca.',
+            content: Text(
+              isUnauth
+                  ? 'Poza salvată local. Fără permisiune cloud — actualizează regulile Firebase Storage.'
+                  : 'Poza salvată local, dar NU s-a încărcat în cloud. Apasă ⬆ lângă poză pentru a reîncerca.',
             ),
-            backgroundColor: Colors.orange.shade700,
+            backgroundColor:
+                isUnauth ? Colors.red.shade700 : Colors.orange.shade700,
             duration: const Duration(seconds: 6),
           ),
         );
       } else {
+        setState(() => _lastUploadError = null);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Poza de teren a fost salvată și încărcată în cloud.')),
+          const SnackBar(
+              content: Text('Poza de teren a fost salvată și încărcată în cloud.')),
         );
       }
     } catch (error) {
       if (!mounted) return;
+      final errStr = error.toString();
+      final isUnauth =
+          errStr.contains('unauthorized') || errStr.contains('PERMISSION_DENIED');
+      setState(() {
+        _lastUploadError = errStr;
+        _saving = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Nu am putut salva poza: $error')),
+        SnackBar(
+          content: Text(
+            isUnauth
+                ? 'Nu ai permisiunea să încarci fișiere. Actualizează regulile Firebase Storage.'
+                : 'Nu am putut salva poza: $error',
+          ),
+          backgroundColor: isUnauth ? Colors.red.shade700 : null,
+          duration: const Duration(seconds: 5),
+        ),
       );
-      setState(() => _saving = false);
       return;
     }
     if (mounted) {
@@ -162,6 +187,7 @@ class _FieldPhotosPageState extends State<FieldPhotosPage> {
       await widget.repository.saveFieldPhoto(updated);
       await _load();
       if (!mounted) return;
+      setState(() => _lastUploadError = null);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Poza a fost încărcată în cloud cu succes.'),
@@ -170,9 +196,17 @@ class _FieldPhotosPageState extends State<FieldPhotosPage> {
       );
     } catch (e) {
       if (!mounted) return;
+      final errStr = e.toString();
+      final isUnauth =
+          errStr.contains('unauthorized') || errStr.contains('PERMISSION_DENIED');
+      setState(() => _lastUploadError = errStr);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Eroare la re-încărcare: $e'),
+          content: Text(
+            isUnauth
+                ? 'Nu ai permisiunea să încarci fișiere. Actualizează regulile Firebase Storage.'
+                : 'Eroare la re-încărcare: $e',
+          ),
           backgroundColor: Colors.red.shade700,
           duration: const Duration(seconds: 6),
         ),
@@ -307,6 +341,42 @@ class _FieldPhotosPageState extends State<FieldPhotosPage> {
         _load();
       }
     });
+  }
+
+  Widget _buildUnauthorizedCard() {
+    return Card(
+      color: Colors.orange.shade50,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              Icon(Icons.lock_outlined, color: Colors.orange.shade700),
+              const SizedBox(width: 8),
+              const Text(
+                'Acțiune necesară — Firebase Storage',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            const Text(
+              'Pozele sunt salvate local pe dispozitiv. '
+              'Pentru sincronizare cloud, actualizează regulile '
+              'Firebase Storage din consolă (Storage → Rules).',
+            ),
+            const SizedBox(height: 4),
+            TextButton.icon(
+              onPressed: () =>
+                  launchUrl(Uri.parse('https://console.firebase.google.com')),
+              icon: const Icon(Icons.open_in_new, size: 16),
+              label: const Text('Deschide Firebase Console →'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildEmptyState() {
@@ -616,6 +686,12 @@ class _FieldPhotosPageState extends State<FieldPhotosPage> {
                     ],
                   ),
                   const SizedBox(height: 16),
+                  if (_lastUploadError != null &&
+                      (_lastUploadError!.contains('unauthorized') ||
+                          _lastUploadError!.contains('PERMISSION_DENIED'))) ...[
+                    _buildUnauthorizedCard(),
+                    const SizedBox(height: 12),
+                  ],
                   if (_photos.isEmpty)
                     _buildEmptyState()
                   else

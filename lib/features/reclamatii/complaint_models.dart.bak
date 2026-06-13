@@ -1,0 +1,881 @@
+import '../product_catalog/product_sales_models.dart';
+
+enum ComplaintInterventionOutcome {
+  rezolvata,
+  necesitaRevenire,
+  necesitaPiese,
+  monitorizare,
+  clientIndisponibil,
+  faraDefectConstatat;
+
+  String get value {
+    switch (this) {
+      case ComplaintInterventionOutcome.rezolvata:
+        return 'rezolvata';
+      case ComplaintInterventionOutcome.necesitaRevenire:
+        return 'necesita_revenire';
+      case ComplaintInterventionOutcome.necesitaPiese:
+        return 'necesita_piese';
+      case ComplaintInterventionOutcome.monitorizare:
+        return 'monitorizare';
+      case ComplaintInterventionOutcome.clientIndisponibil:
+        return 'client_indisponibil';
+      case ComplaintInterventionOutcome.faraDefectConstatat:
+        return 'fara_defect_constatat';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case ComplaintInterventionOutcome.rezolvata:
+        return 'Rezolvata';
+      case ComplaintInterventionOutcome.necesitaRevenire:
+        return 'Necesita revenire';
+      case ComplaintInterventionOutcome.necesitaPiese:
+        return 'Necesita piese';
+      case ComplaintInterventionOutcome.monitorizare:
+        return 'Monitorizare';
+      case ComplaintInterventionOutcome.clientIndisponibil:
+        return 'Client indisponibil';
+      case ComplaintInterventionOutcome.faraDefectConstatat:
+        return 'Fara defect constatat';
+    }
+  }
+
+  static ComplaintInterventionOutcome? fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    for (final item in ComplaintInterventionOutcome.values) {
+      if (item.value == value) {
+        return item;
+      }
+    }
+    return null;
+  }
+}
+
+class ComplaintInterventionEntry {
+  const ComplaintInterventionEntry({
+    required this.id,
+    this.interventionDate,
+    this.teamId = '',
+    this.technicianId = '',
+    this.finding = '',
+    this.workPerformed = '',
+    this.materialsUsed = '',
+    this.partsChanged = '',
+    this.technicianNotes = '',
+    this.outcome,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  final String id;
+  final DateTime? interventionDate;
+  final String teamId;
+  final String technicianId;
+  final String finding;
+  final String workPerformed;
+  final String materialsUsed;
+  final String partsChanged;
+  final String technicianNotes;
+  final ComplaintInterventionOutcome? outcome;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  ComplaintInterventionEntry copyWith({
+    String? id,
+    DateTime? interventionDate,
+    String? teamId,
+    String? technicianId,
+    String? finding,
+    String? workPerformed,
+    String? materialsUsed,
+    String? partsChanged,
+    String? technicianNotes,
+    ComplaintInterventionOutcome? outcome,
+    bool clearOutcome = false,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) {
+    return ComplaintInterventionEntry(
+      id: id ?? this.id,
+      interventionDate: interventionDate ?? this.interventionDate,
+      teamId: teamId ?? this.teamId,
+      technicianId: technicianId ?? this.technicianId,
+      finding: finding ?? this.finding,
+      workPerformed: workPerformed ?? this.workPerformed,
+      materialsUsed: materialsUsed ?? this.materialsUsed,
+      partsChanged: partsChanged ?? this.partsChanged,
+      technicianNotes: technicianNotes ?? this.technicianNotes,
+      outcome: clearOutcome ? null : (outcome ?? this.outcome),
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'intervention_date': interventionDate?.toIso8601String(),
+      'team_id': teamId,
+      'technician_id': technicianId,
+      'finding': finding,
+      'work_performed': workPerformed,
+      'materials_used': materialsUsed,
+      'parts_changed': partsChanged,
+      'technician_notes': technicianNotes,
+      'outcome': outcome?.value ?? '',
+      'created_at': createdAt?.toIso8601String(),
+      'updated_at': updatedAt?.toIso8601String(),
+    };
+  }
+
+  factory ComplaintInterventionEntry.fromMap(Map<String, dynamic> map) {
+    return ComplaintInterventionEntry(
+      id: (map['id'] ?? '').toString().trim(),
+      interventionDate: DateTime.tryParse(
+        (map['intervention_date'] ?? map['interventionDate'] ?? '').toString(),
+      ),
+      teamId: (map['team_id'] ?? map['teamId'] ?? '').toString().trim(),
+      technicianId:
+          (map['technician_id'] ?? map['technicianId'] ?? '').toString().trim(),
+      finding: (map['finding'] ?? '').toString().trim(),
+      workPerformed: (map['work_performed'] ?? map['workPerformed'] ?? '')
+          .toString()
+          .trim(),
+      materialsUsed: (map['materials_used'] ?? map['materialsUsed'] ?? '')
+          .toString()
+          .trim(),
+      partsChanged:
+          (map['parts_changed'] ?? map['partsChanged'] ?? '').toString().trim(),
+      technicianNotes: (map['technician_notes'] ?? map['technicianNotes'] ?? '')
+          .toString()
+          .trim(),
+      outcome: ComplaintInterventionOutcome.fromValue(
+        (map['outcome'] ?? '').toString(),
+      ),
+      createdAt: DateTime.tryParse(
+        (map['created_at'] ?? map['createdAt'] ?? '').toString(),
+      ),
+      updatedAt: DateTime.tryParse(
+        (map['updated_at'] ?? map['updatedAt'] ?? '').toString(),
+      ),
+    );
+  }
+}
+
+class ComplaintLinkedDocument {
+  const ComplaintLinkedDocument({
+    required this.label,
+    required this.filePath,
+    this.fileName = '',
+  });
+
+  final String label;
+  final String filePath;
+  final String fileName;
+
+  ComplaintLinkedDocument copyWith({
+    String? label,
+    String? filePath,
+    String? fileName,
+  }) {
+    return ComplaintLinkedDocument(
+      label: label ?? this.label,
+      filePath: filePath ?? this.filePath,
+      fileName: fileName ?? this.fileName,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'label': label,
+      'file_path': filePath,
+      'file_name': fileName,
+    };
+  }
+
+  factory ComplaintLinkedDocument.fromMap(Map<String, dynamic> map) {
+    return ComplaintLinkedDocument(
+      label: (map['label'] ?? '').toString().trim(),
+      filePath: (map['file_path'] ?? map['filePath'] ?? '').toString().trim(),
+      fileName: (map['file_name'] ?? map['fileName'] ?? '').toString().trim(),
+    );
+  }
+}
+
+enum ComplaintStatus {
+  noua,
+  analizata,
+  programata,
+  inLucru,
+  inAsteptare,
+  rezolvata,
+  inchisa,
+  anulata;
+
+  String get value {
+    switch (this) {
+      case ComplaintStatus.noua:
+        return 'noua';
+      case ComplaintStatus.analizata:
+        return 'analizata';
+      case ComplaintStatus.programata:
+        return 'programata';
+      case ComplaintStatus.inLucru:
+        return 'in_lucru';
+      case ComplaintStatus.inAsteptare:
+        return 'in_asteptare';
+      case ComplaintStatus.rezolvata:
+        return 'rezolvata';
+      case ComplaintStatus.inchisa:
+        return 'inchisa';
+      case ComplaintStatus.anulata:
+        return 'anulata';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case ComplaintStatus.noua:
+        return 'Noua';
+      case ComplaintStatus.analizata:
+        return 'Analizata';
+      case ComplaintStatus.programata:
+        return 'Programata';
+      case ComplaintStatus.inLucru:
+        return 'In lucru';
+      case ComplaintStatus.inAsteptare:
+        return 'In asteptare';
+      case ComplaintStatus.rezolvata:
+        return 'Rezolvata';
+      case ComplaintStatus.inchisa:
+        return 'Inchisa';
+      case ComplaintStatus.anulata:
+        return 'Anulata';
+    }
+  }
+
+  static ComplaintStatus fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    switch (value) {
+      case 'in_analiza':
+        return ComplaintStatus.analizata;
+      case 'alocata':
+        return ComplaintStatus.programata;
+    }
+    return ComplaintStatus.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => ComplaintStatus.noua,
+    );
+  }
+}
+
+enum ComplaintType {
+  garantie,
+  postgarantie,
+  revizie,
+  mentenanta,
+  alta;
+
+  String get value {
+    switch (this) {
+      case ComplaintType.garantie:
+        return 'garantie';
+      case ComplaintType.postgarantie:
+        return 'postgarantie';
+      case ComplaintType.revizie:
+        return 'revizie';
+      case ComplaintType.mentenanta:
+        return 'mentenanta';
+      case ComplaintType.alta:
+        return 'alta';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case ComplaintType.garantie:
+        return 'Garantie';
+      case ComplaintType.postgarantie:
+        return 'Postgarantie';
+      case ComplaintType.revizie:
+        return 'Revizie';
+      case ComplaintType.mentenanta:
+        return 'Mentenanta';
+      case ComplaintType.alta:
+        return 'Alta';
+    }
+  }
+
+  static ComplaintType fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return ComplaintType.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => ComplaintType.alta,
+    );
+  }
+}
+
+enum ComplaintSource {
+  directa,
+  partener;
+
+  String get value {
+    switch (this) {
+      case ComplaintSource.directa:
+        return 'directa';
+      case ComplaintSource.partener:
+        return 'partener';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case ComplaintSource.directa:
+        return 'Directa';
+      case ComplaintSource.partener:
+        return 'Partener / colaborator';
+    }
+  }
+
+  static ComplaintSource fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    return ComplaintSource.values.firstWhere(
+      (item) => item.value == value,
+      orElse: () => ComplaintSource.directa,
+    );
+  }
+}
+
+enum ComplaintEquipmentType {
+  aerConditionat,
+  pompaDeCaldura,
+  centralaTermica,
+  sistemVrv,
+  altul;
+
+  String get value {
+    switch (this) {
+      case ComplaintEquipmentType.aerConditionat:
+        return 'aer_conditionat';
+      case ComplaintEquipmentType.pompaDeCaldura:
+        return 'pompa_de_caldura';
+      case ComplaintEquipmentType.centralaTermica:
+        return 'centrala_termica';
+      case ComplaintEquipmentType.sistemVrv:
+        return 'sistem_vrv';
+      case ComplaintEquipmentType.altul:
+        return 'altul';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case ComplaintEquipmentType.aerConditionat:
+        return 'Aer conditionat';
+      case ComplaintEquipmentType.pompaDeCaldura:
+        return 'Pompa de caldura';
+      case ComplaintEquipmentType.centralaTermica:
+        return 'Centrala termica';
+      case ComplaintEquipmentType.sistemVrv:
+        return 'Sistem VRV';
+      case ComplaintEquipmentType.altul:
+        return 'Altul';
+    }
+  }
+
+  static ComplaintEquipmentType? fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    for (final item in ComplaintEquipmentType.values) {
+      if (item.value == value) {
+        return item;
+      }
+    }
+    return null;
+  }
+}
+
+class ComplaintRecord {
+  const ComplaintRecord({
+    required this.id,
+    required this.complaintNumber,
+    required this.complaintDate,
+    required this.status,
+    required this.type,
+    required this.source,
+    required this.beneficiaryName,
+    required this.contractorName,
+    required this.contactPerson,
+    required this.phone,
+    required this.email,
+    required this.location,
+    required this.assignedTeamId,
+    required this.assignedEmployeeId,
+    required this.problemDescription,
+    required this.internalNotes,
+    required this.createdAt,
+    required this.updatedAt,
+    this.beneficiaryClientId = '',
+    this.contractorClientId = '',
+    this.jobId = '',
+    this.appointmentId = '',
+    this.appointmentIds = const <String>[],
+    this.offerId = '',
+    this.warrantyCertificateId = '',
+    this.warrantyCoverageStatus = WarrantyCoverageStatus.unknown,
+    this.agfrEquipmentId = '',
+    this.agfrInterventionId = '',
+    this.agfrReportId = '',
+    this.equipmentType,
+    this.equipmentBrand = '',
+    this.equipmentModel = '',
+    this.outdoorUnitSerial = '',
+    this.indoorUnitSerials = '',
+    this.equipmentDetails = '',
+    this.fieldFinding = '',
+    this.fieldWorkPerformed = '',
+    this.fieldMaterialsUsed = '',
+    this.fieldPartsChanged = '',
+    this.fieldTechnicianNotes = '',
+    this.fieldInterventionOutcome,
+    this.fieldInterventionDate,
+    this.fieldTeamId = '',
+    this.fieldTechnicianId = '',
+    this.interventionHistory = const <ComplaintInterventionEntry>[],
+    this.linkedDocuments = const <ComplaintLinkedDocument>[],
+    this.pvCount = 0,
+    this.lastInterventionDate,
+    this.lastPvNumber = '',
+    this.totalInterventions = 0,
+  });
+
+  final String id;
+  final String complaintNumber;
+  final DateTime complaintDate;
+  final ComplaintStatus status;
+  final ComplaintType type;
+  final ComplaintSource source;
+  final String beneficiaryClientId;
+  final String beneficiaryName;
+  final String contractorClientId;
+  final String contractorName;
+  final String contactPerson;
+  final String phone;
+  final String email;
+  final String location;
+  final String assignedTeamId;
+  final String assignedEmployeeId;
+  final String problemDescription;
+  final String internalNotes;
+  final String jobId;
+  final String appointmentId;
+  final List<String> appointmentIds;
+  final String offerId;
+  final String warrantyCertificateId;
+  final WarrantyCoverageStatus warrantyCoverageStatus;
+  final String agfrEquipmentId;
+  final String agfrInterventionId;
+  final String agfrReportId;
+  final ComplaintEquipmentType? equipmentType;
+  final String equipmentBrand;
+  final String equipmentModel;
+  final String outdoorUnitSerial;
+  final String indoorUnitSerials;
+  final String equipmentDetails;
+  final String fieldFinding;
+  final String fieldWorkPerformed;
+  final String fieldMaterialsUsed;
+  final String fieldPartsChanged;
+  final String fieldTechnicianNotes;
+  final ComplaintInterventionOutcome? fieldInterventionOutcome;
+  final DateTime? fieldInterventionDate;
+  final String fieldTeamId;
+  final String fieldTechnicianId;
+  final List<ComplaintInterventionEntry> interventionHistory;
+  final List<ComplaintLinkedDocument> linkedDocuments;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final int pvCount;
+  final DateTime? lastInterventionDate;
+  final String lastPvNumber;
+  final int totalInterventions;
+
+  bool get hasPartner =>
+      contractorClientId.trim().isNotEmpty || contractorName.trim().isNotEmpty;
+
+  ComplaintRecord copyWith({
+    String? id,
+    String? complaintNumber,
+    DateTime? complaintDate,
+    ComplaintStatus? status,
+    ComplaintType? type,
+    ComplaintSource? source,
+    String? beneficiaryClientId,
+    String? beneficiaryName,
+    String? contractorClientId,
+    String? contractorName,
+    String? contactPerson,
+    String? phone,
+    String? email,
+    String? location,
+    String? assignedTeamId,
+    String? assignedEmployeeId,
+    String? problemDescription,
+    String? internalNotes,
+    String? jobId,
+    String? appointmentId,
+    List<String>? appointmentIds,
+    String? offerId,
+    String? warrantyCertificateId,
+    WarrantyCoverageStatus? warrantyCoverageStatus,
+    String? agfrEquipmentId,
+    String? agfrInterventionId,
+    String? agfrReportId,
+    ComplaintEquipmentType? equipmentType,
+    bool clearEquipmentType = false,
+    String? equipmentBrand,
+    String? equipmentModel,
+    String? outdoorUnitSerial,
+    String? indoorUnitSerials,
+    String? equipmentDetails,
+    String? fieldFinding,
+    String? fieldWorkPerformed,
+    String? fieldMaterialsUsed,
+    String? fieldPartsChanged,
+    String? fieldTechnicianNotes,
+    ComplaintInterventionOutcome? fieldInterventionOutcome,
+    bool clearFieldInterventionOutcome = false,
+    DateTime? fieldInterventionDate,
+    String? fieldTeamId,
+    String? fieldTechnicianId,
+    List<ComplaintInterventionEntry>? interventionHistory,
+    List<ComplaintLinkedDocument>? linkedDocuments,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    int? pvCount,
+    DateTime? lastInterventionDate,
+    bool clearLastInterventionDate = false,
+    String? lastPvNumber,
+    int? totalInterventions,
+  }) {
+    return ComplaintRecord(
+      id: id ?? this.id,
+      complaintNumber: complaintNumber ?? this.complaintNumber,
+      complaintDate: complaintDate ?? this.complaintDate,
+      status: status ?? this.status,
+      type: type ?? this.type,
+      source: source ?? this.source,
+      beneficiaryClientId: beneficiaryClientId ?? this.beneficiaryClientId,
+      beneficiaryName: beneficiaryName ?? this.beneficiaryName,
+      contractorClientId: contractorClientId ?? this.contractorClientId,
+      contractorName: contractorName ?? this.contractorName,
+      contactPerson: contactPerson ?? this.contactPerson,
+      phone: phone ?? this.phone,
+      email: email ?? this.email,
+      location: location ?? this.location,
+      assignedTeamId: assignedTeamId ?? this.assignedTeamId,
+      assignedEmployeeId: assignedEmployeeId ?? this.assignedEmployeeId,
+      problemDescription: problemDescription ?? this.problemDescription,
+      internalNotes: internalNotes ?? this.internalNotes,
+      jobId: jobId ?? this.jobId,
+      appointmentId: appointmentId ?? this.appointmentId,
+      appointmentIds: appointmentIds ?? this.appointmentIds,
+      offerId: offerId ?? this.offerId,
+      warrantyCertificateId:
+          warrantyCertificateId ?? this.warrantyCertificateId,
+      warrantyCoverageStatus:
+          warrantyCoverageStatus ?? this.warrantyCoverageStatus,
+      agfrEquipmentId: agfrEquipmentId ?? this.agfrEquipmentId,
+      agfrInterventionId: agfrInterventionId ?? this.agfrInterventionId,
+      agfrReportId: agfrReportId ?? this.agfrReportId,
+      equipmentType:
+          clearEquipmentType ? null : (equipmentType ?? this.equipmentType),
+      equipmentBrand: equipmentBrand ?? this.equipmentBrand,
+      equipmentModel: equipmentModel ?? this.equipmentModel,
+      outdoorUnitSerial: outdoorUnitSerial ?? this.outdoorUnitSerial,
+      indoorUnitSerials: indoorUnitSerials ?? this.indoorUnitSerials,
+      equipmentDetails: equipmentDetails ?? this.equipmentDetails,
+      fieldFinding: fieldFinding ?? this.fieldFinding,
+      fieldWorkPerformed: fieldWorkPerformed ?? this.fieldWorkPerformed,
+      fieldMaterialsUsed: fieldMaterialsUsed ?? this.fieldMaterialsUsed,
+      fieldPartsChanged: fieldPartsChanged ?? this.fieldPartsChanged,
+      fieldTechnicianNotes: fieldTechnicianNotes ?? this.fieldTechnicianNotes,
+      fieldInterventionOutcome: clearFieldInterventionOutcome
+          ? null
+          : (fieldInterventionOutcome ?? this.fieldInterventionOutcome),
+      fieldInterventionDate:
+          fieldInterventionDate ?? this.fieldInterventionDate,
+      fieldTeamId: fieldTeamId ?? this.fieldTeamId,
+      fieldTechnicianId: fieldTechnicianId ?? this.fieldTechnicianId,
+      interventionHistory: interventionHistory ?? this.interventionHistory,
+      linkedDocuments: linkedDocuments ?? this.linkedDocuments,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      pvCount: pvCount ?? this.pvCount,
+      lastInterventionDate: clearLastInterventionDate
+          ? null
+          : (lastInterventionDate ?? this.lastInterventionDate),
+      lastPvNumber: lastPvNumber ?? this.lastPvNumber,
+      totalInterventions: totalInterventions ?? this.totalInterventions,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'id': id,
+      'complaint_number': complaintNumber,
+      'complaint_date': complaintDate.toIso8601String(),
+      'status': status.value,
+      'type': type.value,
+      'source': source.value,
+      'beneficiary_client_id': beneficiaryClientId,
+      'beneficiary_name': beneficiaryName,
+      'contractor_client_id': contractorClientId,
+      'contractor_name': contractorName,
+      'contact_person': contactPerson,
+      'phone': phone,
+      'email': email,
+      'location': location,
+      'assigned_team_id': assignedTeamId,
+      'assigned_employee_id': assignedEmployeeId,
+      'problem_description': problemDescription,
+      'internal_notes': internalNotes,
+      'job_id': jobId,
+      'appointment_id': appointmentId,
+      'appointment_ids': appointmentIds,
+      'offer_id': offerId,
+      'warranty_certificate_id': warrantyCertificateId,
+      'warranty_coverage_status': warrantyCoverageStatus.value,
+      'agfr_equipment_id': agfrEquipmentId,
+      'agfr_intervention_id': agfrInterventionId,
+      'agfr_report_id': agfrReportId,
+      'equipment_type': equipmentType?.value ?? '',
+      'equipment_brand': equipmentBrand,
+      'equipment_model': equipmentModel,
+      'outdoor_unit_serial': outdoorUnitSerial,
+      'indoor_unit_serials': indoorUnitSerials,
+      'equipment_details': equipmentDetails,
+      'field_finding': fieldFinding,
+      'field_work_performed': fieldWorkPerformed,
+      'field_materials_used': fieldMaterialsUsed,
+      'field_parts_changed': fieldPartsChanged,
+      'field_technician_notes': fieldTechnicianNotes,
+      'field_intervention_outcome': fieldInterventionOutcome?.value ?? '',
+      'field_intervention_date': fieldInterventionDate?.toIso8601String(),
+      'field_team_id': fieldTeamId,
+      'field_technician_id': fieldTechnicianId,
+      'intervention_history':
+          interventionHistory.map((item) => item.toMap()).toList(),
+      'linked_documents': linkedDocuments.map((item) => item.toMap()).toList(),
+      'created_at': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
+      'pv_count': pvCount,
+      'last_intervention_date': lastInterventionDate?.toIso8601String(),
+      'last_pv_number': lastPvNumber,
+      'total_interventions': totalInterventions,
+    };
+  }
+
+  factory ComplaintRecord.fromMap(Map<String, dynamic> map) {
+    String pick(List<String> keys) {
+      for (final key in keys) {
+        final value = (map[key] ?? '').toString().trim();
+        if (value.isNotEmpty) {
+          return value;
+        }
+      }
+      return '';
+    }
+
+    DateTime parseDate(String key, DateTime fallback) {
+      return DateTime.tryParse((map[key] ?? '').toString()) ?? fallback;
+    }
+
+    List<String> parseStringList(List<String> keys) {
+      for (final key in keys) {
+        final raw = map[key];
+        if (raw is List) {
+          return raw
+              .map((item) => item.toString().trim())
+              .where((item) => item.isNotEmpty)
+              .toList(growable: false);
+        }
+      }
+      return const <String>[];
+    }
+
+    List<ComplaintInterventionEntry> parseInterventionHistory(
+      List<String> keys,
+    ) {
+      for (final key in keys) {
+        final raw = map[key];
+        if (raw is List) {
+          return raw
+              .whereType<Map>()
+              .map(
+                (item) => ComplaintInterventionEntry.fromMap(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList(growable: false);
+        }
+      }
+      return const <ComplaintInterventionEntry>[];
+    }
+
+    List<ComplaintLinkedDocument> parseLinkedDocuments(List<String> keys) {
+      for (final key in keys) {
+        final raw = map[key];
+        if (raw is List) {
+          return raw
+              .whereType<Map>()
+              .map(
+                (item) => ComplaintLinkedDocument.fromMap(
+                  Map<String, dynamic>.from(item),
+                ),
+              )
+              .toList(growable: false);
+        }
+      }
+      return const <ComplaintLinkedDocument>[];
+    }
+
+    final now = DateTime.now();
+    final appointmentId =
+        pick(const <String>['appointment_id', 'appointmentId']);
+    final appointmentIds = parseStringList(
+      const <String>['appointment_ids', 'appointmentIds'],
+    );
+    return ComplaintRecord(
+      id: pick(const <String>['id']),
+      complaintNumber: pick(
+        const <String>['complaint_number', 'complaintNumber', 'number'],
+      ),
+      complaintDate: parseDate('complaint_date', now),
+      status: ComplaintStatus.fromValue(pick(const <String>['status'])),
+      type: ComplaintType.fromValue(pick(const <String>['type'])),
+      source: ComplaintSource.fromValue(pick(const <String>['source'])),
+      beneficiaryClientId: pick(
+        const <String>['beneficiary_client_id', 'beneficiaryClientId'],
+      ),
+      beneficiaryName: pick(
+        const <String>['beneficiary_name', 'beneficiaryName'],
+      ),
+      contractorClientId: pick(
+        const <String>['contractor_client_id', 'contractorClientId'],
+      ),
+      contractorName: pick(
+        const <String>['contractor_name', 'contractorName'],
+      ),
+      contactPerson: pick(const <String>['contact_person', 'contactPerson']),
+      phone: pick(const <String>['phone', 'telefon']),
+      email: pick(const <String>['email']),
+      location: pick(const <String>['location', 'address', 'adresa']),
+      assignedTeamId: pick(
+        const <String>['assigned_team_id', 'assignedTeamId', 'team_id'],
+      ),
+      assignedEmployeeId: pick(
+        const <String>[
+          'assigned_employee_id',
+          'assignedEmployeeId',
+          'employee_id',
+        ],
+      ),
+      problemDescription: pick(
+        const <String>['problem_description', 'problemDescription', 'title'],
+      ),
+      internalNotes: pick(const <String>['internal_notes', 'internalNotes']),
+      jobId: pick(const <String>['job_id', 'jobId']),
+      appointmentId: appointmentId,
+      appointmentIds: <String>[
+        ...appointmentIds,
+        if (appointmentId.isNotEmpty && !appointmentIds.contains(appointmentId))
+          appointmentId,
+      ],
+      offerId: pick(const <String>['offer_id', 'offerId']),
+      warrantyCertificateId: pick(
+        const <String>['warranty_certificate_id', 'warrantyCertificateId'],
+      ),
+      warrantyCoverageStatus: WarrantyCoverageStatus.values.firstWhere(
+        (item) =>
+            item.value ==
+            pick(const <String>[
+              'warranty_coverage_status',
+              'warrantyCoverageStatus',
+            ]),
+        orElse: () => WarrantyCoverageStatus.unknown,
+      ),
+      agfrEquipmentId: pick(
+        const <String>['agfr_equipment_id', 'agfrEquipmentId'],
+      ),
+      agfrInterventionId: pick(
+        const <String>['agfr_intervention_id', 'agfrInterventionId'],
+      ),
+      agfrReportId: pick(
+        const <String>['agfr_report_id', 'agfrReportId'],
+      ),
+      equipmentType: ComplaintEquipmentType.fromValue(
+        pick(const <String>['equipment_type', 'equipmentType']),
+      ),
+      equipmentBrand: pick(const <String>['equipment_brand', 'equipmentBrand']),
+      equipmentModel: pick(const <String>['equipment_model', 'equipmentModel']),
+      outdoorUnitSerial: pick(
+        const <String>['outdoor_unit_serial', 'outdoorUnitSerial'],
+      ),
+      indoorUnitSerials: pick(
+        const <String>['indoor_unit_serials', 'indoorUnitSerials'],
+      ),
+      equipmentDetails: pick(
+        const <String>['equipment_details', 'equipmentDetails'],
+      ),
+      fieldFinding: pick(const <String>['field_finding', 'fieldFinding']),
+      fieldWorkPerformed: pick(
+        const <String>['field_work_performed', 'fieldWorkPerformed'],
+      ),
+      fieldMaterialsUsed: pick(
+        const <String>['field_materials_used', 'fieldMaterialsUsed'],
+      ),
+      fieldPartsChanged: pick(
+        const <String>['field_parts_changed', 'fieldPartsChanged'],
+      ),
+      fieldTechnicianNotes: pick(
+        const <String>['field_technician_notes', 'fieldTechnicianNotes'],
+      ),
+      fieldInterventionOutcome: ComplaintInterventionOutcome.fromValue(
+        pick(
+          const <String>[
+            'field_intervention_outcome',
+            'fieldInterventionOutcome',
+          ],
+        ),
+      ),
+      fieldInterventionDate: DateTime.tryParse(
+        pick(
+          const <String>[
+            'field_intervention_date',
+            'fieldInterventionDate',
+          ],
+        ),
+      ),
+      fieldTeamId: pick(const <String>['field_team_id', 'fieldTeamId']),
+      fieldTechnicianId: pick(
+        const <String>['field_technician_id', 'fieldTechnicianId'],
+      ),
+      interventionHistory: parseInterventionHistory(
+        const <String>['intervention_history', 'interventionHistory'],
+      ),
+      linkedDocuments: parseLinkedDocuments(
+        const <String>['linked_documents', 'linkedDocuments'],
+      ),
+      createdAt: parseDate('created_at', now),
+      updatedAt: parseDate('updated_at', now),
+      pvCount: (map['pv_count'] ?? map['pvCount'] ?? 0) as int,
+      lastInterventionDate: DateTime.tryParse(
+        (map['last_intervention_date'] ?? map['lastInterventionDate'] ?? '').toString(),
+      ),
+      lastPvNumber: (map['last_pv_number'] ?? map['lastPvNumber'] ?? '').toString().trim(),
+      totalInterventions: (map['total_interventions'] ?? map['totalInterventions'] ?? 0) as int,
+    );
+  }
+}

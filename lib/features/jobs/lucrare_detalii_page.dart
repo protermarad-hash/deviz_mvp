@@ -5,6 +5,7 @@ import 'package:archive/archive.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pdf/pdf.dart';
@@ -42,6 +43,8 @@ import '../partners/partner_models.dart';
 import 'firebase_lucrari_repository.dart';
 import 'firebase_job_site_documents_repository.dart';
 import 'job_models.dart';
+import 'deviz_lucrare_pdf_service.dart';
+import '../../core/integrations/smartbill_service.dart';
 import 'job_partner_models.dart';
 import 'job_site_document_models.dart';
 import 'job_site_document_services.dart';
@@ -52,6 +55,8 @@ import 'job_document_type_utils.dart';
 import 'lucrare_raport_complet_page.dart';
 import 'lucrari_cloud_repository.dart';
 import 'situatie_lucrari_pdf_service.dart';
+import 'contract_pdf_service.dart';
+import '../../core/pdf_actions_helper.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -453,15 +458,29 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     _partnerResourcesCtrl = TextEditingController(
         text: widget.job.partnerResources.toStringAsFixed(2));
     _refreshCloudRepository();
-    _loadData();
+    // Future.microtask evită blocarea primului frame (CLAUDE.md ANTI-PATTERN 2)
+    Future.microtask(_loadData);
+    // Reîncarcă din cloud când Firebase devine disponibil după startup
+    // (CLAUDE.md ANTI-PATTERN 4 — pagini care nu se reîncarcă după startup)
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
   }
 
   @override
   void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
     _profitTaxCtrl.dispose();
     _partnerProfitPercentCtrl.dispose();
     _partnerResourcesCtrl.dispose();
     super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    if (FirebaseBootstrap.isOnline &&
+        mounted &&
+        _appointments.isEmpty &&
+        !_isLoading) {
+      _loadData();
+    }
   }
 
   void _refreshCloudRepository() {
@@ -7611,10 +7630,165 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Future<void> _onGenerateContract() async {
-    await _createTemplateDocumentFromJob(
-      type: 'contract',
-      documentLabel: 'Contract',
-      titlePrefix: 'Contract',
+    final contractData = await _showContractDialog();
+    if (contractData == null) return;
+    if (!mounted) return;
+
+    try {
+      final path = await ContractPdfService.export(
+        repository: widget.repository,
+        data: contractData,
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Contract ${widget.job.jobCode}',
+        shareSubject: 'Contract de prestări servicii',
+        shareText: 'Contract PRO TERM SRL — ${widget.job.title}',
+      );
+    } catch (e) {
+      if (mounted) _snack('Eroare la generarea contractului: $e');
+    }
+  }
+
+  Future<ContractData?> _showContractDialog() async {
+    final now = DateTime.now();
+    final dateFmt = '${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')}.${now.year}';
+
+    final materialTotal = _materials.fold<double>(0, (s, i) => s + _materialLineTotal(i));
+    final laborTotal = _labor.fold<double>(0, (s, i) => s + _laborTotalLineCost(i));
+
+    final numberCtrl = TextEditingController();
+    final dateCtrl = TextEditingController(text: dateFmt);
+    final clientCtrl = TextEditingController(text: widget.clientName.trim());
+    final execTermCtrl = TextEditingController();
+    final payTermCtrl = TextEditingController(text: '30 zile de la emiterea facturii');
+    final advanceCtrl = TextEditingController(text: '-');
+    final installCtrl = TextEditingController(text: '-');
+    final obsCtrl = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Contract de prestări servicii'),
+        content: SizedBox(
+          width: 480,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _contractField(numberCtrl, 'Număr contract', 'ex: 001/2026'),
+                _contractField(dateCtrl, 'Data contractului', ''),
+                _contractField(clientCtrl, 'Beneficiar (client)', ''),
+                _contractField(execTermCtrl, 'Termen execuție', 'ex: 30 zile calendaristice'),
+                _contractField(payTermCtrl, 'Termen plată', ''),
+                _contractField(advanceCtrl, 'Avans', 'ex: 30% din valoarea contractului'),
+                _contractField(installCtrl, 'Tranșe de plată', 'ex: 30% avans + 70% la recepție'),
+                _contractField(obsCtrl, 'Observații suplimentare', '', maxLines: 3),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Valoare contract:', style: Theme.of(ctx).textTheme.labelLarge),
+                      const SizedBox(height: 4),
+                      Text('Materiale: ${materialTotal.toStringAsFixed(2)} RON'),
+                      Text('Manoperă: ${laborTotal.toStringAsFixed(2)} RON'),
+                      Text('Subtotal: ${(materialTotal + laborTotal).toStringAsFixed(2)} RON'),
+                      Text('TVA 19%: ${((materialTotal + laborTotal) * 0.19).toStringAsFixed(2)} RON'),
+                      Text(
+                        'TOTAL: ${((materialTotal + laborTotal) * 1.19).toStringAsFixed(2)} RON',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+            label: const Text('Generează PDF'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != true) {
+      numberCtrl.dispose();
+      dateCtrl.dispose();
+      clientCtrl.dispose();
+      execTermCtrl.dispose();
+      payTermCtrl.dispose();
+      advanceCtrl.dispose();
+      installCtrl.dispose();
+      obsCtrl.dispose();
+      return null;
+    }
+
+    final data = ContractData(
+      contractNumber: numberCtrl.text.trim(),
+      contractDate: dateCtrl.text.trim().isEmpty ? dateFmt : dateCtrl.text.trim(),
+      clientName: clientCtrl.text.trim().isEmpty ? widget.clientName : clientCtrl.text.trim(),
+      jobCode: widget.job.jobCode,
+      jobTitle: widget.job.title,
+      location: widget.job.location,
+      teamName: _assignedTeam?.label ?? '',
+      teamMembers: _assignedTeamMembersLabel,
+      materialTotal: materialTotal,
+      laborTotal: laborTotal,
+      vatPercent: 19.0,
+      executionTerm: execTermCtrl.text.trim().isEmpty ? '-' : execTermCtrl.text.trim(),
+      paymentTerm: payTermCtrl.text.trim().isEmpty ? '-' : payTermCtrl.text.trim(),
+      advance: advanceCtrl.text.trim().isEmpty ? '-' : advanceCtrl.text.trim(),
+      installments: installCtrl.text.trim().isEmpty ? '-' : installCtrl.text.trim(),
+      observations: obsCtrl.text.trim(),
+    );
+
+    numberCtrl.dispose();
+    dateCtrl.dispose();
+    clientCtrl.dispose();
+    execTermCtrl.dispose();
+    payTermCtrl.dispose();
+    advanceCtrl.dispose();
+    installCtrl.dispose();
+    obsCtrl.dispose();
+
+    return data;
+  }
+
+  Widget _contractField(
+    TextEditingController ctrl,
+    String label,
+    String hint, {
+    int maxLines = 1,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: ctrl,
+        maxLines: maxLines,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint.isEmpty ? null : hint,
+          border: const OutlineInputBorder(),
+          isDense: true,
+        ),
+      ),
     );
   }
 
@@ -12835,11 +13009,19 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
     final storagePath =
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    } catch (_) {}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: 'application/pdf'),
-    );
+    try {
+      await ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'application/pdf'),
+      );
+    } catch (e) {
+      debugPrint('[Lucrare] ❌ Storage upload failed: $e');
+      rethrow;
+    }
     return <String, dynamic>{
       'filename': normalizedName,
       'storage_path': ref.fullPath,
@@ -13461,1482 +13643,1895 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Fișă lucrare'),
-        actions: [
-          IconButton(
-            onPressed: _isRunningAi ? null : _openJobAiAssistant,
-            icon: const Icon(Icons.auto_awesome_outlined),
-            tooltip: 'Asistent AI',
-          ),
-          IconButton(
-            onPressed: () => Navigator.of(context).pop('edit'),
-            icon: const Icon(Icons.edit_outlined),
-            tooltip: 'Editează',
-          ),
-          PopupMenuButton<String>(
-            tooltip: 'Mai mult',
-            icon: const Icon(Icons.more_vert),
-            onSelected: (value) {
-              switch (value) {
-                case 'raport':
-                  _openReport();
-                case 'situatie':
-                  _onGenerateSituatieLucrari();
-                case 'certificat':
-                  _openWarrantyCertificateFlow();
-                case 'poze':
-                  _openFieldPhotosForJob();
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'raport',
-                child: ListTile(
-                  leading: Icon(Icons.preview_outlined),
-                  title: Text('Raport'),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'situatie',
-                child: ListTile(
-                  leading: Icon(Icons.assignment_outlined),
-                  title: Text('Situație lucrări'),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                ),
-              ),
-              PopupMenuItem(
-                value: 'certificat',
-                child: ListTile(
-                  leading: const Icon(Icons.verified_user_outlined),
-                  title: Text(
-                    _jobWarrantyCertificates.isEmpty
-                        ? 'Generează certificat'
-                        : 'Certificat garanție',
+  // ── TAB: SITUAȚIE LUCRARE (comparativ ofertă vs realizat) ──────────────────
+  Widget _buildSituatieTab(BuildContext context) {
+    final job = widget.job;
+    final linii = job.liniiPlanificate;
+    String fmtCurr(double v) => '${v.toStringAsFixed(2)} RON';
+
+    // Dacă lucrarea nu are linii din ofertă
+    if (linii.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.compare_arrows_outlined,
+                size: 48, color: Colors.grey[400]),
+            const SizedBox(height: 12),
+            Text(
+              job.sourceOfferId.isNotEmpty
+                  ? 'Oferta sursă nu conține linii de articole.'
+                  : 'Lucrarea nu are ofertă asociată.\nCreează oferta și transformă-o în lucrare pentru a vedea situația.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final totalOfertaFaraTva = job.totalOferta;
+    final totalReal = job.totalReal;
+    final diferenta = job.diferenta;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        // ── Header comparativ ───────────────────────────────────────────────
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text('OFERTĂ',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue[700])),
+                      const SizedBox(height: 4),
+                      Text(
+                        fmtCurr(totalOfertaFaraTva),
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue[700]),
+                      ),
+                      Text('fără TVA',
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey[500])),
+                    ],
                   ),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
                 ),
-              ),
-              const PopupMenuItem(
-                value: 'poze',
-                child: ListTile(
-                  leading: Icon(Icons.photo_camera_outlined),
-                  title: Text('Poze teren'),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
+                const VerticalDivider(width: 1),
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text('REALIZAT',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green[700])),
+                      const SizedBox(height: 4),
+                      Text(
+                        fmtCurr(totalReal),
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green[700]),
+                      ),
+                      Text('la prețuri actuale',
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey[500])),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                const VerticalDivider(width: 1),
+                Expanded(
+                  child: Column(
+                    children: [
+                      Text('DIFERENȚĂ',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: diferenta >= 0
+                                  ? Colors.green[700]
+                                  : Colors.red[700])),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${diferenta >= 0 ? '+' : ''}${fmtCurr(diferenta)}',
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: diferenta >= 0
+                                ? Colors.green[700]
+                                : Colors.red[700]),
+                      ),
+                      Text(
+                        diferenta >= 0 ? 'economii' : 'depășire',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.grey[500]),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              child: SelectionArea(
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    if (widget.job.clientDepartmentName.trim().isNotEmpty ||
-                        widget.job.contactPerson.trim().isNotEmpty ||
-                        widget.job.contactPersonEmail.trim().isNotEmpty ||
-                        widget.job.contactPhone.trim().isNotEmpty)
-                      _section(
-                        context,
-                        'Contact comercial',
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
+        ),
+        const SizedBox(height: 12),
+
+        // ── Linii detaliu ───────────────────────────────────────────────────
+        Text('Detaliu articole',
+            style: const TextStyle(
+                fontWeight: FontWeight.bold, fontSize: 14)),
+        const SizedBox(height: 8),
+        ...linii.map((linie) {
+          final dif = linie.diferenta;
+          final difColor = dif == 0
+              ? Colors.grey
+              : (dif > 0 ? Colors.orange[700]! : Colors.green[700]!);
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(linie.denumire,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: difColor.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${dif >= 0 ? '+' : ''}${fmtCurr(dif)}',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: difColor,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (widget.job.clientDepartmentName
-                                .trim()
-                                .isNotEmpty)
-                              _chip(
-                                'Departament',
-                                widget.job.clientDepartmentName.trim(),
-                              ),
-                            if (widget.job.contactPerson.trim().isNotEmpty)
-                              _chip(
-                                'Persoana de contact',
-                                widget.job.contactPerson.trim(),
-                              ),
-                            if (widget.job.contactPersonEmail.trim().isNotEmpty)
-                              _chip(
-                                'Email',
-                                widget.job.contactPersonEmail.trim(),
-                              ),
-                            if (widget.job.contactPhone.trim().isNotEmpty)
-                              _chip(
-                                'Telefon',
-                                widget.job.contactPhone.trim(),
-                              ),
+                            Text('Ofertă:',
+                                style: TextStyle(
+                                    fontSize: 11, color: Colors.blue[600])),
+                            Text(
+                              '${linie.cantitateOferta} ${linie.um} × ${linie.pretUnitarOferta.toStringAsFixed(2)} = ${fmtCurr(linie.totalOferta)}',
+                              style: const TextStyle(fontSize: 11),
+                            ),
                           ],
                         ),
                       ),
-                    _section(
-                        context,
-                        'Header lucrare',
-                        Wrap(spacing: 8, runSpacing: 8, children: [
-                          _chip('Cod', widget.job.jobCode),
-                          _chip('Titlu', widget.job.title),
-                          _chip('Client', client),
-                          _chip(
-                              'Locație',
-                              widget.job.location.trim().isEmpty
-                                  ? '-'
-                                  : widget.job.location.trim()),
-                        ])),
-                    Builder(
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Realizat:',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.green[600])),
+                            Text(
+                              '${linie.cantitateReala} ${linie.um} × ${linie.pretUnitarReal.toStringAsFixed(2)} = ${fmtCurr(linie.totalReal)}',
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+        const SizedBox(height: 16),
+        // Butoane PDF deviz / situație
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                label: const Text('Deviz planificat'),
+                onPressed: () => _onGenerateDevizPdf(planificat: true),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: FilledButton.icon(
+                icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                label: const Text('Situație reală'),
+                style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFC62828)),
+                onPressed: () => _onGenerateDevizPdf(planificat: false),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 40),
+      ],
+    );
+  }
+
+  Future<void> _onGenerateDevizPdf({required bool planificat}) async {
+    try {
+      final profile = await widget.repository.loadCompanyProfile();
+      final branding = DocumentBrandingData.fromCompanyProfile(profile);
+      final path = planificat
+          ? await DevizLucrarePdfService.instance
+              .generateDevizPlanificat(widget.job, branding)
+          : await DevizLucrarePdfService.instance
+              .generateSituatieLucrari(widget.job, branding);
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: planificat
+            ? 'Deviz planificat ${widget.job.jobCode}'
+            : 'Situație lucrări ${widget.job.jobCode}',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare PDF: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
+    return DefaultTabController(
+      length: 5,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Fişă lucrare'),
+              Text(
+                '${widget.job.jobCode} · $client',
+                style: Theme.of(context).textTheme.bodySmall,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+          bottom: const TabBar(
+            isScrollable: true,
+            tabs: [
+              Tab(icon: Icon(Icons.info_outline), text: 'Sumar'),
+              Tab(icon: Icon(Icons.build_outlined), text: 'Execuție'),
+              Tab(icon: Icon(Icons.euro_outlined), text: 'Economic'),
+              Tab(icon: Icon(Icons.folder_outlined), text: 'Documente'),
+              Tab(icon: Icon(Icons.compare_arrows_outlined), text: 'Situație'),
+            ],
+          ),
+          actions: [
+            IconButton(
+              onPressed: _isRunningAi ? null : _openJobAiAssistant,
+              icon: const Icon(Icons.auto_awesome_outlined),
+              tooltip: 'Asistent AI',
+            ),
+            IconButton(
+              onPressed: () => Navigator.of(context).pop('edit'),
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: 'Editează',
+            ),
+            PopupMenuButton<String>(
+              tooltip: 'Mai mult',
+              icon: const Icon(Icons.more_vert),
+              onSelected: (value) {
+                switch (value) {
+                  case 'raport':
+                    _openReport();
+                  case 'situatie':
+                    _onGenerateSituatieLucrari();
+                  case 'certificat':
+                    _openWarrantyCertificateFlow();
+                  case 'poze':
+                    _openFieldPhotosForJob();
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'raport',
+                  child: ListTile(
+                    leading: Icon(Icons.preview_outlined),
+                    title: Text('Raport'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'situatie',
+                  child: ListTile(
+                    leading: Icon(Icons.assignment_outlined),
+                    title: Text('Situație lucrări'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'certificat',
+                  child: ListTile(
+                    leading: const Icon(Icons.verified_user_outlined),
+                    title: Text(
+                      _jobWarrantyCertificates.isEmpty
+                          ? 'Generează certificat'
+                          : 'Certificat garanție',
+                    ),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'poze',
+                  child: ListTile(
+                    leading: Icon(Icons.photo_camera_outlined),
+                    title: Text('Poze teren'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        body: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : TabBarView(
+                children: [
+                  _buildSumarTab(context),
+                  _buildExecutieTab(context),
+                  _buildEconomicTab(context),
+                  _buildDocumenteTab(context),
+                  _buildSituatieTab(context),
+                ],
+              ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: _onAddWorkTask,
+          icon: const Icon(Icons.add_task),
+          label: const Text('Task lucru'),
+          tooltip: 'Adaugă etapă / task lucrat',
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSumarTab(BuildContext context) {
+    final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: SelectionArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _section(
+                context,
+                'Header lucrare',
+                Wrap(spacing: 8, runSpacing: 8, children: [
+                  _chip('Cod', widget.job.jobCode),
+                  _chip('Titlu', widget.job.title),
+                  _chip('Client', client),
+                  _chip(
+                      'Locație',
+                      widget.job.location.trim().isEmpty
+                          ? '-'
+                          : widget.job.location.trim()),
+                ])),
+            if (widget.job.clientDepartmentName.trim().isNotEmpty ||
+                widget.job.contactPerson.trim().isNotEmpty ||
+                widget.job.contactPersonEmail.trim().isNotEmpty ||
+                widget.job.contactPhone.trim().isNotEmpty)
+              _section(
+                context,
+                'Contact comercial',
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (widget.job.clientDepartmentName
+                        .trim()
+                        .isNotEmpty)
+                      _chip(
+                        'Departament',
+                        widget.job.clientDepartmentName.trim(),
+                      ),
+                    if (widget.job.contactPerson.trim().isNotEmpty)
+                      _chip(
+                        'Persoana de contact',
+                        widget.job.contactPerson.trim(),
+                      ),
+                    if (widget.job.contactPersonEmail.trim().isNotEmpty)
+                      _chip(
+                        'Email',
+                        widget.job.contactPersonEmail.trim(),
+                      ),
+                    if (widget.job.contactPhone.trim().isNotEmpty)
+                      _chip(
+                        'Telefon',
+                        widget.job.contactPhone.trim(),
+                      ),
+                  ],
+                ),
+              ),
+            _section(
+              context,
+              'Echipă alocată',
+              _assignedTeam == null
+                  ? const Text('Nu există date.')
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_assignedTeam!.label),
+                        if (_assignedTeamMembersLabel.trim().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                                'Membri: $_assignedTeamMembersLabel'),
+                          ),
+                      ],
+                    ),
+              action: _isTechnician
+                  ? null
+                  : TextButton.icon(
+                      onPressed: _onAssignTeam,
+                      icon: const Icon(Icons.groups_outlined),
+                      label: Text(_assignedTeam == null
+                          ? 'Alocă echipă'
+                          : 'Schimbă echipa'),
+                    ),
+            ),
+            _section(
+              context,
+              'Etape operative',
+              Column(
+                children: _checklistDefs
+                    .map(
+                      (entry) => CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: _checklist[entry.key] ?? false,
+                        title: Text(entry.value),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          _onToggleChecklist(entry.key, value);
+                        },
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExecutieTab(BuildContext context) {
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: SelectionArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _section(
+              context,
+              'Programări asociate',
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _chip('Programari asociate',
+                      _appointments.length.toString()),
+                  _chip(
+                      'Numar materiale', _materials.length.toString()),
+                  _chip('Numar inregistrari ore',
+                      _labor.length.toString()),
+                  _chip('Total ore persoane',
+                      _personHoursTotal.toStringAsFixed(2)),
+                  _chip('Total ore echipe',
+                      _teamHoursTotal.toStringAsFixed(2)),
+                ],
+              ),
+            ),
+            _section(
+              context,
+              'Programari asociate',
+              _appointments.isEmpty
+                  ? const Text('Nu există date.')
+                  : Builder(
                       builder: (context) {
-                        final documentRows = _documents;
-                        String normalizeDocType(Map<String, dynamic> row) {
-                          final rawType = ((row['type'] ??
-                                      row['tipDocument'] ??
-                                      row['documentType'] ??
-                                      _extractDocumentTypeLabel(row)) ??
-                                  '')
-                              .toString()
-                              .trim()
-                              .toLowerCase()
-                              .replaceAll('ă', 'a')
-                              .replaceAll('â', 'a')
-                              .replaceAll('î', 'i')
-                              .replaceAll('ș', 's')
-                              .replaceAll('ş', 's')
-                              .replaceAll('ț', 't')
-                              .replaceAll('ţ', 't');
-                          if (rawType.contains('oferta')) return 'Oferta';
-                          if (rawType.contains('deviz')) return 'Deviz';
-                          if (rawType.contains('contract')) return 'Contract';
-                          if (rawType.contains('proces') ||
-                              rawType == 'pv' ||
-                              rawType.contains('proces_verbal')) {
-                            return 'PV';
+                        Map<String, dynamic>? selectedAppointment;
+                        final selectedId = _selectedAppointmentFilterId;
+                        if (selectedId != null) {
+                          for (final row in _appointments) {
+                            if (_appointmentIdOf(row) == selectedId) {
+                              selectedAppointment = row;
+                              break;
+                            }
                           }
-                          if (rawType == 'pif' || rawType.contains('punere')) {
-                            return 'PIF';
-                          }
-                          return '';
                         }
-
-                        final docCounts = <String, int>{
-                          'Oferta': 0,
-                          'Deviz': 0,
-                          'Contract': 0,
-                          'PV': 0,
-                          'PIF': 0,
-                        };
-                        for (final row in documentRows) {
-                          final key = normalizeDocType(row);
-                          if (key.isEmpty) continue;
-                          docCounts[key] = (docCounts[key] ?? 0) + 1;
-                        }
-
-                        final recentDocs = documentRows
-                            .map((e) => Map<String, dynamic>.from(e))
-                            .toList(growable: false)
-                          ..sort((a, b) {
-                            final aDate =
-                                '${a['updatedAt'] ?? a['createdAt'] ?? a['dataDocument'] ?? ''}';
-                            final bDate =
-                                '${b['updatedAt'] ?? b['createdAt'] ?? b['dataDocument'] ?? ''}';
-                            return bDate.compareTo(aDate);
-                          });
-                        final statusLabel = '${widget.job.status.label}'
-                            .replaceAll('\uFFFD', '')
-                            .replaceAll('', '');
-                        final assignedTeamLabel = _assignedTeam?.label ?? '-';
-                        final relevantAppointments = _appointments
-                            .where((row) =>
-                                '${row['status'] ?? ''}'.trim().isEmpty ||
-                                _normalizeAppointmentStatusLabel(
-                                        row['status']) !=
-                                    'Anulata')
-                            .length;
-                        final registryLabel = _latestReportRegistryRow == null
-                            ? 'fara raport inregistrat'
-                            : '${_latestReportRegistryRow?['number'] ?? _latestReportRegistryRow?['registryNumber'] ?? '-'}';
-
-                        return _section(
-                          context,
-                          'Dashboard comercial / operativ',
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Sumar lucrare',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  _chip('Client', client),
-                                  _chip('Status lucrare', statusLabel),
-                                  _chip('Echipa', assignedTeamLabel),
-                                  if (widget.job.clientDepartmentName
-                                      .trim()
-                                      .isNotEmpty)
-                                    _chip('Departament',
-                                        widget.job.clientDepartmentName.trim()),
-                                  if (widget.job.contactPerson
-                                      .trim()
-                                      .isNotEmpty)
-                                    _chip(
-                                      'Contact',
-                                      widget.job.contactPerson.trim(),
+                        final linkedDocs = selectedAppointment == null
+                            ? const <Map<String, dynamic>>[]
+                            : _documentsLinkedToAppointment(
+                                _appointmentIdOf(selectedAppointment),
+                              );
+                        return Column(
+                          children: [
+                            ...List<Widget>.generate(
+                                _appointments.length, (index) {
+                              final e = _appointments[index];
+                              final appointmentId =
+                                  '${e['id'] ?? e['appointmentId'] ?? ''}'
+                                      .trim();
+                              final linkedDocumentsCount =
+                                  appointmentId.isEmpty
+                                      ? 0
+                                      : _documents
+                                          .where(
+                                            (doc) =>
+                                                _linkedAppointmentIdOfDocument(
+                                                  doc,
+                                                ) ==
+                                                appointmentId,
+                                          )
+                                          .length;
+                              final isFilterActive =
+                                  _selectedAppointmentFilterId ==
+                                      appointmentId;
+                              return ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                    (e['title'] ?? '-').toString()),
+                                subtitle: Text(
+                                  '${e['date'] ?? '-'} • ${e['location'] ?? '-'}',
+                                ),
+                                onTap: () => _onOpenAppointment(index),
+                                trailing: Wrap(
+                                  spacing: 4,
+                                  children: [
+                                    IconButton(
+                                      tooltip: isFilterActive
+                                          ? 'Anuleaza filtru documente'
+                                          : 'Filtreaza documente dupa aceasta programare',
+                                      icon: const Icon(
+                                        Icons.filter_alt_outlined,
+                                      ),
+                                      color: isFilterActive
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .primary
+                                          : null,
+                                      onPressed: () =>
+                                          _toggleAppointmentDocumentFilter(
+                                        Map<String, dynamic>.from(e),
+                                      ),
                                     ),
-                                  _chip(
-                                    'Programari relevante',
-                                    '$relevantAppointments',
-                                  ),
-                                  _chip(
-                                    'Documente asociate',
-                                    '${documentRows.length}',
-                                  ),
-                                  _chip('Registratura raport', registryLabel),
-                                  _chip(
-                                    'Resurse interne',
-                                    _realTotalCost.toStringAsFixed(2),
-                                  ),
-                                  _chip(
-                                    'Total parteneri',
-                                    '${_partnersTotal.toStringAsFixed(2)} $_partnersCurrency',
-                                  ),
-                                  if (_ownVehiclesTotal > 0)
-                                    _chip(
-                                      'Autoturisme proprii',
-                                      '${_ownVehiclesTotal.toStringAsFixed(2)} $_ownVehiclesCurrency',
+                                    IconButton(
+                                      tooltip: 'Genereaza PV',
+                                      icon: const Icon(
+                                        Icons.assignment_outlined,
+                                      ),
+                                      onPressed: () =>
+                                          _onGenerateProcesVerbal(
+                                        appointment:
+                                            Map<String, dynamic>.from(
+                                                e),
+                                      ),
                                     ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Economic',
-                                style: Theme.of(context).textTheme.titleSmall,
+                                    IconButton(
+                                      tooltip: 'Genereaza PIF',
+                                      icon: const Icon(
+                                        Icons.settings_suggest_outlined,
+                                      ),
+                                      onPressed: () => _onGeneratePif(
+                                        appointment:
+                                            Map<String, dynamic>.from(
+                                                e),
+                                      ),
+                                    ),
+                                    IconButton(
+                                      tooltip:
+                                          'Deschide documentul legat ($linkedDocumentsCount)',
+                                      icon: const Icon(
+                                        Icons.description_outlined,
+                                      ),
+                                      onPressed: linkedDocumentsCount ==
+                                              0
+                                          ? null
+                                          : () =>
+                                              _onOpenLatestLinkedDocumentFromAppointment(
+                                                Map<String,
+                                                    dynamic>.from(e),
+                                              ),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Deschide',
+                                      icon:
+                                          const Icon(Icons.open_in_new),
+                                      onPressed: () =>
+                                          _onOpenAppointment(index),
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Editează',
+                                      icon: const Icon(
+                                        Icons.edit_outlined,
+                                      ),
+                                      onPressed: () =>
+                                          _onEditAppointment(index),
+                                    ),
+                                    if (!_isTechnician)
+                                      IconButton(
+                                        tooltip: 'Șterge',
+                                        icon: const Icon(
+                                          Icons.delete_outline,
+                                        ),
+                                        onPressed: () =>
+                                            _onDeleteAppointment(index),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            }),
+                            if (selectedAppointment != null) ...[
+                              const Divider(height: 20),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'Documente legate de programarea selectata: ${selectedAppointment['title'] ?? '-'}',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleSmall,
+                                ),
                               ),
                               const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  _chip('Valoare estimata',
-                                      _estimatedValue.toStringAsFixed(2)),
-                                  _chip('Cost real total',
-                                      _realTotalCost.toStringAsFixed(2)),
-                                  _chip(
-                                    'Diferenta estimat vs real',
-                                    _estimatedVsRealDifference
-                                        .toStringAsFixed(2),
+                              if (linkedDocs.isEmpty)
+                                const Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    'Nu exista documente legate de aceasta programare.',
                                   ),
-                                  _chip('Total materiale',
-                                      _materialsTotal.toStringAsFixed(2)),
-                                  _chip('Total manopera',
-                                      _laborTotalCost.toStringAsFixed(2)),
-                                  _chip('Total diurna',
-                                      _laborDiurnaTotal.toStringAsFixed(2)),
-                                  _chip('Total cazare',
-                                      _laborCazareTotal.toStringAsFixed(2)),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Parteneri',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 6),
-                              _buildPartnerSummaryChips(),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Operativ',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  _chip('Numar materiale',
-                                      _materials.length.toString()),
-                                  _chip('Numar inregistrari ore',
-                                      _labor.length.toString()),
-                                  _chip('Numar programari',
-                                      _appointments.length.toString()),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Documente',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: docCounts.entries.map((entry) {
-                                  final count = entry.value;
-                                  final status =
-                                      count > 0 ? 'exista' : 'lipseste';
-                                  return _chip(
-                                      entry.key, '$status (${entry.value})');
-                                }).toList(growable: false),
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Ultimele documente utile',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 6),
-                              if (recentDocs.isEmpty)
-                                _emptyStateText('Nu exista documente asociate.')
+                                )
                               else
                                 Column(
-                                  children: recentDocs.take(3).map((doc) {
-                                    final docType = normalizeDocType(doc);
+                                  children: linkedDocs.map((doc) {
+                                    final type =
+                                        _documentListTypeLabel(doc)
+                                            .trim();
                                     final title =
                                         '${doc['titlu'] ?? doc['title'] ?? '-'}';
                                     final number =
                                         '${doc['numarDocument'] ?? doc['number'] ?? ''}'
                                             .trim();
-                                    final status = '${doc['status'] ?? '-'}';
                                     final date =
                                         '${doc['dataDocument'] ?? doc['date'] ?? ''}'
                                             .trim();
+                                    final rawIndex =
+                                        _documentIndexInRawList(doc);
                                     return ListTile(
                                       dense: true,
                                       contentPadding: EdgeInsets.zero,
                                       title: Text(title),
                                       subtitle: Text(
                                         <String>[
-                                          if (docType.isNotEmpty) docType,
-                                          if (number.isNotEmpty) 'Nr: $number',
-                                          if (status.trim().isNotEmpty)
-                                            'Status: $status',
+                                          if (type.isNotEmpty) type,
+                                          if (number.isNotEmpty)
+                                            'Nr: $number',
                                           if (date.isNotEmpty) date,
                                         ].join(' • '),
+                                      ),
+                                      trailing: IconButton(
+                                        tooltip: 'Deschide document',
+                                        icon: const Icon(
+                                          Icons.open_in_new,
+                                        ),
+                                        onPressed: rawIndex < 0
+                                            ? null
+                                            : () =>
+                                                _onViewDocumentFixed(
+                                                  rawIndex,
+                                                ),
                                       ),
                                     );
                                   }).toList(growable: false),
                                 ),
                             ],
-                          ),
+                          ],
                         );
                       },
                     ),
-                    _section(
-                      context,
-                      'Cost real lucrare',
+              action: Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: _onAddAppointment,
+                    icon: const Icon(Icons.add),
+                    label: const Text(
+                        'Adaugă programare pentru această lucrare'),
+                  ),
+                  if (_selectedAppointmentFilterId != null)
+                    OutlinedButton.icon(
+                      onPressed: () => setState(
+                          () => _selectedAppointmentFilterId = null),
+                      icon: const Icon(Icons.clear_outlined),
+                      label: const Text('Reseteaza filtru documente'),
+                    ),
+                ],
+              ),
+            ),
+            _section(
+              context,
+              'Materiale asociate',
+              _materials.isEmpty
+                  ? const Text('Nu există date.')
+                  : Column(
+                      children: List<Widget>.generate(_materials.length,
+                          (index) {
+                        final e = _materials[index];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text((e['name'] ?? '-').toString()),
+                          subtitle: Text(
+                            _isTechnician
+                                ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
+                                : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
+                          ),
+                          trailing: Wrap(
+                            spacing: 4,
+                            children: [
+                              IconButton(
+                                tooltip: 'Editează',
+                                icon: const Icon(Icons.edit_outlined),
+                                onPressed: () => _onEditMaterial(index),
+                              ),
+                              if (!_isTechnician)
+                                IconButton(
+                                  tooltip: 'Șterge',
+                                  icon:
+                                      const Icon(Icons.delete_outline),
+                                  onPressed: () =>
+                                      _onDeleteMaterial(index),
+                                ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ),
+              action: TextButton.icon(
+                onPressed: _onAddMaterial,
+                icon: const Icon(Icons.add),
+                label: const Text('Adaugă material'),
+              ),
+            ),
+            _section(
+              context,
+              'Manoperă / ore',
+              _labor.isEmpty
+                  ? const Text('Nu există date.')
+                  : Column(
+                      children:
+                          List<Widget>.generate(_labor.length, (index) {
+                        final e = _labor[index];
+                        final dateLabel = '${e['date'] ?? '-'}';
+                        final hoursLabel =
+                            _asDouble(e['hours']).toStringAsFixed(2);
+                        final rateValue = _laborRateForRow(e);
+                        final rateLabel = rateValue > 0
+                            ? rateValue.toStringAsFixed(2)
+                            : '0.00 (fallback)';
+                        final costOreLabel =
+                            _laborOreCost(e).toStringAsFixed(2);
+                        final costDiurnaLabel =
+                            _laborPerDiemCost(e).toStringAsFixed(2);
+                        final costCazareLabel =
+                            _laborLodgingCost(e).toStringAsFixed(2);
+                        final costTotalLabel =
+                            _laborTotalLineCost(e).toStringAsFixed(2);
+                        final notesLabel = '${e['notes'] ?? ''}'.trim();
+                        final tripDaysLabel =
+                            _formatDecimal(_laborTripDays(e));
+                        final periodLabel = _laborPeriodLabel(e);
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text((e['who'] ?? '-').toString()),
+                          subtitle: Text(
+                            _isTechnician
+                                ? (notesLabel.isEmpty
+                                    ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
+                                    : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
+                                : (notesLabel.isEmpty
+                                    ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
+                                    : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
+                          ),
+                          trailing: Wrap(
+                            spacing: 4,
+                            children: [
+                              IconButton(
+                                tooltip: 'Editează',
+                                icon: const Icon(Icons.edit_outlined),
+                                onPressed: () => _onEditLabor(index),
+                              ),
+                              if (!_isTechnician)
+                                IconButton(
+                                  tooltip: 'Șterge',
+                                  icon:
+                                      const Icon(Icons.delete_outline),
+                                  onPressed: () =>
+                                      _onDeleteLabor(index),
+                                ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ),
+              action: TextButton.icon(
+                onPressed: _onAddLabor,
+                icon: const Icon(Icons.add),
+                label: const Text('Adaugă ore'),
+              ),
+            ),
+            _section(
+              context,
+              'Echipamente furnizate de beneficiar',
+              _beneficiarySuppliedEquipment.isEmpty
+                  ? const Text('Nu exista date.')
+                  : Column(
+                      children: List<Widget>.generate(
+                        _beneficiarySuppliedEquipment.length,
+                        (index) {
+                          final item =
+                              _beneficiarySuppliedEquipment[index];
+                          final subtitle = <String>[
+                            if (item.equipmentType.trim().isNotEmpty)
+                              'Tip: ${item.equipmentType}',
+                            if (item.brand.trim().isNotEmpty)
+                              'Brand: ${item.brand}',
+                            if (item.model.trim().isNotEmpty)
+                              'Model: ${item.model}',
+                            if (item.serialNumber.trim().isNotEmpty)
+                              'Serie: ${item.serialNumber}',
+                            'Cantitate: ${item.quantity.toStringAsFixed(2)}',
+                          ].join(' • ');
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(
+                              Icons.precision_manufacturing_outlined,
+                            ),
+                            title: Text(item.name),
+                            subtitle: Text(
+                              item.notes.trim().isEmpty
+                                  ? subtitle
+                                  : '$subtitle\nObservatii: ${item.notes}',
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Editeaza',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () =>
+                                      _onEditBeneficiaryEquipment(
+                                          index),
+                                ),
+                                IconButton(
+                                  tooltip: 'Sterge',
+                                  icon:
+                                      const Icon(Icons.delete_outline),
+                                  onPressed: () =>
+                                      _onDeleteBeneficiaryEquipment(
+                                          index),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+              action: TextButton.icon(
+                onPressed: _onAddBeneficiaryEquipment,
+                icon: const Icon(Icons.add),
+                label: const Text('Adauga echipament'),
+              ),
+            ),
+            _section(
+              context,
+              'Materiale furnizate de beneficiar',
+              _beneficiarySuppliedMaterials.isEmpty
+                  ? const Text('Nu exista date.')
+                  : Column(
+                      children: List<Widget>.generate(
+                        _beneficiarySuppliedMaterials.length,
+                        (index) {
+                          final item =
+                              _beneficiarySuppliedMaterials[index];
+                          final subtitle =
+                              'UM: ${item.unit.isEmpty ? '-' : item.unit} • Cantitate: ${item.quantity.toStringAsFixed(2)}';
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(
+                              Icons.inventory_2_outlined,
+                            ),
+                            title: Text(item.name),
+                            subtitle: Text(
+                              item.notes.trim().isEmpty
+                                  ? subtitle
+                                  : '$subtitle\nObservatii: ${item.notes}',
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Editeaza',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () =>
+                                      _onEditBeneficiaryMaterial(index),
+                                ),
+                                IconButton(
+                                  tooltip: 'Sterge',
+                                  icon:
+                                      const Icon(Icons.delete_outline),
+                                  onPressed: () =>
+                                      _onDeleteBeneficiaryMaterial(
+                                          index),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+              action: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: _onAddBeneficiaryMaterial,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Adauga material'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _onImportBeneficiaryMaterials,
+                    icon: const Icon(Icons.upload_file_outlined),
+                    label: const Text('Importa lista'),
+                  ),
+                ],
+              ),
+            ),
+            _section(
+              context,
+              'Resurse partener',
+              _buildPartnerResourcesSection(),
+              action: TextButton.icon(
+                onPressed: _onAddPartner,
+                icon: const Icon(Icons.handshake_outlined),
+                label: const Text('Adaugă partener'),
+              ),
+            ),
+            _section(
+              context,
+              'Autoturisme proprii',
+              _buildOwnVehiclesSection(),
+              action: TextButton.icon(
+                onPressed: _onAddOwnVehicle,
+                icon: const Icon(Icons.directions_car_outlined),
+                label: const Text('Adauga autoturism'),
+              ),
+            ),
+            _section(
+              context,
+              'Timeline taskuri / volum zilnic',
+              _workTaskEntries.isEmpty
+                  ? const Text(
+                      'Nu exista inca taskuri. Adauga etape cu ora inceput/final, oameni alocati si status.',
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children:
+                              _workloadSummaryByDay().map((entry) {
+                            final payload = entry.value;
+                            final minutes = payload['minutes'] as int;
+                            final hours = minutes / 60.0;
+                            final taskCount = payload['tasks'] as int;
+                            final people =
+                                payload['people'] as Set<String>;
+                            return _chip(
+                              _dayKeyToLabel(entry.key),
+                              '${hours.toStringAsFixed(2)}h | $taskCount task | ${people.length} pers',
+                            );
+                          }).toList(growable: false),
+                        ),
+                        const SizedBox(height: 10),
+                        ...List<Widget>.generate(
+                            _workTaskEntries.length, (index) {
+                          final row = _workTaskEntries[index];
+                          final title = '${row['title'] ?? '-'}'.trim();
+                          final workers = _workTaskWorkers(row);
+                          final startAt = _workTaskStartAt(row);
+                          final endAt = _workTaskEndAt(row);
+                          final completed = row['completed'] == true;
+                          final notes = '${row['notes'] ?? ''}'.trim();
+                          final interval =
+                              '${startAt == null ? '-' : _formatDateTime(startAt.toIso8601String())} - ${endAt == null ? '-' : _formatDateTime(endAt.toIso8601String())}';
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Checkbox(
+                              value: completed,
+                              onChanged: (value) {
+                                if (value == null) return;
+                                _onToggleWorkTaskCompleted(
+                                    index, value);
+                              },
+                            ),
+                            title: Text(title.isEmpty ? '-' : title),
+                            subtitle: Text(
+                              notes.isEmpty
+                                  ? '$interval • Durata: ${_workTaskDurationLabel(row)} • Oameni: ${workers.isEmpty ? '-' : workers.join(', ')}'
+                                  : '$interval • Durata: ${_workTaskDurationLabel(row)} • Oameni: ${workers.isEmpty ? '-' : workers.join(', ')}\nObs: $notes',
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Editeaza task',
+                                  onPressed: () =>
+                                      _onEditWorkTask(index),
+                                  icon: const Icon(Icons.edit_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: 'Sterge task',
+                                  onPressed: () =>
+                                      _onDeleteWorkTask(index),
+                                  icon:
+                                      const Icon(Icons.delete_outline),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+              action: TextButton.icon(
+                onPressed: _onAddWorkTask,
+                icon: const Icon(
+                    Icons.playlist_add_check_circle_outlined),
+                label: const Text('Adauga task'),
+              ),
+            ),
+            _section(
+              context,
+              'Pontaj teren',
+              _buildTimeTrackingSection(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onEmiteFacturaSmartBill() async {
+    final job = widget.job;
+    if (job.liniiPlanificate.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(
+            'Nu există linii realizate. Completează situația de lucrări mai întâi.'),
+      ));
+      return;
+    }
+    final profile = await widget.repository.loadCompanyProfile();
+    if (!mounted) return;
+    final settings = profile.smartBillSettings;
+    if (!settings.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content:
+            Text('SmartBill nu este configurat. Mergi la Setări → SmartBill.'),
+      ));
+      return;
+    }
+    setState(() {});
+    final linii = job.liniiPlanificate
+        .map((l) => <String, dynamic>{
+              'name': l.denumire,
+              'quantity': l.cantitateReala,
+              'price': l.pretUnitarReal,
+              'measuringUnitName': l.um,
+              'taxName': 'Normala',
+              'taxPercentage': 21,
+              'isService': l.categorie == 'manopera',
+            })
+        .toList();
+    final result = await SmartBillService.instance.genereazaFacturadinLucrare(
+      settings: settings,
+      clientName: widget.clientName,
+      jobCode: job.jobCode,
+      sourceOfferNumber: job.sourceOfferNumber,
+      linii: linii,
+    );
+    if (!mounted) return;
+    if (result.success) {
+      final updated = job.copyWith(
+        smartbillFacturaNumar: result.numarFactura,
+        smartbillFacturaSerie: result.serieFactura,
+      );
+      await widget.repository.saveJob(updated);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Factură emisă: ${result.serieFactura} ${result.numarFactura} ✓'),
+          backgroundColor: Colors.green,
+        ));
+        setState(() {});
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Eroare SmartBill: ${result.eroare}'),
+        backgroundColor: Colors.red,
+      ));
+    }
+  }
+
+  Widget _buildEconomicTab(BuildContext context) {
+    final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: SelectionArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // ── SmartBill facturare ─────────────────────────────────────────
+            if (widget.job.smartbillFacturaNumar.isNotEmpty)
+              Card(
+                color: Colors.green[50],
+                child: ListTile(
+                  leading:
+                      const Icon(Icons.check_circle, color: Colors.green),
+                  title: Text(
+                      'Facturat SmartBill: ${widget.job.smartbillFacturaSerie}${widget.job.smartbillFacturaNumar}'),
+                  subtitle: const Text('Factură deja emisă'),
+                ),
+              )
+            else if (widget.job.status == JobStatus.finalizata)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.receipt_long_outlined),
+                  label: const Text('Emite factură SmartBill'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1565C0),
+                  ),
+                  onPressed: _onEmiteFacturaSmartBill,
+                ),
+              ),
+            Builder(
+              builder: (context) {
+                final documentRows = _documents;
+                String normalizeDocType(Map<String, dynamic> row) {
+                  final rawType = ((row['type'] ??
+                              row['tipDocument'] ??
+                              row['documentType'] ??
+                              _extractDocumentTypeLabel(row)) ??
+                          '')
+                      .toString()
+                      .trim()
+                      .toLowerCase()
+                      .replaceAll('ă', 'a')
+                      .replaceAll('â', 'a')
+                      .replaceAll('î', 'i')
+                      .replaceAll('ș', 's')
+                      .replaceAll('ş', 's')
+                      .replaceAll('ț', 't')
+                      .replaceAll('ţ', 't');
+                  if (rawType.contains('oferta')) return 'Oferta';
+                  if (rawType.contains('deviz')) return 'Deviz';
+                  if (rawType.contains('contract')) return 'Contract';
+                  if (rawType.contains('proces') ||
+                      rawType == 'pv' ||
+                      rawType.contains('proces_verbal')) {
+                    return 'PV';
+                  }
+                  if (rawType == 'pif' || rawType.contains('punere')) {
+                    return 'PIF';
+                  }
+                  return '';
+                }
+
+                final docCounts = <String, int>{
+                  'Oferta': 0,
+                  'Deviz': 0,
+                  'Contract': 0,
+                  'PV': 0,
+                  'PIF': 0,
+                };
+                for (final row in documentRows) {
+                  final key = normalizeDocType(row);
+                  if (key.isEmpty) continue;
+                  docCounts[key] = (docCounts[key] ?? 0) + 1;
+                }
+
+                final recentDocs = documentRows
+                    .map((e) => Map<String, dynamic>.from(e))
+                    .toList(growable: false)
+                  ..sort((a, b) {
+                    final aDate =
+                        '${a['updatedAt'] ?? a['createdAt'] ?? a['dataDocument'] ?? ''}';
+                    final bDate =
+                        '${b['updatedAt'] ?? b['createdAt'] ?? b['dataDocument'] ?? ''}';
+                    return bDate.compareTo(aDate);
+                  });
+                final statusLabel = '${widget.job.status.label}'
+                    .replaceAll('\uFFFD', '')
+                    .replaceAll('', '');
+                final assignedTeamLabel = _assignedTeam?.label ?? '-';
+                final relevantAppointments = _appointments
+                    .where((row) =>
+                        '${row['status'] ?? ''}'.trim().isEmpty ||
+                        _normalizeAppointmentStatusLabel(
+                                row['status']) !=
+                            'Anulata')
+                    .length;
+                final registryLabel = _latestReportRegistryRow == null
+                    ? 'fara raport inregistrat'
+                    : '${_latestReportRegistryRow?['number'] ?? _latestReportRegistryRow?['registryNumber'] ?? '-'}';
+
+                return _section(
+                  context,
+                  'Dashboard comercial / operativ',
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Sumar lucrare',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 6),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          _chip('Total materiale',
-                              _materialsTotal.toStringAsFixed(2)),
-                          _chip('Total manoperă ore',
-                              _laborOreTotal.toStringAsFixed(2)),
-                          _chip('Total diurnă',
-                              _laborDiurnaTotal.toStringAsFixed(2)),
-                          _chip('Total cazare',
-                              _laborCazareTotal.toStringAsFixed(2)),
-                          _chip('Total manoperă completă',
-                              _laborTotalCost.toStringAsFixed(2)),
+                          _chip('Client', client),
+                          _chip('Status lucrare', statusLabel),
+                          _chip('Echipa', assignedTeamLabel),
+                          if (widget.job.clientDepartmentName
+                              .trim()
+                              .isNotEmpty)
+                            _chip('Departament',
+                                widget.job.clientDepartmentName.trim()),
+                          if (widget.job.contactPerson
+                              .trim()
+                              .isNotEmpty)
+                            _chip(
+                              'Contact',
+                              widget.job.contactPerson.trim(),
+                            ),
+                          _chip(
+                            'Programari relevante',
+                            '$relevantAppointments',
+                          ),
+                          _chip(
+                            'Documente asociate',
+                            '${documentRows.length}',
+                          ),
+                          _chip('Registratura raport', registryLabel),
+                          _chip(
+                            'Resurse interne',
+                            _realTotalCost.toStringAsFixed(2),
+                          ),
+                          _chip(
+                            'Total parteneri',
+                            '${_partnersTotal.toStringAsFixed(2)} $_partnersCurrency',
+                          ),
+                          if (_ownVehiclesTotal > 0)
+                            _chip(
+                              'Autoturisme proprii',
+                              '${_ownVehiclesTotal.toStringAsFixed(2)} $_ownVehiclesCurrency',
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Economic',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _chip('Valoare estimata',
+                              _estimatedValue.toStringAsFixed(2)),
                           _chip('Cost real total',
                               _realTotalCost.toStringAsFixed(2)),
                           _chip(
-                            'Valoare estimată',
-                            _estimatedValue.toStringAsFixed(2),
+                            'Diferenta estimat vs real',
+                            _estimatedVsRealDifference
+                                .toStringAsFixed(2),
                           ),
-                          _chip(
-                            'Diferență estimat vs real',
-                            _estimatedVsRealDifference.toStringAsFixed(2),
-                          ),
-                          _chip(
-                              'Număr materiale', _materials.length.toString()),
-                          _chip('Total înregistrări ore',
-                              _labor.length.toString()),
-                          _chip('Total ore persoane',
-                              _personHoursTotal.toStringAsFixed(2)),
-                          _chip('Total ore echipe',
-                              _teamHoursTotal.toStringAsFixed(2)),
-                          _chip(
-                            'Total parteneri (separat)',
-                            '${_partnersTotal.toStringAsFixed(2)} $_partnersCurrency',
-                          ),
-                          _chip('Programări asociate',
-                              _appointments.length.toString()),
-                          _chip('Echipa curentă', _assignedTeam?.label ?? '-'),
-                          _chip('Număr intrări jurnal',
-                              _journal.length.toString()),
-                          _chip(
-                            'Etape bifate',
-                            '${_checklist.values.where((value) => value).length}/${_checklistDefs.length}',
-                          ),
-                          _chip('Taskuri zilnice',
-                              _workTaskEntries.length.toString()),
-                          _chip(
-                            'Taskuri finalizate',
-                            _workTaskEntries
-                                .where((row) => row['completed'] == true)
-                                .length
-                                .toString(),
-                          ),
+                          _chip('Total materiale',
+                              _materialsTotal.toStringAsFixed(2)),
+                          _chip('Total manopera',
+                              _laborTotalCost.toStringAsFixed(2)),
+                          _chip('Total diurna',
+                              _laborDiurnaTotal.toStringAsFixed(2)),
+                          _chip('Total cazare',
+                              _laborCazareTotal.toStringAsFixed(2)),
                         ],
                       ),
-                    ),
-                    _section(
-                      context,
-                      'Programări asociate',
+                      const SizedBox(height: 12),
+                      Text(
+                        'Parteneri',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 6),
+                      _buildPartnerSummaryChips(),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Operativ',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 6),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          _chip('Programari asociate',
-                              _appointments.length.toString()),
-                          _chip(
-                              'Numar materiale', _materials.length.toString()),
+                          _chip('Numar materiale',
+                              _materials.length.toString()),
                           _chip('Numar inregistrari ore',
                               _labor.length.toString()),
-                          _chip('Total ore persoane',
-                              _personHoursTotal.toStringAsFixed(2)),
-                          _chip('Total ore echipe',
-                              _teamHoursTotal.toStringAsFixed(2)),
+                          _chip('Numar programari',
+                              _appointments.length.toString()),
                         ],
                       ),
-                    ),
-                    _section(
-                      context,
-                      'Programari asociate',
-                      _appointments.isEmpty
-                          ? const Text('Nu există date.')
-                          : Builder(
-                              builder: (context) {
-                                Map<String, dynamic>? selectedAppointment;
-                                final selectedId = _selectedAppointmentFilterId;
-                                if (selectedId != null) {
-                                  for (final row in _appointments) {
-                                    if (_appointmentIdOf(row) == selectedId) {
-                                      selectedAppointment = row;
-                                      break;
-                                    }
-                                  }
-                                }
-                                final linkedDocs = selectedAppointment == null
-                                    ? const <Map<String, dynamic>>[]
-                                    : _documentsLinkedToAppointment(
-                                        _appointmentIdOf(selectedAppointment),
-                                      );
-                                return Column(
-                                  children: [
-                                    ...List<Widget>.generate(
-                                        _appointments.length, (index) {
-                                      final e = _appointments[index];
-                                      final appointmentId =
-                                          '${e['id'] ?? e['appointmentId'] ?? ''}'
-                                              .trim();
-                                      final linkedDocumentsCount =
-                                          appointmentId.isEmpty
-                                              ? 0
-                                              : _documents
-                                                  .where(
-                                                    (doc) =>
-                                                        _linkedAppointmentIdOfDocument(
-                                                          doc,
-                                                        ) ==
-                                                        appointmentId,
-                                                  )
-                                                  .length;
-                                      final isFilterActive =
-                                          _selectedAppointmentFilterId ==
-                                              appointmentId;
-                                      return ListTile(
-                                        contentPadding: EdgeInsets.zero,
-                                        title: Text(
-                                            (e['title'] ?? '-').toString()),
-                                        subtitle: Text(
-                                          '${e['date'] ?? '-'} • ${e['location'] ?? '-'}',
-                                        ),
-                                        onTap: () => _onOpenAppointment(index),
-                                        trailing: Wrap(
-                                          spacing: 4,
-                                          children: [
-                                            IconButton(
-                                              tooltip: isFilterActive
-                                                  ? 'Anuleaza filtru documente'
-                                                  : 'Filtreaza documente dupa aceasta programare',
-                                              icon: const Icon(
-                                                Icons.filter_alt_outlined,
-                                              ),
-                                              color: isFilterActive
-                                                  ? Theme.of(context)
-                                                      .colorScheme
-                                                      .primary
-                                                  : null,
-                                              onPressed: () =>
-                                                  _toggleAppointmentDocumentFilter(
-                                                Map<String, dynamic>.from(e),
-                                              ),
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Genereaza PV',
-                                              icon: const Icon(
-                                                Icons.assignment_outlined,
-                                              ),
-                                              onPressed: () =>
-                                                  _onGenerateProcesVerbal(
-                                                appointment:
-                                                    Map<String, dynamic>.from(
-                                                        e),
-                                              ),
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Genereaza PIF',
-                                              icon: const Icon(
-                                                Icons.settings_suggest_outlined,
-                                              ),
-                                              onPressed: () => _onGeneratePif(
-                                                appointment:
-                                                    Map<String, dynamic>.from(
-                                                        e),
-                                              ),
-                                            ),
-                                            IconButton(
-                                              tooltip:
-                                                  'Deschide documentul legat ($linkedDocumentsCount)',
-                                              icon: const Icon(
-                                                Icons.description_outlined,
-                                              ),
-                                              onPressed: linkedDocumentsCount ==
-                                                      0
-                                                  ? null
-                                                  : () =>
-                                                      _onOpenLatestLinkedDocumentFromAppointment(
-                                                        Map<String,
-                                                            dynamic>.from(e),
-                                                      ),
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Deschide',
-                                              icon:
-                                                  const Icon(Icons.open_in_new),
-                                              onPressed: () =>
-                                                  _onOpenAppointment(index),
-                                            ),
-                                            IconButton(
-                                              tooltip: 'Editează',
-                                              icon: const Icon(
-                                                Icons.edit_outlined,
-                                              ),
-                                              onPressed: () =>
-                                                  _onEditAppointment(index),
-                                            ),
-                                            if (!_isTechnician)
-                                              IconButton(
-                                                tooltip: 'Șterge',
-                                                icon: const Icon(
-                                                  Icons.delete_outline,
-                                                ),
-                                                onPressed: () =>
-                                                    _onDeleteAppointment(index),
-                                              ),
-                                          ],
-                                        ),
-                                      );
-                                    }),
-                                    if (selectedAppointment != null) ...[
-                                      const Divider(height: 20),
-                                      Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(
-                                          'Documente legate de programarea selectata: ${selectedAppointment['title'] ?? '-'}',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      if (linkedDocs.isEmpty)
-                                        const Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: Text(
-                                            'Nu exista documente legate de aceasta programare.',
-                                          ),
-                                        )
-                                      else
-                                        Column(
-                                          children: linkedDocs.map((doc) {
-                                            final type =
-                                                _documentListTypeLabel(doc)
-                                                    .trim();
-                                            final title =
-                                                '${doc['titlu'] ?? doc['title'] ?? '-'}';
-                                            final number =
-                                                '${doc['numarDocument'] ?? doc['number'] ?? ''}'
-                                                    .trim();
-                                            final date =
-                                                '${doc['dataDocument'] ?? doc['date'] ?? ''}'
-                                                    .trim();
-                                            final rawIndex =
-                                                _documentIndexInRawList(doc);
-                                            return ListTile(
-                                              dense: true,
-                                              contentPadding: EdgeInsets.zero,
-                                              title: Text(title),
-                                              subtitle: Text(
-                                                <String>[
-                                                  if (type.isNotEmpty) type,
-                                                  if (number.isNotEmpty)
-                                                    'Nr: $number',
-                                                  if (date.isNotEmpty) date,
-                                                ].join(' • '),
-                                              ),
-                                              trailing: IconButton(
-                                                tooltip: 'Deschide document',
-                                                icon: const Icon(
-                                                  Icons.open_in_new,
-                                                ),
-                                                onPressed: rawIndex < 0
-                                                    ? null
-                                                    : () =>
-                                                        _onViewDocumentFixed(
-                                                          rawIndex,
-                                                        ),
-                                              ),
-                                            );
-                                          }).toList(growable: false),
-                                        ),
-                                    ],
-                                  ],
-                                );
-                              },
-                            ),
-                      action: Wrap(
-                        spacing: 8,
-                        children: [
-                          TextButton.icon(
-                            onPressed: _onAddAppointment,
-                            icon: const Icon(Icons.add),
-                            label: const Text(
-                                'Adaugă programare pentru această lucrare'),
-                          ),
-                          if (_selectedAppointmentFilterId != null)
-                            OutlinedButton.icon(
-                              onPressed: () => setState(
-                                  () => _selectedAppointmentFilterId = null),
-                              icon: const Icon(Icons.clear_outlined),
-                              label: const Text('Reseteaza filtru documente'),
-                            ),
-                        ],
+                      const SizedBox(height: 12),
+                      Text(
+                        'Documente',
+                        style: Theme.of(context).textTheme.titleSmall,
                       ),
-                    ),
-                    _section(
-                      context,
-                      'Echipă alocată',
-                      _assignedTeam == null
-                          ? const Text('Nu există date.')
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(_assignedTeam!.label),
-                                if (_assignedTeamMembersLabel.trim().isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 4),
-                                    child: Text(
-                                        'Membri: $_assignedTeamMembersLabel'),
-                                  ),
-                              ],
-                            ),
-                      action: _isTechnician
-                          ? null
-                          : TextButton.icon(
-                              onPressed: _onAssignTeam,
-                              icon: const Icon(Icons.groups_outlined),
-                              label: Text(_assignedTeam == null
-                                  ? 'Alocă echipă'
-                                  : 'Schimbă echipa'),
-                            ),
-                    ),
-                    _section(
-                      context,
-                      'Materiale asociate',
-                      _materials.isEmpty
-                          ? const Text('Nu există date.')
-                          : Column(
-                              children: List<Widget>.generate(_materials.length,
-                                  (index) {
-                                final e = _materials[index];
-                                return ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text((e['name'] ?? '-').toString()),
-                                  subtitle: Text(
-                                    _isTechnician
-                                        ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
-                                        : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
-                                  ),
-                                  trailing: Wrap(
-                                    spacing: 4,
-                                    children: [
-                                      IconButton(
-                                        tooltip: 'Editează',
-                                        icon: const Icon(Icons.edit_outlined),
-                                        onPressed: () => _onEditMaterial(index),
-                                      ),
-                                      if (!_isTechnician)
-                                        IconButton(
-                                          tooltip: 'Șterge',
-                                          icon:
-                                              const Icon(Icons.delete_outline),
-                                          onPressed: () =>
-                                              _onDeleteMaterial(index),
-                                        ),
-                                    ],
-                                  ),
-                                );
-                              }),
-                            ),
-                      action: TextButton.icon(
-                        onPressed: _onAddMaterial,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Adaugă material'),
-                      ),
-                    ),
-                    _section(
-                      context,
-                      'Manoperă / ore',
-                      _labor.isEmpty
-                          ? const Text('Nu există date.')
-                          : Column(
-                              children:
-                                  List<Widget>.generate(_labor.length, (index) {
-                                final e = _labor[index];
-                                final dateLabel = '${e['date'] ?? '-'}';
-                                final hoursLabel =
-                                    _asDouble(e['hours']).toStringAsFixed(2);
-                                final rateValue = _laborRateForRow(e);
-                                final rateLabel = rateValue > 0
-                                    ? rateValue.toStringAsFixed(2)
-                                    : '0.00 (fallback)';
-                                final costOreLabel =
-                                    _laborOreCost(e).toStringAsFixed(2);
-                                final costDiurnaLabel =
-                                    _laborPerDiemCost(e).toStringAsFixed(2);
-                                final costCazareLabel =
-                                    _laborLodgingCost(e).toStringAsFixed(2);
-                                final costTotalLabel =
-                                    _laborTotalLineCost(e).toStringAsFixed(2);
-                                final notesLabel = '${e['notes'] ?? ''}'.trim();
-                                final tripDaysLabel =
-                                    _formatDecimal(_laborTripDays(e));
-                                final periodLabel = _laborPeriodLabel(e);
-                                return ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text((e['who'] ?? '-').toString()),
-                                  subtitle: Text(
-                                    _isTechnician
-                                        ? (notesLabel.isEmpty
-                                            ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
-                                            : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
-                                        : (notesLabel.isEmpty
-                                            ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
-                                            : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
-                                  ),
-                                  trailing: Wrap(
-                                    spacing: 4,
-                                    children: [
-                                      IconButton(
-                                        tooltip: 'Editează',
-                                        icon: const Icon(Icons.edit_outlined),
-                                        onPressed: () => _onEditLabor(index),
-                                      ),
-                                      if (!_isTechnician)
-                                        IconButton(
-                                          tooltip: 'Șterge',
-                                          icon:
-                                              const Icon(Icons.delete_outline),
-                                          onPressed: () =>
-                                              _onDeleteLabor(index),
-                                        ),
-                                    ],
-                                  ),
-                                );
-                              }),
-                            ),
-                      action: TextButton.icon(
-                        onPressed: _onAddLabor,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Adaugă ore'),
-                      ),
-                    ),
-                    _section(
-                      context,
-                      'Echipamente furnizate de beneficiar',
-                      _beneficiarySuppliedEquipment.isEmpty
-                          ? const Text('Nu exista date.')
-                          : Column(
-                              children: List<Widget>.generate(
-                                _beneficiarySuppliedEquipment.length,
-                                (index) {
-                                  final item =
-                                      _beneficiarySuppliedEquipment[index];
-                                  final subtitle = <String>[
-                                    if (item.equipmentType.trim().isNotEmpty)
-                                      'Tip: ${item.equipmentType}',
-                                    if (item.brand.trim().isNotEmpty)
-                                      'Brand: ${item.brand}',
-                                    if (item.model.trim().isNotEmpty)
-                                      'Model: ${item.model}',
-                                    if (item.serialNumber.trim().isNotEmpty)
-                                      'Serie: ${item.serialNumber}',
-                                    'Cantitate: ${item.quantity.toStringAsFixed(2)}',
-                                  ].join(' • ');
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: const Icon(
-                                      Icons.precision_manufacturing_outlined,
-                                    ),
-                                    title: Text(item.name),
-                                    subtitle: Text(
-                                      item.notes.trim().isEmpty
-                                          ? subtitle
-                                          : '$subtitle\nObservatii: ${item.notes}',
-                                    ),
-                                    trailing: Wrap(
-                                      spacing: 4,
-                                      children: [
-                                        IconButton(
-                                          tooltip: 'Editeaza',
-                                          icon: const Icon(Icons.edit_outlined),
-                                          onPressed: () =>
-                                              _onEditBeneficiaryEquipment(
-                                                  index),
-                                        ),
-                                        IconButton(
-                                          tooltip: 'Sterge',
-                                          icon:
-                                              const Icon(Icons.delete_outline),
-                                          onPressed: () =>
-                                              _onDeleteBeneficiaryEquipment(
-                                                  index),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                      action: TextButton.icon(
-                        onPressed: _onAddBeneficiaryEquipment,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Adauga echipament'),
-                      ),
-                    ),
-                    _section(
-                      context,
-                      'Materiale furnizate de beneficiar',
-                      _beneficiarySuppliedMaterials.isEmpty
-                          ? const Text('Nu exista date.')
-                          : Column(
-                              children: List<Widget>.generate(
-                                _beneficiarySuppliedMaterials.length,
-                                (index) {
-                                  final item =
-                                      _beneficiarySuppliedMaterials[index];
-                                  final subtitle =
-                                      'UM: ${item.unit.isEmpty ? '-' : item.unit} • Cantitate: ${item.quantity.toStringAsFixed(2)}';
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: const Icon(
-                                      Icons.inventory_2_outlined,
-                                    ),
-                                    title: Text(item.name),
-                                    subtitle: Text(
-                                      item.notes.trim().isEmpty
-                                          ? subtitle
-                                          : '$subtitle\nObservatii: ${item.notes}',
-                                    ),
-                                    trailing: Wrap(
-                                      spacing: 4,
-                                      children: [
-                                        IconButton(
-                                          tooltip: 'Editeaza',
-                                          icon: const Icon(Icons.edit_outlined),
-                                          onPressed: () =>
-                                              _onEditBeneficiaryMaterial(index),
-                                        ),
-                                        IconButton(
-                                          tooltip: 'Sterge',
-                                          icon:
-                                              const Icon(Icons.delete_outline),
-                                          onPressed: () =>
-                                              _onDeleteBeneficiaryMaterial(
-                                                  index),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                      action: Wrap(
+                      const SizedBox(height: 6),
+                      Wrap(
                         spacing: 8,
                         runSpacing: 8,
-                        children: [
-                          TextButton.icon(
-                            onPressed: _onAddBeneficiaryMaterial,
-                            icon: const Icon(Icons.add),
-                            label: const Text('Adauga material'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _onImportBeneficiaryMaterials,
-                            icon: const Icon(Icons.upload_file_outlined),
-                            label: const Text('Importa lista'),
-                          ),
-                        ],
+                        children: docCounts.entries.map((entry) {
+                          final count = entry.value;
+                          final status =
+                              count > 0 ? 'exista' : 'lipseste';
+                          return _chip(
+                              entry.key, '$status (${entry.value})');
+                        }).toList(growable: false),
                       ),
-                    ),
-                    _section(
-                      context,
-                      'Resurse partener',
-                      _buildPartnerResourcesSection(),
-                      action: TextButton.icon(
-                        onPressed: _onAddPartner,
-                        icon: const Icon(Icons.handshake_outlined),
-                        label: const Text('Adaugă partener'),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Ultimele documente utile',
+                        style: Theme.of(context).textTheme.titleSmall,
                       ),
-                    ),
-                    _section(
-                      context,
-                      'Autoturisme proprii',
-                      _buildOwnVehiclesSection(),
-                      action: TextButton.icon(
-                        onPressed: _onAddOwnVehicle,
-                        icon: const Icon(Icons.directions_car_outlined),
-                        label: const Text('Adauga autoturism'),
-                      ),
-                    ),
-                    _section(
-                      context,
-                      'Procese-verbale lucrari',
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
-                          Text(
-                            'Familia noua de PV / PIF este gestionata distinct si cloud-first pentru aceasta lucrare.',
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'Tipuri disponibile: PV montaj / executie lucrari, PV PIF ventilatie / recuperator, PV PIF VRF / climatizare.',
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'La creare se pregatesc automat anexele relevante din materialele, echipamentele si datele deja existente in lucrare.',
-                          ),
-                        ],
-                      ),
-                      action: FilledButton.icon(
-                        onPressed: _openJobSiteDocumentsPage,
-                        icon: const Icon(Icons.assignment_turned_in_outlined),
-                        label: const Text('Deschide PV / PIF'),
-                      ),
-                    ),
-                    _section(
-                      context,
-                      'Certificate de garantie',
-                      _jobWarrantyCertificates.isEmpty
-                          ? const Text(
-                              'Nu exista inca certificate emise pentru aceasta lucrare.',
-                            )
-                          : Column(
-                              children: _jobWarrantyCertificates.map((item) {
-                                final coverage = _productCatalogService
-                                    .coverageStatusForCertificate(
-                                  item,
-                                );
-                                final subtitleParts = <String>[
-                                  if (item.sourceEquipmentLabel
-                                      .trim()
-                                      .isNotEmpty)
-                                    item.sourceEquipmentLabel.trim(),
-                                  if (item.jobTitle.trim().isNotEmpty)
-                                    item.jobTitle.trim(),
-                                  item.fullCertificateNumber.trim().isEmpty
-                                      ? 'Draft'
-                                      : item.fullCertificateNumber.trim(),
-                                  coverage.label,
-                                ];
-                                return ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  leading: const Icon(
-                                    Icons.verified_user_outlined,
-                                  ),
-                                  title: Text(
-                                    item.buyerName.trim().isEmpty
-                                        ? 'Certificat garantie'
-                                        : item.buyerName.trim(),
-                                  ),
-                                  subtitle: Text(subtitleParts.join(' | ')),
-                                  trailing: Wrap(
-                                    spacing: 4,
-                                    children: [
-                                      IconButton(
-                                        tooltip: 'Deschide certificat',
-                                        onPressed: () async {
-                                          final equipment =
-                                              _beneficiarySuppliedEquipment
-                                                  .where(
-                                                    (entry) =>
-                                                        entry.id ==
-                                                        item.sourceEquipmentId,
-                                                  )
-                                                  .fold<
-                                                      BeneficiarySuppliedEquipment?>(
-                                                    null,
-                                                    (previous, entry) => entry,
-                                                  );
-                                          final initial =
-                                              await _buildJobWarrantyCertificate(
-                                            equipment: equipment,
-                                            existing: item,
-                                          );
-                                          if (!mounted) return;
-                                          final saved = await showDialog<
-                                              WarrantyCertificateRecord>(
-                                            context: this.context,
-                                            builder: (context) =>
-                                                WarrantyCertificateEditorDialog(
-                                              initial: initial,
-                                            ),
-                                          );
-                                          if (saved == null) return;
-                                          await _productCatalogService
-                                              .saveWarrantyCertificate(saved);
-                                          await _loadData();
-                                        },
-                                        icon: const Icon(Icons.edit_outlined),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Genereaza PDF',
-                                        onPressed: () =>
-                                            _generateJobWarrantyCertificatePdf(
-                                          item,
-                                          share: false,
-                                        ),
-                                        icon: const Icon(
-                                          Icons.picture_as_pdf_outlined,
-                                        ),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Save As',
-                                        onPressed: () =>
-                                            _generateJobWarrantyCertificatePdf(
-                                          item,
-                                          share: false,
-                                          saveAs: true,
-                                        ),
-                                        icon:
-                                            const Icon(Icons.save_as_outlined),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Share',
-                                        onPressed: () =>
-                                            _generateJobWarrantyCertificatePdf(
-                                          item,
-                                          share: true,
-                                        ),
-                                        icon: const Icon(Icons.share_outlined),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }).toList(growable: false),
-                            ),
-                      action: FilledButton.icon(
-                        onPressed: _openWarrantyCertificateFlow,
-                        icon: const Icon(Icons.verified_user_outlined),
-                        label: Text(_jobWarrantyCertificates.isEmpty
-                            ? 'Genereaza certificat garantie'
-                            : 'Deschide certificat garantie'),
-                      ),
-                    ),
-                    if (!_isTechnician)
-                      _section(
-                        context,
-                        'Rentabilitate lucrare',
-                        _buildProfitabilitySection(),
-                      ),
-                    if (!_isTechnician)
-                      _section(
-                        context,
-                        'Profit și Partener',
-                        _buildPartnerProfitSection(),
-                      ),
-                    _section(
-                      context,
-                      'Pontaj teren',
-                      _buildTimeTrackingSection(),
-                    ),
-                    _section(
-                      context,
-                      'Documente asociate',
-                      _documentsForDisplay(_documents).isEmpty
-                          ? const Text('Nu există date.')
-                          : Column(
-                              children: List<Widget>.generate(
-                                  _documentsForDisplay(_documents).length,
-                                  (index) {
-                                final e =
-                                    _documentsForDisplay(_documents)[index];
-                                final type = _documentListTypeLabel(e);
-                                final title =
-                                    '${e['titlu'] ?? e['title'] ?? '-'}';
-                                final number =
-                                    '${e['numarDocument'] ?? e['number'] ?? ''}'
-                                        .trim();
-                                final date =
-                                    '${e['dataDocument'] ?? e['date'] ?? ''}'
-                                        .trim();
-                                final status = _normalizeAppointmentStatusLabel(
-                                    e['status']);
-                                final filePath =
-                                    '${e['filePath'] ?? e['pdfPath'] ?? ''}'
-                                        .trim();
-                                final registryNumber =
-                                    '${e['registryNumber'] ?? ''}'.trim();
-                                final registeredAt =
-                                    '${e['registeredAt'] ?? ''}'.trim();
-                                final subtitle = <String>[
-                                  if (type.trim().isNotEmpty) type,
+                      const SizedBox(height: 6),
+                      if (recentDocs.isEmpty)
+                        _emptyStateText('Nu exista documente asociate.')
+                      else
+                        Column(
+                          children: recentDocs.take(3).map((doc) {
+                            final docType = normalizeDocType(doc);
+                            final title =
+                                '${doc['titlu'] ?? doc['title'] ?? '-'}';
+                            final number =
+                                '${doc['numarDocument'] ?? doc['number'] ?? ''}'
+                                    .trim();
+                            final status = '${doc['status'] ?? '-'}';
+                            final date =
+                                '${doc['dataDocument'] ?? doc['date'] ?? ''}'
+                                    .trim();
+                            return ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(title),
+                              subtitle: Text(
+                                <String>[
+                                  if (docType.isNotEmpty) docType,
                                   if (number.isNotEmpty) 'Nr: $number',
-                                  if (date.isNotEmpty) date,
                                   if (status.trim().isNotEmpty)
                                     'Status: $status',
-                                ].join(' • ');
-                                final notes =
-                                    '${e['observatii'] ?? e['notes'] ?? ''}'
-                                        .trim();
-                                final registrySuffix = <String>[
-                                  registryNumber.isNotEmpty
-                                      ? 'Registratura: $registryNumber'
-                                      : 'Registratura: neinregistrat',
-                                  if (registeredAt.isNotEmpty)
-                                    'Inregistrat: $registeredAt',
-                                ].join(' • ');
-                                final linkedAppointmentId =
-                                    _linkedAppointmentIdOfDocument(e);
-                                final linkedAppointmentTitle =
-                                    '${e['sourceAppointmentTitle'] ?? ''}'
-                                        .trim();
-                                final linkedAppointmentDate =
-                                    '${e['sourceAppointmentDate'] ?? ''}'
-                                        .trim();
-                                final linkedAppointmentSuffix = linkedAppointmentId
-                                        .isEmpty
-                                    ? ''
-                                    : 'Programare: ${linkedAppointmentTitle.isEmpty ? linkedAppointmentId : linkedAppointmentTitle}${linkedAppointmentDate.isEmpty ? '' : ' ($linkedAppointmentDate)'}';
-                                return ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text(title),
-                                  subtitle: Text(notes.isEmpty
-                                      ? (linkedAppointmentSuffix.isEmpty
-                                          ? '$subtitle • $registrySuffix'
-                                          : '$subtitle • $registrySuffix\n$linkedAppointmentSuffix')
-                                      : (linkedAppointmentSuffix.isEmpty
-                                          ? '$subtitle • $registrySuffix\n$notes'
-                                          : '$subtitle • $registrySuffix\n$linkedAppointmentSuffix\n$notes')),
-                                  trailing: PopupMenuButton<String>(
-                                    icon: const Icon(Icons.more_vert),
-                                    tooltip: 'Acțiuni document',
-                                    itemBuilder: (_) => [
-                                      if (linkedAppointmentId.isNotEmpty)
-                                        const PopupMenuItem(
-                                          value: 'appointment',
-                                          child: ListTile(
-                                            leading: Icon(Icons.event_note_outlined),
-                                            title: Text('Deschide programarea'),
-                                            contentPadding: EdgeInsets.zero,
-                                          ),
-                                        ),
-                                      const PopupMenuItem(
-                                        value: 'open',
-                                        child: ListTile(
-                                          leading: Icon(Icons.open_in_new),
-                                          title: Text('Deschide'),
-                                          contentPadding: EdgeInsets.zero,
-                                        ),
-                                      ),
-                                      const PopupMenuItem(
-                                        value: 'edit',
-                                        child: ListTile(
-                                          leading: Icon(Icons.edit_outlined),
-                                          title: Text('Editează'),
-                                          contentPadding: EdgeInsets.zero,
-                                        ),
-                                      ),
-                                      const PopupMenuItem(
-                                        value: 'pdf',
-                                        child: ListTile(
-                                          leading: Icon(Icons.picture_as_pdf_outlined),
-                                          title: Text('Export PDF'),
-                                          contentPadding: EdgeInsets.zero,
-                                        ),
-                                      ),
-                                      const PopupMenuItem(
-                                        value: 'save_as',
-                                        child: ListTile(
-                                          leading: Icon(Icons.save_as_outlined),
-                                          title: Text('Salvează PDF ca...'),
-                                          contentPadding: EdgeInsets.zero,
-                                        ),
-                                      ),
-                                      const PopupMenuItem(
-                                        value: 'open_pdf',
-                                        child: ListTile(
-                                          leading: Icon(Icons.file_open_outlined),
-                                          title: Text('Deschide PDF'),
-                                          contentPadding: EdgeInsets.zero,
-                                        ),
-                                      ),
-                                      const PopupMenuItem(
-                                        value: 'photos',
-                                        child: ListTile(
-                                          leading: Icon(Icons.photo_camera_outlined),
-                                          title: Text('Poze teren'),
-                                          contentPadding: EdgeInsets.zero,
-                                        ),
-                                      ),
-                                      if (!_isTechnician)
-                                        const PopupMenuItem(
-                                          value: 'delete',
-                                          child: ListTile(
-                                            leading: Icon(Icons.delete_outline),
-                                            title: Text('Șterge'),
-                                            contentPadding: EdgeInsets.zero,
-                                          ),
-                                        ),
-                                    ],
-                                    onSelected: (value) {
-                                      switch (value) {
-                                        case 'appointment':
-                                          _onOpenLinkedAppointmentFromDocument(e);
-                                        case 'open':
-                                          _onViewDocumentFixed(index);
-                                        case 'edit':
-                                          _onEditDocumentSmart(index);
-                                        case 'pdf':
-                                          _onExportDocumentPdf(index);
-                                        case 'save_as':
-                                          _onExportDocumentPdf(index,
-                                              saveAs: true);
-                                        case 'open_pdf':
-                                          _onOpenDocumentPdf(index);
-                                        case 'photos':
-                                          _openFieldPhotosForDocument(index);
-                                        case 'delete':
-                                          _onDeleteDocument(index);
-                                      }
-                                    },
-                                  ),
-                                );
-                              }),
-                            ),
-                      action: Wrap(
-                        spacing: 4,
-                        children: [
-                          TextButton.icon(
-                            onPressed: _onGenerateProcesVerbal,
-                            icon: const Icon(Icons.assignment_outlined),
-                            label: const Text('Genereaza PV'),
+                                  if (date.isNotEmpty) date,
+                                ].join(' • '),
+                              ),
+                            );
+                          }).toList(growable: false),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+            _section(
+              context,
+              'Cost real lucrare',
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _chip('Total materiale',
+                      _materialsTotal.toStringAsFixed(2)),
+                  _chip('Total manoperă ore',
+                      _laborOreTotal.toStringAsFixed(2)),
+                  _chip('Total diurnă',
+                      _laborDiurnaTotal.toStringAsFixed(2)),
+                  _chip('Total cazare',
+                      _laborCazareTotal.toStringAsFixed(2)),
+                  _chip('Total manoperă completă',
+                      _laborTotalCost.toStringAsFixed(2)),
+                  _chip('Cost real total',
+                      _realTotalCost.toStringAsFixed(2)),
+                  _chip(
+                    'Valoare estimată',
+                    _estimatedValue.toStringAsFixed(2),
+                  ),
+                  _chip(
+                    'Diferență estimat vs real',
+                    _estimatedVsRealDifference.toStringAsFixed(2),
+                  ),
+                  _chip(
+                      'Număr materiale', _materials.length.toString()),
+                  _chip('Total înregistrări ore',
+                      _labor.length.toString()),
+                  _chip('Total ore persoane',
+                      _personHoursTotal.toStringAsFixed(2)),
+                  _chip('Total ore echipe',
+                      _teamHoursTotal.toStringAsFixed(2)),
+                  _chip(
+                    'Total parteneri (separat)',
+                    '${_partnersTotal.toStringAsFixed(2)} $_partnersCurrency',
+                  ),
+                  _chip('Programări asociate',
+                      _appointments.length.toString()),
+                  _chip('Echipa curentă', _assignedTeam?.label ?? '-'),
+                  _chip('Număr intrări jurnal',
+                      _journal.length.toString()),
+                  _chip(
+                    'Etape bifate',
+                    '${_checklist.values.where((value) => value).length}/${_checklistDefs.length}',
+                  ),
+                  _chip('Taskuri zilnice',
+                      _workTaskEntries.length.toString()),
+                  _chip(
+                    'Taskuri finalizate',
+                    _workTaskEntries
+                        .where((row) => row['completed'] == true)
+                        .length
+                        .toString(),
+                  ),
+                ],
+              ),
+            ),
+            if (!_isTechnician)
+              _section(
+                context,
+                'Rentabilitate lucrare',
+                _buildProfitabilitySection(),
+              ),
+            if (!_isTechnician)
+              _section(
+                context,
+                'Profit și Partener',
+                _buildPartnerProfitSection(),
+              ),
+            if (!_isTechnician)
+              _section(
+                context,
+                'Setări comerciale globale',
+                _buildCommercialSettingsSummary(),
+                action: OutlinedButton.icon(
+                  onPressed: _openCommercialSettingsDialog,
+                  icon: const Icon(Icons.tune_outlined, size: 16),
+                  label: const Text('Editează'),
+                ),
+              ),
+            _section(
+              context,
+              'Acces rapid documente',
+              _buildQuickDocumentActions(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDocumenteTab(BuildContext context) {
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      child: SelectionArea(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _section(
+              context,
+              'Procese-verbale lucrari',
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  Text(
+                    'Familia noua de PV / PIF este gestionata distinct si cloud-first pentru aceasta lucrare.',
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Tipuri disponibile: PV montaj / executie lucrari, PV PIF ventilatie / recuperator, PV PIF VRF / climatizare.',
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'La creare se pregatesc automat anexele relevante din materialele, echipamentele si datele deja existente in lucrare.',
+                  ),
+                ],
+              ),
+              action: FilledButton.icon(
+                onPressed: _openJobSiteDocumentsPage,
+                icon: const Icon(Icons.assignment_turned_in_outlined),
+                label: const Text('Deschide PV / PIF'),
+              ),
+            ),
+            _section(
+              context,
+              'Certificate de garantie',
+              _jobWarrantyCertificates.isEmpty
+                  ? const Text(
+                      'Nu exista inca certificate emise pentru aceasta lucrare.',
+                    )
+                  : Column(
+                      children: _jobWarrantyCertificates.map((item) {
+                        final coverage = _productCatalogService
+                            .coverageStatusForCertificate(
+                          item,
+                        );
+                        final subtitleParts = <String>[
+                          if (item.sourceEquipmentLabel
+                              .trim()
+                              .isNotEmpty)
+                            item.sourceEquipmentLabel.trim(),
+                          if (item.jobTitle.trim().isNotEmpty)
+                            item.jobTitle.trim(),
+                          item.fullCertificateNumber.trim().isEmpty
+                              ? 'Draft'
+                              : item.fullCertificateNumber.trim(),
+                          coverage.label,
+                        ];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(
+                            Icons.verified_user_outlined,
                           ),
-                          TextButton.icon(
-                            onPressed: _onGeneratePif,
-                            icon: const Icon(Icons.settings_suggest_outlined),
-                            label: const Text('Genereaza PIF'),
+                          title: Text(
+                            item.buyerName.trim().isEmpty
+                                ? 'Certificat garantie'
+                                : item.buyerName.trim(),
                           ),
-                          if (!_isTechnician) ...[
-                            const SizedBox(width: 8),
-                            OutlinedButton.icon(
-                              onPressed: _onGenerateOferta,
-                              icon: const Icon(Icons.request_quote_outlined),
-                              label: const Text('Genereaza Ofertă'),
-                            ),
-                            const SizedBox(width: 8),
-                            OutlinedButton.icon(
-                              onPressed: _onGenerateDeviz,
-                              icon: const Icon(Icons.calculate_outlined),
-                              label: const Text('Genereaza Deviz'),
-                            ),
-                            const SizedBox(width: 8),
-                            OutlinedButton.icon(
-                              onPressed: _onGenerateContract,
-                              icon: const Icon(Icons.gavel_outlined),
-                              label: const Text('Genereaza Contract'),
-                            ),
-                          ],
-                          TextButton.icon(
-                            onPressed: _onAddDocument,
-                            icon: const Icon(Icons.add),
-                            label: const Text('Adaugă document'),
-                          ),
-                        ],
-                      ),
-                    ),
-                    _section(
-                      context,
-                      'Timeline taskuri / volum zilnic',
-                      _workTaskEntries.isEmpty
-                          ? const Text(
-                              'Nu exista inca taskuri. Adauga etape cu ora inceput/final, oameni alocati si status.',
-                            )
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children:
-                                      _workloadSummaryByDay().map((entry) {
-                                    final payload = entry.value;
-                                    final minutes = payload['minutes'] as int;
-                                    final hours = minutes / 60.0;
-                                    final taskCount = payload['tasks'] as int;
-                                    final people =
-                                        payload['people'] as Set<String>;
-                                    return _chip(
-                                      _dayKeyToLabel(entry.key),
-                                      '${hours.toStringAsFixed(2)}h | $taskCount task | ${people.length} pers',
-                                    );
-                                  }).toList(growable: false),
-                                ),
-                                const SizedBox(height: 10),
-                                ...List<Widget>.generate(
-                                    _workTaskEntries.length, (index) {
-                                  final row = _workTaskEntries[index];
-                                  final title = '${row['title'] ?? '-'}'.trim();
-                                  final workers = _workTaskWorkers(row);
-                                  final startAt = _workTaskStartAt(row);
-                                  final endAt = _workTaskEndAt(row);
-                                  final completed = row['completed'] == true;
-                                  final notes = '${row['notes'] ?? ''}'.trim();
-                                  final interval =
-                                      '${startAt == null ? '-' : _formatDateTime(startAt.toIso8601String())} - ${endAt == null ? '-' : _formatDateTime(endAt.toIso8601String())}';
-                                  return ListTile(
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: Checkbox(
-                                      value: completed,
-                                      onChanged: (value) {
-                                        if (value == null) return;
-                                        _onToggleWorkTaskCompleted(
-                                            index, value);
-                                      },
-                                    ),
-                                    title: Text(title.isEmpty ? '-' : title),
-                                    subtitle: Text(
-                                      notes.isEmpty
-                                          ? '$interval • Durata: ${_workTaskDurationLabel(row)} • Oameni: ${workers.isEmpty ? '-' : workers.join(', ')}'
-                                          : '$interval • Durata: ${_workTaskDurationLabel(row)} • Oameni: ${workers.isEmpty ? '-' : workers.join(', ')}\nObs: $notes',
-                                    ),
-                                    trailing: Wrap(
-                                      spacing: 4,
-                                      children: [
-                                        IconButton(
-                                          tooltip: 'Editeaza task',
-                                          onPressed: () =>
-                                              _onEditWorkTask(index),
-                                          icon: const Icon(Icons.edit_outlined),
-                                        ),
-                                        IconButton(
-                                          tooltip: 'Sterge task',
-                                          onPressed: () =>
-                                              _onDeleteWorkTask(index),
-                                          icon:
-                                              const Icon(Icons.delete_outline),
-                                        ),
-                                      ],
+                          subtitle: Text(subtitleParts.join(' | ')),
+                          trailing: Wrap(
+                            spacing: 4,
+                            children: [
+                              IconButton(
+                                tooltip: 'Deschide certificat',
+                                onPressed: () async {
+                                  final equipment =
+                                      _beneficiarySuppliedEquipment
+                                          .where(
+                                            (entry) =>
+                                                entry.id ==
+                                                item.sourceEquipmentId,
+                                          )
+                                          .fold<
+                                              BeneficiarySuppliedEquipment?>(
+                                            null,
+                                            (previous, entry) => entry,
+                                          );
+                                  final initial =
+                                      await _buildJobWarrantyCertificate(
+                                    equipment: equipment,
+                                    existing: item,
+                                  );
+                                  if (!mounted) return;
+                                  final saved = await showDialog<
+                                      WarrantyCertificateRecord>(
+                                    context: this.context,
+                                    builder: (context) =>
+                                        WarrantyCertificateEditorDialog(
+                                      initial: initial,
                                     ),
                                   );
-                                }),
-                              ],
-                            ),
-                      action: TextButton.icon(
-                        onPressed: _onAddWorkTask,
-                        icon: const Icon(
-                            Icons.playlist_add_check_circle_outlined),
-                        label: const Text('Adauga task'),
-                      ),
-                    ),
-                    _section(
-                      context,
-                      'Etape operative',
-                      Column(
-                        children: _checklistDefs
-                            .map(
-                              (entry) => CheckboxListTile(
-                                contentPadding: EdgeInsets.zero,
-                                value: _checklist[entry.key] ?? false,
-                                title: Text(entry.value),
-                                onChanged: (value) {
-                                  if (value == null) return;
-                                  _onToggleChecklist(entry.key, value);
+                                  if (saved == null) return;
+                                  await _productCatalogService
+                                      .saveWarrantyCertificate(saved);
+                                  await _loadData();
                                 },
+                                icon: const Icon(Icons.edit_outlined),
                               ),
-                            )
-                            .toList(growable: false),
-                      ),
+                              IconButton(
+                                tooltip: 'Genereaza PDF',
+                                onPressed: () =>
+                                    _generateJobWarrantyCertificatePdf(
+                                  item,
+                                  share: false,
+                                ),
+                                icon: const Icon(
+                                  Icons.picture_as_pdf_outlined,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Save As',
+                                onPressed: () =>
+                                    _generateJobWarrantyCertificatePdf(
+                                  item,
+                                  share: false,
+                                  saveAs: true,
+                                ),
+                                icon:
+                                    const Icon(Icons.save_as_outlined),
+                              ),
+                              IconButton(
+                                tooltip: 'Share',
+                                onPressed: () =>
+                                    _generateJobWarrantyCertificatePdf(
+                                  item,
+                                  share: true,
+                                ),
+                                icon: const Icon(Icons.share_outlined),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(growable: false),
                     ),
-                    if (!_isTechnician)
-                      _section(
-                        context,
-                        'Setări comerciale globale',
-                        _buildCommercialSettingsSummary(),
-                        action: OutlinedButton.icon(
-                          onPressed: _openCommercialSettingsDialog,
-                          icon: const Icon(Icons.tune_outlined, size: 16),
-                          label: const Text('Editează'),
-                        ),
-                      ),
-                    _section(
-                      context,
-                      'Acces rapid documente',
-                      _buildQuickDocumentActions(),
-                    ),
-                    _section(
-                      context,
-                      'Istoric lucrare',
-                      _journal.isEmpty
-                          ? const Text('Nu există date.')
-                          : Column(
-                              children: List<Widget>.generate(_journal.length,
-                                  (index) {
-                                final e = _journal[index];
-                                final action = '${e['action'] ?? '-'}';
-                                final message = '${e['message'] ?? '-'}';
-                                final at = _formatDateTime('${e['at'] ?? ''}');
-                                return ListTile(
+              action: FilledButton.icon(
+                onPressed: _openWarrantyCertificateFlow,
+                icon: const Icon(Icons.verified_user_outlined),
+                label: Text(_jobWarrantyCertificates.isEmpty
+                    ? 'Genereaza certificat garantie'
+                    : 'Deschide certificat garantie'),
+              ),
+            ),
+            _section(
+              context,
+              'Documente asociate',
+              _documentsForDisplay(_documents).isEmpty
+                  ? const Text('Nu există date.')
+                  : Column(
+                      children: List<Widget>.generate(
+                          _documentsForDisplay(_documents).length,
+                          (index) {
+                        final e =
+                            _documentsForDisplay(_documents)[index];
+                        final type = _documentListTypeLabel(e);
+                        final title =
+                            '${e['titlu'] ?? e['title'] ?? '-'}';
+                        final number =
+                            '${e['numarDocument'] ?? e['number'] ?? ''}'
+                                .trim();
+                        final date =
+                            '${e['dataDocument'] ?? e['date'] ?? ''}'
+                                .trim();
+                        final status = _normalizeAppointmentStatusLabel(
+                            e['status']);
+                        final filePath =
+                            '${e['filePath'] ?? e['pdfPath'] ?? ''}'
+                                .trim();
+                        final registryNumber =
+                            '${e['registryNumber'] ?? ''}'.trim();
+                        final registeredAt =
+                            '${e['registeredAt'] ?? ''}'.trim();
+                        final subtitle = <String>[
+                          if (type.trim().isNotEmpty) type,
+                          if (number.isNotEmpty) 'Nr: $number',
+                          if (date.isNotEmpty) date,
+                          if (status.trim().isNotEmpty)
+                            'Status: $status',
+                        ].join(' • ');
+                        final notes =
+                            '${e['observatii'] ?? e['notes'] ?? ''}'
+                                .trim();
+                        final registrySuffix = <String>[
+                          registryNumber.isNotEmpty
+                              ? 'Registratura: $registryNumber'
+                              : 'Registratura: neinregistrat',
+                          if (registeredAt.isNotEmpty)
+                            'Inregistrat: $registeredAt',
+                        ].join(' • ');
+                        final linkedAppointmentId =
+                            _linkedAppointmentIdOfDocument(e);
+                        final linkedAppointmentTitle =
+                            '${e['sourceAppointmentTitle'] ?? ''}'
+                                .trim();
+                        final linkedAppointmentDate =
+                            '${e['sourceAppointmentDate'] ?? ''}'
+                                .trim();
+                        final linkedAppointmentSuffix = linkedAppointmentId
+                                .isEmpty
+                            ? ''
+                            : 'Programare: ${linkedAppointmentTitle.isEmpty ? linkedAppointmentId : linkedAppointmentTitle}${linkedAppointmentDate.isEmpty ? '' : ' ($linkedAppointmentDate)'}';
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(title),
+                          subtitle: Text(notes.isEmpty
+                              ? (linkedAppointmentSuffix.isEmpty
+                                  ? '$subtitle • $registrySuffix'
+                                  : '$subtitle • $registrySuffix\n$linkedAppointmentSuffix')
+                              : (linkedAppointmentSuffix.isEmpty
+                                  ? '$subtitle • $registrySuffix\n$notes'
+                                  : '$subtitle • $registrySuffix\n$linkedAppointmentSuffix\n$notes')),
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert),
+                            tooltip: 'Acțiuni document',
+                            itemBuilder: (_) => [
+                              if (linkedAppointmentId.isNotEmpty)
+                                const PopupMenuItem(
+                                  value: 'appointment',
+                                  child: ListTile(
+                                    leading: Icon(Icons.event_note_outlined),
+                                    title: Text('Deschide programarea'),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                              const PopupMenuItem(
+                                value: 'open',
+                                child: ListTile(
+                                  leading: Icon(Icons.open_in_new),
+                                  title: Text('Deschide'),
                                   contentPadding: EdgeInsets.zero,
-                                  title: Text(message),
-                                  subtitle: Text('$action • $at'),
-                                );
-                              }),
-                            ),
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: ListTile(
+                                  leading: Icon(Icons.edit_outlined),
+                                  title: Text('Editează'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'pdf',
+                                child: ListTile(
+                                  leading: Icon(Icons.picture_as_pdf_outlined),
+                                  title: Text('Export PDF'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'save_as',
+                                child: ListTile(
+                                  leading: Icon(Icons.save_as_outlined),
+                                  title: Text('Salvează PDF ca...'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'open_pdf',
+                                child: ListTile(
+                                  leading: Icon(Icons.file_open_outlined),
+                                  title: Text('Deschide PDF'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              const PopupMenuItem(
+                                value: 'photos',
+                                child: ListTile(
+                                  leading: Icon(Icons.photo_camera_outlined),
+                                  title: Text('Poze teren'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
+                              ),
+                              if (!_isTechnician)
+                                const PopupMenuItem(
+                                  value: 'delete',
+                                  child: ListTile(
+                                    leading: Icon(Icons.delete_outline),
+                                    title: Text('Șterge'),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                                ),
+                            ],
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'appointment':
+                                  _onOpenLinkedAppointmentFromDocument(e);
+                                case 'open':
+                                  _onViewDocumentFixed(index);
+                                case 'edit':
+                                  _onEditDocumentSmart(index);
+                                case 'pdf':
+                                  _onExportDocumentPdf(index);
+                                case 'save_as':
+                                  _onExportDocumentPdf(index,
+                                      saveAs: true);
+                                case 'open_pdf':
+                                  _onOpenDocumentPdf(index);
+                                case 'photos':
+                                  _openFieldPhotosForDocument(index);
+                                case 'delete':
+                                  _onDeleteDocument(index);
+                              }
+                            },
+                          ),
+                        );
+                      }),
+                    ),
+              action: Wrap(
+                spacing: 4,
+                children: [
+                  TextButton.icon(
+                    onPressed: _onGenerateProcesVerbal,
+                    icon: const Icon(Icons.assignment_outlined),
+                    label: const Text('Genereaza PV'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _onGeneratePif,
+                    icon: const Icon(Icons.settings_suggest_outlined),
+                    label: const Text('Genereaza PIF'),
+                  ),
+                  if (!_isTechnician) ...[
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _onGenerateOferta,
+                      icon: const Icon(Icons.request_quote_outlined),
+                      label: const Text('Genereaza Ofertă'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _onGenerateDeviz,
+                      icon: const Icon(Icons.calculate_outlined),
+                      label: const Text('Genereaza Deviz'),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _onGenerateContract,
+                      icon: const Icon(Icons.gavel_outlined),
+                      label: const Text('Genereaza Contract'),
                     ),
                   ],
-                ),
-              ), // SelectionArea
+                  TextButton.icon(
+                    onPressed: _onAddDocument,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Adaugă document'),
+                  ),
+                ],
+              ),
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _onAddWorkTask,
-        icon: const Icon(Icons.add_task),
-        label: const Text('Task lucru'),
-        tooltip: 'Adaugă etapă / task lucrat',
+            _section(
+              context,
+              'Istoric lucrare',
+              _journal.isEmpty
+                  ? const Text('Nu există date.')
+                  : Column(
+                      children: List<Widget>.generate(_journal.length,
+                          (index) {
+                        final e = _journal[index];
+                        final action = '${e['action'] ?? '-'}';
+                        final message = '${e['message'] ?? '-'}';
+                        final at = _formatDateTime('${e['at'] ?? ''}');
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(message),
+                          subtitle: Text('$action • $at'),
+                        );
+                      }),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -15054,10 +15649,13 @@ Widget _section(BuildContext context, String title, Widget child,
       initiallyExpanded: _isInitiallyExpandedSection(title),
       tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
       childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-      title: Row(
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(child: Text(title, style: titleStyle)),
-          if (action != null) action,
+          Text(title, style: titleStyle),
+          if (action != null)
+            Align(alignment: Alignment.centerRight, child: action),
         ],
       ),
       children: [
@@ -15505,6 +16103,7 @@ class _MaterialOption {
   }
 }
 
+// ── Helper pentru _buildSituatieTab ──────────────────────────────────────────
 String _fileNameFromPath(String path) {
   final normalized = path.trim().replaceAll('\\', '/');
   if (normalized.isEmpty) return '';

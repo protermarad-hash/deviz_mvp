@@ -1,0 +1,971 @@
+import 'package:flutter/material.dart';
+
+import '../../core/help/help_module_button.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/services/communication_service.dart';
+import '../clients/client_models.dart';
+import 'crm_models.dart';
+import 'crm_repository.dart';
+
+class CrmPage extends StatefulWidget {
+  const CrmPage({super.key, this.repository});
+
+  final AppDataRepository? repository;
+
+  @override
+  State<CrmPage> createState() => _CrmPageState();
+}
+
+class _CrmPageState extends State<CrmPage>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
+  final _repo = CrmRepository.instance;
+  List<ClientRecord> _clients = [];
+
+  List<CrmRecord> _all = [];
+  CrmStats? _stats;
+  bool _loading = true;
+  String _search = '';
+  String _filtruStadiu = 'Toate';
+  String _filtruSursa = 'Toate';
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 3, vsync: this);
+    Future.microtask(_load);
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    final items = await _repo.listMerged();
+    final stats = await _repo.getStats();
+    if (widget.repository != null && _clients.isEmpty) {
+      try {
+        _clients = await widget.repository!.listClients();
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _all = items;
+      _stats = stats;
+      _loading = false;
+    });
+  }
+
+  List<CrmRecord> get _filtered {
+    var list = _all;
+    if (_search.isNotEmpty) {
+      final q = _search.toLowerCase();
+      list = list.where((r) {
+        return r.titlu.toLowerCase().contains(q) ||
+            r.clientName.toLowerCase().contains(q) ||
+            r.phoneNumbers.any((p) => p.contains(q));
+      }).toList();
+    }
+    if (_filtruStadiu != 'Toate') {
+      final s = CrmStadiu.values.firstWhere(
+          (s) => s.label == _filtruStadiu,
+          orElse: () => CrmStadiu.lead);
+      list = list.where((r) => r.stadiu == s).toList();
+    }
+    if (_filtruSursa != 'Toate') {
+      list = list.where((r) => r.sursa == _filtruSursa).toList();
+    }
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final necActiune =
+        _all.where((r) => r.necesitaActiune && r.esteActiv).length;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('CRM — Pipeline vanzari'),
+        actions: [
+          if (necActiune > 0)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Chip(
+                label: Text('$necActiune actiuni'),
+                backgroundColor: Colors.red.shade100,
+                labelStyle: const TextStyle(
+                    color: Colors.red, fontWeight: FontWeight.w600),
+              ),
+            ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loading ? null : _load,
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Lead nou',
+            onPressed: _loading ? null : () => _showEditDialog(null),
+          ),
+          const HelpModuleButton(moduleId: 'crm'),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: [
+            const Tab(icon: Icon(Icons.view_column_outlined), text: 'Pipeline'),
+            Tab(
+              icon: const Icon(Icons.list_outlined),
+              text: 'Lista (${_all.length})',
+            ),
+            const Tab(icon: Icon(Icons.bar_chart_outlined), text: 'Statistici'),
+          ],
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : TabBarView(
+              controller: _tabs,
+              children: [
+                _buildPipelineTab(),
+                _buildListTab(),
+                _buildStatsTab(),
+              ],
+            ),
+    );
+  }
+
+  // ── TAB 0 — Pipeline (Kanban) ─────────────────────────────────────────────
+
+  Widget _buildPipelineTab() {
+    final stadii = CrmStadiu.values
+        .where((s) => s != CrmStadiu.pierdut && s != CrmStadiu.inactiv)
+        .toList();
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: stadii.map((stadiu) {
+          final records =
+              _all.where((r) => r.stadiu == stadiu).toList();
+          final valoare = records.fold<double>(
+              0, (s, r) => s + r.valoareEstimata);
+          return _buildKanbanColumn(stadiu, records, valoare);
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildKanbanColumn(
+      CrmStadiu stadiu, List<CrmRecord> records, double valoare) {
+    return Container(
+      width: 220,
+      margin: const EdgeInsets.only(right: 10),
+      decoration: BoxDecoration(
+        color: stadiu.color.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: stadiu.color.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header coloană
+          Container(
+            width: double.infinity,
+            padding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: stadiu.color.withValues(alpha: 0.12),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(10)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  stadiu.label,
+                  style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: stadiu.color,
+                      fontSize: 13),
+                ),
+                Text(
+                  '${records.length} lead${records.length != 1 ? 'uri' : ''}'
+                  '${valoare > 0 ? ' · ${valoare.toStringAsFixed(0)} RON' : ''}',
+                  style: TextStyle(
+                      fontSize: 11, color: stadiu.color.withValues(alpha: 0.8)),
+                ),
+              ],
+            ),
+          ),
+          // Carduri lead
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 600),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                children: [
+                  ...records.map((r) => _buildKanbanCard(r)),
+                  const SizedBox(height: 4),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.add, size: 14),
+                      label: const Text('Lead nou',
+                          style: TextStyle(fontSize: 12)),
+                      onPressed: () => _showEditDialog(null,
+                          initialStadiu: stadiu),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKanbanCard(CrmRecord r) {
+    final isOverdue = r.necesitaActiune;
+    return GestureDetector(
+      onTap: () => _showEditDialog(r),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+              color: isOverdue ? Colors.red.shade200 : Colors.grey.shade200),
+          boxShadow: [
+            BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 3,
+                offset: const Offset(0, 1)),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(r.titlu,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w600, fontSize: 12),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis),
+            Text(r.clientName,
+                style: TextStyle(
+                    fontSize: 11, color: Colors.grey.shade600),
+                overflow: TextOverflow.ellipsis),
+            if (r.valoareEstimata > 0)
+              Text('${r.valoareEstimata.toStringAsFixed(0)} RON',
+                  style: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600,
+                      color: Colors.green)),
+            if (r.dataUrmatoareActiune != null)
+              Row(
+                children: [
+                  Icon(Icons.calendar_today_outlined,
+                      size: 10,
+                      color: isOverdue ? Colors.red : Colors.grey),
+                  const SizedBox(width: 3),
+                  Text(
+                    _fmtDate(r.dataUrmatoareActiune!),
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: isOverdue ? Colors.red : Colors.grey),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── TAB 1 — Listă ──────────────────────────────────────────────────────────
+
+  Widget _buildListTab() {
+    final surse = <String>{'Toate', ..._all.map((r) => r.sursa)};
+    final stadiuLabels = <String>{'Toate', ...CrmStadiu.values.map((s) => s.label)};
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Column(
+            children: [
+              TextField(
+                decoration: const InputDecoration(
+                  hintText: 'Cauta client, titlu, telefon...',
+                  prefixIcon: Icon(Icons.search),
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => setState(() => _search = v),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _filtruStadiu,
+                      isDense: true,
+                      decoration: const InputDecoration(
+                          labelText: 'Stadiu',
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 6)),
+                      items: stadiuLabels
+                          .map((s) =>
+                              DropdownMenuItem(value: s, child: Text(s)))
+                          .toList(),
+                      onChanged: (v) =>
+                          setState(() => _filtruStadiu = v ?? 'Toate'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _filtruSursa,
+                      isDense: true,
+                      decoration: const InputDecoration(
+                          labelText: 'Sursa',
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 6)),
+                      items: surse
+                          .map((s) =>
+                              DropdownMenuItem(value: s, child: Text(s)))
+                          .toList(),
+                      onChanged: (v) =>
+                          setState(() => _filtruSursa = v ?? 'Toate'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: _filtered.isEmpty
+                ? ListView(children: const [
+                    SizedBox(height: 40),
+                    Center(child: Text('Niciun lead gasit.')),
+                  ])
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 80),
+                    itemCount: _filtered.length,
+                    itemBuilder: (_, i) => _buildListCard(_filtered[i]),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildListCard(CrmRecord r) {
+    final phone = r.phoneNumbers.isNotEmpty ? r.phoneNumbers.first : '';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(r.titlu,
+                      style:
+                          const TextStyle(fontWeight: FontWeight.w600)),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: r.stadiu.color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    r.stadiu.label,
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: r.stadiu.color,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            Text(r.clientName,
+                style: TextStyle(
+                    fontSize: 12, color: Colors.grey.shade700)),
+            if (r.valoareEstimata > 0)
+              Text('${r.valoareEstimata.toStringAsFixed(0)} RON',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.green)),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              children: [
+                if (phone.isNotEmpty)
+                  ActionChip(
+                    avatar: const Icon(Icons.chat_outlined, size: 14),
+                    label: const Text('WhatsApp',
+                        style: TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        CommunicationService.instance.sendWhatsApp(
+                      phone: phone,
+                      message: 'Buna ziua, ${r.contactPerson.isNotEmpty ? r.contactPerson : r.clientName}!\n\n'
+                          'Va contactam in legatura cu: ${r.titlu}.\n\n'
+                          'SC PRO TERM SRL',
+                    ),
+                  ),
+                if (phone.isNotEmpty)
+                  ActionChip(
+                    avatar: const Icon(Icons.call_outlined, size: 14),
+                    label:
+                        const Text('Suna', style: TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        CommunicationService.instance.callPhone(phone),
+                  ),
+                ActionChip(
+                  avatar: const Icon(Icons.edit_outlined, size: 14),
+                  label: const Text('Editeaza',
+                      style: TextStyle(fontSize: 11)),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => _showEditDialog(r),
+                ),
+                PopupMenuButton<CrmStadiu>(
+                  child: Chip(
+                    avatar: const Icon(Icons.arrow_forward_outlined,
+                        size: 14),
+                    label: const Text('Muta stadiu',
+                        style: TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  itemBuilder: (_) => CrmStadiu.values
+                      .where((s) => s != r.stadiu)
+                      .map((s) => PopupMenuItem(
+                            value: s,
+                            child: Text(s.label),
+                          ))
+                      .toList(),
+                  onSelected: (s) => _mutaStadiu(r, s),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── TAB 2 — Statistici ────────────────────────────────────────────────────
+
+  Widget _buildStatsTab() {
+    final s = _stats;
+    if (s == null) return const Center(child: CircularProgressIndicator());
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // KPI cards
+          Row(
+            children: [
+              _kpiCard('Total leaduri', s.totalLeaduri.toString(),
+                  Icons.people_outlined, Colors.blue),
+              const SizedBox(width: 10),
+              _kpiCard('Castigate', s.castigate.toString(),
+                  Icons.check_circle_outlined, Colors.green),
+              const SizedBox(width: 10),
+              _kpiCard('Pierdute', s.pierdute.toString(),
+                  Icons.cancel_outlined, Colors.red),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _kpiCard(
+                'Rata conversie',
+                '${s.rataConversie.toStringAsFixed(1)}%',
+                Icons.trending_up_outlined,
+                Colors.purple,
+              ),
+              const SizedBox(width: 10),
+              _kpiCard(
+                'Pipeline',
+                '${s.valoareTotalaPipeline.toStringAsFixed(0)} RON',
+                Icons.account_balance_outlined,
+                Colors.orange,
+              ),
+              const SizedBox(width: 10),
+              _kpiCard(
+                'Castigat total',
+                '${s.valoareTotalaCastigata.toStringAsFixed(0)} RON',
+                Icons.monetization_on_outlined,
+                Colors.teal,
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          // Bar chart per stadiu
+          const Text('Distributie per stadiu',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+          const SizedBox(height: 8),
+          ...CrmStadiu.values.map((stadiu) {
+            final count =
+                _all.where((r) => r.stadiu == stadiu).length;
+            if (count == 0) return const SizedBox.shrink();
+            final maxCount = CrmStadiu.values
+                .map((s) => _all.where((r) => r.stadiu == s).length)
+                .fold(0, (a, b) => a > b ? a : b);
+            final ratio =
+                maxCount > 0 ? count / maxCount : 0.0;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 120,
+                    child: Text(stadiu.label,
+                        style: const TextStyle(fontSize: 12)),
+                  ),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        Container(
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade200,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                        FractionallySizedBox(
+                          widthFactor: ratio,
+                          child: Container(
+                            height: 20,
+                            decoration: BoxDecoration(
+                              color:
+                                  stadiu.color.withValues(alpha: 0.8),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    width: 32,
+                    child: Text(' $count',
+                        style: const TextStyle(fontSize: 11)),
+                  ),
+                ],
+              ),
+            );
+          }),
+          const SizedBox(height: 20),
+          // Top surse
+          if (s.perSursa.isNotEmpty) ...[
+            const Text('Surse lead-uri',
+                style:
+                    TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            const SizedBox(height: 8),
+            for (final e in (s.perSursa.entries.toList()
+                  ..sort((a, b) => b.value.compareTo(a.value)))
+                .take(5))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                        child: Text(e.key,
+                            style: const TextStyle(fontSize: 12))),
+                    Text('${e.value} leaduri',
+                        style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _kpiCard(
+      String label, String value, IconData icon, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(height: 4),
+            Text(value,
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                    color: color)),
+            Text(label,
+                style: const TextStyle(fontSize: 10),
+                textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Acțiuni ───────────────────────────────────────────────────────────────
+
+  Future<void> _mutaStadiu(CrmRecord r, CrmStadiu nouStadiu) async {
+    final updated = r.copyWith(stadiu: nouStadiu, updatedAt: DateTime.now());
+    setState(() {
+      final idx = _all.indexWhere((item) => item.id == r.id);
+      if (idx >= 0) _all[idx] = updated;
+    });
+    await _repo.upsertCrmRecord(updated);
+    if (mounted) {
+      final stats = await _repo.getStats();
+      if (mounted) setState(() => _stats = stats);
+    }
+  }
+
+  Future<void> _showEditDialog(CrmRecord? existing,
+      {CrmStadiu? initialStadiu}) async {
+    final titluCtrl =
+        TextEditingController(text: existing?.titlu ?? '');
+    final clientCtrl =
+        TextEditingController(text: existing?.clientName ?? '');
+    final contactCtrl =
+        TextEditingController(text: existing?.contactPerson ?? '');
+    final phoneCtrl = TextEditingController(
+        text: existing?.phoneNumbers.isNotEmpty == true
+            ? existing!.phoneNumbers.first
+            : '');
+    final emailCtrl =
+        TextEditingController(text: existing?.email ?? '');
+    final valCtrl = TextEditingController(
+        text: existing?.valoareEstimata.toStringAsFixed(0) ?? '');
+    final tipCtrl =
+        TextEditingController(text: existing?.tipLucrare ?? '');
+    final actiuneCtrl =
+        TextEditingController(text: existing?.urmatoareActiune ?? '');
+    final noteCtrl = TextEditingController(text: existing?.note ?? '');
+    CrmStadiu stadiu = existing?.stadiu ?? initialStadiu ?? CrmStadiu.lead;
+    String sursa = existing?.sursa ?? 'Direct';
+    DateTime? dataActiune = existing?.dataUrmatoareActiune;
+    String selectedClientId = existing?.clientId ?? '';
+
+    try {
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setSt) => AlertDialog(
+            title: Text(existing == null ? 'Lead nou' : 'Editeaza lead'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: titluCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Titlu oportunitate *'),
+                    ),
+                    const SizedBox(height: 8),
+                    // Client cu autocomplete
+                    _clients.isNotEmpty
+                        ? Autocomplete<ClientRecord>(
+                            initialValue: TextEditingValue(
+                                text: clientCtrl.text),
+                            optionsBuilder: (textEditingValue) {
+                              if (textEditingValue.text.isEmpty) {
+                                return const Iterable<ClientRecord>.empty();
+                              }
+                              final q = textEditingValue.text.toLowerCase();
+                              return _clients.where((c) =>
+                                  c.name.toLowerCase().contains(q) ||
+                                  (c.allPhoneNumbers.isNotEmpty &&
+                                      c.allPhoneNumbers.first.contains(q)));
+                            },
+                            displayStringForOption: (c) => c.name,
+                            onSelected: (c) {
+                              setSt(() {
+                                clientCtrl.text = c.name;
+                                selectedClientId = c.id;
+                                if (phoneCtrl.text.isEmpty &&
+                                    c.allPhoneNumbers.isNotEmpty) {
+                                  phoneCtrl.text = c.allPhoneNumbers.first;
+                                }
+                              });
+                            },
+                            fieldViewBuilder: (ctx2, ctrl, focusNode, onSub) =>
+                                TextField(
+                                  controller: ctrl,
+                                  focusNode: focusNode,
+                                  textCapitalization:
+                                      TextCapitalization.sentences,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Client *'),
+                                  onChanged: (v) {
+                                    clientCtrl.text = v;
+                                    selectedClientId = '';
+                                  },
+                                ),
+                          )
+                        : TextField(
+                            textCapitalization: TextCapitalization.sentences,
+                            controller: clientCtrl,
+                            decoration: const InputDecoration(
+                                labelText: 'Client *')),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              textCapitalization:
+                                  TextCapitalization.sentences,
+                              controller: contactCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Persoana contact'))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: TextField(
+                              controller: phoneCtrl,
+                              keyboardType: TextInputType.phone,
+                              decoration: const InputDecoration(
+                                  labelText: 'Telefon'))),
+                    ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              controller: emailCtrl,
+                              keyboardType: TextInputType.emailAddress,
+                              decoration: const InputDecoration(
+                                  labelText: 'Email'))),
+                    ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                          child: DropdownButtonFormField<CrmStadiu>(
+                        initialValue: stadiu,
+                        decoration: const InputDecoration(
+                            labelText: 'Stadiu'),
+                        items: CrmStadiu.values
+                            .map((s) => DropdownMenuItem(
+                                value: s, child: Text(s.label)))
+                            .toList(),
+                        onChanged: (v) =>
+                            setSt(() => stadiu = v ?? CrmStadiu.lead),
+                      )),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: DropdownButtonFormField<String>(
+                        initialValue: sursa,
+                        decoration: const InputDecoration(
+                            labelText: 'Sursa'),
+                        items: [
+                          'Direct',
+                          'Referinta',
+                          'Google',
+                          'Facebook',
+                          'Instagram',
+                          'Alt',
+                        ]
+                            .map((s) => DropdownMenuItem(
+                                value: s, child: Text(s)))
+                            .toList(),
+                        onChanged: (v) =>
+                            setSt(() => sursa = v ?? 'Direct'),
+                      )),
+                    ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              textCapitalization:
+                                  TextCapitalization.sentences,
+                              controller: tipCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Tip lucrare'))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: TextField(
+                              controller: valCtrl,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                      decimal: true),
+                              decoration: const InputDecoration(
+                                  labelText: 'Valoare est. (RON)',
+                                  suffixText: 'RON'))),
+                    ]),
+                    const SizedBox(height: 8),
+                    // Data acțiunii + Acțiune de urmat
+                    Row(children: [
+                      Expanded(
+                        child: InkWell(
+                          onTap: () async {
+                            final picked = await showDatePicker(
+                              context: ctx,
+                              initialDate: dataActiune ?? DateTime.now(),
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime(2030),
+                            );
+                            if (picked != null) {
+                              setSt(() => dataActiune = picked);
+                            }
+                          },
+                          child: InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Data actiunii',
+                              suffixIcon: Icon(Icons.calendar_today, size: 16),
+                            ),
+                            child: Text(
+                              dataActiune != null
+                                  ? '${dataActiune!.day.toString().padLeft(2, '0')}.${dataActiune!.month.toString().padLeft(2, '0')}.${dataActiune!.year}'
+                                  : 'Alege data',
+                              style: TextStyle(
+                                  color: dataActiune != null
+                                      ? null
+                                      : Colors.grey.shade500),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (dataActiune != null) ...[
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.clear, size: 16),
+                          tooltip: 'Sterge data',
+                          onPressed: () => setSt(() => dataActiune = null),
+                        ),
+                      ],
+                    ]),
+                    const SizedBox(height: 8),
+                    TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: actiuneCtrl,
+                      decoration: const InputDecoration(
+                          labelText: 'Actiune de urmat'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: noteCtrl,
+                      maxLines: 2,
+                      decoration: const InputDecoration(labelText: 'Note'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              if (existing != null)
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(ctx, false);
+                    setState(() =>
+                        _all.removeWhere((r) => r.id == existing.id));
+                    await _repo.deleteCrmRecord(existing.id);
+                    _load();
+                  },
+                  style:
+                      TextButton.styleFrom(foregroundColor: Colors.red),
+                  child: const Text('Sterge'),
+                ),
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Anuleaza')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Salveaza')),
+            ],
+          ),
+        ),
+      );
+      if (saved != true || !mounted) return;
+      final title = titluCtrl.text.trim();
+      final client = clientCtrl.text.trim();
+      if (title.isEmpty || client.isEmpty) return;
+      final now = DateTime.now();
+      final phones = phoneCtrl.text.trim().isNotEmpty
+          ? [phoneCtrl.text.trim()]
+          : <String>[];
+      final valoare = double.tryParse(valCtrl.text.replaceAll(',', '.'));
+      final r = existing != null
+          ? existing.copyWith(
+              titlu: title,
+              clientId: selectedClientId.isNotEmpty
+                  ? selectedClientId
+                  : existing.clientId,
+              clientName: client,
+              contactPerson: contactCtrl.text.trim(),
+              phoneNumbers:
+                  phones.isNotEmpty ? phones : existing.phoneNumbers,
+              email: emailCtrl.text.trim(),
+              stadiu: stadiu,
+              sursa: sursa,
+              tipLucrare: tipCtrl.text.trim(),
+              valoareEstimata: valoare ?? existing.valoareEstimata,
+              dataUrmatoareActiune: dataActiune,
+              urmatoareActiune: actiuneCtrl.text.trim(),
+              note: noteCtrl.text.trim(),
+              updatedAt: now,
+            )
+          : _repo
+              .createNew(
+                titlu: title,
+                clientName: client,
+                clientId: selectedClientId,
+                stadiu: stadiu,
+                sursa: sursa,
+                tipLucrare: tipCtrl.text.trim(),
+                valoareEstimata: valoare ?? 0,
+                contactPerson: contactCtrl.text.trim(),
+                phoneNumbers: phones,
+              )
+              .copyWith(
+                email: emailCtrl.text.trim(),
+                dataUrmatoareActiune: dataActiune,
+                urmatoareActiune: actiuneCtrl.text.trim(),
+                note: noteCtrl.text.trim(),
+              );
+      await _repo.upsertCrmRecord(r);
+      _load();
+    } finally {
+      titluCtrl.dispose();
+      clientCtrl.dispose();
+      contactCtrl.dispose();
+      phoneCtrl.dispose();
+      emailCtrl.dispose();
+      valCtrl.dispose();
+      tipCtrl.dispose();
+      actiuneCtrl.dispose();
+      noteCtrl.dispose();
+    }
+  }
+
+  String _fmtDate(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}';
+}

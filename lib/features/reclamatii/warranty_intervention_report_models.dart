@@ -39,6 +39,10 @@ class WarrantyInterventionReportRecord {
     this.agfrReportId = '',
     required this.createdAt,
     required this.updatedAt,
+    this.photoUrls = const <String>[],
+    this.photoBase64List = const <String>[],
+    this.photoCategories = const <String>[],
+    this.photoCaptions = const <String>[],
   });
 
   final String id;
@@ -78,6 +82,10 @@ class WarrantyInterventionReportRecord {
   final String agfrReportId;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final List<String> photoUrls;
+  final List<String> photoBase64List;
+  final List<String> photoCategories;
+  final List<String> photoCaptions;
 
   WarrantyInterventionReportRecord copyWith({
     String? id,
@@ -117,6 +125,10 @@ class WarrantyInterventionReportRecord {
     String? agfrReportId,
     DateTime? createdAt,
     DateTime? updatedAt,
+    List<String>? photoUrls,
+    List<String>? photoBase64List,
+    List<String>? photoCategories,
+    List<String>? photoCaptions,
   }) {
     return WarrantyInterventionReportRecord(
       id: id ?? this.id,
@@ -164,6 +176,10 @@ class WarrantyInterventionReportRecord {
       agfrReportId: agfrReportId ?? this.agfrReportId,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      photoUrls: photoUrls ?? this.photoUrls,
+      photoBase64List: photoBase64List ?? this.photoBase64List,
+      photoCategories: photoCategories ?? this.photoCategories,
+      photoCaptions: photoCaptions ?? this.photoCaptions,
     );
   }
 
@@ -206,6 +222,10 @@ class WarrantyInterventionReportRecord {
       'agfr_report_id': agfrReportId,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'photo_urls': photoUrls,
+      'photo_base64_list': photoBase64List,
+      'photo_categories': photoCategories,
+      'photo_captions': photoCaptions,
     };
   }
 
@@ -321,6 +341,10 @@ class WarrantyInterventionReportRecord {
           parseNullableDate(const <String>['created_at', 'createdAt']) ?? now,
       updatedAt:
           parseNullableDate(const <String>['updated_at', 'updatedAt']) ?? now,
+      photoUrls: List<String>.from((map['photo_urls'] ?? map['photoUrls'] ?? const <String>[]) as List),
+      photoBase64List: List<String>.from((map['photo_base64_list'] ?? map['photoBase64List'] ?? const <String>[]) as List),
+      photoCategories: List<String>.from((map['photo_categories'] ?? map['photoCategories'] ?? const <String>[]) as List),
+      photoCaptions: List<String>.from((map['photo_captions'] ?? map['photoCaptions'] ?? const <String>[]) as List),
     );
   }
 }

@@ -256,6 +256,16 @@ class OfflineSyncRuntime {
     await _bridge.queuePartnerFinancialSummaryUpsert(summary);
   }
 
+  Future<void> queuePartnerSettlementUpsert(
+    Map<String, dynamic> settlement,
+  ) async {
+    await _bridge.queuePartnerSettlementUpsert(settlement);
+  }
+
+  Future<void> queuePartnerSettlementDelete(String settlementId) async {
+    await _bridge.queuePartnerSettlementDelete(settlementId);
+  }
+
   Future<void> queueDevizArticolTemplateUpsert(
     Map<String, dynamic> template,
   ) async {
@@ -296,6 +306,85 @@ class OfflineSyncRuntime {
 
   Future<void> queueAppTaskDelete(String taskId) async {
     await _bridge.queueAppTaskDelete(taskId);
+  }
+
+  Future<void> queueEmployeePayEntryUpsert(Map<String, dynamic> entry) async {
+    await _bridge.queueEmployeePayEntryUpsert(entry);
+  }
+
+  Future<void> queueEmployeePayEntryDelete(String entryId) async {
+    await _bridge.queueEmployeePayEntryDelete(entryId);
+  }
+
+  Future<void> queueEmployeePaymentUpsert(Map<String, dynamic> payment) async {
+    await _bridge.queueEmployeePaymentUpsert(payment);
+  }
+
+  Future<void> queueEmployeePaymentDelete(String paymentId) async {
+    await _bridge.queueEmployeePaymentDelete(paymentId);
+  }
+
+  Future<void> queueEmployeeFinancialSummaryUpsert(
+    Map<String, dynamic> summary,
+  ) async {
+    await _bridge.queueEmployeeFinancialSummaryUpsert(summary);
+  }
+
+  Future<void> queueEmployeeSettingsUpsert(
+    Map<String, dynamic> settings,
+  ) async {
+    await _bridge.queueEmployeeSettingsUpsert(settings);
+  }
+
+  Future<void> queueEmployeeSettingsDelete(String employeeId) async {
+    await _bridge.queueEmployeeSettingsDelete(employeeId);
+  }
+
+  Future<void> queueHrPayrollPaymentUpsert(
+    Map<String, dynamic> payment,
+  ) async {
+    await _bridge.queueHrPayrollPaymentUpsert(payment);
+  }
+
+  Future<void> queueHrPayrollPaymentDelete(String paymentId) async {
+    await _bridge.queueHrPayrollPaymentDelete(paymentId);
+  }
+
+  Future<void> queueStocItemUpsert(Map<String, dynamic> item) async {
+    await _bridge.queueStocItemUpsert(item);
+  }
+
+  Future<void> queueStocItemDelete(String itemId) async {
+    await _bridge.queueStocItemDelete(itemId);
+  }
+
+  Future<void> queueStocMiscareUpsert(Map<String, dynamic> miscare) async {
+    await _bridge.queueStocMiscareUpsert(miscare);
+  }
+
+  Future<void> queueGpsCheckinUpsert(Map<String, dynamic> checkin) async {
+    await _bridge.queueGpsCheckinUpsert(checkin);
+  }
+
+  Future<void> queueEchipamentInstalat(
+      Map<String, dynamic> echipament) async {
+    await _bridge.queueEchipamentInstalat(echipament);
+  }
+
+  Future<void> queueEchipamentInstalatDelete(String echipamentId) async {
+    await _bridge.queueEchipamentInstalatDelete(echipamentId);
+  }
+
+  Future<void> queueCrmRecordUpsert(Map<String, dynamic> record) async {
+    await _bridge.queueCrmRecordUpsert(record);
+  }
+
+  Future<void> queueCrmRecordDelete(String id) async {
+    await _bridge.queueCrmRecordDelete(id);
+  }
+
+  Future<void> queueObiectivLunarUpsert(Map<String, dynamic> o) async {
+    await _bridge.queueObiectivLunarUpsert(o);
   }
 
   /// Curăță imediat coada: elimină itemele deja sincronizate și cele moarte.
@@ -587,6 +676,20 @@ class OfflineSyncRuntime {
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
+            case CloudEntityType.partnerSettlements:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.partnerSettlements)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.partnerSettlements)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
             case CloudEntityType.devizArticoleTemplate:
               final templateRepo = DevizArticolTemplateRepository();
               if (item.deleted) {
@@ -649,6 +752,148 @@ class OfflineSyncRuntime {
               } else {
                 await FirebaseFirestore.instance
                     .collection(FirebaseCollections.appTasks)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.employeePayEntries:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayEntries)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayEntries)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.employeePayments:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayments)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayments)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.employeeFinancialSummary:
+              if (!item.deleted) {
+                final empId =
+                    (item.payload['employee_id'] ?? item.entityId).toString();
+                if (empId.isNotEmpty) {
+                  await FirebaseFirestore.instance
+                      .collection(FirebaseCollections.employeeFinancialSummary)
+                      .doc(empId)
+                      .set(item.payload, SetOptions(merge: true));
+                }
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.employeeSettings:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeeSettings)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                final empId =
+                    (item.payload['employee_id'] ?? item.entityId).toString();
+                if (empId.isNotEmpty) {
+                  await FirebaseFirestore.instance
+                      .collection(FirebaseCollections.employeeSettings)
+                      .doc(empId)
+                      .set(item.payload, SetOptions(merge: true));
+                }
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.hrPayrollPayments:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.hrPayrollPayments)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.hrPayrollPayments)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.stocItems:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.stocItems)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.stocItems)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.stocMiscari:
+              if (!item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.stocMiscari)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.gpsCheckins:
+              if (!item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.gpsCheckins)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.echipamenteInstalate:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.echipamenteInstalate)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.echipamenteInstalate)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.crmRecords:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.crmRecords)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.crmRecords)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.obiectiveLunare:
+              if (!item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.obiectiveLunare)
                     .doc(item.entityId)
                     .set(item.payload, SetOptions(merge: true));
               }

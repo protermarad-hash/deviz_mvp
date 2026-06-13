@@ -139,7 +139,7 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
   Future<void> _delete(DevizFiltreCta deviz) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Șterge deviz'),
         content: Text(
           'Ești sigur că vrei să ștergi devizul '
@@ -148,13 +148,13 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Anulează'),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
                 backgroundColor: Colors.red.shade700),
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Șterge'),
           ),
         ],
@@ -168,17 +168,14 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
       const SnackBar(content: Text('Deviz șters.')),
     );
 
-    // Defer ștergerea DUPĂ ce frame-ul curent se randează complet,
-    // astfel UI-ul arată actualizarea vizual ÎNAINTE de operațiile grele JSON.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _repo.delete(deviz.id).catchError((e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Eroare la ștergere: $e')),
-          );
-          _load(); // restaurează starea corectă la eroare
-        }
-      });
+    // Ștergere async în fundal — nu blochează UI.
+    _repo.delete(deviz.id).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la ștergere: $e')),
+        );
+        _load(); // restaurează starea corectă la eroare
+      }
     });
   }
 
@@ -208,7 +205,7 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
   Future<void> _deduplicate() async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Curăță duplicate din cloud'),
         content: const Text(
           'Această acțiune va găsi devizele cu același număr în Firestore '
@@ -217,11 +214,11 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Anulează'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Curăță'),
           ),
         ],

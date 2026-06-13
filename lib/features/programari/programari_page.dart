@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/document_file_service.dart';
+import '../../core/romanian_holidays.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_save_service.dart';
@@ -63,10 +64,14 @@ import '../reclamatii/repair_report_editor_page.dart';
 import '../reclamatii/repair_report_models.dart';
 import '../reclamatii/warranty_intervention_report_editor_page.dart';
 import '../reclamatii/warranty_intervention_report_models.dart';
-import '../../core/widgets/help_button.dart';
-import '../../core/help_content.dart';
+import '../../core/help/help_module_button.dart';
 import 'programari_postpone_dialog.dart';
 import 'programari_bon_consum_dialog.dart';
+import '../hr/employee_financial_models.dart';
+import '../hr/employee_financial_repository.dart';
+import '../../core/services/communication_service.dart';
+import '../../core/services/gps_checkin_service.dart';
+import '../stoc/stoc_repository.dart';
 
 class _JobsLookupBundle {
   const _JobsLookupBundle({
@@ -161,6 +166,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
       'programari_filter_job_v1';
   static const String _filterEmployeeScopePreferenceKey =
       'programari_filter_employee_scope_v1';
+  static const String _barraCollapsedPreferenceKey = 'calendar_bar_collapsed';
   static const Duration _defaultCalendarCreateDuration = Duration(hours: 1);
   final NotificationCenterService _notificationService =
       NotificationCenterService();
@@ -301,6 +307,13 @@ class _ProgramariPageState extends State<ProgramariPage> {
   int _calendarVisibleDays = 7;
   double _calendarZoom = 1.0;
   bool _showCalendarControlPanel = false;
+  bool _isCalendarNavigating = false;
+  bool _barraCollapsed = true;
+  // Prag acumulare overscroll orizontal pentru navigare calendar (pixeli).
+  // Utilizatorul trebuie să tragă deliberat cel puțin această distanță peste marginea
+  // planner-ului înainte să se treacă la intervalul următor/precedent.
+  static const double _calendarOverscrollThreshold = 80.0;
+  double _calendarOverscrollAccum = 0.0;
   bool _didHandleInitialDraft = false;
   bool _didHandleInitialFocus = false;
 
@@ -319,6 +332,12 @@ class _ProgramariPageState extends State<ProgramariPage> {
   bool _clientsReloadInProgress = false;
   Timer? _clientsReloadDebounce;
   DateTime? _lastClientsReloadAt;
+
+  // ── Real-time Firestore listener pentru sync cross-device ─────────────────
+  // Detectează programări noi/modificate de pe alt dispozitiv fără restart app
+  StreamSubscription<QuerySnapshot>? _appointmentsRealtimeSubscription;
+  Timer? _realtimeSyncDebounce;
+  bool _isOnlineCached = false;  // pentru iconița de status din AppBar
 
   String get _dataSourceUiLabel {
     if (_dataSourceLabel != 'local_cache') {
@@ -382,6 +401,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
     _programariLog('initState start');
     _refreshCloudRepositories();
     _loadAllPreferences();
+    _isOnlineCached = FirebaseBootstrap.isOnline;
     // Future.microtask evită operații grele în primul frame (CLAUDE.md ANTI-PATTERN 2)
     Future.microtask(_load);
     // Reîncarcă din cloud când internetul devine disponibil după startup
@@ -391,15 +411,70 @@ class _ProgramariPageState extends State<ProgramariPage> {
     LocalAppDataRepository.clientsChangeCount.addListener(
       _onClientsChangeCountUpdated,
     );
+    // Pornește listener real-time Firestore pentru sync cross-device
+    Future.microtask(_maybeStartRealtimeListener);
   }
 
   /// Apelat când starea online/offline se schimbă.
-  /// Reîncarcă datele din cloud NUMAI dacă lista e goală (CLAUDE.md ANTI-PATTERN 4).
-  /// NU reîncărcăm dacă datele există — previne reload la fiecare fluctuație WiFi.
+  /// La tranziție offline→online: pornește listener real-time + reîncarcă dacă lista goală.
+  /// La tranziție online→offline: anulează listener-ul real-time.
   void _onOnlineChanged() {
-    if (FirebaseBootstrap.isOnline && mounted && _items.isEmpty && !_loading) {
-      _load();
+    final nowOnline = FirebaseBootstrap.isOnline;
+    final wasOnline = _isOnlineCached;
+    _isOnlineCached = nowOnline;
+    if (mounted) setState(() {}); // actualizează iconița status
+
+    if (nowOnline) {
+      _maybeStartRealtimeListener();
+      // Reîncarcă lista NUMAI dacă tocmai s-a reconectat SAU dacă lista e goală
+      if ((!wasOnline || _items.isEmpty) && !_loading) {
+        _load();
+      }
+    } else {
+      // Offline — anulează listener-ul; se repornește când revine internetul
+      _appointmentsRealtimeSubscription?.cancel();
+      _appointmentsRealtimeSubscription = null;
     }
+  }
+
+  /// Pornește listener real-time Firestore pentru programările din ultimele 14 luni.
+  /// Când Firestore raportează modificări (de pe orice dispozitiv), declanșează
+  /// un reload debounced care folosește logica completă de merge (BUG 7 fix inclus).
+  void _maybeStartRealtimeListener() {
+    if (!FirebaseBootstrap.isInitialized || !FirebaseBootstrap.isOnline) return;
+    if (_appointmentsRealtimeSubscription != null) return; // deja pornit
+
+    final windowStart = DateTime.now().subtract(const Duration(days: 425));
+    final windowStartStr = windowStart.toIso8601String().substring(0, 10);
+
+    _appointmentsRealtimeSubscription = FirebaseFirestore.instance
+        .collection(FirebaseCollections.appointments)
+        .where('scheduled_date', isGreaterThanOrEqualTo: windowStartStr)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        if (snapshot.docChanges.isEmpty) return; // nicio modificare reală
+        _programariLog(
+          'realtime ${snapshot.docChanges.length} changes types=${snapshot.docChanges.map((c) => c.type.name).toSet().join(",")}',
+        );
+        // Debounce: evităm reload multiplu pentru save-uri batch
+        _realtimeSyncDebounce?.cancel();
+        _realtimeSyncDebounce = Timer(const Duration(seconds: 3), () {
+          if (mounted && !_loading) {
+            _programariLog('realtime trigger _load() after debounce');
+            _load();
+          }
+        });
+      },
+      onError: (Object e) {
+        _programariLog('realtime listener error: $e');
+        // Anulează — se repornește la reconectare via _onOnlineChanged
+        _appointmentsRealtimeSubscription?.cancel();
+        _appointmentsRealtimeSubscription = null;
+      },
+    );
+    _programariLog('realtime listener started windowStart=$windowStartStr');
   }
 
   void _refreshCloudRepositories() {
@@ -416,6 +491,8 @@ class _ProgramariPageState extends State<ProgramariPage> {
       _onClientsChangeCountUpdated,
     );
     _clientsReloadDebounce?.cancel();
+    _realtimeSyncDebounce?.cancel();
+    _appointmentsRealtimeSubscription?.cancel();
     _pageScrollController.dispose();
     super.dispose();
   }
@@ -768,6 +845,8 @@ class _ProgramariPageState extends State<ProgramariPage> {
         (prefs.getString(_filterJobPreferenceKey) ?? '').trim();
     final savedFilterScope =
         (prefs.getString(_filterEmployeeScopePreferenceKey) ?? '').trim();
+    final savedBarraCollapsed =
+        prefs.getBool(_barraCollapsedPreferenceKey) ?? true;
     if (!mounted) return;
     _setStateLogged('load preferences', () {
       if (rawView.isNotEmpty) {
@@ -798,6 +877,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
           orElse: () => _EmployeeScopeMode.all,
         );
       }
+      _barraCollapsed = savedBarraCollapsed;
     });
   }
 
@@ -835,6 +915,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
       prefs.setString(
           _filterEmployeeScopePreferenceKey, _employeeScopeMode.name),
     ]);
+  }
+
+  Future<void> _persistBarraCollapsed() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_barraCollapsedPreferenceKey, _barraCollapsed);
   }
 
   Future<void> _persistDefaultAppointmentTeamPreference() async {
@@ -1149,9 +1234,41 @@ class _ProgramariPageState extends State<ProgramariPage> {
   }
 
   Future<void> _saveAppointmentResolved(Appointment item) async {
-    await widget.repository.saveAppointment(item);
+    final isNew = !(item.stocScazut);
+    final hasStock = item.materialUsage.lines.isNotEmpty;
+    // Dacă e prima salvare (stocul nu e încă scăzut) și are linii de materiale
+    // → marchează stocScazut și salvează versiunea actualizată
+    final toSave = (isNew && hasStock)
+        ? item.copyWith(stocScazut: true)
+        : item;
+    await widget.repository.saveAppointment(toSave);
     _syncAppointmentDataSourceLabel();
-    // Queue apelat din repository (CLAUDE.md: nu din pagini)
+    // Scade stocul în background — fire-and-forget (nu blochează UI)
+    if (isNew && hasStock) {
+      _scadeStocDinProgramare(item).catchError((e) {
+        debugPrint('[Stoc] Eroare scădere stoc programare ${item.id}: $e');
+      });
+    }
+  }
+
+  Future<void> _scadeStocDinProgramare(Appointment item) async {
+    for (final line in item.materialUsage.lines) {
+      if (line.materialId.isEmpty || line.quantity <= 0) continue;
+      try {
+        await StocRepository.instance.inregistreazaConsum(
+          productId: line.materialId,
+          cantitate: line.quantity,
+          referintaId: item.id,
+          referintaTip: 'programare',
+          referintaNume: item.materialUsage.kitTemplateName.isNotEmpty
+              ? item.materialUsage.kitTemplateName
+              : line.name,
+        );
+        debugPrint('[Stoc] Scazut ${line.quantity} ${line.unit} din ${line.name}');
+      } catch (e) {
+        debugPrint('[Stoc] Eroare la ${line.name}: $e');
+      }
+    }
   }
 
   Future<void> _writeAppointmentHistory({
@@ -3624,7 +3741,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
           .toList();
     }
 
-    // Produse din catalog (cu cache în memorie)
+    // Invalidează cache-ul înainte de dialog — produsele adăugate recent în Catalog
+    // sunt astfel vizibile imediat fără a reporni aplicația.
+    _cachedCatalogProducts = null;
     final allCatalogProducts = await _getCatalogProducts();
     if (!mounted) return;
 
@@ -4079,6 +4198,8 @@ class _ProgramariPageState extends State<ProgramariPage> {
     List<String> selectedAssignedTeamIds = seedAppointment != null
         ? _appointmentTeamIds(seedAppointment)
         : <String>[];
+    // IDs angajaților adăugați automat la selectarea echipei (se pot elimina manual)
+    final Set<String> autoAddedEmployeeIds = <String>{};
     String selectedJobId = seedAppointment?.jobId ?? '';
     String selectedClientId = seedAppointment?.clientId ?? '';
     String selectedContractingClientId =
@@ -4120,10 +4241,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
         selectedAssignedEmployeeIds = <String>[currentEmployeeId];
       }
       if (selectedAssignedTeamIds.isEmpty) {
-        if (userTeamId.isNotEmpty) {
-          selectedAssignedTeamIds = <String>[userTeamId];
-        } else if (_defaultAppointmentTeamIds.isNotEmpty) {
+        // Setarea explicită a utilizatorului are prioritate față de echipa automată
+        if (_defaultAppointmentTeamIds.isNotEmpty) {
           selectedAssignedTeamIds = List<String>.of(_defaultAppointmentTeamIds);
+        } else if (userTeamId.isNotEmpty) {
+          selectedAssignedTeamIds = <String>[userTeamId];
         } else {
           selectedAssignedTeamIds = _normalizeIdList(
             selectedAssignedEmployeeIds.map(_teamIdFromEmployee),
@@ -4143,6 +4265,21 @@ class _ProgramariPageState extends State<ProgramariPage> {
               );
         if (restrictedTeamIds.isNotEmpty) {
           selectedAssignedTeamIds = restrictedTeamIds;
+        }
+      }
+      // Auto-adaugă membrii echipelor pre-selectate la programare nouă
+      for (final teamId in selectedAssignedTeamIds) {
+        final team =
+            _masterTeams.where((t) => t.id == teamId).firstOrNull;
+        if (team == null) continue;
+        for (final memberId in team.memberIds) {
+          if (!selectedAssignedEmployeeIds.contains(memberId)) {
+            selectedAssignedEmployeeIds = [
+              ...selectedAssignedEmployeeIds,
+              memberId,
+            ];
+            autoAddedEmployeeIds.add(memberId);
+          }
         }
       }
     }
@@ -4419,6 +4556,38 @@ class _ProgramariPageState extends State<ProgramariPage> {
       setDialogState(() => selectedAdminDueDate = picked);
     }
 
+    // ── Employee pay — pre-populate controllers ───────────────────────────────
+    final employeePayControllers = <String, TextEditingController>{};
+    if (isEditingExisting) {
+      final existingPayEntries = await EmployeeFinancialRepository.instance
+          .listPayEntriesForAppointment(appointment.id);
+      for (final e in existingPayEntries) {
+        if (e.amountDue > 0) {
+          employeePayControllers[e.employeeId] = TextEditingController(
+            text: e.amountDue.toStringAsFixed(2),
+          );
+        }
+      }
+    } else {
+      // Programare nouă: pre-completăm cu tarifele prestabilite din Firestore
+      final defaultSettings = await EmployeeFinancialRepository.instance
+          .loadAllEmployeeSettings();
+      for (final empId in selectedAssignedEmployeeIds) {
+        final defaultRate =
+            defaultSettings[empId]?.defaultPayPerAppointment;
+        if (defaultRate != null && defaultRate > 0) {
+          employeePayControllers[empId] = TextEditingController(
+            text: defaultRate.toStringAsFixed(2),
+          );
+        }
+      }
+    }
+    if (!mounted) return;
+
+    // Capturate la salvare pentru dialogul de confirmare WhatsApp
+    String clientNameForWhatsApp = '';
+    String phoneForWhatsApp = '';
+
     final saved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
@@ -4439,13 +4608,38 @@ class _ProgramariPageState extends State<ProgramariPage> {
               ),
               content: SizedBox(
                 width: 620,
-                child: SingleChildScrollView(
-                  controller: dialogScrollController,
-                  primary: false,
+                height: MediaQuery.of(dialogContext).size.height * 0.8,
+                child: DefaultTabController(
+                  length: 3,
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      TabBar(
+                        tabs: const [
+                          Tab(
+                            icon: Icon(Icons.event_note_outlined),
+                            text: 'General',
+                          ),
+                          Tab(
+                            icon: Icon(Icons.build_outlined),
+                            text: 'Execuție',
+                          ),
+                          Tab(
+                            icon: Icon(Icons.euro_outlined),
+                            text: 'Financiar',
+                          ),
+                        ],
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: TabBarView(
+                          children: [
+                            // TAB 0: General
+                            SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 8),
                       _formSection(
                         context,
                         title: 'Programare',
@@ -4583,7 +4777,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                                  const SizedBox(height: 12),
                       _formSection(
                         context,
                         title: 'Client si context',
@@ -4694,6 +4888,27 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                   );
                                 });
                               },
+                              repository: widget.repository,
+                              tipEntitate: 'Client',
+                              onClientAdded: (newClient) {
+                                // Actualizează page state
+                                setState(() {
+                                  _clientRecords = [
+                                    ..._clientRecords,
+                                    newClient,
+                                  ];
+                                  _clientRecordByIdMap = {
+                                    for (final c in _clientRecords)
+                                      if (c.id.trim().isNotEmpty) c.id: c,
+                                  };
+                                });
+                                // Actualizează dialog state
+                                setDialogState(() {
+                                  selectedContractingClientId = newClient.id;
+                                  contractantKey =
+                                      ValueKey('contract_${newClient.id}');
+                                });
+                              },
                             ),
                           ],
                           const SizedBox(height: 12),
@@ -4735,7 +4950,243 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                                  if (!isComplaintAppointment) ...[
+                                    const SizedBox(height: 12),
+                        _formSection(
+                          context,
+                          title: 'Recurență',
+                          children: [
+                            DropdownButtonFormField<String>(
+                              initialValue: selectedRecurrenceRule,
+                              decoration: const InputDecoration(
+                                labelText: 'Repetare automată',
+                                helperText:
+                                    'La salvare se creează automat programări pentru anii următori.',
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'none',
+                                  child: Text('Fără recurență'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'annual',
+                                  child: Text('Anual (service / mentenanță)'),
+                                ),
+                              ],
+                              onChanged: isEditingExisting
+                                  ? null
+                                  : (v) => setDialogState(
+                                        () => selectedRecurrenceRule =
+                                            v ?? 'none',
+                                      ),
+                            ),
+                            if (selectedRecurrenceRule == 'annual' &&
+                                !isEditingExisting)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.info_outline,
+                                        size: 16,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        'Se vor crea automat 3 programări: cea curentă + 1 an + 2 ani.',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                            ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                                  ],
+                                  const SizedBox(height: 12),
+                      _formSection(
+                        context,
+                        title: 'Note si detalii',
+                        children: [
+                          TextField(
+                            controller: notesController,
+                            maxLines: 3,
+                            textCapitalization: TextCapitalization.sentences,
+                            decoration: const InputDecoration(
+                              labelText: 'Observatii',
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          ExpansionTile(
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: EdgeInsets.zero,
+                            title: const Text('Detalii suplimentare'),
+                            children: [
+                              TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: typeController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Tip',
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              TextField(
+                                textCapitalization: TextCapitalization.sentences,
+                                controller: priorityController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Prioritate',
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'Culoare in programari',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelLarge
+                                      ?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  ChoiceChip(
+                                    label:
+                                        const Text('Auto dupa echipa / status'),
+                                    selected: selectedColorCode.isEmpty,
+                                    visualDensity: VisualDensity.compact,
+                                    onSelected: (_) => setDialogState(
+                                      () => selectedColorCode = '',
+                                    ),
+                                  ),
+                                  for (final preset in _appointmentColorPresets)
+                                    ChoiceChip(
+                                      avatar: CircleAvatar(
+                                        radius: 8,
+                                        backgroundColor: preset.color,
+                                      ),
+                                      label: Text(preset.label),
+                                      selected: selectedColorCode ==
+                                          _colorCodeFromColor(preset.color),
+                                      visualDensity: VisualDensity.compact,
+                                      onSelected: (_) => setDialogState(
+                                        () => selectedColorCode =
+                                            _colorCodeFromColor(preset.color),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Builder(builder: (context) {
+                                // Derive the preview color the same way
+                                // _appointmentAccentColor does at runtime.
+                                Color previewColor;
+                                String previewLabel;
+                                if (selectedColorCode.isNotEmpty) {
+                                  previewColor =
+                                      _colorFromCode(selectedColorCode) ??
+                                          _statusAccentColor(selectedStatus);
+                                  previewLabel =
+                                      _appointmentColorLabel(selectedColorCode);
+                                } else {
+                                  // Check if any selected team has a color.
+                                  Color? teamColor;
+                                  for (final teamId
+                                      in selectedAssignedTeamIds) {
+                                    for (final team in _masterTeams) {
+                                      if (team.id == teamId &&
+                                          team.colorValue != 0) {
+                                        teamColor = Color(team.colorValue);
+                                        break;
+                                      }
+                                    }
+                                    if (teamColor != null) break;
+                                  }
+                                  if (teamColor != null) {
+                                    previewColor = teamColor;
+                                    previewLabel = 'Culoare echipa';
+                                  } else {
+                                    previewColor =
+                                        _statusAccentColor(selectedStatus);
+                                    previewLabel =
+                                        'Status: ${_statusLabel(selectedStatus)}';
+                                  }
+                                }
+                                return Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Color.alphaBlend(
+                                      previewColor.withValues(alpha: 0.12),
+                                      Theme.of(context)
+                                          .colorScheme
+                                          .surfaceContainerLowest,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color:
+                                          previewColor.withValues(alpha: 0.35),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 12,
+                                        height: 12,
+                                        decoration: BoxDecoration(
+                                          color: previewColor,
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          'Preview: $previewLabel',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }),
+                            ],
+                          ),
+                          if ((formError ?? '').trim().isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              formError!,
+                              style: const TextStyle(color: Colors.red),
+                            ),
+                          ],
+                        ],
+                      ),
+                                  const SizedBox(height: 16),
+                                ],
+                              ),
+                            ),
+                            // TAB 1: Execuție
+                            SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 8),
                       _formSection(
                         context,
                         title: 'Alocare',
@@ -4763,9 +5214,60 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                             return;
                                           }
                                           setDialogState(() {
+                                            final prevTeams =
+                                                Set<String>.from(
+                                              selectedAssignedTeamIds,
+                                            );
+                                            final nextTeams =
+                                                Set<String>.from(nextSelection);
                                             selectedAssignedTeamIds =
                                                 nextSelection;
                                             teamManuallyChanged = true;
+                                            // Elimină angajații auto din echipele scoase
+                                            final removedTeams =
+                                                prevTeams.difference(nextTeams);
+                                            for (final tid in removedTeams) {
+                                              final t = _masterTeams
+                                                  .where((x) => x.id == tid)
+                                                  .firstOrNull;
+                                              if (t == null) continue;
+                                              for (final mid
+                                                  in t.memberIds) {
+                                                if (autoAddedEmployeeIds
+                                                    .contains(mid)) {
+                                                  selectedAssignedEmployeeIds =
+                                                      selectedAssignedEmployeeIds
+                                                          .where(
+                                                            (id) => id != mid,
+                                                          )
+                                                          .toList();
+                                                  autoAddedEmployeeIds
+                                                      .remove(mid);
+                                                }
+                                              }
+                                            }
+                                            // Adaugă angajații din echipele noi
+                                            final addedTeams =
+                                                nextTeams.difference(prevTeams);
+                                            for (final tid in addedTeams) {
+                                              final t = _masterTeams
+                                                  .where((x) => x.id == tid)
+                                                  .firstOrNull;
+                                              if (t == null) continue;
+                                              for (final mid
+                                                  in t.memberIds) {
+                                                if (!selectedAssignedEmployeeIds
+                                                    .contains(mid)) {
+                                                  selectedAssignedEmployeeIds =
+                                                      [
+                                                    ...selectedAssignedEmployeeIds,
+                                                    mid,
+                                                  ];
+                                                  autoAddedEmployeeIds
+                                                      .add(mid);
+                                                }
+                                              }
+                                            }
                                           });
                                         },
                                   icon: const Icon(Icons.groups_outlined),
@@ -4815,6 +5317,16 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                             return;
                                           }
                                           setDialogState(() {
+                                            // Angajații eliminați manual → scot flag-ul auto
+                                            final removed =
+                                                selectedAssignedEmployeeIds
+                                                    .where(
+                                                      (id) => !nextSelection
+                                                          .contains(id),
+                                                    )
+                                                    .toSet();
+                                            autoAddedEmployeeIds
+                                                .removeAll(removed);
                                             selectedAssignedEmployeeIds =
                                                 nextSelection;
                                             if (!teamManuallyChanged) {
@@ -4852,7 +5364,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                                  const SizedBox(height: 12),
                       // ── Overlap warning ──────────────────────────────────
                       Builder(builder: (ctx) {
                         final currentId =
@@ -4951,287 +5463,76 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           ),
                         );
                       }),
-                      // ── Interventie si echipament ─────────────────────────
-                      _formSection(
-                        context,
-                        title: 'Interventie si echipament',
-                        helper:
-                            'Partenerul beneficiar, partenerul executant, echipamentul si pretul interventiei.',
-                        children: [
-                          PartnerAutocompleteField(
-                            key: forPartnerKey,
-                            partners: _partnerRecords,
-                            initialPartner: _partnerRecords.where(
-                              (p) => p.id == selectedForPartnerId,
-                            ).firstOrNull,
-                            labelText: 'Montez pentru partener',
-                            helperText:
-                                'Partenerul în numele căruia execuți lucrarea',
-                            onPartnerSelected: (partner) {
-                              setDialogState(() {
-                                selectedForPartnerId =
-                                    (partner?.id ?? '').trim();
-                              });
-                            },
-                            onCreateNew: () async {
-                              final created =
-                                  await _openQuickCreatePartnerDialog();
-                              if (created == null || !mounted) return;
-                              final nextPartners =
-                                  await widget.repository.listPartners();
-                              if (!mounted) return;
-                              setState(() {
-                                _partnerRecords = <PartnerRecord>[
-                                  ...nextPartners.where(
-                                    (p) => p.id != created.id,
-                                  ),
-                                  created,
-                                ];
-                              });
-                              setDialogState(() {
-                                selectedForPartnerId = created.id;
-                                forPartnerKey =
-                                    ValueKey('forp_${created.id}');
-                              });
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(this.context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Partener creat și selectat: ${created.name.trim().isEmpty ? created.id : created.name.trim()}',
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                          // Câmpuri financiare partener contractant (admin only)
-                          if (_canManageAppointmentFinancials) ...[
-                            const SizedBox(height: 12),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Expanded(
-                                  flex: 3,
-                                  child: TextField(
-                                    controller: forPartnerInvoiceController,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Valoare de încasat de la partener',
-                                      helperText: 'Suma pe care o facturezi partenerului contractant.',
-                                    ),
-                                    onChanged: (_) => setDialogState(() {}),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  flex: 2,
-                                  child: DropdownButtonFormField<String>(
-                                    initialValue: selectedForPartnerInvoiceCurrency,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Monedă',
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(value: 'RON', child: Text('RON')),
-                                      DropdownMenuItem(value: 'EUR', child: Text('EUR')),
-                                      DropdownMenuItem(value: 'USD', child: Text('USD')),
-                                    ],
-                                    onChanged: (v) => setDialogState(
-                                      () => selectedForPartnerInvoiceCurrency = v ?? 'RON',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<PartnerPaymentStatus>(
-                              initialValue: selectedForPartnerReceiveStatus,
+                                  if (isComplaintAppointment) ...[
+                                    const SizedBox(height: 12),
+                        _formSection(
+                          context,
+                          title: 'Vizita pe reclamatie',
+                          helper:
+                              'Aceste campuri descriu vizita in contextul cazului, fara sa schimbe statusul general al reclamatiei.',
+                          children: [
+                            DropdownButtonFormField<ComplaintVisitType>(
+                              initialValue: selectedComplaintVisitType,
                               decoration: const InputDecoration(
-                                labelText: 'Status încasare partener',
+                                labelText: 'Tip vizita',
                               ),
-                              items: PartnerPaymentStatus.values
-                                  .map((s) => DropdownMenuItem(
-                                        value: s,
-                                        child: Text(s.label),
-                                      ))
-                                  .toList(),
-                              onChanged: (v) => setDialogState(
-                                () => selectedForPartnerReceiveStatus =
-                                    v ?? PartnerPaymentStatus.neplatit,
+                              items: _complaintVisitTypes
+                                  .map(
+                                    (entry) =>
+                                        DropdownMenuItem<ComplaintVisitType>(
+                                      value: entry.key,
+                                      child: Text(entry.value),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                              onChanged: (value) => setDialogState(
+                                () => selectedComplaintVisitType = value,
                               ),
                             ),
                             const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: () async {
-                                      final picked = await showDatePicker(
-                                        context: context,
-                                        initialDate: selectedForPartnerReceiveDate ?? DateTime.now(),
-                                        firstDate: DateTime(2020),
-                                        lastDate: DateTime(2035),
-                                      );
-                                      if (picked != null) {
-                                        setDialogState(() => selectedForPartnerReceiveDate = picked);
-                                      }
-                                    },
-                                    icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                                    label: Text(
-                                      selectedForPartnerReceiveDate != null
-                                          ? 'Încasat pe: ${selectedForPartnerReceiveDate!.day.toString().padLeft(2, '0')}.${selectedForPartnerReceiveDate!.month.toString().padLeft(2, '0')}.${selectedForPartnerReceiveDate!.year}'
-                                          : 'Data încasare partener',
-                                    ),
+                            DropdownButtonFormField<ComplaintVisitOutcome?>(
+                              initialValue: selectedComplaintVisitOutcome,
+                              decoration: const InputDecoration(
+                                labelText: 'Rezultat vizita',
+                              ),
+                              items: <DropdownMenuItem<ComplaintVisitOutcome?>>[
+                                const DropdownMenuItem<ComplaintVisitOutcome?>(
+                                  value: null,
+                                  child: Text('Neselectat'),
+                                ),
+                                ..._complaintVisitOutcomes.map(
+                                  (entry) =>
+                                      DropdownMenuItem<ComplaintVisitOutcome?>(
+                                    value: entry.key,
+                                    child: Text(entry.value),
                                   ),
                                 ),
-                                if (selectedForPartnerReceiveDate != null)
-                                  IconButton(
-                                    onPressed: () => setDialogState(() => selectedForPartnerReceiveDate = null),
-                                    icon: const Icon(Icons.clear, size: 18),
-                                    tooltip: 'Șterge data',
-                                  ),
                               ],
+                              onChanged: (value) => setDialogState(
+                                () => selectedComplaintVisitOutcome = value,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: postponementReasonController,
+                              maxLines: 2,
+                              decoration: const InputDecoration(
+                                labelText: 'Motiv amanare / reprogramare',
+                                helperText:
+                                    'Se foloseste doar cand vizita a fost amanata sau reprogramata.',
+                              ),
                             ),
                           ],
-                          const SizedBox(height: 12),
-                          PartnerAutocompleteField(
-                            key: execPartnerKey,
-                            partners: _partnerRecords,
-                            initialPartner: _partnerRecords.where(
-                              (p) => p.id == selectedExecutingPartnerId,
-                            ).firstOrNull,
-                            labelText: 'Partener trimis să execute',
-                            helperText:
-                                'Partenerul pe care l-ai trimis să facă lucrarea',
-                            onPartnerSelected: (partner) {
-                              setDialogState(() {
-                                selectedExecutingPartnerId =
-                                    (partner?.id ?? '').trim();
-                              });
-                            },
-                            onCreateNew: () async {
-                              final created =
-                                  await _openQuickCreatePartnerDialog();
-                              if (created == null || !mounted) return;
-                              final nextPartners =
-                                  await widget.repository.listPartners();
-                              if (!mounted) return;
-                              setState(() {
-                                _partnerRecords = <PartnerRecord>[
-                                  ...nextPartners.where(
-                                    (p) => p.id != created.id,
-                                  ),
-                                  created,
-                                ];
-                              });
-                              setDialogState(() {
-                                selectedExecutingPartnerId = created.id;
-                                execPartnerKey =
-                                    ValueKey('exepart_${created.id}');
-                              });
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(this.context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Partener creat și selectat: ${created.name.trim().isEmpty ? created.id : created.name.trim()}',
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                          // Câmpuri financiare partener executant (admin only)
-                          if (_canManageAppointmentFinancials) ...[
-                            const SizedBox(height: 12),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Expanded(
-                                  flex: 3,
-                                  child: TextField(
-                                    controller: executingPartnerCommissionController,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                      decimal: true,
-                                    ),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Comision partener executant',
-                                      helperText: 'Suma pe care o datorezi partenerului care execută.',
-                                    ),
-                                    onChanged: (_) => setDialogState(() {}),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  flex: 2,
-                                  child: DropdownButtonFormField<String>(
-                                    initialValue: selectedExecutingPartnerCommissionCurrency,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Monedă',
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(value: 'RON', child: Text('RON')),
-                                      DropdownMenuItem(value: 'EUR', child: Text('EUR')),
-                                      DropdownMenuItem(value: 'USD', child: Text('USD')),
-                                    ],
-                                    onChanged: (v) => setDialogState(
-                                      () => selectedExecutingPartnerCommissionCurrency = v ?? 'RON',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<PartnerPaymentStatus>(
-                              initialValue: selectedExecutingPartnerPaymentStatus,
-                              decoration: const InputDecoration(
-                                labelText: 'Status plată partener executant',
-                              ),
-                              items: PartnerPaymentStatus.values
-                                  .map((s) => DropdownMenuItem(
-                                        value: s,
-                                        child: Text(s.label),
-                                      ))
-                                  .toList(),
-                              onChanged: (v) => setDialogState(
-                                () => selectedExecutingPartnerPaymentStatus =
-                                    v ?? PartnerPaymentStatus.neplatit,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton.icon(
-                                    onPressed: () async {
-                                      final picked = await showDatePicker(
-                                        context: context,
-                                        initialDate: selectedExecutingPartnerPaymentDate ?? DateTime.now(),
-                                        firstDate: DateTime(2020),
-                                        lastDate: DateTime(2035),
-                                      );
-                                      if (picked != null) {
-                                        setDialogState(() => selectedExecutingPartnerPaymentDate = picked);
-                                      }
-                                    },
-                                    icon: const Icon(Icons.calendar_today_outlined, size: 16),
-                                    label: Text(
-                                      selectedExecutingPartnerPaymentDate != null
-                                          ? 'Plătit pe: ${selectedExecutingPartnerPaymentDate!.day.toString().padLeft(2, '0')}.${selectedExecutingPartnerPaymentDate!.month.toString().padLeft(2, '0')}.${selectedExecutingPartnerPaymentDate!.year}'
-                                          : 'Data plată partener',
-                                    ),
-                                  ),
-                                ),
-                                if (selectedExecutingPartnerPaymentDate != null)
-                                  IconButton(
-                                    onPressed: () => setDialogState(() => selectedExecutingPartnerPaymentDate = null),
-                                    icon: const Icon(Icons.clear, size: 18),
-                                    tooltip: 'Șterge data',
-                                  ),
-                              ],
-                            ),
-                          ],
-                          const SizedBox(height: 12),
+                        ),
+                                  ],
+                                  const SizedBox(height: 12),
+                                  _formSection(
+                                    context,
+                                    title: 'Intervenție și echipament',
+                                    helper:
+                                        'Echipamentul, prețul intervenției și materialele folosite.',
+                                    children: [
                           TextField(
                             controller: equipmentController,
                             textCapitalization: TextCapitalization.sentences,
@@ -5403,8 +5704,20 @@ class _ProgramariPageState extends State<ProgramariPage> {
                               ],
                             ],
                           ),
-                          if (_canManageAppointmentFinancials) ...[
-                            const SizedBox(height: 12),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+                                ],
+                              ),
+                            ),
+                            // TAB 2: Financiar
+                            SingleChildScrollView(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const SizedBox(height: 8),
+                                  if (_canManageAppointmentFinancials) ...[
                             _formSection(
                               context,
                               title: 'Evidenta administrator',
@@ -5517,326 +5830,533 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                   ),
                                 ),
                                 const SizedBox(height: 12),
-                                Card(
-                                  margin: EdgeInsets.zero,
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Profitabilitate estimata',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall,
+                                Builder(builder: (_) {
+                                  final costMat =
+                                      previewMaterialUsage.totalCost;
+                                  final costAng =
+                                      selectedAssignedEmployeeIds.fold<double>(
+                                    0.0,
+                                    (s, empId) {
+                                      final ctrl =
+                                          employeePayControllers[empId];
+                                      if (ctrl == null) return s;
+                                      return s +
+                                          (double.tryParse(
+                                                ctrl.text.replaceAll(
+                                                  ',',
+                                                  '.',
+                                                ),
+                                              ) ??
+                                              0.0);
+                                    },
+                                  );
+                                  final totalCosturi = costMat + costAng;
+                                  final incasare = _asDouble(
+                                    adminCollectedAmountController.text,
+                                  );
+                                  final profit = incasare - totalCosturi;
+                                  final hasAngajati = costAng > 0;
+
+                                  Widget profRow(
+                                    String label,
+                                    String value, {
+                                    bool bold = false,
+                                  }) =>
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 2,
                                         ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          'Cost materiale: ${previewMaterialUsage.totalCost.toStringAsFixed(2)} RON',
-                                        ),
-                                        Text(
-                                          'Incasare: ${_asDouble(adminCollectedAmountController.text).toStringAsFixed(2)} $selectedAdminCollectedCurrency',
-                                        ),
-                                        Text(
-                                          'Profit estimat: ${(_asDouble(adminCollectedAmountController.text) - previewMaterialUsage.totalCost).toStringAsFixed(2)} $selectedAdminCollectedCurrency',
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
-                      ),
-                      if (isComplaintAppointment) ...[
-                        const SizedBox(height: 12),
-                        _formSection(
-                          context,
-                          title: 'Vizita pe reclamatie',
-                          helper:
-                              'Aceste campuri descriu vizita in contextul cazului, fara sa schimbe statusul general al reclamatiei.',
-                          children: [
-                            DropdownButtonFormField<ComplaintVisitType>(
-                              initialValue: selectedComplaintVisitType,
-                              decoration: const InputDecoration(
-                                labelText: 'Tip vizita',
-                              ),
-                              items: _complaintVisitTypes
-                                  .map(
-                                    (entry) =>
-                                        DropdownMenuItem<ComplaintVisitType>(
-                                      value: entry.key,
-                                      child: Text(entry.value),
-                                    ),
-                                  )
-                                  .toList(growable: false),
-                              onChanged: (value) => setDialogState(
-                                () => selectedComplaintVisitType = value,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<ComplaintVisitOutcome?>(
-                              initialValue: selectedComplaintVisitOutcome,
-                              decoration: const InputDecoration(
-                                labelText: 'Rezultat vizita',
-                              ),
-                              items: <DropdownMenuItem<ComplaintVisitOutcome?>>[
-                                const DropdownMenuItem<ComplaintVisitOutcome?>(
-                                  value: null,
-                                  child: Text('Neselectat'),
-                                ),
-                                ..._complaintVisitOutcomes.map(
-                                  (entry) =>
-                                      DropdownMenuItem<ComplaintVisitOutcome?>(
-                                    value: entry.key,
-                                    child: Text(entry.value),
-                                  ),
-                                ),
-                              ],
-                              onChanged: (value) => setDialogState(
-                                () => selectedComplaintVisitOutcome = value,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            TextField(
-                              textCapitalization: TextCapitalization.sentences,
-                              controller: postponementReasonController,
-                              maxLines: 2,
-                              decoration: const InputDecoration(
-                                labelText: 'Motiv amanare / reprogramare',
-                                helperText:
-                                    'Se foloseste doar cand vizita a fost amanata sau reprogramata.',
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                      const SizedBox(height: 12),
-                      if (!isComplaintAppointment)
-                        _formSection(
-                          context,
-                          title: 'Recurență',
-                          children: [
-                            DropdownButtonFormField<String>(
-                              initialValue: selectedRecurrenceRule,
-                              decoration: const InputDecoration(
-                                labelText: 'Repetare automată',
-                                helperText:
-                                    'La salvare se creează automat programări pentru anii următori.',
-                              ),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'none',
-                                  child: Text('Fără recurență'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'annual',
-                                  child: Text('Anual (service / mentenanță)'),
-                                ),
-                              ],
-                              onChanged: isEditingExisting
-                                  ? null
-                                  : (v) => setDialogState(
-                                        () => selectedRecurrenceRule =
-                                            v ?? 'none',
-                                      ),
-                            ),
-                            if (selectedRecurrenceRule == 'annual' &&
-                                !isEditingExisting)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.info_outline,
-                                        size: 16,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: Text(
-                                        'Se vor crea automat 3 programări: cea curentă + 1 an + 2 ani.',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .primary,
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              label,
+                                              style: bold
+                                                  ? const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    )
+                                                  : TextStyle(
+                                                      color:
+                                                          Colors.grey[600],
+                                                    ),
                                             ),
+                                            Text(
+                                              value,
+                                              style: bold
+                                                  ? const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                    )
+                                                  : null,
+                                            ),
+                                          ],
+                                        ),
+                                      );
+
+                                  return Card(
+                                    margin: EdgeInsets.zero,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Profitabilitate estimată',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleSmall,
+                                          ),
+                                          const SizedBox(height: 8),
+                                          profRow(
+                                            'Cost materiale:',
+                                            '${costMat.toStringAsFixed(2)} RON',
+                                          ),
+                                          if (hasAngajati)
+                                            profRow(
+                                              'Cost angajați:',
+                                              '${costAng.toStringAsFixed(2)} RON',
+                                            ),
+                                          if (hasAngajati) ...[
+                                            const Divider(height: 12),
+                                            profRow(
+                                              'Total costuri:',
+                                              '${totalCosturi.toStringAsFixed(2)} RON',
+                                            ),
+                                          ],
+                                          profRow(
+                                            'Încasare:',
+                                            '${incasare.toStringAsFixed(2)} $selectedAdminCollectedCurrency',
+                                          ),
+                                          const Divider(height: 12),
+                                          Padding(
+                                            padding:
+                                                const EdgeInsets.symmetric(
+                                              vertical: 2,
+                                            ),
+                                            child: Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment
+                                                      .spaceBetween,
+                                              children: [
+                                                const Text(
+                                                  'Profit estimat:',
+                                                  style: TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.bold,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${profit.toStringAsFixed(2)} $selectedAdminCollectedCurrency',
+                                                  style: TextStyle(
+                                                    fontWeight:
+                                                        FontWeight.bold,
+                                                    color: profit >= 0
+                                                        ? Colors.green[700]
+                                                        : Colors.red[700],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
-                                  ],
-                                ),
-                              ),
-                          ],
-                        ),
-                      const SizedBox(height: 12),
-                      _formSection(
-                        context,
-                        title: 'Note si detalii',
-                        children: [
-                          TextField(
-                            controller: notesController,
-                            maxLines: 3,
-                            textCapitalization: TextCapitalization.sentences,
-                            decoration: const InputDecoration(
-                              labelText: 'Observatii',
+                                  );
+                                }),
+                              ],
                             ),
-                          ),
-                          const SizedBox(height: 12),
-                          ExpansionTile(
-                            tilePadding: EdgeInsets.zero,
-                            childrenPadding: EdgeInsets.zero,
-                            title: const Text('Detalii suplimentare'),
-                            children: [
-                              TextField(
-                                textCapitalization: TextCapitalization.sentences,
-                                controller: typeController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Tip',
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                textCapitalization: TextCapitalization.sentences,
-                                controller: priorityController,
-                                decoration: const InputDecoration(
-                                  labelText: 'Prioritate',
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: Text(
-                                  'Culoare in programari',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .labelLarge
-                                      ?.copyWith(fontWeight: FontWeight.w700),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: [
-                                  ChoiceChip(
-                                    label:
-                                        const Text('Auto dupa echipa / status'),
-                                    selected: selectedColorCode.isEmpty,
-                                    visualDensity: VisualDensity.compact,
-                                    onSelected: (_) => setDialogState(
-                                      () => selectedColorCode = '',
-                                    ),
-                                  ),
-                                  for (final preset in _appointmentColorPresets)
-                                    ChoiceChip(
-                                      avatar: CircleAvatar(
-                                        radius: 8,
-                                        backgroundColor: preset.color,
-                                      ),
-                                      label: Text(preset.label),
-                                      selected: selectedColorCode ==
-                                          _colorCodeFromColor(preset.color),
-                                      visualDensity: VisualDensity.compact,
-                                      onSelected: (_) => setDialogState(
-                                        () => selectedColorCode =
-                                            _colorCodeFromColor(preset.color),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Builder(builder: (context) {
-                                // Derive the preview color the same way
-                                // _appointmentAccentColor does at runtime.
-                                Color previewColor;
-                                String previewLabel;
-                                if (selectedColorCode.isNotEmpty) {
-                                  previewColor =
-                                      _colorFromCode(selectedColorCode) ??
-                                          _statusAccentColor(selectedStatus);
-                                  previewLabel =
-                                      _appointmentColorLabel(selectedColorCode);
-                                } else {
-                                  // Check if any selected team has a color.
-                                  Color? teamColor;
-                                  for (final teamId
-                                      in selectedAssignedTeamIds) {
-                                    for (final team in _masterTeams) {
-                                      if (team.id == teamId &&
-                                          team.colorValue != 0) {
-                                        teamColor = Color(team.colorValue);
-                                        break;
-                                      }
-                                    }
-                                    if (teamColor != null) break;
-                                  }
-                                  if (teamColor != null) {
-                                    previewColor = teamColor;
-                                    previewLabel = 'Culoare echipa';
-                                  } else {
-                                    previewColor =
-                                        _statusAccentColor(selectedStatus);
-                                    previewLabel =
-                                        'Status: ${_statusLabel(selectedStatus)}';
-                                  }
-                                }
-                                return Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 10,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Color.alphaBlend(
-                                      previewColor.withValues(alpha: 0.12),
-                                      Theme.of(context)
-                                          .colorScheme
-                                          .surfaceContainerLowest,
-                                    ),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color:
-                                          previewColor.withValues(alpha: 0.35),
-                                    ),
-                                  ),
-                                  child: Row(
+                                    const SizedBox(height: 12),
+                                  ],
+                                  _formSection(
+                                    context,
+                                    title: 'Partener beneficiar',
+                                    helper:
+                                        'Partenerul în numele căruia execuți lucrarea.',
                                     children: [
-                                      Container(
-                                        width: 12,
-                                        height: 12,
-                                        decoration: BoxDecoration(
-                                          color: previewColor,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Text(
-                                          'Preview: $previewLabel',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodyMedium,
-                                        ),
-                                      ),
+                          PartnerAutocompleteField(
+                            key: forPartnerKey,
+                            partners: _partnerRecords,
+                            initialPartner: _partnerRecords.where(
+                              (p) => p.id == selectedForPartnerId,
+                            ).firstOrNull,
+                            labelText: 'Montez pentru partener',
+                            helperText:
+                                'Partenerul în numele căruia execuți lucrarea',
+                            onPartnerSelected: (partner) {
+                              setDialogState(() {
+                                selectedForPartnerId =
+                                    (partner?.id ?? '').trim();
+                              });
+                            },
+                            onCreateNew: () async {
+                              final created =
+                                  await _openQuickCreatePartnerDialog();
+                              if (created == null || !mounted) return;
+                              final nextPartners =
+                                  await widget.repository.listPartners();
+                              if (!mounted) return;
+                              setState(() {
+                                _partnerRecords = <PartnerRecord>[
+                                  ...nextPartners.where(
+                                    (p) => p.id != created.id,
+                                  ),
+                                  created,
+                                ];
+                              });
+                              setDialogState(() {
+                                selectedForPartnerId = created.id;
+                                forPartnerKey =
+                                    ValueKey('forp_${created.id}');
+                              });
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(this.context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Partener creat și selectat: ${created.name.trim().isEmpty ? created.id : created.name.trim()}',
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          // Câmpuri financiare partener contractant (admin only)
+                          if (_canManageAppointmentFinancials) ...[
+                            const SizedBox(height: 12),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: forPartnerInvoiceController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Valoare de încasat de la partener',
+                                      helperText: 'Suma pe care o facturezi partenerului contractant.',
+                                    ),
+                                    onChanged: (_) => setDialogState(() {}),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  flex: 2,
+                                  child: DropdownButtonFormField<String>(
+                                    initialValue: selectedForPartnerInvoiceCurrency,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Monedă',
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(value: 'RON', child: Text('RON')),
+                                      DropdownMenuItem(value: 'EUR', child: Text('EUR')),
+                                      DropdownMenuItem(value: 'USD', child: Text('USD')),
+                                    ],
+                                    onChanged: (v) => setDialogState(
+                                      () => selectedForPartnerInvoiceCurrency = v ?? 'RON',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<PartnerPaymentStatus>(
+                              initialValue: selectedForPartnerReceiveStatus,
+                              decoration: const InputDecoration(
+                                labelText: 'Status încasare partener',
+                              ),
+                              items: PartnerPaymentStatus.values
+                                  .map((s) => DropdownMenuItem(
+                                        value: s,
+                                        child: Text(s.label),
+                                      ))
+                                  .toList(),
+                              onChanged: (v) => setDialogState(
+                                () => selectedForPartnerReceiveStatus =
+                                    v ?? PartnerPaymentStatus.neplatit,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () async {
+                                      final picked = await showDatePicker(
+                                        context: context,
+                                        initialDate: selectedForPartnerReceiveDate ?? DateTime.now(),
+                                        firstDate: DateTime(2020),
+                                        lastDate: DateTime(2035),
+                                      );
+                                      if (picked != null) {
+                                        setDialogState(() => selectedForPartnerReceiveDate = picked);
+                                      }
+                                    },
+                                    icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                                    label: Text(
+                                      selectedForPartnerReceiveDate != null
+                                          ? 'Încasat pe: ${selectedForPartnerReceiveDate!.day.toString().padLeft(2, '0')}.${selectedForPartnerReceiveDate!.month.toString().padLeft(2, '0')}.${selectedForPartnerReceiveDate!.year}'
+                                          : 'Data încasare partener',
+                                    ),
+                                  ),
+                                ),
+                                if (selectedForPartnerReceiveDate != null)
+                                  IconButton(
+                                    onPressed: () => setDialogState(() => selectedForPartnerReceiveDate = null),
+                                    icon: const Icon(Icons.clear, size: 18),
+                                    tooltip: 'Șterge data',
+                                  ),
+                              ],
+                            ),
+                          ],
                                     ],
                                   ),
-                                );
-                              }),
-                            ],
+                                  const SizedBox(height: 12),
+                                  _formSection(
+                                    context,
+                                    title: 'Partener executant',
+                                    helper:
+                                        'Partenerul pe care l-ai trimis să facă lucrarea.',
+                                    children: [
+                          PartnerAutocompleteField(
+                            key: execPartnerKey,
+                            partners: _partnerRecords,
+                            initialPartner: _partnerRecords.where(
+                              (p) => p.id == selectedExecutingPartnerId,
+                            ).firstOrNull,
+                            labelText: 'Partener trimis să execute',
+                            helperText:
+                                'Partenerul pe care l-ai trimis să facă lucrarea',
+                            onPartnerSelected: (partner) {
+                              setDialogState(() {
+                                selectedExecutingPartnerId =
+                                    (partner?.id ?? '').trim();
+                              });
+                            },
+                            onCreateNew: () async {
+                              final created =
+                                  await _openQuickCreatePartnerDialog();
+                              if (created == null || !mounted) return;
+                              final nextPartners =
+                                  await widget.repository.listPartners();
+                              if (!mounted) return;
+                              setState(() {
+                                _partnerRecords = <PartnerRecord>[
+                                  ...nextPartners.where(
+                                    (p) => p.id != created.id,
+                                  ),
+                                  created,
+                                ];
+                              });
+                              setDialogState(() {
+                                selectedExecutingPartnerId = created.id;
+                                execPartnerKey =
+                                    ValueKey('exepart_${created.id}');
+                              });
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(this.context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Partener creat și selectat: ${created.name.trim().isEmpty ? created.id : created.name.trim()}',
+                                  ),
+                                ),
+                              );
+                            },
                           ),
-                          if ((formError ?? '').trim().isNotEmpty) ...[
+                          // Câmpuri financiare partener executant (admin only)
+                          if (_canManageAppointmentFinancials) ...[
                             const SizedBox(height: 12),
-                            Text(
-                              formError!,
-                              style: const TextStyle(color: Colors.red),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: executingPartnerCommissionController,
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Comision partener executant',
+                                      helperText: 'Suma pe care o datorezi partenerului care execută.',
+                                    ),
+                                    onChanged: (_) => setDialogState(() {}),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  flex: 2,
+                                  child: DropdownButtonFormField<String>(
+                                    initialValue: selectedExecutingPartnerCommissionCurrency,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Monedă',
+                                    ),
+                                    items: const [
+                                      DropdownMenuItem(value: 'RON', child: Text('RON')),
+                                      DropdownMenuItem(value: 'EUR', child: Text('EUR')),
+                                      DropdownMenuItem(value: 'USD', child: Text('USD')),
+                                    ],
+                                    onChanged: (v) => setDialogState(
+                                      () => selectedExecutingPartnerCommissionCurrency = v ?? 'RON',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<PartnerPaymentStatus>(
+                              initialValue: selectedExecutingPartnerPaymentStatus,
+                              decoration: const InputDecoration(
+                                labelText: 'Status plată partener executant',
+                              ),
+                              items: PartnerPaymentStatus.values
+                                  .map((s) => DropdownMenuItem(
+                                        value: s,
+                                        child: Text(s.label),
+                                      ))
+                                  .toList(),
+                              onChanged: (v) => setDialogState(
+                                () => selectedExecutingPartnerPaymentStatus =
+                                    v ?? PartnerPaymentStatus.neplatit,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () async {
+                                      final picked = await showDatePicker(
+                                        context: context,
+                                        initialDate: selectedExecutingPartnerPaymentDate ?? DateTime.now(),
+                                        firstDate: DateTime(2020),
+                                        lastDate: DateTime(2035),
+                                      );
+                                      if (picked != null) {
+                                        setDialogState(() => selectedExecutingPartnerPaymentDate = picked);
+                                      }
+                                    },
+                                    icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                                    label: Text(
+                                      selectedExecutingPartnerPaymentDate != null
+                                          ? 'Plătit pe: ${selectedExecutingPartnerPaymentDate!.day.toString().padLeft(2, '0')}.${selectedExecutingPartnerPaymentDate!.month.toString().padLeft(2, '0')}.${selectedExecutingPartnerPaymentDate!.year}'
+                                          : 'Data plată partener',
+                                    ),
+                                  ),
+                                ),
+                                if (selectedExecutingPartnerPaymentDate != null)
+                                  IconButton(
+                                    onPressed: () => setDialogState(() => selectedExecutingPartnerPaymentDate = null),
+                                    icon: const Icon(Icons.clear, size: 18),
+                                    tooltip: 'Șterge data',
+                                  ),
+                              ],
                             ),
                           ],
-                        ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _formSection(
+                                    context,
+                                    title: 'Plată angajați',
+                                    helper:
+                                        'Sumele datorate fiecărui angajat alocat pe această programare.',
+                                    children: [
+                                      if (selectedAssignedEmployeeIds.isEmpty)
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 8,
+                                          ),
+                                          child: Text(
+                                            'Alocați mai întâi persoane în tab-ul Execuție.',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall,
+                                          ),
+                                        )
+                                      else ...[
+                                        for (final empId
+                                            in selectedAssignedEmployeeIds)
+                                          Builder(builder: (ctx) {
+                                            final emp =
+                                                _masterEmployees.firstWhere(
+                                              (e) => e.id == empId,
+                                              orElse: () => MasterEmployee(
+                                                id: empId,
+                                                name: empId,
+                                                role: '',
+                                                active: true,
+                                              ),
+                                            );
+                                            final ctrl =
+                                                employeePayControllers
+                                                    .putIfAbsent(
+                                              empId,
+                                              () => TextEditingController(),
+                                            );
+                                            return Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 8,
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      emp.name.trim().isEmpty
+                                                          ? empId
+                                                          : emp.name,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  SizedBox(
+                                                    width: 130,
+                                                    child: TextField(
+                                                      controller: ctrl,
+                                                      keyboardType: const TextInputType
+                                                          .numberWithOptions(
+                                                        decimal: true,
+                                                      ),
+                                                      textAlign: TextAlign.end,
+                                                      decoration:
+                                                          const InputDecoration(
+                                                        labelText: 'Sumă',
+                                                        suffixText: 'RON',
+                                                        isDense: true,
+                                                      ),
+                                                      onChanged: (_) =>
+                                                          setDialogState(() {}),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          }),
+                                        const Divider(height: 16),
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.end,
+                                          children: [
+                                            Text(
+                                              'Total angajați: ${selectedAssignedEmployeeIds.fold<double>(0, (acc, empId) { final ctrl = employeePayControllers[empId]; return acc + _asDouble(ctrl?.text ?? ''); }).toStringAsFixed(2)} RON',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleSmall,
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                  const SizedBox(height: 16),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -6025,12 +6545,30 @@ class _ProgramariPageState extends State<ProgramariPage> {
                       forPartnerReceiveNotes:
                           forPartnerReceiveNotesController.text.trim(),
                     );
+                    // Build employee pay data from controllers
+                    final employeePayData = <String, double>{};
+                    for (final empId in enforcedAssignedEmployeeIds) {
+                      final ctrl = employeePayControllers[empId];
+                      if (ctrl != null) {
+                        final amount = _asDouble(ctrl.text);
+                        if (amount > 0) employeePayData[empId] = amount;
+                      }
+                    }
                     _programariLog('local save start');
                     // 1. Salvare locală — instant (cu mem cache)
                     await _saveAppointmentResolved(item);
                     _programariLog(
                       'local save end duration_ms=${saveStopwatch.elapsedMilliseconds}',
                     );
+                    // Capturare date WhatsApp pentru confirmarea post-save
+                    if (!isEditingExisting) {
+                      clientNameForWhatsApp = item.clientName.trim();
+                      phoneForWhatsApp = item.contactPhone.trim().isNotEmpty
+                          ? item.contactPhone.trim()
+                          : (item.clientPhoneNumbers.isNotEmpty
+                              ? item.clientPhoneNumbers.first.trim()
+                              : '');
+                    }
                     // 2. Închide dialogul IMEDIAT — UI răspunde instant
                     if (dialogContext.mounted) {
                       Navigator.of(dialogContext).pop(true);
@@ -6092,6 +6630,52 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         () => widget.onAppointmentSaved!(item),
                       );
                     }
+                    if (employeePayData.isNotEmpty) {
+                      final savedItem = item;
+                      final savedAuthUserId = authUserId;
+                      _startBackgroundTask('employee pay save', () async {
+                        final payRepo = EmployeeFinancialRepository.instance;
+                        final existing = await payRepo
+                            .listPayEntriesForAppointment(savedItem.id);
+                        for (final entry in employeePayData.entries) {
+                          final empId = entry.key;
+                          final amount = entry.value;
+                          final emp = _masterEmployees.firstWhere(
+                            (e) => e.id == empId,
+                            orElse: () => MasterEmployee(
+                              id: empId,
+                              name: empId,
+                              role: '',
+                              active: true,
+                            ),
+                          );
+                          final existingEntry = existing
+                              .where((e) => e.employeeId == empId)
+                              .firstOrNull;
+                          if (existingEntry != null) {
+                            await payRepo.savePayEntry(
+                              existingEntry.copyWith(amountDue: amount),
+                            );
+                          } else {
+                            await payRepo.savePayEntry(
+                              EmployeePayEntry.create(
+                                appointmentId: savedItem.id,
+                                appointmentTitle: savedItem.title,
+                                appointmentDate: savedItem.effectiveStartDateTime
+                                    .toIso8601String()
+                                    .substring(0, 10),
+                                employeeId: empId,
+                                employeeName: emp.name,
+                                amountDue: amount,
+                                currency: 'RON',
+                                notes: '',
+                                createdBy: savedAuthUserId,
+                              ),
+                            );
+                          }
+                        }
+                      });
+                    }
                   },
                   child: const Text('Salveaza'),
                 ),
@@ -6107,6 +6691,16 @@ class _ProgramariPageState extends State<ProgramariPage> {
     if (saved == true) {
       // Reîncarcă NUMAI programările (nu și clienți/echipe/lucrări) — mult mai rapid
       await _reloadAppointmentsOnly();
+      // Confirmare WhatsApp pentru programări noi cu telefon disponibil
+      if (!isEditingExisting && mounted) {
+        _maybeOfferWhatsAppConfirmation(
+          clientName: clientNameForWhatsApp,
+          phone: phoneForWhatsApp,
+          titlu: titleController.text.trim(),
+          start: selectedStart,
+          location: locationController.text.trim(),
+        );
+      }
       if (closePageOnSave && mounted && Navigator.of(context).canPop()) {
         Navigator.of(context).pop();
         return;
@@ -6127,6 +6721,130 @@ class _ProgramariPageState extends State<ProgramariPage> {
     adminFinancialNotesController.dispose();
     materialUsageNotesController.dispose();
     materialKitLinearMetersController.dispose();
+    for (final ctrl in employeePayControllers.values) {
+      ctrl.dispose();
+    }
+  }
+
+  Future<void> _handleGpsCheckin(Appointment item) async {
+    final activeCheckin =
+        await GpsCheckinService.instance.getActiveCheckin(item.id);
+    if (!mounted) return;
+    final isCheckedIn = activeCheckin != null;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isCheckedIn ? 'Check-out GPS' : 'Check-in GPS'),
+        content: Text(isCheckedIn
+            ? 'Confirmati check-out (ati terminat la locatie)?'
+            : 'Confirmati ca sunteti la locatia: ${item.location.isEmpty ? item.title : item.location}'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Anuleaza')),
+          FilledButton.icon(
+            icon: Icon(isCheckedIn
+                ? Icons.logout_outlined
+                : Icons.location_on_outlined),
+            label: Text(isCheckedIn ? 'Check-out' : 'Check-in'),
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final GpsCheckinResult result;
+    if (isCheckedIn) {
+      result = await GpsCheckinService.instance.checkOut(
+        appointmentId: item.id,
+        adresaLocatie: item.location,
+      );
+    } else {
+      result = await GpsCheckinService.instance.checkIn(
+        appointmentId: item.id,
+        adresaLocatie: item.location,
+      );
+    }
+    if (!mounted) return;
+    if (!result.success) {
+      messenger.showSnackBar(
+          SnackBar(content: Text(result.error ?? 'Eroare GPS')));
+      return;
+    }
+    if (!result.inRaza && !isCheckedIn) {
+      final dist = result.distanta?.toStringAsFixed(0) ?? '?';
+      final continua = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Esti departe de locatie'),
+          content: Text('Distanta fata de adresa programarii: $dist m.\n'
+              'Doriti sa inregistrati oricum prezenta?'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Anuleaza')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Inregistreaza')),
+          ],
+        ),
+      );
+      if (continua != true) return;
+    }
+    final tip = isCheckedIn ? 'Check-out' : 'Check-in';
+    final razaMsg = result.inRaza ? ' ✅' : ' ⚠️ (departe de locatie)';
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('$tip inregistrat$razaMsg'),
+        backgroundColor: result.inRaza ? Colors.green : Colors.orange,
+      ),
+    );
+  }
+
+  void _maybeOfferWhatsAppConfirmation({
+    required String clientName,
+    required String phone,
+    required String titlu,
+    required DateTime start,
+    String location = '',
+  }) {
+    if (phone.isEmpty || !mounted) return;
+    showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Trimite confirmare?'),
+        content: Text(
+            'Doriți să trimiteți confirmare WhatsApp lui $clientName?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Mai tarziu')),
+          FilledButton.icon(
+            icon: const Icon(Icons.chat_outlined, size: 16),
+            label: const Text('Trimite WhatsApp'),
+            onPressed: () {
+              Navigator.pop(ctx, true);
+              final ora =
+                  '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
+              final data =
+                  '${start.day.toString().padLeft(2, '0')}.${start.month.toString().padLeft(2, '0')}.${start.year}';
+              final msg = CommunicationService.instance
+                  .mesajConfirmareProgramare(
+                numeClient: clientName,
+                dataOra: '$data la $ora',
+                titluLucrare: titlu,
+                numeTechnician: '',
+                adresaLocatie: location.isNotEmpty ? location : null,
+              );
+              CommunicationService.instance
+                  .sendWhatsApp(phone: phone, message: msg)
+                  .catchError((_) => false);
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openEditorForCalendarSlot(DateTime start) async {
@@ -6233,6 +6951,85 @@ class _ProgramariPageState extends State<ProgramariPage> {
     });
     await _persistPlannerBaseRangePreference();
   }
+
+  // ── Navigare calendar cu swipe / butoane ────────────────────────────────────
+  void _goToNextCalendarInterval() {
+    if (_isCalendarNavigating) return;
+    const intervalStep = 7;
+    final visibleDayCount = _calendarVisibleDayOptions.contains(_calendarVisibleDays)
+        ? _calendarVisibleDays
+        : 7;
+    final useWeekAnchor = _calendarUsesWeekAnchor(visibleDayCount);
+    final baseDate = useWeekAnchor
+        ? _startOfWeekMonday(_calendarFocusDate)
+        : _dateOnly(_calendarFocusDate);
+    setState(() {
+      _isCalendarNavigating = true;
+      _calendarFocusDate = DateTime(
+        baseDate.year,
+        baseDate.month,
+        baseDate.day + intervalStep,
+      );
+    });
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (mounted) setState(() => _isCalendarNavigating = false);
+    });
+  }
+
+  void _goToPreviousCalendarInterval() {
+    if (_isCalendarNavigating) return;
+    const intervalStep = 7;
+    final visibleDayCount = _calendarVisibleDayOptions.contains(_calendarVisibleDays)
+        ? _calendarVisibleDays
+        : 7;
+    final useWeekAnchor = _calendarUsesWeekAnchor(visibleDayCount);
+    final baseDate = useWeekAnchor
+        ? _startOfWeekMonday(_calendarFocusDate)
+        : _dateOnly(_calendarFocusDate);
+    setState(() {
+      _isCalendarNavigating = true;
+      _calendarFocusDate = DateTime(
+        baseDate.year,
+        baseDate.month,
+        baseDate.day - intervalStep,
+      );
+    });
+    Future.delayed(const Duration(milliseconds: 400), () {
+      if (mounted) setState(() => _isCalendarNavigating = false);
+    });
+  }
+
+  void _goToTodayCalendar() {
+    final visibleDayCount = _calendarVisibleDayOptions.contains(_calendarVisibleDays)
+        ? _calendarVisibleDays
+        : 7;
+    final useWeekAnchor = _calendarUsesWeekAnchor(visibleDayCount);
+    setState(() {
+      _calendarFocusDate = useWeekAnchor
+          ? _startOfWeekMonday(DateTime.now())
+          : _dateOnly(DateTime.now());
+    });
+  }
+
+  Future<void> _showCalendarIntervalPicker() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _calendarFocusDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null || !mounted) return;
+    final visibleDayCount = _calendarVisibleDayOptions.contains(_calendarVisibleDays)
+        ? _calendarVisibleDays
+        : 7;
+    final useWeekAnchor = _calendarUsesWeekAnchor(visibleDayCount);
+    setState(() {
+      _calendarFocusDate = useWeekAnchor
+          ? _startOfWeekMonday(picked)
+          : _dateOnly(picked);
+    });
+  }
+  // ── End navigare calendar ────────────────────────────────────────────────────
 
   Appointment _withStatus(
     Appointment item,
@@ -6990,6 +7787,172 @@ class _ProgramariPageState extends State<ProgramariPage> {
     );
   }
 
+  // ── Editare date client din programare (accesibil tuturor rolurilor) ────────
+
+  Future<void> _showClientDataEditDialog(
+    BuildContext parentContext,
+    Appointment item,
+  ) async {
+    final nameCtrl = TextEditingController(
+      text: item.clientName.trim().isNotEmpty
+          ? item.clientName.trim()
+          : _resolvedClientName(item.clientId, item.clientName),
+    );
+    final locationCtrl = TextEditingController(text: item.location.trim());
+
+    // Inițializare numere telefon din clientPhoneNumbers sau contactPhone
+    final initPhones = item.clientPhoneNumbers.isNotEmpty
+        ? List<String>.from(item.clientPhoneNumbers)
+        : item.contactPhone.trim().isNotEmpty
+            ? [item.contactPhone.trim()]
+            : [''];
+    final phoneControllers =
+        initPhones.map((p) => TextEditingController(text: p)).toList();
+
+    await showDialog<void>(
+      context: parentContext,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (ctx, setS) {
+          void addPhone() {
+            if (phoneControllers.length >= 5) return;
+            setS(() => phoneControllers.add(TextEditingController()));
+          }
+
+          void removePhone(int i) {
+            if (phoneControllers.length <= 1) return;
+            phoneControllers[i].dispose();
+            setS(() => phoneControllers.removeAt(i));
+          }
+
+          return AlertDialog(
+            title: const Text('Editează date client'),
+            content: SizedBox(
+              width: 400,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: nameCtrl,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Beneficiar / client',
+                        prefixIcon: Icon(Icons.person_outline),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: locationCtrl,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Adresă / locație intervenție',
+                        prefixIcon: Icon(Icons.location_on_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Numere de telefon',
+                      style: Theme.of(ctx).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    ...phoneControllers.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: entry.value,
+                                keyboardType: TextInputType.phone,
+                                decoration: InputDecoration(
+                                  labelText: i == 0
+                                      ? 'Telefon principal'
+                                      : 'Telefon ${i + 1}',
+                                  prefixIcon: const Icon(Icons.phone_outlined),
+                                ),
+                              ),
+                            ),
+                            if (phoneControllers.length > 1)
+                              IconButton(
+                                icon: const Icon(Icons.remove_circle_outline,
+                                    color: Colors.red),
+                                onPressed: () => removePhone(i),
+                              ),
+                          ],
+                        ),
+                      );
+                    }),
+                    if (phoneControllers.length < 5)
+                      TextButton.icon(
+                        icon: const Icon(Icons.add_call, size: 16),
+                        label: const Text('Adaugă număr de telefon'),
+                        onPressed: addPhone,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Renunță'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  Navigator.of(dialogContext).pop();
+                  final phones = phoneControllers
+                      .map((c) => c.text.trim())
+                      .where((p) => p.isNotEmpty)
+                      .toList();
+                  final updated = item.copyWith(
+                    clientName: nameCtrl.text.trim().isEmpty
+                        ? item.clientName
+                        : nameCtrl.text.trim(),
+                    location: locationCtrl.text.trim().isEmpty
+                        ? item.location
+                        : locationCtrl.text.trim(),
+                    contactPhone: phones.isNotEmpty ? phones.first : item.contactPhone,
+                    clientPhoneNumbers: phones,
+                  );
+                  // Optimistic update + save în fundal
+                  setState(() {
+                    final idx = _items.indexWhere((a) => a.id == item.id);
+                    if (idx >= 0) {
+                      final list = List.of(_items);
+                      list[idx] = updated;
+                      _items = list;
+                      _updateFilteredCache();
+                    }
+                  });
+                  widget.repository.saveAppointment(updated).catchError((e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Eroare salvare date client: $e')),
+                      );
+                    }
+                  });
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Date client actualizate.')),
+                    );
+                  }
+                  for (final c in phoneControllers) {
+                    c.dispose();
+                  }
+                },
+                child: const Text('Salvează'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    nameCtrl.dispose();
+    locationCtrl.dispose();
+  }
+
   Future<void> _openDetails(Appointment item) async {
     final clientLabel = _resolvedClientName(item.clientId, item.clientName);
     final contractingLabel = _resolvedClientName(
@@ -7070,20 +8033,28 @@ class _ProgramariPageState extends State<ProgramariPage> {
                     dialogContext,
                     title: 'Contact si locatie',
                     children: [
-                      // Tappable client chip - opens full client info dialog
-                      if (item.clientId.trim().isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: ActionChip(
-                            avatar: const Icon(Icons.person_outlined, size: 16),
-                            label: Text(clientLabel),
-                            onPressed: () => _showClientInfoDialog(
-                              dialogContext,
-                              item.clientId,
-                              clientLabel,
+                      // Tappable client chip + buton editare date client (vizibil pt toți)
+                      Row(
+                        children: [
+                          if (item.clientId.trim().isNotEmpty)
+                            ActionChip(
+                              avatar: const Icon(Icons.person_outlined, size: 16),
+                              label: Text(clientLabel),
+                              onPressed: () => _showClientInfoDialog(
+                                dialogContext,
+                                item.clientId,
+                                clientLabel,
+                              ),
                             ),
+                          const Spacer(),
+                          TextButton.icon(
+                            icon: const Icon(Icons.edit_outlined, size: 16),
+                            label: const Text('Editează'),
+                            onPressed: () => _showClientDataEditDialog(dialogContext, item),
                           ),
-                        ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
                       _detailLine('Beneficiar real', clientLabel),
                       if (!_isEmployeeRole &&
                           (item.contractingClientId.trim().isNotEmpty ||
@@ -7095,20 +8066,36 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         _detailLine(
                             'Adresa din fisa client', clientAddrFromRecord),
                       _detailLine('Persoana de contact', contactPerson),
-                      _detailLine(
-                        'Telefon client',
-                        phone,
-                        onTap: phone.trim().isEmpty
-                            ? null
-                            : () => _launchExternalUri(
-                                  dialogContext,
-                                  Uri(
-                                    scheme: 'tel',
-                                    path: _phoneUriValue(phone),
+                      // Afișare multiple telefoane
+                      if (item.clientPhoneNumbers.isNotEmpty)
+                        ...item.clientPhoneNumbers.map((p) => _detailLine(
+                          item.clientPhoneNumbers.length == 1
+                              ? 'Telefon client'
+                              : 'Telefon ${item.clientPhoneNumbers.indexOf(p) + 1}',
+                          p,
+                          onTap: p.trim().isEmpty
+                              ? null
+                              : () => _launchExternalUri(
+                                    dialogContext,
+                                    Uri(scheme: 'tel', path: _phoneUriValue(p)),
+                                    failureLabel: 'dialerul',
                                   ),
-                                  failureLabel: 'dialerul',
-                                ),
-                      ),
+                        ))
+                      else
+                        _detailLine(
+                          'Telefon client',
+                          phone,
+                          onTap: phone.trim().isEmpty
+                              ? null
+                              : () => _launchExternalUri(
+                                    dialogContext,
+                                    Uri(
+                                      scheme: 'tel',
+                                      path: _phoneUriValue(phone),
+                                    ),
+                                    failureLabel: 'dialerul',
+                                  ),
+                        ),
                       _detailLine(
                         'Email client',
                         email,
@@ -7387,6 +8374,15 @@ class _ProgramariPageState extends State<ProgramariPage> {
                               icon: const Icon(Icons.shopping_cart_outlined),
                               label: const Text('Catalog materiale'),
                             ),
+                          if (_canManageAppointmentFinancials)
+                            FilledButton.tonalIcon(
+                              onPressed: () async {
+                                Navigator.of(dialogContext).pop();
+                                await _openEmployeePayDialog(item);
+                              },
+                              icon: const Icon(Icons.people_outlined),
+                              label: const Text('Plată angajați'),
+                            ),
                         ],
                       ),
                       if (item.linkedDocuments.isNotEmpty) ...[
@@ -7439,6 +8435,61 @@ class _ProgramariPageState extends State<ProgramariPage> {
                               failureLabel: 'dialerul',
                             ),
                           ),
+                        if (phone.trim().isNotEmpty)
+                          ActionChip(
+                            avatar: const Icon(Icons.chat_outlined, size: 16),
+                            label: const Text('Confirmare WA'),
+                            onPressed: () {
+                              final msg = CommunicationService.instance
+                                  .mesajConfirmareProgramare(
+                                numeClient: item.clientName.trim().isNotEmpty
+                                    ? item.clientName
+                                    : item.title,
+                                dataOra: _formatDateTime(
+                                    item.effectiveStartDateTime),
+                                titluLucrare: item.title,
+                                numeTechnician:
+                                    item.assignedUserEmail.isNotEmpty
+                                        ? item.assignedUserEmail
+                                        : item.teamId,
+                                adresaLocatie: item.location.trim().isNotEmpty
+                                    ? item.location
+                                    : null,
+                              );
+                              CommunicationService.instance.sendWhatsApp(
+                                phone: phone.trim(),
+                                message: msg,
+                              );
+                            },
+                          ),
+                        if (phone.trim().isNotEmpty)
+                          ActionChip(
+                            avatar: const Icon(Icons.schedule_outlined,
+                                size: 16),
+                            label: const Text('Reminder WA'),
+                            onPressed: () {
+                              final start =
+                                  item.effectiveStartDateTime;
+                              final oraStr =
+                                  '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
+                              final msg = CommunicationService.instance
+                                  .mesajReminderZiUrmatoare(
+                                numeClient: item.clientName.trim().isNotEmpty
+                                    ? item.clientName
+                                    : item.title,
+                                ora: oraStr,
+                                titluLucrare: item.title,
+                                numeTechnician:
+                                    item.assignedUserEmail.isNotEmpty
+                                        ? item.assignedUserEmail
+                                        : item.teamId,
+                              );
+                              CommunicationService.instance.sendWhatsApp(
+                                phone: phone.trim(),
+                                message: msg,
+                              );
+                            },
+                          ),
                         if (email.trim().isNotEmpty)
                           ActionChip(
                             avatar: const Icon(Icons.email_outlined, size: 16),
@@ -7484,6 +8535,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
               },
               icon: const Icon(Icons.photo_camera_outlined),
               label: const Text('Poze teren'),
+            ),
+            TextButton.icon(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                await _handleGpsCheckin(item);
+              },
+              icon: const Icon(Icons.location_on_outlined),
+              label: const Text('GPS'),
             ),
             if (_canCreateAdministrativeAppointments)
               TextButton.icon(
@@ -8585,6 +9644,50 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
   }
 
+  // ── Plată angajați per programare ─────────────────────────────────────────
+  Future<void> _openEmployeePayDialog(Appointment item) async {
+    if (!mounted) return;
+    final repo = EmployeeFinancialRepository.instance;
+    final assignedEmployeeIds = _appointmentEmployeeIds(item);
+    final assignedEmployees = assignedEmployeeIds
+        .map(_employeeById)
+        .whereType<MasterEmployee>()
+        .toList(growable: false);
+
+    // Încarcă intrările existente pentru această programare
+    var entries = await repo.listPayEntriesForAppointment(item.id);
+    if (!mounted) return;
+
+    final appointmentTitle = item.title.trim().isEmpty
+        ? item.jobId.trim()
+        : item.title.trim();
+    final startDt = item.startDateTime;
+    final appointmentDate = startDt != null
+        ? '${startDt.day.toString().padLeft(2, '0')}.${startDt.month.toString().padLeft(2, '0')}.${startDt.year}'
+        : '';
+    final jobTitle = _jobLabel(item.jobId);
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => _EmployeePayDialog(
+        item: item,
+        appointmentTitle: appointmentTitle,
+        appointmentDate: appointmentDate,
+        jobTitle: jobTitle,
+        assignedEmployees: assignedEmployees,
+        allEmployees: _masterEmployees,
+        initialEntries: entries,
+        currentUserId: widget.fieldAuthUserId,
+        onSaveEntry: (entry) async {
+          await repo.savePayEntry(entry);
+        },
+        onDeleteEntry: (entryId) async {
+          await repo.deletePayEntry(entryId);
+        },
+      ),
+    );
+  }
+
   Future<void> _showQuickPartnerPaymentDialog(Appointment item) async {
     if (!mounted) return;
     var selectedStatus = item.executingPartnerPaymentStatus;
@@ -9184,6 +10287,47 @@ class _ProgramariPageState extends State<ProgramariPage> {
     );
   }
 
+  Widget _buildCalendarNavBar(List<DateTime> visibleDays, bool isTodayRange) {
+    final label = _calendarRangeLabel(visibleDays);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.chevron_left),
+            onPressed: _isCalendarNavigating ? null : _goToPreviousCalendarInterval,
+            tooltip: 'Interval anterior',
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: _showCalendarIntervalPicker,
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+            ),
+          ),
+          if (!isTodayRange)
+            IconButton(
+              icon: const Icon(Icons.my_location_outlined),
+              onPressed: _goToTodayCalendar,
+              tooltip: 'Azi',
+              iconSize: 20,
+            ),
+          IconButton(
+            icon: const Icon(Icons.chevron_right),
+            onPressed: _isCalendarNavigating ? null : _goToNextCalendarInterval,
+            tooltip: 'Interval următor',
+          ),
+        ],
+      ),
+    );
+  }
+
   String _calendarRangeLabel(List<DateTime> days) {
     if (days.isEmpty) {
       return _formatDate(_calendarFocusDate);
@@ -9201,7 +10345,30 @@ class _ProgramariPageState extends State<ProgramariPage> {
 
   String _calendarDayHeaderLabel(DateTime day) {
     final weekday = DateFormat('EEE', 'ro_RO').format(day);
-    return '$weekday\n${day.day.toString().padLeft(2, '0')}.${day.month.toString().padLeft(2, '0')}';
+    return '$weekday\n${day.day} ${_monthShort(day.month)}';
+  }
+
+  String _monthShort(int month) {
+    const months = [
+      'ian', 'feb', 'mar', 'apr', 'mai', 'iun',
+      'iul', 'aug', 'sep', 'oct', 'nov', 'dec',
+    ];
+    return months[(month - 1).clamp(0, 11)];
+  }
+
+  String _dayTooltipMessage(DateTime day, DayType dayType) {
+    switch (dayType) {
+      case DayType.holiday:
+        final name = RomanianHolidays.holidayName(day);
+        final dateStr = '${day.day} ${_monthShort(day.month)}';
+        return name != null ? '$name — $dateStr' : 'Sărbătoare legală';
+      case DayType.sunday:
+        return 'Duminică';
+      case DayType.saturday:
+        return 'Sâmbătă';
+      case DayType.workday:
+        return '';
+    }
   }
 
   List<Appointment> _calendarItemsForDate(DateTime date) {
@@ -9372,6 +10539,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
 
         return Column(
           children: [
+            _buildCalendarNavBar(visibleDays, isTodayRange),
             if (_showCalendarControlPanel)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
@@ -9539,7 +10707,24 @@ class _ProgramariPageState extends State<ProgramariPage> {
                 ),
               ),
             Expanded(
-              child: SingleChildScrollView(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  if (notification is OverscrollNotification) {
+                    _calendarOverscrollAccum += notification.overscroll;
+                    if (_calendarOverscrollAccum > _calendarOverscrollThreshold) {
+                      _calendarOverscrollAccum = 0.0;
+                      _goToNextCalendarInterval();
+                    } else if (_calendarOverscrollAccum <
+                        -_calendarOverscrollThreshold) {
+                      _calendarOverscrollAccum = 0.0;
+                      _goToPreviousCalendarInterval();
+                    }
+                  } else if (notification is ScrollEndNotification) {
+                    _calendarOverscrollAccum = 0.0;
+                  }
+                  return false;
+                },
+                child: SingleChildScrollView(
                 padding: EdgeInsets.fromLTRB(16, 16, 16, bottomSpacing),
                 scrollDirection: Axis.horizontal,
                 child: SizedBox(
@@ -9608,6 +10793,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                   ),
                 ),
               ),
+              ),
             ),
           ],
         );
@@ -9624,6 +10810,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
   }) {
     final placements = _cachedPlacementsForDay(day);
     final isToday = _isSameDate(day, DateTime.now());
+    final dayType = RomanianHolidays.getDayType(day);
+    final isHolidayOrSunday =
+        dayType == DayType.holiday || dayType == DayType.sunday;
+    final isSatDay = dayType == DayType.saturday;
+    final holidayLabel = RomanianHolidays.holidayName(day);
 
     return Container(
       margin: const EdgeInsets.only(right: 10),
@@ -9638,12 +10829,19 @@ class _ProgramariPageState extends State<ProgramariPage> {
         border: Border.all(
           color: isToday
               ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.45)
-              : Theme.of(context).dividerColor.withValues(alpha: 0.7),
+              : isHolidayOrSunday
+                  ? HolidayColors.sundayHolidayBorder
+                  : isSatDay
+                      ? HolidayColors.saturdayBorder
+                      : Theme.of(context).dividerColor.withValues(alpha: 0.7),
         ),
       ),
       child: Column(
         children: [
-          Container(
+          Tooltip(
+            message: _dayTooltipMessage(day, dayType),
+            triggerMode: TooltipTriggerMode.longPress,
+            child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
             decoration: BoxDecoration(
@@ -9652,7 +10850,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
                       .colorScheme
                       .primaryContainer
                       .withValues(alpha: 0.9)
-                  : Theme.of(context).colorScheme.surfaceContainerLowest,
+                  : isHolidayOrSunday
+                      ? HolidayColors.sundayHoliday
+                      : isSatDay
+                          ? HolidayColors.saturday
+                          : Theme.of(context).colorScheme.surfaceContainerLowest,
               borderRadius: const BorderRadius.vertical(
                 top: Radius.circular(15),
               ),
@@ -9660,25 +10862,80 @@ class _ProgramariPageState extends State<ProgramariPage> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final isNarrowHeader = constraints.maxWidth < 170;
+                final todayColor =
+                    Theme.of(context).colorScheme.onPrimaryContainer;
+                final defaultColor = Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.7);
+                final badgeColor = isToday
+                    ? Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.12)
+                    : defaultColor;
+                final Color? headerTextColor = isToday
+                    ? todayColor
+                    : isHolidayOrSunday
+                        ? HolidayColors.sundayHolidayText
+                        : isSatDay
+                            ? HolidayColors.saturdayText
+                            : null;
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      _calendarDayHeaderLabel(day),
-                      textAlign: TextAlign.center,
-                      maxLines: isNarrowHeader ? 1 : 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            fontSize: isNarrowHeader ? 12 : null,
+                    if (isNarrowHeader) ...[
+                      // Mobil: numărul zilei mare, ziua mică, badge compact
+                      Text(
+                        '${day.day}',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: headerTextColor,
+                            ),
+                      ),
+                      Text(
+                        DateFormat('EEE', 'ro_RO').format(day),
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: headerTextColor,
+                            ),
+                      ),
+                    ] else ...[
+                      // Desktop: "lun.\n26 mai"
+                      Text(
+                        _calendarDayHeaderLabel(day),
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: headerTextColor,
+                            ),
+                      ),
+                      if (holidayLabel != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          holidayLabel,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 9,
                             color: isToday
-                                ? Theme.of(context)
-                                    .colorScheme
-                                    .onPrimaryContainer
-                                : null,
+                                ? todayColor
+                                : HolidayColors.sundayHolidayText,
                           ),
-                    ),
-                    SizedBox(height: isNarrowHeader ? 3 : 4),
+                        ),
+                      ],
+                    ],
+                    const SizedBox(height: 4),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Container(
@@ -9687,26 +10944,22 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           vertical: isNarrowHeader ? 3 : 4,
                         ),
                         decoration: BoxDecoration(
-                          color: isToday
-                              ? Theme.of(context)
-                                  .colorScheme
-                                  .primary
-                                  .withValues(alpha: 0.12)
-                              : Theme.of(context)
-                                  .colorScheme
-                                  .surfaceContainerHighest
-                                  .withValues(alpha: 0.7),
+                          color: badgeColor,
                           borderRadius: BorderRadius.circular(999),
                         ),
                         child: Text(
-                          '${placements.length} programari',
+                          isNarrowHeader
+                              ? '${placements.length}'
+                              : '${placements.length} programari',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style:
-                              Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: isNarrowHeader ? 10 : null,
-                                  ),
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelSmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: isNarrowHeader ? 10 : null,
+                              ),
                         ),
                       ),
                     ),
@@ -9714,12 +10967,30 @@ class _ProgramariPageState extends State<ProgramariPage> {
                 );
               },
             ),
+            ),
           ),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
                 return Stack(
                   children: [
+                    // Fundal ușor colorat pentru weekend/sărbători
+                    if (isHolidayOrSunday)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: ColoredBox(
+                            color: const Color(0xFFFFEBEE).withValues(alpha: 0.3),
+                          ),
+                        ),
+                      )
+                    else if (isSatDay)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: ColoredBox(
+                            color: const Color(0xFFFFF8E1).withValues(alpha: 0.3),
+                          ),
+                        ),
+                      ),
                     if (_canCreateOperationalAppointments)
                       for (var hour = startHour; hour < endHour; hour++)
                         Positioned(
@@ -10055,7 +11326,38 @@ class _ProgramariPageState extends State<ProgramariPage> {
                 icon: const Icon(Icons.tune_outlined),
               ),
             ),
-          HelpButton(content: AppHelp.programari),
+          IconButton(
+            icon: AnimatedRotation(
+              turns: _barraCollapsed ? 0.5 : 0.0,
+              duration: const Duration(milliseconds: 250),
+              child: const Icon(Icons.expand_less),
+            ),
+            tooltip: _barraCollapsed ? 'Arată filtre' : 'Ascunde filtre',
+            onPressed: () {
+              setState(() => _barraCollapsed = !_barraCollapsed);
+              _persistBarraCollapsed();
+            },
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 2),
+            child: Tooltip(
+              message: _isOnlineCached
+                  ? (_appointmentsRealtimeSubscription != null
+                      ? 'Sincronizare activă — modificările apar instantaneu'
+                      : 'Online')
+                  : 'Offline — modificările se sincronizează la reconectare',
+              child: Icon(
+                _isOnlineCached
+                    ? (_appointmentsRealtimeSubscription != null
+                        ? Icons.cloud_done_outlined
+                        : Icons.cloud_outlined)
+                    : Icons.cloud_off_outlined,
+                size: 18,
+                color: _isOnlineCached ? Colors.green : Colors.orange,
+              ),
+            ),
+          ),
+          const HelpModuleButton(moduleId: 'programari'),
         ],
       ),
       endDrawer: showInlineSidePanel
@@ -10073,9 +11375,12 @@ class _ProgramariPageState extends State<ProgramariPage> {
           ? FloatingActionButton.extended(
               onPressed: () => _openEditor(),
               icon: const Icon(Icons.add),
-              label: const Text('Adauga'),
+              label: const Text('Adaugă'),
+              backgroundColor: const Color(0xFFC62828),
+              foregroundColor: Colors.white,
             )
           : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: AdaptiveSidePanelLayout(
         showSidePanel: showInlineSidePanel,
         sidePanelWidth: screenWidth >= 1480 ? 360 : 336,
@@ -10085,7 +11390,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
         ),
         mainContent: Column(
           children: [
-            _buildMainToolbar(showPanelButton: !showInlineSidePanel),
+            AnimatedCrossFade(
+              duration: const Duration(milliseconds: 250),
+              crossFadeState: _barraCollapsed
+                  ? CrossFadeState.showFirst
+                  : CrossFadeState.showSecond,
+              firstChild: const SizedBox(width: double.infinity, height: 0),
+              secondChild: _buildMainToolbar(showPanelButton: !showInlineSidePanel),
+            ),
             Expanded(
               child: _viewMode == _ProgramariViewMode.calendar
                   ? _buildCalendarView(items)
@@ -10564,5 +11876,303 @@ class _CalendarPlacement {
   final int laneCount;
   final DateTime visualStart;
   final DateTime visualEnd;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dialog Plată angajați per programare
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _EmployeePayDialog extends StatefulWidget {
+  const _EmployeePayDialog({
+    required this.item,
+    required this.appointmentTitle,
+    required this.appointmentDate,
+    required this.jobTitle,
+    required this.assignedEmployees,
+    required this.allEmployees,
+    required this.initialEntries,
+    required this.currentUserId,
+    required this.onSaveEntry,
+    required this.onDeleteEntry,
+  });
+
+  final Appointment item;
+  final String appointmentTitle;
+  final String appointmentDate;
+  final String jobTitle;
+  final List<MasterEmployee> assignedEmployees;
+  final List<MasterEmployee> allEmployees;
+  final List<EmployeePayEntry> initialEntries;
+  final String? currentUserId;
+  final Future<void> Function(EmployeePayEntry) onSaveEntry;
+  final Future<void> Function(String) onDeleteEntry;
+
+  @override
+  State<_EmployeePayDialog> createState() => _EmployeePayDialogState();
+}
+
+class _EmployeePayDialogState extends State<_EmployeePayDialog> {
+  late List<EmployeePayEntry> _entries;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _entries = List.from(widget.initialEntries);
+  }
+
+  Future<void> _editEntry(EmployeePayEntry? existing, MasterEmployee? preselected) async {
+    final amountCtrl = TextEditingController(
+      text: existing != null && existing.amountDue > 0
+          ? existing.amountDue.toStringAsFixed(2)
+          : '',
+    );
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    MasterEmployee? selectedEmployee = preselected ??
+        (existing != null
+            ? widget.allEmployees
+                .where((e) => e.id == existing.employeeId)
+                .firstOrNull
+            : null);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: Text(existing != null ? 'Editează sumă' : 'Adaugă sumă angajat'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (existing == null)
+                  DropdownButtonFormField<MasterEmployee>(
+                    initialValue: selectedEmployee,
+                    decoration: const InputDecoration(labelText: 'Angajat'),
+                    items: widget.allEmployees
+                        .map(
+                          (e) => DropdownMenuItem(
+                            value: e,
+                            child: Text(e.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) => setSt(() => selectedEmployee = v),
+                  ),
+                if (existing != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      existing.employeeName,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Sumă datorată (RON)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: notesCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Observații',
+                    border: OutlineInputBorder(),
+                  ),
+                  textCapitalization: TextCapitalization.sentences,
+                  maxLines: 2,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Anulează'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (existing == null && selectedEmployee == null) return;
+                Navigator.of(ctx).pop(true);
+              },
+              child: const Text('Salvează'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved != true || !mounted) return;
+
+    final amount =
+        double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0.0;
+    final employee = selectedEmployee;
+    if (employee == null && existing == null) return;
+
+    setState(() => _saving = true);
+    try {
+      EmployeePayEntry entry;
+      if (existing != null) {
+        entry = existing.copyWith(
+          amountDue: amount,
+          notes: notesCtrl.text.trim(),
+        );
+      } else {
+        entry = EmployeePayEntry.create(
+          employeeId: employee!.id,
+          employeeName: employee.name,
+          appointmentId: widget.item.id,
+          appointmentTitle: widget.appointmentTitle,
+          appointmentDate: widget.appointmentDate,
+          jobId: widget.item.jobId,
+          jobTitle: widget.jobTitle,
+          amountDue: amount,
+          notes: notesCtrl.text.trim(),
+          createdBy: widget.currentUserId ?? '',
+        );
+      }
+      await widget.onSaveEntry(entry);
+      final updated = List<EmployeePayEntry>.from(_entries);
+      final idx = updated.indexWhere((e) => e.id == entry.id);
+      if (idx >= 0) {
+        updated[idx] = entry;
+      } else {
+        updated.insert(0, entry);
+      }
+      if (mounted) setState(() => _entries = updated);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _deleteEntry(EmployeePayEntry entry) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Șterge înregistrare'),
+        content: Text(
+          'Ștergi suma de ${entry.amountDue.toStringAsFixed(2)} RON pentru ${entry.employeeName}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Nu'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Da, șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    // Optimistic UI
+    setState(() => _entries = _entries.where((e) => e.id != entry.id).toList());
+    widget.onDeleteEntry(entry.id).catchError((_) {
+      if (mounted) {
+        setState(() => _entries = [..._entries, entry]);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final assignedNotInEntries = widget.assignedEmployees
+        .where((emp) => !_entries.any((e) => e.employeeId == emp.id))
+        .toList();
+
+    return AlertDialog(
+      title: const Text('Plată angajați'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.appointmentTitle.isNotEmpty)
+              Text(
+                widget.appointmentTitle,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            const SizedBox(height: 8),
+            if (_saving)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: LinearProgressIndicator(),
+              ),
+            if (_entries.isEmpty && assignedNotInEntries.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  'Niciun angajat alocat și nicio sumă înregistrată.',
+                  style: TextStyle(color: Colors.grey),
+                ),
+              ),
+            // Angajați alocați fără sumă — pre-completare rapidă
+            for (final emp in assignedNotInEntries)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: const Icon(Icons.person_outline),
+                title: Text(emp.name),
+                subtitle: const Text('Sumă necompletată'),
+                trailing: IconButton(
+                  icon: const Icon(Icons.add_circle_outline),
+                  tooltip: 'Adaugă sumă',
+                  onPressed: _saving ? null : () => _editEntry(null, emp),
+                ),
+              ),
+            // Sume deja salvate
+            for (final entry in _entries)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: const Icon(Icons.person),
+                title: Text(entry.employeeName),
+                subtitle: Text(
+                  '${entry.amountDue.toStringAsFixed(2)} ${entry.currency}'
+                  '${entry.notes.isNotEmpty ? ' · ${entry.notes}' : ''}',
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit_outlined),
+                      tooltip: 'Editează',
+                      onPressed:
+                          _saving ? null : () => _editEntry(entry, null),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      tooltip: 'Șterge',
+                      onPressed:
+                          _saving ? null : () => _deleteEntry(entry),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : () => _editEntry(null, null),
+              icon: const Icon(Icons.add),
+              label: const Text('Adaugă manual'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Închide'),
+        ),
+      ],
+    );
+  }
 }
 

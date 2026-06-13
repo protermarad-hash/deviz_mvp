@@ -192,6 +192,47 @@ enum AppointmentFinancialStatus {
   }
 }
 
+enum PartnerPaymentStatus {
+  neplatit,
+  platitPartial,
+  platit,
+  conformContract;
+
+  String get value {
+    switch (this) {
+      case PartnerPaymentStatus.neplatit:
+        return 'neplatit';
+      case PartnerPaymentStatus.platitPartial:
+        return 'platit_partial';
+      case PartnerPaymentStatus.platit:
+        return 'platit';
+      case PartnerPaymentStatus.conformContract:
+        return 'conform_contract';
+    }
+  }
+
+  String get label {
+    switch (this) {
+      case PartnerPaymentStatus.neplatit:
+        return 'Neplatit';
+      case PartnerPaymentStatus.platitPartial:
+        return 'Platit parțial';
+      case PartnerPaymentStatus.platit:
+        return 'Platit';
+      case PartnerPaymentStatus.conformContract:
+        return 'Conform contract';
+    }
+  }
+
+  static PartnerPaymentStatus fromValue(String? raw) {
+    final value = (raw ?? '').trim().toLowerCase();
+    for (final item in PartnerPaymentStatus.values) {
+      if (item.value == value) return item;
+    }
+    return PartnerPaymentStatus.neplatit;
+  }
+}
+
 class AppointmentMaterialUsageLine {
   const AppointmentMaterialUsageLine({
     required this.id,
@@ -396,6 +437,16 @@ class Appointment {
     this.adminDueDate,
     this.adminFinancialNotes = '',
     this.materialUsage = const AppointmentMaterialUsage(),
+    this.executingPartnerCommission = 0,
+    this.executingPartnerCommissionCurrency = 'RON',
+    this.executingPartnerPaymentStatus = PartnerPaymentStatus.neplatit,
+    this.executingPartnerPaymentDate,
+    this.executingPartnerPaymentNotes = '',
+    this.forPartnerInvoiceAmount = 0,
+    this.forPartnerInvoiceCurrency = 'RON',
+    this.forPartnerReceiveStatus = PartnerPaymentStatus.neplatit,
+    this.forPartnerReceiveDate,
+    this.forPartnerReceiveNotes = '',
   });
 
   final String id;
@@ -461,6 +512,20 @@ class Appointment {
   final String adminFinancialNotes;
   final AppointmentMaterialUsage materialUsage;
 
+  /// Comision datorat partenerului care execută lucrarea pentru tine
+  final double executingPartnerCommission;
+  final String executingPartnerCommissionCurrency;
+  final PartnerPaymentStatus executingPartnerPaymentStatus;
+  final DateTime? executingPartnerPaymentDate;
+  final String executingPartnerPaymentNotes;
+
+  /// Sumă de încasat de la partenerul pentru care lucrezi (subcontractare)
+  final double forPartnerInvoiceAmount;
+  final String forPartnerInvoiceCurrency;
+  final PartnerPaymentStatus forPartnerReceiveStatus;
+  final DateTime? forPartnerReceiveDate;
+  final String forPartnerReceiveNotes;
+
   Appointment copyWith({
     String? id,
     String? clientId,
@@ -517,6 +582,18 @@ class Appointment {
     bool clearAdminDueDate = false,
     String? adminFinancialNotes,
     AppointmentMaterialUsage? materialUsage,
+    double? executingPartnerCommission,
+    String? executingPartnerCommissionCurrency,
+    PartnerPaymentStatus? executingPartnerPaymentStatus,
+    DateTime? executingPartnerPaymentDate,
+    bool clearExecutingPartnerPaymentDate = false,
+    String? executingPartnerPaymentNotes,
+    double? forPartnerInvoiceAmount,
+    String? forPartnerInvoiceCurrency,
+    PartnerPaymentStatus? forPartnerReceiveStatus,
+    DateTime? forPartnerReceiveDate,
+    bool clearForPartnerReceiveDate = false,
+    String? forPartnerReceiveNotes,
   }) {
     return Appointment(
       id: id ?? this.id,
@@ -582,6 +659,28 @@ class Appointment {
           clearAdminDueDate ? null : (adminDueDate ?? this.adminDueDate),
       adminFinancialNotes: adminFinancialNotes ?? this.adminFinancialNotes,
       materialUsage: materialUsage ?? this.materialUsage,
+      executingPartnerCommission:
+          executingPartnerCommission ?? this.executingPartnerCommission,
+      executingPartnerCommissionCurrency: executingPartnerCommissionCurrency ??
+          this.executingPartnerCommissionCurrency,
+      executingPartnerPaymentStatus:
+          executingPartnerPaymentStatus ?? this.executingPartnerPaymentStatus,
+      executingPartnerPaymentDate: clearExecutingPartnerPaymentDate
+          ? null
+          : (executingPartnerPaymentDate ?? this.executingPartnerPaymentDate),
+      executingPartnerPaymentNotes:
+          executingPartnerPaymentNotes ?? this.executingPartnerPaymentNotes,
+      forPartnerInvoiceAmount:
+          forPartnerInvoiceAmount ?? this.forPartnerInvoiceAmount,
+      forPartnerInvoiceCurrency:
+          forPartnerInvoiceCurrency ?? this.forPartnerInvoiceCurrency,
+      forPartnerReceiveStatus:
+          forPartnerReceiveStatus ?? this.forPartnerReceiveStatus,
+      forPartnerReceiveDate: clearForPartnerReceiveDate
+          ? null
+          : (forPartnerReceiveDate ?? this.forPartnerReceiveDate),
+      forPartnerReceiveNotes:
+          forPartnerReceiveNotes ?? this.forPartnerReceiveNotes,
     );
   }
 
@@ -690,6 +789,18 @@ class Appointment {
       'admin_due_date': adminDueDate?.toIso8601String(),
       'admin_financial_notes': adminFinancialNotes,
       'material_usage': materialUsage.toMap(),
+      'executing_partner_commission': executingPartnerCommission,
+      'executing_partner_commission_currency':
+          executingPartnerCommissionCurrency,
+      'executing_partner_payment_status': executingPartnerPaymentStatus.value,
+      'executing_partner_payment_date':
+          executingPartnerPaymentDate?.toIso8601String(),
+      'executing_partner_payment_notes': executingPartnerPaymentNotes,
+      'for_partner_invoice_amount': forPartnerInvoiceAmount,
+      'for_partner_invoice_currency': forPartnerInvoiceCurrency,
+      'for_partner_receive_status': forPartnerReceiveStatus.value,
+      'for_partner_receive_date': forPartnerReceiveDate?.toIso8601String(),
+      'for_partner_receive_notes': forPartnerReceiveNotes,
     };
   }
 
@@ -894,6 +1005,56 @@ class Appointment {
       materialUsage: parseMaterialUsage(
         map['material_usage'] ?? map['materialUsage'],
       ),
+      executingPartnerCommission: _parseDouble(
+        map['executing_partner_commission'] ??
+            map['executingPartnerCommission'],
+      ),
+      executingPartnerCommissionCurrency: (() {
+        final v = (map['executing_partner_commission_currency'] ??
+                map['executingPartnerCommissionCurrency'] ??
+                'RON')
+            .toString()
+            .trim();
+        return v.isEmpty ? 'RON' : v;
+      })(),
+      executingPartnerPaymentStatus: PartnerPaymentStatus.fromValue(
+        (map['executing_partner_payment_status'] ??
+                map['executingPartnerPaymentStatus'] ??
+                '')
+            .toString(),
+      ),
+      executingPartnerPaymentDate: parseDateTime(
+        map['executing_partner_payment_date'] ??
+            map['executingPartnerPaymentDate'],
+      ),
+      executingPartnerPaymentNotes: (map['executing_partner_payment_notes'] ??
+              map['executingPartnerPaymentNotes'] ??
+              '')
+          .toString(),
+      forPartnerInvoiceAmount: _parseDouble(
+        map['for_partner_invoice_amount'] ?? map['forPartnerInvoiceAmount'],
+      ),
+      forPartnerInvoiceCurrency: (() {
+        final v = (map['for_partner_invoice_currency'] ??
+                map['forPartnerInvoiceCurrency'] ??
+                'RON')
+            .toString()
+            .trim();
+        return v.isEmpty ? 'RON' : v;
+      })(),
+      forPartnerReceiveStatus: PartnerPaymentStatus.fromValue(
+        (map['for_partner_receive_status'] ??
+                map['forPartnerReceiveStatus'] ??
+                '')
+            .toString(),
+      ),
+      forPartnerReceiveDate: parseDateTime(
+        map['for_partner_receive_date'] ?? map['forPartnerReceiveDate'],
+      ),
+      forPartnerReceiveNotes: (map['for_partner_receive_notes'] ??
+              map['forPartnerReceiveNotes'] ??
+              '')
+          .toString(),
     );
   }
 

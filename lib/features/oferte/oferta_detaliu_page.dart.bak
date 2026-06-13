@@ -29,7 +29,6 @@ import '../reclamatii/signature_capture_page.dart';
 import 'deviz_articol_template_models.dart';
 import 'deviz_articol_template_repository.dart';
 import 'offer_acceptance_clauses_dialog.dart';
-import 'offer_acceptance_form_pdf_service.dart';
 import 'offer_acceptance_models.dart';
 import 'offer_currency_converter.dart';
 import 'offer_commercial_package_models.dart';
@@ -49,6 +48,7 @@ import 'offer_standard_catalog_models.dart';
 import 'offer_standard_labor_line_dialog.dart';
 import '../notifications/notification_service.dart';
 import '../notifications/notification_models.dart';
+import '../../core/widgets/client_info_card.dart';
 
 class OfertaDetaliuPage extends StatefulWidget {
   const OfertaDetaliuPage({
@@ -856,43 +856,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     await _saveOperationalMetadata(next);
   }
 
-  Future<void> _generateAcceptanceFormPdf() async {
-    setState(() => _saving = true);
-    try {
-      final clauses = _resolvedAcceptanceClauses();
-      final company = await widget.repository.loadCompanyProfile();
-      final bytes = await OfferAcceptanceFormPdfService.buildBytes(
-        offer: _offer,
-        company: company,
-        clauses: clauses,
-      );
-      final fileName = OfferAcceptanceFormPdfService.exportFileName(_offer);
-      final path = await PdfSaveService.savePdf(
-        repository: widget.repository,
-        bytes: bytes,
-        fileName: fileName,
-        category: PdfDocumentCategory.offers,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Formular generat: $path'),
-          action: SnackBarAction(
-            label: 'Deschide',
-            onPressed: () => _openFileExternal(path),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Eroare generare formular: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
   Future<void> _captureAcceptanceSignature() async {
     final bytes = await Navigator.of(context).push<Uint8List>(
       MaterialPageRoute<Uint8List>(
@@ -915,13 +878,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       clearAcceptanceFormSignedAt: true,
     );
     await _saveOperationalMetadata(next);
-  }
-
-  void _openFileExternal(String path) {
-    try {
-      final uri = Uri.file(path);
-      launchUrl(uri);
-    } catch (_) {}
   }
 
   Widget _buildAcceptanceFormCard() {
@@ -1048,11 +1004,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
                   onPressed: _saving ? null : _openAcceptanceClausesEditor,
                   icon: const Icon(Icons.tune_outlined, size: 16),
                   label: const Text('Editează clauze'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _saving ? null : _generateAcceptanceFormPdf,
-                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
-                  label: const Text('Generează PDF'),
                 ),
                 FilledButton.tonal(
                   onPressed: _saving ? null : _captureAcceptanceSignature,
@@ -2381,44 +2332,12 @@ if (Test-Path \$attachment) {
 
       if (!mounted) return true;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Email pus in coada: ${queueItem.id}')),
-      );
-
-      final resolved = await notif.waitForEmailQueueFinalStatus(queueItem.id);
-      final status = (resolved?.status ?? '').trim().toLowerCase();
-      if (!mounted) return status != 'failed';
-
-      if (status == 'sent') {
-        await _markOfferAsSentIfDraft();
-        if (!mounted) return true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Email trimis cu succes (${queueItem.id}).')),
-        );
-        return true;
-      }
-
-      if (status == 'failed') {
-        final reason = (resolved?.errorMessage ?? '').trim();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              reason.isEmpty
-                  ? 'Email esuat (${queueItem.id}). Verifica notificarea din coada.'
-                  : 'Email esuat: $reason',
-            ),
-          ),
-        );
-        return false;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Emailul este in procesare (${queueItem.id}). Verifica statusul in notification_email_queue.',
+            'Email pus in coada: ${queueItem.id}. Statusul final se vede in Notificari / Email log.',
           ),
         ),
       );
-
       return true;
     } catch (e) {
       final diagnosticMessage = _describeDirectEmailFailure(e);
@@ -2629,6 +2548,7 @@ if (Test-Path \$attachment) {
         _cleanupOldOfferPdfs(newPath: path, offer: _offer);
         offerForActions = offerForActions.copyWith(
           pdfPath: path,
+          hasAcceptancePage: true,
           updatedAt: DateTime.now(),
         );
         _lastGeneratedPdfTemplate = selectedTemplate;
@@ -4582,6 +4502,16 @@ if (Test-Path \$attachment) {
                         _kv('Numar oferta', _offer.offerNumber),
                         _kv('Titlu', _offer.title),
                         _kv('Client', _resolveClientName()),
+                        // Card detalii identificare client
+                        if (_findOfferClient() != null)
+                          SizedBox(
+                            width: double.infinity,
+                            child: ClientInfoCard(
+                              client: _findOfferClient()!,
+                              compact: true,
+                              showTitle: false,
+                            ),
+                          ),
                         if (_offer.commercialRecipientName.trim().isNotEmpty)
                           _kv(
                             'Destinatar comercial / platitor',

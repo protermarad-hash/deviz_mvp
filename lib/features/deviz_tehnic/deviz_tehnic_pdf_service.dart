@@ -130,7 +130,7 @@ class DevizTehnicPdfService {
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
-                pw.Text(deviz.tipDocument.pdfTitle,
+                pw.Text(_getTitluDocument(deviz.tipDocument),
                     style: tsBold(size: 16, color: headerBg)),
                 pw.SizedBox(height: 2),
                 pw.Text('Nr. ${deviz.numar}',
@@ -169,6 +169,12 @@ class DevizTehnicPdfService {
       addRow('Lucrare:', deviz.titlu);
       addRow('Obiectiv:', deviz.obiectiv);
       addRow('Client:', deviz.clientName);
+      if (deviz.clientCui.isNotEmpty) addRow('CUI client:', deviz.clientCui);
+      if (deviz.clientAddress.isNotEmpty) addRow('Adresă client:', deviz.clientAddress);
+      if (deviz.clientPhone.isNotEmpty) addRow('Tel. client:', deviz.clientPhone);
+      if (deviz.clientEmail.isNotEmpty) addRow('Email client:', deviz.clientEmail);
+      if (deviz.contactDepartment.isNotEmpty) addRow('Departament:', deviz.contactDepartment);
+      if (deviz.contactPerson.isNotEmpty) addRow('Att:', deviz.contactPerson);
       addRow('Cota TVA:', '${_fmtNum(deviz.tvaPercent)}%');
 
       if (rows.isEmpty) return pw.SizedBox();
@@ -365,7 +371,9 @@ class DevizTehnicPdfService {
             pw.TableRow(
               decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFE3F2FD)),
               children: [
-                cell('Total deviz fără TVA', style: tsBold(size: 9)),
+                cell(
+                    'Total ${_getLabelDocument(deviz.tipDocument).toLowerCase()} fără TVA',
+                    style: tsBold(size: 9)),
                 cellRight('', style: ts(size: 8)),
                 cellRight('', style: ts(size: 8)),
                 cellRight('', style: ts(size: 8)),
@@ -451,7 +459,7 @@ class DevizTehnicPdfService {
               children: [
                 if (deviz.zileValabilitate > 0)
                   pw.Text(
-                    'Oferta este valabilă ${deviz.zileValabilitate} de zile de la data emiterii.',
+                    '${_getLabelDocument(deviz.tipDocument)} este valabil${deviz.tipDocument == DevizTehnicTipDocument.devizTehnic ? '' : 'ă'} ${deviz.zileValabilitate} de zile de la data emiterii.',
                     style: ts(size: 8, color: grey, italic: true),
                   ),
                 if (deviz.note.isNotEmpty)
@@ -462,6 +470,21 @@ class DevizTehnicPdfService {
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
+                pw.Text(
+                  '${_getLabelDocument(deviz.tipDocument)} Nr. ${deviz.numar}',
+                  style: tsBold(size: 8, color: headerBg),
+                ),
+                pw.SizedBox(height: 2),
+                pw.Text('Data: ${dateFmt.format(deviz.dataEmiterii)}',
+                    style: ts(size: 8, color: grey)),
+                if (deviz.zileValabilitate > 0) ...[
+                  pw.SizedBox(height: 1),
+                  pw.Text(
+                    'Valabilitate: ${deviz.zileValabilitate} zile de la data emiterii',
+                    style: ts(size: 7, color: grey, italic: true),
+                  ),
+                ],
+                pw.SizedBox(height: 6),
                 pw.Text('Întocmit de:',
                     style: tsBold(size: 8)),
                 pw.SizedBox(height: 2),
@@ -471,9 +494,6 @@ class DevizTehnicPdfService {
                       : profile.contactName,
                   style: ts(size: 9),
                 ),
-                pw.SizedBox(height: 2),
-                pw.Text('la data: ${dateFmt.format(deviz.dataEmiterii)}',
-                    style: ts(size: 8, color: grey)),
                 pw.SizedBox(height: 16),
                 pw.Text('Semnătură: ________________',
                     style: ts(size: 8, color: grey)),
@@ -509,7 +529,7 @@ class DevizTehnicPdfService {
         build: (ctx) => [
           buildProjectInfo(),
           pw.SizedBox(height: 8),
-          pw.Text('Articole deviz',
+          pw.Text('Articole ${_getLabelDocument(deviz.tipDocument).toLowerCase()}',
               style: tsBold(size: 10, color: headerBg)),
           pw.SizedBox(height: 4),
           buildArticleTable(),
@@ -523,7 +543,11 @@ class DevizTehnicPdfService {
     final bytes = await doc.save();
     final numarSafe =
         deviz.numar.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
-    final fileName = 'DevizTehnic_${numarSafe}_${deviz.titlu.isEmpty ? 'deviz' : deviz.titlu.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_')}.pdf';
+    final prefix = _getPrefixFisier(deviz.tipDocument);
+    final titluSafe = deviz.titlu.isEmpty
+        ? 'document'
+        : deviz.titlu.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
+    final fileName = '${prefix}_${numarSafe}_$titluSafe.pdf';
 
     return PdfSaveService.savePdf(
       repository: repository,
@@ -537,6 +561,39 @@ class DevizTehnicPdfService {
 
   static String _fmtNum(double v) =>
       v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+
+  static String _getTitluDocument(DevizTehnicTipDocument tip) {
+    switch (tip) {
+      case DevizTehnicTipDocument.ofertaLucrari:
+        return 'OFERTĂ DE LUCRĂRI';
+      case DevizTehnicTipDocument.situatieLucrari:
+        return 'SITUAȚIE DE LUCRĂRI';
+      case DevizTehnicTipDocument.devizTehnic:
+        return 'DEVIZ TEHNIC';
+    }
+  }
+
+  static String _getPrefixFisier(DevizTehnicTipDocument tip) {
+    switch (tip) {
+      case DevizTehnicTipDocument.ofertaLucrari:
+        return 'Oferta';
+      case DevizTehnicTipDocument.situatieLucrari:
+        return 'SituatieLucrari';
+      case DevizTehnicTipDocument.devizTehnic:
+        return 'DevizTehnic';
+    }
+  }
+
+  static String _getLabelDocument(DevizTehnicTipDocument tip) {
+    switch (tip) {
+      case DevizTehnicTipDocument.ofertaLucrari:
+        return 'Ofertă de lucrări';
+      case DevizTehnicTipDocument.situatieLucrari:
+        return 'Situație de lucrări';
+      case DevizTehnicTipDocument.devizTehnic:
+        return 'Deviz tehnic';
+    }
+  }
 }
 
 class _Cat {

@@ -223,18 +223,18 @@ class _ModuleSettingsPageState extends State<ModuleSettingsPage> {
   Future<void> _resetDefaults() async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Resetare la implicite'),
         content: const Text(
           'Toate modulele vor fi setate ca active. Continui?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
             child: const Text('Anulează'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
             child: const Text('Resetează'),
           ),
         ],

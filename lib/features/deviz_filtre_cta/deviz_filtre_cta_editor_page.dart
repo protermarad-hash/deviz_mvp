@@ -167,19 +167,19 @@ class _DevizFiltreCtaEditorPageState
     final cta = _ctas[idx];
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Șterge CTA'),
         content: Text(
             'Ștergi "${cta.denumireCta}"?\nAceastă acțiune nu poate fi anulată.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('Anulează'),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
                 backgroundColor: Colors.red.shade700),
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogCtx, true),
             child: const Text('Șterge'),
           ),
         ],
@@ -205,7 +205,7 @@ class _DevizFiltreCtaEditorPageState
 
     final val = await showDialog<double>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: Text('Editează preț: ${f.pozitie}'),
         content: TextField(
           controller: ctrl,
@@ -222,12 +222,12 @@ class _DevizFiltreCtaEditorPageState
             final v = double.tryParse(
                     ctrl.text.replaceAll(',', '.').trim()) ??
                 0;
-            Navigator.pop(context, v);
+            Navigator.pop(dialogCtx, v);
           },
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('Anulează'),
           ),
           FilledButton(
@@ -235,7 +235,7 @@ class _DevizFiltreCtaEditorPageState
               final v = double.tryParse(
                       ctrl.text.replaceAll(',', '.').trim()) ??
                   0;
-              Navigator.pop(context, v);
+              Navigator.pop(dialogCtx, v);
             },
             child: const Text('Salvează'),
           ),

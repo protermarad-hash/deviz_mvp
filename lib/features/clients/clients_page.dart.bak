@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
@@ -40,6 +41,10 @@ class ClientsPage extends StatefulWidget {
 }
 
 class _ClientsPageState extends State<ClientsPage> {
+  static const String _prefTypeFilter = 'clients_filter_type_v1';
+  static const String _prefActiveFilter = 'clients_filter_active_v1';
+  static const String _prefSearch = 'clients_filter_search_v1';
+
   bool _loading = true;
   final TextEditingController _search = TextEditingController();
   final LocalOferteRepository _localOffersRepository = LocalOferteRepository();
@@ -48,6 +53,15 @@ class _ClientsPageState extends State<ClientsPage> {
   bool? _activeFilter;
   String _dataSourceLabel = 'local_cache';
   String? _cloudFallbackReason;
+  bool _filtersVisible = false;
+
+  int get _activeFilterCount {
+    int count = 0;
+    if (_typeFilter != null) count++;
+    if (_activeFilter != null) count++;
+    if (_search.text.trim().isNotEmpty) count++;
+    return count;
+  }
 
   String _shortCloudError(Object error) {
     final raw = error.toString().replaceAll('\n', ' ').trim();
@@ -70,11 +84,58 @@ class _ClientsPageState extends State<ClientsPage> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadFilterPreferences();
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+    Future.microtask(_load);
+  }
+
+  void _onOnlineChanged() {
+    if (FirebaseBootstrap.onlineNotifier.value && _items.isEmpty && !_loading) {
+      _load();
+    }
+  }
+
+  Future<void> _loadFilterPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final typeName = prefs.getString(_prefTypeFilter);
+    final activeStr = prefs.getString(_prefActiveFilter);
+    final search = prefs.getString(_prefSearch) ?? '';
+    setState(() {
+      if (typeName != null) {
+        try {
+          _typeFilter = ClientType.values.firstWhere(
+            (e) => e.name == typeName,
+          );
+        } catch (_) {}
+      }
+      if (activeStr == 'true') {
+        _activeFilter = true;
+      } else if (activeStr == 'false') {
+        _activeFilter = false;
+      }
+      if (search.isNotEmpty) {
+        _search.text = search;
+      }
+    });
+  }
+
+  Future<void> _persistFilterPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      _typeFilter == null
+          ? prefs.remove(_prefTypeFilter)
+          : prefs.setString(_prefTypeFilter, _typeFilter!.name),
+      _activeFilter == null
+          ? prefs.remove(_prefActiveFilter)
+          : prefs.setString(_prefActiveFilter, _activeFilter.toString()),
+      prefs.setString(_prefSearch, _search.text.trim()),
+    ]);
   }
 
   @override
   void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
     _search.dispose();
     super.dispose();
   }
@@ -87,9 +148,9 @@ class _ClientsPageState extends State<ClientsPage> {
   }
 
   Future<void> _saveClientResolved(ClientRecord item) async {
-    final saved = await widget.repository.saveClient(item);
+    // Repository se ocupă de queue intern (CLAUDE.md: queue în repository, nu în pagini)
+    await widget.repository.saveClient(item);
     _syncClientDataSourceLabel();
-    await OfflineSyncRuntime.instance.queueClient(saved);
   }
 
   Future<void> _importCsv() async {
@@ -274,9 +335,9 @@ class _ClientsPageState extends State<ClientsPage> {
   }
 
   Future<void> _deleteClientResolved(String id) async {
+    // Repository se ocupă de queue intern (CLAUDE.md: queue în repository, nu în pagini)
     await widget.repository.deleteClient(id);
     _syncClientDataSourceLabel();
-    await OfflineSyncRuntime.instance.queueClientDelete(id);
   }
 
   Future<List<OfferRecord>> _listOffersResolved() async {
@@ -1149,7 +1210,48 @@ class _ClientsPageState extends State<ClientsPage> {
                       createdAt: current?.createdAt ?? now,
                       updatedAt: now,
                     );
-                    // Duplicate CUI detection
+                    // ── Detecție duplicate după NUME ──────────────────────
+                    final nameValue = name.text.trim();
+                    {
+                      ClientRecord? dupByName;
+                      for (final c in _items) {
+                        if (c.name.trim().toLowerCase() ==
+                                nameValue.toLowerCase() &&
+                            c.id != (current?.id ?? '')) {
+                          dupByName = c;
+                          break;
+                        }
+                      }
+                      if (dupByName != null && dialogCtx.mounted) {
+                        final proceed = await showDialog<bool>(
+                          context: dialogCtx,
+                          builder: (alertCtx) => AlertDialog(
+                            title: const Text('Client similar existent'),
+                            content: Text(
+                              'Există deja un client cu același nume:\n\n'
+                              '• ${dupByName!.name}'
+                              '${dupByName.city.trim().isNotEmpty ? " · ${dupByName.city.trim()}" : ""}'
+                              '${dupByName.cui.trim().isNotEmpty ? " · CUI: ${dupByName.cui.trim()}" : ""}\n\n'
+                              'Doriți să salvați un client nou oricum?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(alertCtx).pop(false),
+                                child: const Text('Anulează'),
+                              ),
+                              FilledButton(
+                                onPressed: () =>
+                                    Navigator.of(alertCtx).pop(true),
+                                child: const Text('Adaugă oricum'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (proceed != true) return;
+                      }
+                    }
+                    // ── Detecție duplicate după CUI ────────────────────────
                     final cuiValue = cui.text.trim();
                     if (cuiValue.isNotEmpty) {
                       ClientRecord? duplicate;
@@ -1258,12 +1360,23 @@ class _ClientsPageState extends State<ClientsPage> {
       },
     );
     if (confirm != true) return;
-    await _deleteClientResolved(client.id);
-    await _load();
     if (!mounted) return;
+
+    // Optimistic UI — actualizare imediată (BUG 9)
+    setState(() => _items = _items.where((c) => c.id != client.id).toList(growable: false));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Clientul a fost sters.')),
     );
+
+    // Operația efectivă în fundal
+    _deleteClientResolved(client.id).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la ștergere: $e')),
+        );
+        _load(); // restaurează starea la eroare
+      }
+    });
   }
 
   String _dateLabel(DateTime? value) {
@@ -2481,106 +2594,235 @@ class _ClientsPageState extends State<ClientsPage> {
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Column(
         children: [
-          Card(
-            margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _search,
-                    onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      labelText:
-                          'Caută după nume, cod intern, cod extern, telefon, email, CUI',
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Chip(
-                          label: Text('Sursa date: $_dataSourceLabel'),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        if (_dataSourceLabel == 'local_cache' &&
-                            (_cloudFallbackReason ?? '').trim().isNotEmpty)
-                          Text(
-                            'Motiv fallback: ${_shortCloudError(_cloudFallbackReason!)}',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // Pe ecrane largi (Windows/tablet ≥600px) filtrele sunt mereu vizibile
+              final isWide = constraints.maxWidth >= 600;
+              final showFilters = isWide || _filtersVisible;
+              final cs = Theme.of(context).colorScheme;
+              final hasFilters = _activeFilterCount > 0;
+
+              return Card(
+                margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
-                        width: 240,
-                        child: DropdownButtonFormField<ClientType>(
-                          initialValue: _typeFilter,
-                          items: ClientType.values
-                              .map(
-                                (item) => DropdownMenuItem<ClientType>(
-                                  value: item,
-                                  child: Text(item.label),
+                      // Rândul 1: search + buton filtre (DOAR pe mobil)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _search,
+                              onChanged: (_) {
+                                setState(() {});
+                                _persistFilterPreferences();
+                              },
+                              decoration: InputDecoration(
+                                hintText:
+                                    'Caută după nume, telefon, email, CUI...',
+                                prefixIcon: const Icon(Icons.search),
+                                suffixIcon: _search.text.trim().isNotEmpty
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear),
+                                        onPressed: () {
+                                          _search.clear();
+                                          setState(() {});
+                                          _persistFilterPreferences();
+                                        },
+                                      )
+                                    : null,
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                  horizontal: 12,
                                 ),
-                              )
-                              .toList(),
-                          onChanged: (value) =>
-                              setState(() => _typeFilter = value),
-                          decoration:
-                              const InputDecoration(labelText: 'Tip client'),
-                        ),
-                      ),
-                      SizedBox(
-                        width: 220,
-                        child: DropdownButtonFormField<bool>(
-                          initialValue: _activeFilter,
-                          items: const [
-                            DropdownMenuItem<bool>(
-                              value: true,
-                              child: Text('Activ'),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
                             ),
-                            DropdownMenuItem<bool>(
-                              value: false,
-                              child: Text('Inactiv'),
+                          ),
+                          // Buton filtre: DOAR pe mobil
+                          if (!isWide) ...[
+                            const SizedBox(width: 8),
+                            Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                OutlinedButton.icon(
+                                  onPressed: () => setState(() =>
+                                      _filtersVisible = !_filtersVisible),
+                                  icon: Icon(
+                                    _filtersVisible
+                                        ? Icons.filter_list_off
+                                        : Icons.filter_list,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                      _filtersVisible ? 'Ascunde' : 'Filtre'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor:
+                                        hasFilters ? cs.primary : null,
+                                    side: hasFilters
+                                        ? BorderSide(
+                                            color: cs.primary, width: 1.5)
+                                        : null,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                  ),
+                                ),
+                                if (hasFilters)
+                                  Positioned(
+                                    top: -4,
+                                    right: -4,
+                                    child: Container(
+                                      padding: const EdgeInsets.all(4),
+                                      decoration: BoxDecoration(
+                                        color: cs.primary,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Text(
+                                        '$_activeFilterCount',
+                                        style: TextStyle(
+                                          color: cs.onPrimary,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ],
-                          onChanged: (value) =>
-                              setState(() => _activeFilter = value),
-                          decoration: const InputDecoration(
-                            labelText: 'Status',
-                          ),
+                        ],
+                      ),
+                      // Rândul 2: filtre (mereu pe desktop, colapsabile pe mobil)
+                      if (showFilters) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 200,
+                              child: DropdownButtonFormField<ClientType>(
+                                initialValue: _typeFilter,
+                                items: ClientType.values
+                                    .map(
+                                      (item) => DropdownMenuItem<ClientType>(
+                                        value: item,
+                                        child: Text(item.label),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (value) {
+                                  setState(() => _typeFilter = value);
+                                  _persistFilterPreferences();
+                                },
+                                decoration: const InputDecoration(
+                                    labelText: 'Tip client'),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 180,
+                              child: DropdownButtonFormField<bool>(
+                                initialValue: _activeFilter,
+                                items: const [
+                                  DropdownMenuItem<bool>(
+                                    value: true,
+                                    child: Text('Activ'),
+                                  ),
+                                  DropdownMenuItem<bool>(
+                                    value: false,
+                                    child: Text('Inactiv'),
+                                  ),
+                                ],
+                                onChanged: (value) {
+                                  setState(() => _activeFilter = value);
+                                  _persistFilterPreferences();
+                                },
+                                decoration: const InputDecoration(
+                                  labelText: 'Status',
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                _search.clear();
+                                setState(() {
+                                  _typeFilter = null;
+                                  _activeFilter = null;
+                                  _filtersVisible = false;
+                                });
+                                _persistFilterPreferences();
+                              },
+                              child: const Text('Resetează'),
+                            ),
+                            Chip(
+                              label: Text('Sursă: $_dataSourceLabel'),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            if ((_cloudFallbackReason ?? '').trim().isNotEmpty)
+                              Text(
+                                'Fallback: ${_shortCloudError(_cloudFallbackReason!)}',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                          ],
                         ),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          _search.clear();
-                          setState(() {
-                            _typeFilter = null;
-                            _activeFilter = null;
-                          });
-                        },
-                        child: const Text('Resetează'),
-                      ),
+                      ],
                     ],
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           ),
           Expanded(
             child: items.isEmpty
-                ? const Center(child: Text('Nu există clienți salvați.'))
+                ? RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
+                      children: [
+                        const SizedBox(height: 32),
+                        const Center(child: Text('Nu există clienți salvați.')),
+                        const SizedBox(height: 16),
+                        Center(
+                          child: Card(
+                            margin: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'Firebase: init=${FirebaseBootstrap.isInitialized} online=${FirebaseBootstrap.isOnline}',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                  if (_cloudFallbackReason != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Eroare: $_cloudFallbackReason',
+                                      style: const TextStyle(fontSize: 11, color: Colors.red),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 8),
+                                  FilledButton.icon(
+                                    onPressed: _loading ? null : _load,
+                                    icon: const Icon(Icons.refresh, size: 16),
+                                    label: const Text('Reîncarcă din cloud'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
                 : ListView.separated(
                     padding: AppViewportGuard.scrollablePadding(
                       top: 8,
@@ -2598,6 +2840,11 @@ class _ClientsPageState extends State<ClientsPage> {
                           item.externalClientSource.trim().isEmpty
                               ? '-'
                               : item.externalClientSource.trim();
+                      final adresaCompleta = [
+                        item.address.trim(),
+                        item.city.trim(),
+                        item.county.trim(),
+                      ].where((s) => s.isNotEmpty).join(', ');
                       return Card(
                         child: ListTile(
                           onTap: () => _openClientHistory(item),
@@ -2608,39 +2855,63 @@ class _ClientsPageState extends State<ClientsPage> {
                             '${item.phone2.isEmpty ? '' : ' / ${item.phone2}'}'
                             '${item.phone3.isEmpty ? '' : ' / ${item.phone3}'} | '
                             'Email: ${item.email.isEmpty ? '-' : item.email}\n'
+                            '${item.cui.trim().isNotEmpty ? 'CUI: ${item.cui.trim()} | ' : ''}'
+                            '${item.regCom.trim().isNotEmpty ? 'Reg. Com.: ${item.regCom.trim()} | ' : ''}'
+                            'Adresă: ${adresaCompleta.isEmpty ? '-' : adresaCompleta}\n'
                             'Cod extern: $externalCodeLabel | '
-                            'Partener: $externalSourceLabel\n'
-                            'Oras: ${item.city.isEmpty ? '-' : item.city} | '
+                            'Partener: $externalSourceLabel | '
                             'Tip: ${item.type.label} | '
-                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'} | '
-                            'Departamente: ${item.departments.length} | '
-                            'Contacte: ${item.contactPeople.length}',
+                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
                           ),
-                          trailing: Wrap(
-                            spacing: 4,
-                            children: [
-                              IconButton(
-                                onPressed: () => _openClientHistory(item),
-                                icon: const Icon(Icons.history_outlined),
-                                tooltip: 'Istoric client',
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.more_vert),
+                            tooltip: 'Acțiuni',
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
+                                value: 'history',
+                                child: ListTile(
+                                  leading: Icon(Icons.history_outlined),
+                                  title: Text('Istoric client'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
                               ),
-                              IconButton(
-                                onPressed: () =>
-                                    _openCentralizerGeneratorForClient(item),
-                                icon: const Icon(Icons.post_add_outlined),
-                                tooltip: 'Centralizator selectiv',
+                              const PopupMenuItem(
+                                value: 'centralizer',
+                                child: ListTile(
+                                  leading: Icon(Icons.post_add_outlined),
+                                  title: Text('Centralizator selectiv'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
                               ),
-                              IconButton(
-                                onPressed: () => _openForm(current: item),
-                                icon: const Icon(Icons.edit_outlined),
-                                tooltip: 'Editează',
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: ListTile(
+                                  leading: Icon(Icons.edit_outlined),
+                                  title: Text('Editează'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
                               ),
-                              IconButton(
-                                onPressed: () => _delete(item),
-                                icon: const Icon(Icons.delete_outline),
-                                tooltip: 'Șterge',
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: ListTile(
+                                  leading: Icon(Icons.delete_outline),
+                                  title: Text('Șterge'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
                               ),
                             ],
+                            onSelected: (value) {
+                              switch (value) {
+                                case 'history':
+                                  _openClientHistory(item);
+                                case 'centralizer':
+                                  _openCentralizerGeneratorForClient(item);
+                                case 'edit':
+                                  _openForm(current: item);
+                                case 'delete':
+                                  _delete(item);
+                              }
+                            },
                           ),
                         ),
                       );

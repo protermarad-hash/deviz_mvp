@@ -1,3 +1,99 @@
+import 'package:uuid/uuid.dart';
+
+// ── Linie planificată din ofertă (iun 2026) ────────────────────────────────
+class JobLine {
+  const JobLine({
+    required this.id,
+    required this.denumire,
+    required this.um,
+    required this.cantitateOferta,
+    required this.cantitateReala,
+    required this.pretUnitarOferta,
+    required this.pretUnitarReal,
+    required this.categorie,
+    this.ofertaLineId = '',
+  });
+
+  final String id;
+  final String ofertaLineId;
+  final String denumire;
+  final String um;
+  final double cantitateOferta;
+  final double cantitateReala;
+  final double pretUnitarOferta;
+  final double pretUnitarReal;
+  final String categorie; // 'material' | 'manopera' | 'transport' | 'altul'
+
+  double get totalOferta => cantitateOferta * pretUnitarOferta;
+  double get totalReal => cantitateReala * pretUnitarReal;
+  double get diferenta => totalReal - totalOferta;
+
+  static JobLine fromOfertaLine({
+    required String id,
+    required String ofertaLineId,
+    required String denumire,
+    required String um,
+    required double cantitate,
+    required double pretUnitar,
+    required String categorie,
+  }) =>
+      JobLine(
+        id: id.isNotEmpty ? id : const Uuid().v4(),
+        ofertaLineId: ofertaLineId,
+        denumire: denumire,
+        um: um,
+        cantitateOferta: cantitate,
+        cantitateReala: cantitate,
+        pretUnitarOferta: pretUnitar,
+        pretUnitarReal: pretUnitar,
+        categorie: categorie,
+      );
+
+  JobLine copyWith({
+    double? cantitateReala,
+    double? pretUnitarReal,
+  }) =>
+      JobLine(
+        id: id,
+        ofertaLineId: ofertaLineId,
+        denumire: denumire,
+        um: um,
+        cantitateOferta: cantitateOferta,
+        cantitateReala: cantitateReala ?? this.cantitateReala,
+        pretUnitarOferta: pretUnitarOferta,
+        pretUnitarReal: pretUnitarReal ?? this.pretUnitarReal,
+        categorie: categorie,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'oferta_line_id': ofertaLineId,
+        'denumire': denumire,
+        'um': um,
+        'cantitate_oferta': cantitateOferta,
+        'cantitate_reala': cantitateReala,
+        'pret_unitar_oferta': pretUnitarOferta,
+        'pret_unitar_real': pretUnitarReal,
+        'categorie': categorie,
+      };
+
+  factory JobLine.fromMap(Map<String, dynamic> map) {
+    double d(dynamic v) =>
+        v is num ? v.toDouble() : double.tryParse('${v ?? 0}') ?? 0;
+    return JobLine(
+      id: (map['id'] ?? '').toString(),
+      ofertaLineId: (map['oferta_line_id'] ?? '').toString(),
+      denumire: (map['denumire'] ?? map['name'] ?? '').toString(),
+      um: (map['um'] ?? map['unit'] ?? 'buc').toString(),
+      cantitateOferta: d(map['cantitate_oferta'] ?? map['cantitate']),
+      cantitateReala: d(map['cantitate_reala'] ?? map['cantitate_oferta'] ?? map['cantitate']),
+      pretUnitarOferta: d(map['pret_unitar_oferta'] ?? map['pret_unitar']),
+      pretUnitarReal: d(map['pret_unitar_real'] ?? map['pret_unitar_oferta'] ?? map['pret_unitar']),
+      categorie: (map['categorie'] ?? 'altul').toString(),
+    );
+  }
+}
+
 enum JobStatus {
   noua,
   ofertata,
@@ -257,6 +353,12 @@ class JobRecord {
     this.partnerProfitPercent = 0.0,
     this.partnerResources = 0.0,
     this.profitTaxPercent = 16.0,
+    // Linii planificate din ofertă (iun 2026) — backward compatible
+    this.liniiPlanificate = const <JobLine>[],
+    this.totalOferta = 0.0,
+    // SmartBill facturare (iun 2026) — backward compatible
+    this.smartbillFacturaNumar = '',
+    this.smartbillFacturaSerie = '',
   });
 
   final String id;
@@ -328,6 +430,16 @@ class JobRecord {
 
   /// Rata impozit profit aplicată acestei lucrări (%). Default 16.
   final double profitTaxPercent;
+  // Linii planificate din ofertă (iun 2026)
+  final List<JobLine> liniiPlanificate;
+  final double totalOferta;
+  // SmartBill (iun 2026)
+  final String smartbillFacturaNumar;
+  final String smartbillFacturaSerie;
+
+  double get totalReal =>
+      liniiPlanificate.fold(0.0, (s, l) => s + l.totalReal);
+  double get diferenta => totalReal - totalOferta;
 
   JobRecord copyWith({
     String? id,
@@ -383,6 +495,10 @@ class JobRecord {
     double? partnerProfitPercent,
     double? partnerResources,
     double? profitTaxPercent,
+    List<JobLine>? liniiPlanificate,
+    double? totalOferta,
+    String? smartbillFacturaNumar,
+    String? smartbillFacturaSerie,
   }) {
     return JobRecord(
       id: id ?? this.id,
@@ -441,6 +557,12 @@ class JobRecord {
       partnerProfitPercent: partnerProfitPercent ?? this.partnerProfitPercent,
       partnerResources: partnerResources ?? this.partnerResources,
       profitTaxPercent: profitTaxPercent ?? this.profitTaxPercent,
+      liniiPlanificate: liniiPlanificate ?? this.liniiPlanificate,
+      totalOferta: totalOferta ?? this.totalOferta,
+      smartbillFacturaNumar:
+          smartbillFacturaNumar ?? this.smartbillFacturaNumar,
+      smartbillFacturaSerie:
+          smartbillFacturaSerie ?? this.smartbillFacturaSerie,
     );
   }
 
@@ -503,6 +625,10 @@ class JobRecord {
       'partner_profit_percent': partnerProfitPercent,
       'partner_resources': partnerResources,
       'profit_tax_percent': profitTaxPercent,
+      'linii_planificate': liniiPlanificate.map((l) => l.toMap()).toList(),
+      'total_oferta': totalOferta,
+      'smartbill_factura_numar': smartbillFacturaNumar,
+      'smartbill_factura_serie': smartbillFacturaSerie,
     };
   }
 
@@ -665,6 +791,20 @@ class JobRecord {
       profitTaxPercent:
           parseDouble(map['profit_tax_percent'] ?? map['profitTaxPercent']) ??
               16.0,
+      liniiPlanificate: (() {
+        final raw = map['linii_planificate'] ?? map['liniiPlanificate'];
+        if (raw is! List) return const <JobLine>[];
+        return raw
+            .whereType<Map>()
+            .map((m) => JobLine.fromMap(Map<String, dynamic>.from(m)))
+            .toList(growable: false);
+      })(),
+      totalOferta:
+          parseDouble(map['total_oferta'] ?? map['totalOferta']) ?? 0.0,
+      smartbillFacturaNumar:
+          (map['smartbill_factura_numar'] ?? map['smartbillFacturaNumar'] ?? '').toString(),
+      smartbillFacturaSerie:
+          (map['smartbill_factura_serie'] ?? map['smartbillFacturaSerie'] ?? '').toString(),
     );
   }
 }

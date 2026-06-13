@@ -76,8 +76,19 @@ class _DevizArticoleBazaPageState extends State<DevizArticoleBazaPage> {
       builder: (ctx) => _EditTemplateDialog(template: template),
     );
     if (result == null || !mounted) return;
-    await _repo.upsert(result);
-    await _loadTemplates();
+    // Optimistic UI
+    setState(() {
+      final idx = _allTemplates.indexWhere((t) => t.id == result.id);
+      if (idx >= 0) {
+        _allTemplates = List.from(_allTemplates)..[idx] = result;
+      } else {
+        _allTemplates = [..._allTemplates, result];
+      }
+      _applyFilter();
+    });
+    _repo.upsert(result).catchError((e) {
+      if (mounted) _loadTemplates();
+    });
   }
 
   Future<void> _deleteTemplate(DevizArticolTemplate template) async {
@@ -100,13 +111,18 @@ class _DevizArticoleBazaPageState extends State<DevizArticoleBazaPage> {
       ),
     );
     if (confirm != true || !mounted) return;
-    await _repo.delete(template.id);
-    await _loadTemplates();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Articol șters din baza proprie.')),
-      );
-    }
+    // Optimistic UI
+    setState(() {
+      _allTemplates =
+          _allTemplates.where((t) => t.id != template.id).toList();
+      _applyFilter();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Articol șters din baza proprie.')),
+    );
+    _repo.delete(template.id).catchError((e) {
+      if (mounted) _loadTemplates();
+    });
   }
 
   @override

@@ -1,0 +1,603 @@
+import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../core/help/help_module_button.dart';
+import 'echipament_instalat_models.dart';
+import 'echipamente_repository.dart';
+
+class EchipamentePage extends StatefulWidget {
+  const EchipamentePage({super.key});
+
+  @override
+  State<EchipamentePage> createState() => _EchipamentePageState();
+}
+
+class _EchipamentePageState extends State<EchipamentePage>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
+  final _repo = EchipamenteRepository.instance;
+
+  List<EchipamentInstalat> _all = [];
+  bool _loading = true;
+  bool _syncing = false;
+  String _search = '';
+  String _filtru = 'Toate';
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 3, vsync: this);
+    Future.microtask(_load);
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    final items = await _repo.listMerged();
+    if (!mounted) return;
+    setState(() {
+      _all = items;
+      _loading = false;
+    });
+  }
+
+  List<EchipamentInstalat> get _filtered {
+    var list = _all;
+    if (_search.isNotEmpty) {
+      final q = _search.toLowerCase();
+      list = list.where((e) {
+        return e.marca.toLowerCase().contains(q) ||
+            e.model.toLowerCase().contains(q) ||
+            e.serieUnitateExterna.toLowerCase().contains(q) ||
+            e.clientName.toLowerCase().contains(q) ||
+            e.adresaInstalare.toLowerCase().contains(q);
+      }).toList();
+    }
+    switch (_filtru) {
+      case 'Garantie activa':
+        return list.where((e) => e.garantieActiva).toList();
+      case 'Garantie expirata':
+        return list.where((e) => !e.garantieActiva && e.garantieLuni > 0).toList();
+      case 'Necesita service':
+        return list.where((e) => e.necesitaService).toList();
+      default:
+        return list;
+    }
+  }
+
+  List<EchipamentInstalat> get _garantiiExpirand {
+    final limita = DateTime.now().add(const Duration(days: 90));
+    return _all
+        .where((e) =>
+            e.garantieLuni > 0 &&
+            e.dataExpirariiGarantiei.isBefore(limita))
+        .toList()
+      ..sort(
+          (a, b) => a.dataExpirariiGarantiei.compareTo(b.dataExpirariiGarantiei));
+  }
+
+  List<EchipamentInstalat> get _necesitaService =>
+      _all.where((e) => e.necesitaService).toList();
+
+  @override
+  Widget build(BuildContext context) {
+    final garantieCount = _garantiiExpirand.length;
+    final serviceCount = _necesitaService.length;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Echipamente instalate'),
+        actions: [
+          IconButton(
+            icon: _syncing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.cloud_sync_outlined),
+            tooltip: 'Sincronizeaza',
+            onPressed: (_loading || _syncing) ? null : _syncToCloud,
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Adauga echipament',
+            onPressed: _loading ? null : () => _showEditDialog(null),
+          ),
+          const HelpModuleButton(moduleId: 'echipamente'),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: [
+            Tab(
+              icon: const Icon(Icons.hvac_outlined),
+              text: 'Toate (${_all.length})',
+            ),
+            Tab(
+              icon: const Icon(Icons.verified_user_outlined),
+              text: garantieCount > 0 ? 'Garantie ($garantieCount)' : 'Garantie',
+            ),
+            Tab(
+              icon: const Icon(Icons.build_outlined),
+              text: serviceCount > 0 ? 'Service ($serviceCount)' : 'Service',
+            ),
+          ],
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : TabBarView(
+              controller: _tabs,
+              children: [
+                _buildAllTab(),
+                _buildGarantieTab(),
+                _buildServiceTab(),
+              ],
+            ),
+    );
+  }
+
+  // ── TAB 0 — Toate ──────────────────────────────────────────────────────────
+
+  Widget _buildAllTab() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Column(
+            children: [
+              TextField(
+                decoration: const InputDecoration(
+                  hintText: 'Cauta marca, model, serie, client...',
+                  prefixIcon: Icon(Icons.search),
+                  isDense: true,
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (v) => setState(() => _search = v),
+              ),
+              const SizedBox(height: 6),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    'Toate',
+                    'Garantie activa',
+                    'Garantie expirata',
+                    'Necesita service'
+                  ].map((f) {
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: FilterChip(
+                        label: Text(f),
+                        selected: _filtru == f,
+                        onSelected: (_) => setState(() => _filtru = f),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: _filtered.isEmpty
+                ? ListView(children: const [
+                    SizedBox(height: 40),
+                    Center(child: Icon(Icons.hvac_outlined, size: 48)),
+                    SizedBox(height: 12),
+                    Center(
+                        child: Text('Niciun echipament inregistrat.')),
+                  ])
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 80),
+                    itemCount: _filtered.length,
+                    itemBuilder: (_, i) => _buildCard(_filtered[i]),
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCard(EchipamentInstalat e) {
+    final garantieColor = !e.garantieActiva && e.garantieLuni > 0
+        ? Colors.red
+        : e.zileRamasGarantie < 30 && e.garantieActiva
+            ? Colors.orange
+            : Colors.green;
+    final stareColor = e.stare == 'defect'
+        ? Colors.red
+        : e.stare == 'in_service'
+            ? Colors.orange
+            : Colors.green;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: () => _showEditDialog(e),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${e.marca} ${e.model}'.trim().isEmpty
+                          ? e.tipEchipament
+                          : '${e.marca} ${e.model}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: stareColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      e.stare,
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: stareColor,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+              if (e.tipEchipament.isNotEmpty)
+                Text(e.tipEchipament,
+                    style: TextStyle(
+                        fontSize: 11, color: Colors.grey.shade600)),
+              const SizedBox(height: 4),
+              Text('${e.clientName} — ${e.adresaInstalare}',
+                  style: const TextStyle(fontSize: 12)),
+              if (e.serieUnitateExterna.isNotEmpty)
+                Text('Serie: ${e.serieUnitateExterna}',
+                    style: const TextStyle(fontSize: 11)),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(
+                    e.garantieActiva
+                        ? Icons.verified_user_outlined
+                        : Icons.gpp_bad_outlined,
+                    size: 14,
+                    color: garantieColor,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    e.garantieLuni == 0
+                        ? 'Fara garantie'
+                        : e.garantieActiva
+                            ? 'Garantie activa pana ${_fmtDate(e.dataExpirariiGarantiei)}'
+                            : 'Garantie expirata ${_fmtDate(e.dataExpirariiGarantiei)}',
+                    style: TextStyle(fontSize: 11, color: garantieColor),
+                  ),
+                ],
+              ),
+              if (e.necesitaService)
+                Row(
+                  children: [
+                    const Icon(Icons.build_outlined,
+                        size: 14, color: Colors.orange),
+                    const SizedBox(width: 4),
+                    const Text('Necesita service',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.orange)),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── TAB 1 — Garanții ──────────────────────────────────────────────────────
+
+  Widget _buildGarantieTab() {
+    if (_garantiiExpirand.isEmpty) {
+      return const Center(child: Text('Nicio garantie expiranda in 90 de zile.'));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: _garantiiExpirand.length,
+      itemBuilder: (_, i) {
+        final e = _garantiiExpirand[i];
+        final expired = !e.garantieActiva;
+        return Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: ListTile(
+            leading: Icon(
+              expired
+                  ? Icons.gpp_bad_outlined
+                  : Icons.verified_user_outlined,
+              color: expired ? Colors.red : Colors.orange,
+            ),
+            title: Text('${e.marca} ${e.model}'.trim().isEmpty
+                ? e.tipEchipament
+                : '${e.marca} ${e.model}'),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(e.clientName),
+                Text(
+                  expired
+                      ? 'Expirata pe ${_fmtDate(e.dataExpirariiGarantiei)}'
+                      : 'Expira pe ${_fmtDate(e.dataExpirariiGarantiei)} '
+                          '(${e.zileRamasGarantie} zile)',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: expired ? Colors.red : Colors.orange),
+                ),
+              ],
+            ),
+            trailing: IconButton(
+              icon: const Icon(Icons.chat_outlined),
+              tooltip: 'Trimite WhatsApp',
+              onPressed: () => _sendGarantieWhatsApp(e),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── TAB 2 — Service ───────────────────────────────────────────────────────
+
+  Widget _buildServiceTab() {
+    if (_necesitaService.isEmpty) {
+      return const Center(
+          child: Text('Niciun echipament nu necesita service acum.'));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: _necesitaService.length,
+      itemBuilder: (_, i) {
+        final e = _necesitaService[i];
+        final ultima = e.ultimaInterventieData ?? e.dataInstalare;
+        final luniDeLaUltima =
+            DateTime.now().difference(ultima).inDays ~/ 30;
+        return Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: ListTile(
+            leading: const Icon(Icons.build_outlined, color: Colors.orange),
+            title: Text('${e.marca} ${e.model}'.trim().isEmpty
+                ? e.tipEchipament
+                : '${e.marca} ${e.model}'),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(e.clientName),
+                Text(
+                  'Ultima interventie: ${_fmtDate(ultima)} '
+                  '($luniDeLaUltima luni)',
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ],
+            ),
+            trailing: TextButton(
+              onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                    content: Text(
+                        'Programeaza service — disponibil curand.')),
+              ),
+              child: const Text('Service'),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── Dialog editare ────────────────────────────────────────────────────────
+
+  Future<void> _showEditDialog(EchipamentInstalat? existing) async {
+    final uuid = const Uuid();
+    final marcaCtrl = TextEditingController(text: existing?.marca ?? '');
+    final modelCtrl = TextEditingController(text: existing?.model ?? '');
+    final tipCtrl =
+        TextEditingController(text: existing?.tipEchipament ?? 'AC Split');
+    final clientCtrl =
+        TextEditingController(text: existing?.clientName ?? '');
+    final adresaCtrl =
+        TextEditingController(text: existing?.adresaInstalare ?? '');
+    final serieCtrl =
+        TextEditingController(text: existing?.serieUnitateExterna ?? '');
+    final agentCtrl =
+        TextEditingController(text: existing?.agentFrigorific ?? '');
+    final garantieCtrl = TextEditingController(
+        text: (existing?.garantieLuni ?? 24).toString());
+    final noteCtrl = TextEditingController(text: existing?.note ?? '');
+    String stare = existing?.stare ?? 'functional';
+
+    try {
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setSt) => AlertDialog(
+            title:
+                Text(existing == null ? 'Adauga echipament' : 'Editeaza'),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: marcaCtrl,
+                              decoration:
+                                  const InputDecoration(labelText: 'Marca *'))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: modelCtrl,
+                              decoration:
+                                  const InputDecoration(labelText: 'Model *'))),
+                    ]),
+                    const SizedBox(height: 8),
+                    TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: tipCtrl,
+                        decoration:
+                            const InputDecoration(labelText: 'Tip echipament')),
+                    const SizedBox(height: 8),
+                    TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: clientCtrl,
+                        decoration:
+                            const InputDecoration(labelText: 'Client *')),
+                    const SizedBox(height: 8),
+                    TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: adresaCtrl,
+                        decoration:
+                            const InputDecoration(labelText: 'Adresa instalare')),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: serieCtrl,
+                              decoration:
+                                  const InputDecoration(labelText: 'Serie ODU'))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: agentCtrl,
+                              decoration: const InputDecoration(
+                                  labelText: 'Agent frigorific'))),
+                    ]),
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(
+                          child: TextField(
+                              controller: garantieCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                  labelText: 'Garantie (luni)'))),
+                      const SizedBox(width: 8),
+                      Expanded(
+                          child: DropdownButtonFormField<String>(
+                        initialValue: stare,
+                        decoration:
+                            const InputDecoration(labelText: 'Stare'),
+                        items: const [
+                          DropdownMenuItem(
+                              value: 'functional',
+                              child: Text('Functional')),
+                          DropdownMenuItem(
+                              value: 'defect', child: Text('Defect')),
+                          DropdownMenuItem(
+                              value: 'in_service',
+                              child: Text('In service')),
+                          DropdownMenuItem(
+                              value: 'casat', child: Text('Casat')),
+                        ],
+                        onChanged: (v) =>
+                            setSt(() => stare = v ?? 'functional'),
+                      )),
+                    ]),
+                    const SizedBox(height: 8),
+                    TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: noteCtrl,
+                        maxLines: 2,
+                        decoration: const InputDecoration(labelText: 'Note')),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              if (existing != null)
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(ctx, false);
+                    // Optimistic delete
+                    setState(() =>
+                        _all.removeWhere((e) => e.id == existing.id));
+                    await _repo.deleteEchipament(existing.id);
+                  },
+                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  child: const Text('Sterge'),
+                ),
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Anuleaza')),
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Salveaza')),
+            ],
+          ),
+        ),
+      );
+      if (saved != true || !mounted) return;
+      final now = DateTime.now();
+      final e = EchipamentInstalat(
+        id: existing?.id ?? uuid.v4(),
+        clientId: existing?.clientId ?? uuid.v4(),
+        clientName: clientCtrl.text.trim(),
+        adresaInstalare: adresaCtrl.text.trim(),
+        tipEchipament: tipCtrl.text.trim(),
+        marca: marcaCtrl.text.trim(),
+        model: modelCtrl.text.trim(),
+        serieUnitateExterna: serieCtrl.text.trim(),
+        agentFrigorific: agentCtrl.text.trim(),
+        dataInstalare: existing?.dataInstalare ?? now,
+        garantieLuni:
+            int.tryParse(garantieCtrl.text.trim()) ?? 24,
+        stare: stare,
+        note: noteCtrl.text.trim(),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      );
+      await _repo.upsertEchipament(e);
+      _load();
+    } finally {
+      marcaCtrl.dispose();
+      modelCtrl.dispose();
+      tipCtrl.dispose();
+      clientCtrl.dispose();
+      adresaCtrl.dispose();
+      serieCtrl.dispose();
+      agentCtrl.dispose();
+      garantieCtrl.dispose();
+      noteCtrl.dispose();
+    }
+  }
+
+  Future<void> _syncToCloud() async {
+    setState(() => _syncing = true);
+    final count = await _repo.forceSyncToCloud();
+    if (!mounted) return;
+    setState(() => _syncing = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Sincronizat $count echipamente.')),
+    );
+  }
+
+  void _sendGarantieWhatsApp(EchipamentInstalat e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('WhatsApp garantie — necesita numar client.')),
+    );
+  }
+
+  String _fmtDate(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
+}

@@ -81,4 +81,18 @@ class LocalOferteRepository {
     final payload = items.map((item) => item.toMap()).toList(growable: false);
     await prefs.setString(_offersKey, jsonEncode(payload));
   }
+
+  /// Returnează ofertele cu status 'sent' (trimise) care nu au primit răspuns
+  /// în ultimele [dupaZile] zile și nu au fost convertite în lucrare.
+  Future<List<OfferRecord>> listExpirate({required int dupaZile}) async {
+    final cutoff =
+        DateTime.now().subtract(Duration(days: dupaZile));
+    final all = await listOffers();
+    return all
+        .where((o) =>
+            o.status == OfferStatus.sent &&
+            o.updatedAt.isBefore(cutoff) &&
+            !o.isConverted)
+        .toList(growable: false);
+  }
 }

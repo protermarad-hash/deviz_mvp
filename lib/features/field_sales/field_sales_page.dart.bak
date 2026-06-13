@@ -1,4 +1,7 @@
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -12,9 +15,12 @@ import '../../core/auth_models.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/document_file_service.dart';
+import '../../core/pdf_actions_helper.dart';
 import '../../core/pdf_document_branding.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/widgets/client_autocomplete_field.dart';
 import '../ai_assistant/ai_assistant_action_catalog.dart';
 import '../ai_assistant/ai_assistant_models.dart';
 import '../ai_assistant/ai_assistant_service.dart';
@@ -62,6 +68,8 @@ class FieldSalesPage extends StatefulWidget {
 class _FieldSalesPageState extends State<FieldSalesPage> {
   static const double _maxDirectDiscountPercent = 12;
   static const int _maxInlineAttachmentBytes = 550 * 1024;
+  static const String _prefKeyPriceList = 'field_sales_price_list_v1';
+  static const String _prefKeyLeadId = 'field_sales_lead_id_v1';
   AiAssistantService get _aiAssistantService =>
       AiAssistantService(repository: widget.repository);
   final FieldSalesService _service = FieldSalesService();
@@ -76,6 +84,8 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
   final TextEditingController _leadSearchController = TextEditingController();
 
   bool _loading = true;
+  Timer? _clientsReloadDebounce;
+  bool _clientsReloading = false;
   String? _message;
   AppUser? _currentUser;
   List<ClientRecord> _clients = const <ClientRecord>[];
@@ -86,6 +96,7 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
   List<FieldSalesRequestRecord> _requests = const <FieldSalesRequestRecord>[];
   String _selectedPriceListId = '';
   FieldLeadRecord? _selectedLead;
+  String _savedLeadId = '';
 
   String get _currentUserId => (widget.fieldAuthUserId ?? '').trim();
   String get _currentUserEmail => (widget.fieldAuthUserEmail ?? '').trim();
@@ -133,14 +144,71 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
     super.initState();
     _catalogSearchController.addListener(() => setState(() {}));
     _leadSearchController.addListener(() => setState(() {}));
+    LocalAppDataRepository.clientsChangeCount.addListener(_handleClientsChanged);
+    _initAsync();
+  }
+
+  Future<void> _initAsync() async {
+    await _loadSavedPreferences();
     _load();
+  }
+
+  Future<void> _loadSavedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final priceListId = prefs.getString(_prefKeyPriceList) ?? '';
+    final leadId = prefs.getString(_prefKeyLeadId) ?? '';
+    setState(() {
+      if (priceListId.isNotEmpty) {
+        _selectedPriceListId = priceListId;
+      }
+      // _selectedLeadId va fi rezolvat în _load() după ce leads sunt încărcate
+      _savedLeadId = leadId;
+    });
+  }
+
+  Future<void> _persistSavedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.setString(_prefKeyPriceList, _selectedPriceListId),
+      prefs.setString(_prefKeyLeadId, _selectedLead?.id ?? ''),
+    ]);
   }
 
   @override
   void dispose() {
+    LocalAppDataRepository.clientsChangeCount.removeListener(_handleClientsChanged);
+    _clientsReloadDebounce?.cancel();
     _catalogSearchController.dispose();
     _leadSearchController.dispose();
     super.dispose();
+  }
+
+  void _handleClientsChanged() {
+    if (_loading) {
+      return;
+    }
+    _clientsReloadDebounce?.cancel();
+    _clientsReloadDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      _reloadClientsOnly();
+    });
+  }
+
+  Future<void> _reloadClientsOnly() async {
+    if (_loading || _clientsReloading) {
+      return;
+    }
+    _clientsReloading = true;
+    try {
+      final clients = await widget.repository.listClients();
+      if (!mounted) return;
+      setState(() => _clients = clients
+          .where((c) => c.isActive)
+          .toList(growable: false));
+    } finally {
+      _clientsReloading = false;
+    }
   }
 
   Future<void> _load() async {
@@ -175,13 +243,24 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
         priceListId: _selectedPriceListId,
         restrictToStandardOnly: _restrictToStandardPriceList,
       );
+      // Restaurează lead selectat: actualizează din lista nouă sau restaurează din ID salvat
       if (_selectedLead != null) {
+        FieldLeadRecord? updated;
         for (final lead in _leads) {
           if (lead.id == _selectedLead!.id) {
+            updated = lead;
+            break;
+          }
+        }
+        _selectedLead = updated; // null dacă lead-ul a fost șters
+      } else if (_savedLeadId.isNotEmpty) {
+        for (final lead in _leads) {
+          if (lead.id == _savedLeadId) {
             _selectedLead = lead;
             break;
           }
         }
+        _savedLeadId = ''; // curățăm după prima restaurare
       }
     } catch (error) {
       _message = 'Nu am putut incarca modulul de teren: $error';
@@ -343,22 +422,6 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
     if (normalized.isEmpty) return '';
     final parts = normalized.split('/');
     return parts.isEmpty ? normalized : parts.last.trim();
-  }
-
-  Future<void> _openGeneratedDocument(String filePath) async {
-    final result = await DocumentFileService.openFile(filePath);
-    if (result.opened || !mounted) {
-      return;
-    }
-    if (DocumentFileService.supportsFolderOpen) {
-      await DocumentFileService.openFolderForFile(filePath);
-    }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${result.message} Documentul a fost salvat: $filePath'),
-      ),
-    );
   }
 
   List<FieldSalesQuotePdfProductRow> _buildRequestPdfProducts(
@@ -537,29 +600,12 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
             );
             if (!mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Email pus in coada: ${queueItem.id}')),
-            );
-            final resolved =
-                await notif.waitForEmailQueueFinalStatus(queueItem.id);
-            if (!mounted) return;
-            final status = (resolved?.status ?? '').trim().toLowerCase();
-            if (status == 'sent') {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                    content: Text('Email trimis cu succes (${queueItem.id}).')),
-              );
-            } else if (status == 'failed') {
-              final reason = (resolved?.errorMessage ?? '').trim();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    reason.isEmpty
-                        ? 'Email esuat (${queueItem.id}). Verifica notification_email_queue.'
-                        : 'Email esuat: $reason',
-                  ),
+              SnackBar(
+                content: Text(
+                  'Email pus in coada: ${queueItem.id}. Statusul final se vede in Notificari / Email log.',
                 ),
-              );
-            }
+              ),
+            );
             await _load();
           } catch (e) {
             if (!mounted) return;
@@ -570,19 +616,17 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
         }
         return;
       }
-      await _openGeneratedDocument(filePath);
       await _load();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            share
-                ? 'PDF-ul a fost generat si pregatit pentru share.'
-                : saveAs
-                    ? 'PDF-ul a fost salvat.'
-                    : 'PDF-ul mini-ofertei a fost generat.',
-          ),
-        ),
+        const SnackBar(content: Text('PDF mini-ofertă generat.')),
+      );
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: filePath,
+        title: 'Mini-ofertă PDF generată',
+        shareSubject: 'Ofertă ${request.id}',
+        shareText: 'PDF mini-ofertă generat din aplicație.',
       );
     } on PdfSaveCanceledException {
       if (!mounted) return;
@@ -623,11 +667,19 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
         : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
     final storagePath =
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    } catch (_) {}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: 'application/pdf'),
-    );
+    try {
+      await ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'application/pdf'),
+      );
+    } catch (e) {
+      debugPrint('[FieldSales] ❌ Storage upload failed: $e');
+      rethrow;
+    }
     return <String, dynamic>{
       'filename': normalizedName,
       'storage_path': ref.fullPath,
@@ -1251,6 +1303,8 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
   }
 
   Future<void> _createLead() async {
+    await _refreshCatalog();
+    if (!mounted) return;
     final lead = await showDialog<FieldLeadRecord>(
       context: context,
       builder: (context) => _FieldLeadDialog(
@@ -1546,71 +1600,137 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
-          Wrap(
-            spacing: 12,
-            runSpacing: 12,
-            children: [
-              SizedBox(
-                width: 280,
-                child: TextField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _catalogSearchController,
-                  decoration: const InputDecoration(
-                    labelText: 'Cauta produse',
-                    prefixIcon: Icon(Icons.search),
-                  ),
-                ),
-              ),
-              if (!_restrictToStandardPriceList)
-                SizedBox(
-                  width: 320,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _normalizedSelectedPriceListId.isEmpty
-                        ? (_availableFieldPriceLists.isEmpty
-                            ? null
-                            : _availableFieldPriceLists.first.id)
-                        : _normalizedSelectedPriceListId,
-                    decoration: const InputDecoration(
-                      labelText: 'Lista comerciala',
-                    ),
-                    items: _availableFieldPriceLists
-                        .map(
-                          (item) => DropdownMenuItem<String>(
-                            value: item.id,
-                            child: Text(item.name),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 600;
+              return Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: _catalogSearchController,
+                              decoration: const InputDecoration(
+                                labelText: 'Caută produse',
+                                prefixIcon: Icon(Icons.search),
+                                isDense: true,
+                              ),
+                            ),
                           ),
-                        )
-                        .toList(growable: false),
-                    onChanged: (value) async {
-                      if (value == null) return;
-                      setState(() {
-                        _selectedPriceListId = value;
-                      });
-                      await _refreshCatalog();
-                    },
+                          if (isWide && !_restrictToStandardPriceList) ...[
+                            const SizedBox(width: 12),
+                            SizedBox(
+                              width: 280,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _normalizedSelectedPriceListId.isEmpty
+                                    ? (_availableFieldPriceLists.isEmpty
+                                        ? null
+                                        : _availableFieldPriceLists.first.id)
+                                    : _normalizedSelectedPriceListId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Listă comercială',
+                                  isDense: true,
+                                ),
+                                items: _availableFieldPriceLists
+                                    .map(
+                                      (item) => DropdownMenuItem<String>(
+                                        value: item.id,
+                                        child: Text(item.name),
+                                      ),
+                                    )
+                                    .toList(growable: false),
+                                onChanged: (value) async {
+                                  if (value == null) return;
+                                  setState(() {
+                                    _selectedPriceListId = value;
+                                  });
+                                  _persistSavedPreferences();
+                                  await _refreshCatalog();
+                                },
+                              ),
+                            ),
+                          ] else if (isWide && _restrictToStandardPriceList)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 12),
+                              child: Chip(
+                                label: Text(
+                                  selectedPriceList == null
+                                      ? 'Listă standard indisponibilă'
+                                      : 'Listă standard: ${selectedPriceList.name}',
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      if (!isWide && !_restrictToStandardPriceList) ...[
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          initialValue: _normalizedSelectedPriceListId.isEmpty
+                              ? (_availableFieldPriceLists.isEmpty
+                                  ? null
+                                  : _availableFieldPriceLists.first.id)
+                              : _normalizedSelectedPriceListId,
+                          decoration: const InputDecoration(
+                            labelText: 'Listă comercială',
+                            isDense: true,
+                          ),
+                          items: _availableFieldPriceLists
+                              .map(
+                                (item) => DropdownMenuItem<String>(
+                                  value: item.id,
+                                  child: Text(item.name),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) async {
+                            if (value == null) return;
+                            setState(() {
+                              _selectedPriceListId = value;
+                            });
+                            _persistSavedPreferences();
+                            await _refreshCatalog();
+                          },
+                        ),
+                      ] else if (!isWide && _restrictToStandardPriceList) ...[
+                        const SizedBox(height: 8),
+                        Chip(
+                          label: Text(
+                            selectedPriceList == null
+                                ? 'Listă standard indisponibilă'
+                                : 'Listă standard: ${selectedPriceList.name}',
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            Chip(
+                              label: Text(
+                                _availableFieldPriceLists.isEmpty
+                                    ? 'Fără listă comercială activă'
+                                    : 'Listă activă: ${selectedPriceList?.name ?? _availableFieldPriceLists.first.name}',
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Chip(
+                              label: Text('Afișare comercială — fără costuri interne'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                )
-              else
-                Chip(
-                  label: Text(
-                    selectedPriceList == null
-                        ? 'Lista standard indisponibila'
-                        : 'Lista standard: ${selectedPriceList.name}',
-                  ),
                 ),
-              Chip(
-                label: Text(
-                  'Afisare comerciala only: fara costuri interne',
-                ),
-              ),
-              Chip(
-                label: Text(
-                  _availableFieldPriceLists.isEmpty
-                      ? 'Fara lista comerciala activa'
-                      : 'Lista activa: ${selectedPriceList?.name ?? _availableFieldPriceLists.first.name}',
-                ),
-              ),
-            ],
+              );
+            },
           ),
           const SizedBox(height: 16),
           Expanded(
@@ -1698,92 +1818,100 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
 
   Widget _buildLeadsTab(BuildContext context) {
     final leads = _visibleLeads;
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: Column(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 700;
+        final leadList = Column(
+          children: [
+            Row(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        textCapitalization: TextCapitalization.sentences,
-                        controller: _leadSearchController,
-                        decoration: const InputDecoration(
-                          labelText: 'Cauta lead-uri',
-                          prefixIcon: Icon(Icons.search),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton.icon(
-                      onPressed: _createLead,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Lead nou'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
                 Expanded(
-                  child: leads.isEmpty
-                      ? const Center(
-                          child: Text('Nu exista lead-uri relevante.'))
-                      : ListView.separated(
-                          itemCount: leads.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final item = leads[index];
-                            final selected = _selectedLead?.id == item.id;
-                            return Card(
-                              color: selected
-                                  ? Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer
-                                  : null,
-                              child: ListTile(
-                                onTap: () {
-                                  setState(() {
-                                    _selectedLead = item;
-                                  });
-                                },
-                                title: Text(
-                                  item.clientName.trim().isEmpty
-                                      ? item.contactName
-                                      : item.clientName,
-                                ),
-                                subtitle: Text(
-                                  '${item.interestedInType.label} | ${item.status.label}\n${item.phone.trim().isEmpty ? '-' : item.phone}',
-                                ),
-                                isThreeLine: true,
-                              ),
-                            );
-                          },
-                        ),
+                  child: TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _leadSearchController,
+                    decoration: const InputDecoration(
+                      labelText: 'Cauta lead-uri',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                FilledButton.icon(
+                  onPressed: _createLead,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Lead nou'),
                 ),
               ],
             ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            flex: 3,
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: _selectedLead == null
-                    ? const Center(
-                        child:
-                            Text('Selecteaza un lead pentru actiuni rapide.'),
-                      )
-                    : _buildLeadDetails(context, _selectedLead!),
-              ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: leads.isEmpty
+                  ? const Center(child: Text('Nu exista lead-uri relevante.'))
+                  : ListView.separated(
+                      itemCount: leads.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final item = leads[index];
+                        final selected = _selectedLead?.id == item.id;
+                        return Card(
+                          color: selected
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : null,
+                          child: ListTile(
+                            onTap: () {
+                              setState(() => _selectedLead = item);
+                              _persistSavedPreferences();
+                            },
+                            title: Text(
+                              item.clientName.trim().isEmpty
+                                  ? item.contactName
+                                  : item.clientName,
+                            ),
+                            subtitle: Text(
+                              '${item.interestedInType.label} | ${item.status.label}\n${item.phone.trim().isEmpty ? '-' : item.phone}',
+                            ),
+                            isThreeLine: true,
+                          ),
+                        );
+                      },
+                    ),
             ),
+          ],
+        );
+        final detailPanel = Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _selectedLead == null
+                ? const Center(child: Text('Selecteaza un lead pentru actiuni rapide.'))
+                : _buildLeadDetails(context, _selectedLead!),
           ),
-        ],
-      ),
+        );
+        if (isWide) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(flex: 2, child: leadList),
+                const SizedBox(width: 16),
+                Expanded(flex: 3, child: detailPanel),
+              ],
+            ),
+          );
+        }
+        // Mobile: list on top, details below (only when a lead is selected)
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Expanded(flex: 2, child: leadList),
+              if (_selectedLead != null) ...[
+                const SizedBox(height: 12),
+                Expanded(flex: 3, child: detailPanel),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -2137,36 +2265,24 @@ class _FieldLeadDialogState extends State<_FieldLeadDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DropdownButtonFormField<String?>(
-                initialValue: _clientId,
-                decoration: const InputDecoration(labelText: 'Client existent'),
-                items: [
-                  const DropdownMenuItem<String?>(
-                    value: null,
-                    child: Text('Fara client asociat'),
-                  ),
-                  ...widget.clients.map(
-                    (item) => DropdownMenuItem<String?>(
-                      value: item.id,
-                      child: Text(item.name),
-                    ),
-                  ),
-                ],
-                onChanged: (value) {
+              ClientAutocompleteField(
+                clients: widget.clients,
+                initialClient: widget.clients.where(
+                  (c) => c.id == _clientId,
+                ).firstOrNull,
+                labelText: 'Caută client existent',
+                helperText: 'Tastează pentru a căuta în baza de date',
+                onClientSelected: (client) {
                   setState(() {
-                    _clientId = value;
-                  });
-                  if (value == null) return;
-                  for (final item in widget.clients) {
-                    if (item.id == value) {
-                      _clientNameController.text = item.name;
-                      _contactNameController.text = item.contactPerson;
-                      _phoneController.text = item.phone;
-                      _emailController.text = item.email;
-                      _addressController.text = item.address;
-                      break;
+                    _clientId = client?.id;
+                    if (client != null) {
+                      _clientNameController.text = client.name;
+                      _contactNameController.text = client.contactPerson;
+                      _phoneController.text = client.phone;
+                      _emailController.text = client.email;
+                      _addressController.text = client.address;
                     }
-                  }
+                  });
                 },
               ),
               const SizedBox(height: 12),
@@ -2229,25 +2345,28 @@ class _FieldLeadDialogState extends State<_FieldLeadDialog> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                Column(
                   children: widget.catalogItems
                       .take(20)
                       .map(
-                        (item) => FilterChip(
-                          selected:
-                              _selectedProductIds.contains(item.product.id),
-                          label: Text(item.product.name),
-                          onSelected: (selected) {
+                        (item) => CheckboxListTile(
+                          value: _selectedProductIds.contains(item.product.id),
+                          title: Text(
+                            item.product.name,
+                            softWrap: true,
+                          ),
+                          onChanged: (selected) {
                             setState(() {
-                              if (selected) {
+                              if (selected == true) {
                                 _selectedProductIds.add(item.product.id);
                               } else {
                                 _selectedProductIds.remove(item.product.id);
                               }
                             });
                           },
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
                         ),
                       )
                       .toList(growable: false),

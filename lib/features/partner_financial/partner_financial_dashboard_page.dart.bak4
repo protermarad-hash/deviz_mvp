@@ -1,0 +1,378 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
+import 'partner_financial_models.dart';
+import 'partner_financial_repository.dart';
+import 'partner_financial_page.dart';
+
+class PartnerFinancialDashboardPage extends StatefulWidget {
+  const PartnerFinancialDashboardPage({super.key});
+
+  @override
+  State<PartnerFinancialDashboardPage> createState() =>
+      _PartnerFinancialDashboardPageState();
+}
+
+class _PartnerFinancialDashboardPageState
+    extends State<PartnerFinancialDashboardPage> {
+  final _repository = PartnerFinancialRepository();
+  final _fmt = NumberFormat('#,##0.00', 'ro_RO');
+
+  bool _loading = true;
+  bool _syncing = false;
+  List<PartnerFinancialSummary> _summaries = const [];
+  String _filter = 'toti';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    await _syncAllFromAppointments();
+    final summaries = await _repository.listAllSummaries();
+    if (!mounted) return;
+    setState(() {
+      _summaries = summaries..sort((a, b) => b.soldNet.compareTo(a.soldNet));
+      _loading = false;
+    });
+  }
+
+  /// Citește TOATE programările din Firestore și creează/actualizează
+  /// tranzacțiile financiare pentru toți partenerii implicați.
+  /// Funcționează cu date vechi (orice format câmpuri — camelCase sau snake_case).
+  Future<void> _syncAllFromAppointments() async {
+    if (_syncing) return;
+    if (!mounted) return;
+    setState(() => _syncing = true);
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('appointments')
+          .get();
+
+      final now = DateTime.now();
+
+      double parseNum(dynamic v) =>
+          v is num ? v.toDouble() : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
+
+      PartnerTransactionStatus mapStatus(String raw) {
+        final v = raw.trim().toLowerCase();
+        if (v == 'platit_partial') return PartnerTransactionStatus.partial;
+        if (v == 'platit' || v == 'conform_contract') {
+          return PartnerTransactionStatus.platit;
+        }
+        return PartnerTransactionStatus.neplatit;
+      }
+
+      for (final doc in snapshot.docs) {
+        final raw = doc.data();
+        final id = doc.id;
+
+        // Suportă atât snake_case cât și camelCase (date vechi și noi)
+        final scheduledDateStr = (raw['scheduled_date'] ?? raw['scheduledDate'] ?? '').toString();
+        final scheduledDate = DateTime.tryParse(scheduledDateStr) ?? now;
+        final title = (raw['title'] ?? '').toString().trim();
+        final label = title.isEmpty
+            ? 'Programare ${scheduledDate.day.toString().padLeft(2, '0')}.${scheduledDate.month.toString().padLeft(2, '0')}.${scheduledDate.year}'
+            : title;
+
+        // --- Partener pentru care lucrăm (intrare) ---
+        final forId = (raw['for_partner_id'] ?? raw['forPartnerId'] ?? '').toString().trim();
+        final forName = (raw['for_partner_name'] ?? raw['forPartnerName'] ?? '').toString().trim();
+        final forAmount = parseNum(raw['for_partner_invoice_amount'] ?? raw['forPartnerInvoiceAmount']);
+        if (forId.isNotEmpty && forAmount > 0) {
+          final txn = PartnerTransaction(
+            id: 'ptxn_${id}_for',
+            partnerId: forId,
+            partnerName: forName,
+            type: PartnerTransactionType.incasareProgramare,
+            direction: PartnerTransactionDirection.intrare,
+            amount: forAmount,
+            date: scheduledDate,
+            description: 'Programare: $label',
+            referenceId: id,
+            referenceType: 'programare',
+            paymentMethod: PartnerTransactionPaymentMethod.transfer,
+            status: mapStatus(
+              (raw['for_partner_receive_status'] ?? raw['forPartnerReceiveStatus'] ?? '').toString(),
+            ),
+            createdAt: now,
+            updatedAt: now,
+          );
+          await _repository.upsertTransaction(txn);
+        }
+
+        // --- Partener executant (ieșire) ---
+        final execId = (raw['executing_partner_id'] ?? raw['executingPartnerId'] ?? '').toString().trim();
+        final execName = (raw['executing_partner_name'] ?? raw['executingPartnerName'] ?? '').toString().trim();
+        final execAmount = parseNum(raw['executing_partner_commission'] ?? raw['executingPartnerCommission']);
+        if (execId.isNotEmpty && execAmount > 0) {
+          final txn = PartnerTransaction(
+            id: 'ptxn_${id}_exec',
+            partnerId: execId,
+            partnerName: execName,
+            type: PartnerTransactionType.plataProgramare,
+            direction: PartnerTransactionDirection.iesire,
+            amount: execAmount,
+            date: scheduledDate,
+            description: 'Programare: $label',
+            referenceId: id,
+            referenceType: 'programare',
+            paymentMethod: PartnerTransactionPaymentMethod.transfer,
+            status: mapStatus(
+              (raw['executing_partner_payment_status'] ?? raw['executingPartnerPaymentStatus'] ?? '').toString(),
+            ),
+            createdAt: now,
+            updatedAt: now,
+          );
+          await _repository.upsertTransaction(txn);
+        }
+      }
+    } catch (_) {
+      // Eșec silențios — datele existente rămân neafectate
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  List<PartnerFinancialSummary> get _filtered {
+    switch (_filter) {
+      case 'de_incasat':
+        return _summaries.where((s) => s.soldNet > 0).toList();
+      case 'de_platit':
+        return _summaries.where((s) => s.soldNet < 0).toList();
+      default:
+        return _summaries;
+    }
+  }
+
+  double get _totalDeIncasat =>
+      _summaries.fold(0, (acc, s) => acc + s.totalDeIncasat);
+  double get _totalDePlata =>
+      _summaries.fold(0, (acc, s) => acc + s.totalDePlata);
+  double get _soldNetTotal => _totalDeIncasat - _totalDePlata;
+
+  Widget _buildGlobalSummary() {
+    final soldNet = _soldNetTotal;
+    final soldColor =
+        soldNet >= 0 ? Colors.green.shade700 : Colors.red.shade700;
+
+    return Card(
+      margin: const EdgeInsets.all(12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Sumar global parteneri',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            _GlobalSummaryRow(
+              label: 'Total de încasat',
+              value: '${_fmt.format(_totalDeIncasat)} RON',
+              color: Colors.green.shade700,
+            ),
+            _GlobalSummaryRow(
+              label: 'Total de plătit',
+              value: '${_fmt.format(_totalDePlata)} RON',
+              color: Colors.red.shade700,
+            ),
+            const Divider(height: 16),
+            _GlobalSummaryRow(
+              label: 'Sold NET total',
+              value:
+                  '${soldNet >= 0 ? '+' : ''}${_fmt.format(soldNet)} RON',
+              color: soldColor,
+              bold: true,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChips() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          _buildChip('toti', 'Toți'),
+          const SizedBox(width: 8),
+          _buildChip('de_incasat', 'De încasat'),
+          const SizedBox(width: 8),
+          _buildChip('de_platit', 'De plătit'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChip(String value, String label) {
+    return FilterChip(
+      label: Text(label),
+      selected: _filter == value,
+      onSelected: (_) => setState(() => _filter = value),
+    );
+  }
+
+  Widget _buildPartnerRow(PartnerFinancialSummary s) {
+    final soldNet = s.soldNet;
+    final isPositive = soldNet >= 0;
+    final color = isPositive ? Colors.green.shade700 : Colors.red.shade700;
+    final soldLabel =
+        '${isPositive ? '+' : ''}${_fmt.format(soldNet)} RON';
+
+    return ListTile(
+      title: Text(
+        s.partnerName.isEmpty ? s.partnerId : s.partnerName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(
+        '${s.transactionCount} tranzacții',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      trailing: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          soldLabel,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontSize: 13,
+          ),
+        ),
+      ),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PartnerFinancialPage(
+              partnerId: s.partnerId,
+              partnerName:
+                  s.partnerName.isEmpty ? s.partnerId : s.partnerName,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Financiar parteneri'),
+        actions: [
+          if (_syncing)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.sync_outlined),
+              tooltip: 'Sincronizează toate programările',
+              onPressed: _load,
+            ),
+          HelpButton(content: AppHelp.partnerFinanciarDashboard),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(child: _buildGlobalSummary()),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _buildFilterChips(),
+                    ),
+                  ),
+                  if (_filtered.isEmpty)
+                    const SliverFillRemaining(
+                      child: Center(
+                        child: Text('Nicio tranzacție pentru filtrele selectate.'),
+                      ),
+                    )
+                  else
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (ctx, i) {
+                          final s = _filtered[i];
+                          return Column(
+                            children: [
+                              _buildPartnerRow(s),
+                              if (i < _filtered.length - 1)
+                                const Divider(height: 1, indent: 16),
+                            ],
+                          );
+                        },
+                        childCount: _filtered.length,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+class _GlobalSummaryRow extends StatelessWidget {
+  const _GlobalSummaryRow({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.bold = false,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: bold ? color : null,
+              fontWeight: bold ? FontWeight.bold : null,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontWeight: bold ? FontWeight.bold : FontWeight.w600,
+              fontSize: bold ? 15 : 13,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -25,6 +25,18 @@ enum CloudEntityType {
   devizeTehnice,
   devizeFiltreCta,
   appTasks,
+  employeePayEntries,
+  employeePayments,
+  employeeFinancialSummary,
+  employeeSettings,
+  hrPayrollPayments,
+  stocItems,
+  stocMiscari,
+  gpsCheckins,
+  echipamenteInstalate,
+  crmRecords,
+  obiectiveLunare,
+  partnerSettlements,
   unknown,
 }
 

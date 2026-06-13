@@ -191,4 +191,31 @@ class NotificationRuntimeService {
       await _tapHandler?.call(Map<String, dynamic>.from(decoded));
     } catch (_) {}
   }
+
+  /// Afișează o notificare locală imediată, fără server (util pentru alerte on-device).
+  Future<void> showLocalNotification({
+    required String title,
+    required String body,
+    Map<String, dynamic> data = const <String, dynamic>{},
+  }) async {
+    if (!_supportsPush) return;
+    await _ensureInitialized();
+    await _localNotifications.show(
+      title.hashCode ^ body.hashCode,
+      title,
+      body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          _androidChannel?.id ?? _channelId,
+          _androidChannel?.name ?? _channelName,
+          channelDescription:
+              _androidChannel?.description ?? _channelDescription,
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+        iOS: const DarwinNotificationDetails(),
+      ),
+      payload: data.isEmpty ? null : jsonEncode(data),
+    );
+  }
 }

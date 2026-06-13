@@ -1,6 +1,7 @@
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../core/pdf/pdf_font_helper.dart';
 import '../../core/pdf_document_branding.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_save_service.dart';
@@ -16,7 +17,8 @@ class MonthlyTimesheetPdfService {
     String outputDirectory = '',
     bool saveAs = false,
   }) async {
-    final doc = pw.Document();
+    await PdfFontHelper.initialize();
+    final doc = pw.Document(theme: PdfFontHelper.theme);
     final companyProfile = await repository.loadCompanyProfile();
     final branding = DocumentBrandingData.fromCompanyProfile(companyProfile);
     final generatedAt = DateTime.now();

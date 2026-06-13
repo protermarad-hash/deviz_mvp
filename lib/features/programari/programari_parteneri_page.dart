@@ -207,10 +207,8 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
       map[id]!.programari.add(a);
       if (a.executingPartnerPaymentStatus == PartnerPaymentStatus.platit) {
         map[id]!.totalPlatit += a.executingPartnerCommission;
-      } else if (a.executingPartnerPaymentStatus ==
-          PartnerPaymentStatus.platitPartial) {
-        map[id]!.totalPlatit += a.executingPartnerCommission * 0.5;
       }
+      // platitPartial: nu adăugăm în totalPlatit — suma exactă e în notes
     }
     return map.values.toList()
       ..sort((a, b) => b.restDePlatit.compareTo(a.restDePlatit));
@@ -234,9 +232,8 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
       map[id]!.programari.add(a);
       if (a.forPartnerReceiveStatus == PartnerPaymentStatus.platit) {
         map[id]!.totalPlatit += a.forPartnerInvoiceAmount;
-      } else if (a.forPartnerReceiveStatus == PartnerPaymentStatus.platitPartial) {
-        map[id]!.totalPlatit += a.forPartnerInvoiceAmount * 0.5;
       }
+      // platitPartial: nu adăugăm în totalPlatit — suma exactă e în notes
     }
     return map.values.toList()
       ..sort((a, b) => b.restDePlatit.compareTo(a.restDePlatit));
@@ -636,7 +633,11 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
           Text('Programări', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 6),
           ...items.map(
-            (a) => _RandProgramareExecutant(item: a, fmt: fmt),
+            (a) => _RandProgramareExecutant(
+              item: a,
+              fmt: fmt,
+              onSave: _saveUpdated,
+            ),
           ),
         ],
       ],
@@ -712,7 +713,11 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
           Text('Programări', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 6),
           ...items.map(
-            (a) => _RandProgramareContractant(item: a, fmt: fmt),
+            (a) => _RandProgramareContractant(
+              item: a,
+              fmt: fmt,
+              onSave: _saveUpdated,
+            ),
           ),
         ],
       ],
@@ -1045,22 +1050,44 @@ class _SumarPartenerCard extends StatelessWidget {
       ),
     );
 
+    // Capturam ÎNAINTE de dispose — altfel valorile se pierd
+    final enteredAmountStr = amountCtrl.text.replaceAll(',', '.');
     final notes = notesCtrl.text.trim();
     amountCtrl.dispose();
     notesCtrl.dispose();
 
     if (confirmed != true || onSave == null) return;
+
+    final enteredAmount = double.tryParse(enteredAmountStr) ?? 0;
+    final totalRest = sumar.restDePlatit;
+    // Status corect: platit dacă suma acoperă tot, platitPartial dacă parțial
+    final newStatus = (enteredAmount > 0 && enteredAmount >= totalRest - 0.01)
+        ? PartnerPaymentStatus.platit
+        : PartnerPaymentStatus.platitPartial;
+
+    // Notă cu suma parțială pentru transparență
+    String buildNotes(String existing) {
+      final parts = <String>[];
+      if (notes.isNotEmpty) parts.add(notes);
+      if (newStatus == PartnerPaymentStatus.platitPartial && enteredAmount > 0) {
+        parts.add(
+          'Parțial: ${enteredAmount.toStringAsFixed(2)} RON din ${totalRest.toStringAsFixed(2)} RON',
+        );
+      }
+      return parts.isNotEmpty ? parts.join(' — ') : existing;
+    }
+
     for (final a in neplatite) {
       final updated = isReceivable
           ? a.copyWith(
-              forPartnerReceiveStatus: PartnerPaymentStatus.platit,
+              forPartnerReceiveStatus: newStatus,
               forPartnerReceiveDate: date,
-              forPartnerReceiveNotes: notes.isNotEmpty ? notes : a.forPartnerReceiveNotes,
+              forPartnerReceiveNotes: buildNotes(a.forPartnerReceiveNotes),
             )
           : a.copyWith(
-              executingPartnerPaymentStatus: PartnerPaymentStatus.platit,
+              executingPartnerPaymentStatus: newStatus,
               executingPartnerPaymentDate: date,
-              executingPartnerPaymentNotes: notes.isNotEmpty ? notes : a.executingPartnerPaymentNotes,
+              executingPartnerPaymentNotes: buildNotes(a.executingPartnerPaymentNotes),
             );
       await onSave!(updated);
     }
@@ -1139,14 +1166,133 @@ class _SumarPartenerCard extends StatelessWidget {
   }
 }
 
-class _RandProgramareExecutant extends StatelessWidget {
+class _RandProgramareExecutant extends StatefulWidget {
   final Appointment item;
   final DateFormat fmt;
+  final Future<void> Function(Appointment)? onSave;
 
-  const _RandProgramareExecutant({required this.item, required this.fmt});
+  const _RandProgramareExecutant({
+    required this.item,
+    required this.fmt,
+    this.onSave,
+  });
+
+  @override
+  State<_RandProgramareExecutant> createState() =>
+      _RandProgramareExecutantState();
+}
+
+class _RandProgramareExecutantState extends State<_RandProgramareExecutant> {
+  Future<void> _editPayment() async {
+    final a = widget.item;
+    var status = a.executingPartnerPaymentStatus;
+    var date = a.executingPartnerPaymentDate ?? DateTime.now();
+    final notesCtrl =
+        TextEditingController(text: a.executingPartnerPaymentNotes);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (_, setS) => AlertDialog(
+          title: const Text('Editează plată partener'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<PartnerPaymentStatus>(
+                    initialValue: status,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: PartnerPaymentStatus.values
+                        .map((s) => DropdownMenuItem(
+                            value: s, child: Text(s.label)))
+                        .toList(),
+                    onChanged: (v) => setS(() => status = v ?? status),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.calendar_today_outlined),
+                    title: Text(
+                        'Data plății: ${DateFormat('dd.MM.yyyy').format(date)}'),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: date,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                      );
+                      if (picked != null) setS(() => date = picked);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: notesCtrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    maxLines: 3,
+                    decoration:
+                        const InputDecoration(labelText: 'Note (opțional)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Anulează')),
+            FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Salvează')),
+          ],
+        ),
+      ),
+    );
+
+    final notes = notesCtrl.text.trim();
+    notesCtrl.dispose();
+    if (confirmed != true || widget.onSave == null) return;
+
+    final updated = widget.item.copyWith(
+      executingPartnerPaymentStatus: status,
+      executingPartnerPaymentDate: date,
+      executingPartnerPaymentNotes: notes,
+    );
+    await widget.onSave!(updated);
+  }
+
+  Future<void> _resetPayment() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Șterge înregistrarea de plată?'),
+        content: const Text(
+            'Statusul va fi resetat la „Neplatit" și data/notele vor fi șterse.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Renunță')),
+          FilledButton.tonal(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Resetează')),
+        ],
+      ),
+    );
+    if (confirmed != true || widget.onSave == null) return;
+    if (!mounted) return;
+
+    final updated = widget.item.copyWith(
+      executingPartnerPaymentStatus: PartnerPaymentStatus.neplatit,
+      executingPartnerPaymentDate: null,
+      executingPartnerPaymentNotes: '',
+    );
+    widget.onSave!(updated).catchError((_) {});
+  }
 
   @override
   Widget build(BuildContext context) {
+    final item = widget.item;
     final status = item.executingPartnerPaymentStatus;
     final statusColor = status == PartnerPaymentStatus.platit
         ? Colors.green.shade700
@@ -1171,8 +1317,26 @@ class _RandProgramareExecutant extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                 ),
-                Text(fmt.format(item.effectiveStartDateTime),
+                Text(widget.fmt.format(item.effectiveStartDateTime),
                     style: Theme.of(context).textTheme.bodySmall),
+                if (widget.onSave != null) ...[
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    tooltip: 'Editează plată',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _editPayment,
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.delete_outline,
+                        size: 18, color: Colors.red.shade400),
+                    tooltip: 'Șterge înregistrarea de plată',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: status != PartnerPaymentStatus.neplatit
+                        ? _resetPayment
+                        : null,
+                  ),
+                ],
               ],
             ),
             if (item.clientName.isNotEmpty)
@@ -1190,8 +1354,8 @@ class _RandProgramareExecutant extends StatelessWidget {
                   ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: statusColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),
@@ -1223,14 +1387,133 @@ class _RandProgramareExecutant extends StatelessWidget {
   }
 }
 
-class _RandProgramareContractant extends StatelessWidget {
+class _RandProgramareContractant extends StatefulWidget {
   final Appointment item;
   final DateFormat fmt;
+  final Future<void> Function(Appointment)? onSave;
 
-  const _RandProgramareContractant({required this.item, required this.fmt});
+  const _RandProgramareContractant({
+    required this.item,
+    required this.fmt,
+    this.onSave,
+  });
+
+  @override
+  State<_RandProgramareContractant> createState() =>
+      _RandProgramareContractantState();
+}
+
+class _RandProgramareContractantState
+    extends State<_RandProgramareContractant> {
+  Future<void> _editIncasare() async {
+    final a = widget.item;
+    var status = a.forPartnerReceiveStatus;
+    var date = a.forPartnerReceiveDate ?? DateTime.now();
+    final notesCtrl = TextEditingController(text: a.forPartnerReceiveNotes);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (_, setS) => AlertDialog(
+          title: const Text('Editează încasare partener'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<PartnerPaymentStatus>(
+                    initialValue: status,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: PartnerPaymentStatus.values
+                        .map((s) => DropdownMenuItem(
+                            value: s, child: Text(s.label)))
+                        .toList(),
+                    onChanged: (v) => setS(() => status = v ?? status),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.calendar_today_outlined),
+                    title: Text(
+                        'Data încasării: ${DateFormat('dd.MM.yyyy').format(date)}'),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: date,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                      );
+                      if (picked != null) setS(() => date = picked);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: notesCtrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    maxLines: 3,
+                    decoration:
+                        const InputDecoration(labelText: 'Note (opțional)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Anulează')),
+            FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Salvează')),
+          ],
+        ),
+      ),
+    );
+
+    final notes = notesCtrl.text.trim();
+    notesCtrl.dispose();
+    if (confirmed != true || widget.onSave == null) return;
+
+    final updated = widget.item.copyWith(
+      forPartnerReceiveStatus: status,
+      forPartnerReceiveDate: date,
+      forPartnerReceiveNotes: notes,
+    );
+    await widget.onSave!(updated);
+  }
+
+  Future<void> _resetIncasare() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Șterge înregistrarea de încasare?'),
+        content: const Text(
+            'Statusul va fi resetat la „Neplatit" și data/notele vor fi șterse.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Renunță')),
+          FilledButton.tonal(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Resetează')),
+        ],
+      ),
+    );
+    if (confirmed != true || widget.onSave == null) return;
+    if (!mounted) return;
+
+    final updated = widget.item.copyWith(
+      forPartnerReceiveStatus: PartnerPaymentStatus.neplatit,
+      forPartnerReceiveDate: null,
+      forPartnerReceiveNotes: '',
+    );
+    widget.onSave!(updated).catchError((_) {});
+  }
 
   @override
   Widget build(BuildContext context) {
+    final item = widget.item;
     final status = item.forPartnerReceiveStatus;
     final statusColor = status == PartnerPaymentStatus.platit
         ? Colors.green.shade700
@@ -1255,8 +1538,26 @@ class _RandProgramareContractant extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                 ),
-                Text(fmt.format(item.effectiveStartDateTime),
+                Text(widget.fmt.format(item.effectiveStartDateTime),
                     style: Theme.of(context).textTheme.bodySmall),
+                if (widget.onSave != null) ...[
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    tooltip: 'Editează încasare',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: _editIncasare,
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.delete_outline,
+                        size: 18, color: Colors.red.shade400),
+                    tooltip: 'Șterge înregistrarea de încasare',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: status != PartnerPaymentStatus.neplatit
+                        ? _resetIncasare
+                        : null,
+                  ),
+                ],
               ],
             ),
             if (item.clientName.isNotEmpty)
@@ -1274,8 +1575,8 @@ class _RandProgramareContractant extends StatelessWidget {
                   ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
                     color: statusColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),

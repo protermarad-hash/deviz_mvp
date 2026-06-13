@@ -2,14 +2,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/auth/app_role_policy.dart';
-import '../../core/help_content.dart';
-import '../../core/widgets/help_button.dart';
+import '../../core/help/help_module_button.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../../core/widgets/client_info_card.dart';
+import '../../core/widgets/client_autocomplete_field.dart';
 import '../clients/client_models.dart';
 import '../notifications/notification_models.dart';
 import '../notifications/notification_service.dart';
@@ -96,8 +96,10 @@ class _JobsPageState extends State<JobsPage> {
     super.initState();
     _refreshCloudRepository();
     _searchController.addListener(_applyFilters);
-    // Reîncarcă clienții instant când sunt adăugați/modificați din alt modul
     LocalAppDataRepository.clientsChangeCount.addListener(_handleClientsChanged);
+    // Reîncarcă din cloud când Firebase devine disponibil după startup
+    // (CLAUDE.md ANTI-PATTERN 4 — pagini care nu se reîncarcă după startup)
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
     Future.microtask(_loadData);
   }
 
@@ -112,10 +114,17 @@ class _JobsPageState extends State<JobsPage> {
 
   @override
   void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
     LocalAppDataRepository.clientsChangeCount.removeListener(_handleClientsChanged);
     _clientsReloadDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    if (FirebaseBootstrap.isOnline && mounted && _jobs.isEmpty && !_isLoading) {
+      _loadData();
+    }
   }
 
   /// Reîncarcă doar lista de clienți fără a reîncărca lucrările.
@@ -691,7 +700,7 @@ class _JobsPageState extends State<JobsPage> {
                                   cs, hasFilters, isWide),
                             ],
                             const SizedBox(width: 4),
-                            HelpButton(content: AppHelp.lucrari),
+                            const HelpModuleButton(moduleId: 'jobs'),
                           ],
                         ),
                         if (showFilters) ...[
@@ -901,6 +910,9 @@ class _JobFormDialogState extends State<_JobFormDialog> {
   final _estimatedValueController = TextEditingController();
   final _notesController = TextEditingController();
 
+  // Clienți adăugați inline din dialog fără a reîncărca toată pagina
+  final List<ClientRecord> _extraClients = [];
+
   bool _saving = false;
   String? _selectedClientId;
   JobStatus _selectedStatus = JobStatus.noua;
@@ -983,28 +995,23 @@ class _JobFormDialogState extends State<_JobFormDialog> {
                     _jobCode.isEmpty ? 'Se generează...' : _jobCode),
                 SizedBox(
                   width: 360,
-                  child: DropdownButtonFormField<String?>(
-                    initialValue: _normalizeClient(_selectedClientId),
-                    decoration: InputDecoration(
-                      labelText: 'Client',
-                      helperText: widget.clients.isEmpty
-                          ? 'Nu există clienți salvați.'
-                          : null,
-                    ),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Selectează client'),
-                      ),
-                      ...widget.clients.map(
-                        (client) => DropdownMenuItem<String?>(
-                          value: client.id,
-                          child: Text(client.label),
-                        ),
-                      ),
-                    ],
-                    onChanged: (value) =>
-                        setState(() => _selectedClientId = value),
+                  child: ClientAutocompleteField(
+                    key: ValueKey(
+                        'job-form-client-${_selectedClientId ?? 'none'}'),
+                    clients: _clientRecords,
+                    initialClient: _selectedClientRecord,
+                    labelText: 'Client',
+                    helperText: _clientRecords.isEmpty
+                        ? 'Nu există clienți salvați.'
+                        : null,
+                    onClientSelected: (c) =>
+                        setState(() => _selectedClientId = c?.id),
+                    repository: widget.repository,
+                    tipEntitate: 'Client',
+                    onClientAdded: (c) => setState(() {
+                      _extraClients.add(c);
+                      _selectedClientId = c.id;
+                    }),
                   ),
                 ),
                 // Card detalii client — apare când e selectat un client
@@ -1283,6 +1290,15 @@ class _JobFormDialogState extends State<_JobFormDialog> {
     final exists = widget.clients.any((client) => client.id == id);
     return exists ? id : null;
   }
+
+  /// Extrage ClientRecord-urile reale din fullClientRecords + clienți adăugați inline
+  List<ClientRecord> get _clientRecords => [
+        ...widget.fullClientRecords.whereType<ClientRecord>(),
+        ..._extraClients,
+      ];
+
+  ClientRecord? get _selectedClientRecord =>
+      _clientRecords.where((r) => r.id == _selectedClientId).firstOrNull;
 }
 
 class _LookupOption {

@@ -1,0 +1,1360 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
+import '../notifications/notification_runtime_service.dart';
+import 'partner_financial_models.dart';
+import 'partner_financial_repository.dart';
+import 'partner_purchase_form.dart';
+import 'partner_sale_form.dart';
+
+class PartnerFinancialPage extends StatefulWidget {
+  const PartnerFinancialPage({
+    super.key,
+    required this.partnerId,
+    required this.partnerName,
+  });
+
+  final String partnerId;
+  final String partnerName;
+
+  @override
+  State<PartnerFinancialPage> createState() => _PartnerFinancialPageState();
+}
+
+class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
+  final _repository = PartnerFinancialRepository();
+  final _fmt = NumberFormat('#,##0.00', 'ro_RO');
+
+  bool _loading = true;
+  List<PartnerTransaction> _transactions = const [];
+  PartnerFinancialSummary? _summary;
+  String _filter = 'toate';
+
+  @override
+  void initState() {
+    super.initState();
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+    Future.microtask(_load);
+  }
+
+  @override
+  void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
+    super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    if (FirebaseBootstrap.onlineNotifier.value && _transactions.isEmpty && !_loading) {
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+    await _syncFromAppointments();
+    // Migrează datele vechi (adaugă financial_direction dacă lipsește)
+    await _repository.migrateTransactions();
+    final transactions =
+        await _repository.listTransactionsForPartner(widget.partnerId);
+    // rebuildSummary() calculează din cache local — întotdeauna consistent cu lista afișată
+    final summary =
+        await _repository.rebuildSummary(widget.partnerId, widget.partnerName);
+    if (!mounted) return;
+    setState(() {
+      _transactions = transactions;
+      _summary = summary;
+      _loading = false;
+    });
+  }
+
+  /// Citește programările din Firestore care implică acest partener
+  /// și creează/actualizează tranzacțiile financiare corespunzătoare.
+  /// ID-urile sunt deterministe (ptxn_{id}_for / ptxn_{id}_exec / ptxn_{id}_materials)
+  /// — safe pentru upsert repetat.
+  ///
+  /// PERFORMANȚĂ: Construim TOATE tranzacțiile în memorie, apoi facem
+  /// O SINGURĂ scriere batch (evită O(n²) citiri/scrieri SharedPreferences).
+  Future<void> _syncFromAppointments() async {
+    try {
+      final collection =
+          FirebaseFirestore.instance.collection('appointments');
+      final now = DateTime.now();
+
+      final results = await Future.wait([
+        collection.where('for_partner_id', isEqualTo: widget.partnerId).get(),
+        collection
+            .where('executing_partner_id', isEqualTo: widget.partnerId)
+            .get(),
+      ]);
+
+      // Deduplică documentele (un appointment poate apărea în ambele query-uri)
+      final seen = <String>{};
+      final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+      for (final snapshot in results) {
+        for (final doc in snapshot.docs) {
+          if (seen.add(doc.id)) docs.add(doc);
+        }
+      }
+
+      // Construim lista de tranzacții în memorie — fără nicio scriere încă
+      final toUpsert = <PartnerTransaction>[];
+
+      for (final doc in docs) {
+        final raw = doc.data();
+        final id = doc.id;
+
+        double parseNum(dynamic v) =>
+            v is num ? v.toDouble() : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
+
+        final scheduledDateStr =
+            (raw['scheduled_date'] ?? raw['scheduledDate'] ?? '').toString();
+        final scheduledDate = DateTime.tryParse(scheduledDateStr) ?? now;
+        final title = (raw['title'] ?? '').toString().trim();
+        final label = title.isEmpty
+            ? 'Programare ${scheduledDate.day.toString().padLeft(2, '0')}.${scheduledDate.month.toString().padLeft(2, '0')}.${scheduledDate.year}'
+            : title;
+
+        final forId =
+            (raw['for_partner_id'] ?? raw['forPartnerId'] ?? '').toString().trim();
+        final execId =
+            (raw['executing_partner_id'] ?? raw['executingPartnerId'] ?? '')
+                .toString()
+                .trim();
+
+        // Tranzacție intrare: partenerul pentru care lucrăm (noi încasăm de la el)
+        if (forId == widget.partnerId) {
+          final amount = parseNum(
+            raw['for_partner_invoice_amount'] ?? raw['forPartnerInvoiceAmount'],
+          );
+          if (amount > 0) {
+            toUpsert.add(PartnerTransaction(
+              id: 'ptxn_${id}_for',
+              partnerId: widget.partnerId,
+              partnerName: widget.partnerName,
+              type: PartnerTransactionType.incasareProgramare,
+              direction: PartnerTransactionDirection.intrare,
+              amount: amount,
+              date: scheduledDate,
+              description: 'Programare: $label',
+              referenceId: id,
+              referenceType: 'programare',
+              paymentMethod: PartnerTransactionPaymentMethod.transfer,
+              status: _mapStatusStr(
+                (raw['for_partner_receive_status'] ??
+                        raw['forPartnerReceiveStatus'] ??
+                        '')
+                    .toString(),
+              ),
+              createdAt: now,
+              updatedAt: now,
+            ));
+          }
+
+          // Materiale/kituri folosite pentru lucrarea partenerului
+          final rawUsage = raw['material_usage'] ?? raw['materialUsage'];
+          if (rawUsage is Map) {
+            final rawLines = rawUsage['lines'];
+            if (rawLines is List && rawLines.isNotEmpty) {
+              final matLines = rawLines
+                  .whereType<Map>()
+                  .map((item) {
+                    final m = Map<String, dynamic>.from(item);
+                    double pn(dynamic v) => v is num
+                        ? v.toDouble()
+                        : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
+                    return PartnerMaterialLine(
+                      name: (m['name'] ?? '').toString(),
+                      unit: (m['unit'] ?? '').toString(),
+                      quantity: pn(m['quantity']),
+                      unitCost: pn(m['unit_cost'] ?? m['unitCost']),
+                    );
+                  })
+                  .where((l) => l.quantity > 0)
+                  .toList(growable: false);
+
+              final totalMat =
+                  matLines.fold<double>(0, (acc, l) => acc + l.totalCost);
+              if (totalMat > 0) {
+                final kitName = (rawUsage['kit_template_name'] ??
+                        rawUsage['kitTemplateName'] ??
+                        '')
+                    .toString();
+                toUpsert.add(PartnerTransaction(
+                  id: 'ptxn_${id}_materials',
+                  partnerId: widget.partnerId,
+                  partnerName: widget.partnerName,
+                  type: PartnerTransactionType.consumMateriale,
+                  // Kiturile/materialele sunt puse de noi (PRO TERM) la
+                  // lucrările partenerului — partenerul ne datorează costul
+                  // → intrare (De încasat de la partener).
+                  direction: PartnerTransactionDirection.intrare,
+                  amount: totalMat,
+                  date: scheduledDate,
+                  description:
+                      'Materiale${kitName.isNotEmpty ? ' · Kit: $kitName' : ''} — $label',
+                  referenceId: id,
+                  referenceType: 'programare',
+                  kitName: kitName,
+                  materialLines: matLines,
+                  createdAt: now,
+                  updatedAt: now,
+                ));
+              }
+            }
+          }
+        }
+
+        // Tranzacție ieșire: partenerul care execută (noi îi plătim)
+        if (execId == widget.partnerId) {
+          final amount = parseNum(
+            raw['executing_partner_commission'] ??
+                raw['executingPartnerCommission'],
+          );
+          if (amount > 0) {
+            toUpsert.add(PartnerTransaction(
+              id: 'ptxn_${id}_exec',
+              partnerId: widget.partnerId,
+              partnerName: widget.partnerName,
+              type: PartnerTransactionType.plataProgramare,
+              direction: PartnerTransactionDirection.iesire,
+              amount: amount,
+              date: scheduledDate,
+              description: 'Programare: $label',
+              referenceId: id,
+              referenceType: 'programare',
+              paymentMethod: PartnerTransactionPaymentMethod.transfer,
+              status: _mapStatusStr(
+                (raw['executing_partner_payment_status'] ??
+                        raw['executingPartnerPaymentStatus'] ??
+                        '')
+                    .toString(),
+              ),
+              createdAt: now,
+              updatedAt: now,
+            ));
+          }
+        }
+      }
+
+      // O SINGURĂ scriere batch pentru toate tranzacțiile construite
+      // (evită O(n²) citiri/scrieri SharedPreferences din bucla anterioară)
+      // preserveExistingStatus = true: nu suprascrie statusul editat manual
+      // (e.g. admin marchează o programare ca "Plătit" → rămâne plătit după refresh)
+      if (toUpsert.isNotEmpty) {
+        await _repository.upsertTransactionsBatch(
+          toUpsert,
+          preserveExistingStatus: true,
+        );
+      }
+    } catch (_) {
+      // Sync eșuat silențios — datele existente rămân neafectate
+    }
+  }
+
+  PartnerTransactionStatus _mapStatusStr(String raw) {
+    final v = raw.trim().toLowerCase();
+    // platit_partial din appointment = suma parțial încasată = încă restantă în financiar
+    // → tratăm ca neplatit (suma rămâne în soldul de încasat)
+    if (v == 'platit') return PartnerTransactionStatus.platit;
+    if (v == 'conform_contract') return PartnerTransactionStatus.platit;
+    return PartnerTransactionStatus.neplatit;
+  }
+
+  List<PartnerTransaction> get _filtered {
+    if (_filter == 'toate') return _transactions;
+    if (_filter == 'programari') {
+      return _transactions
+          .where((t) =>
+              t.type == PartnerTransactionType.incasareProgramare ||
+              t.type == PartnerTransactionType.plataProgramare)
+          .toList();
+    }
+    if (_filter == 'vanzari') {
+      return _transactions
+          .where((t) => t.type == PartnerTransactionType.vanzareProdus)
+          .toList();
+    }
+    if (_filter == 'achizitii') {
+      return _transactions
+          .where((t) => t.type == PartnerTransactionType.achizitieProodus)
+          .toList();
+    }
+    if (_filter == 'manuale') {
+      return _transactions
+          .where((t) =>
+              t.type == PartnerTransactionType.plataManuala ||
+              t.type == PartnerTransactionType.incasareManuala)
+          .toList();
+    }
+    if (_filter == 'materiale') {
+      return _transactions
+          .where((t) => t.type == PartnerTransactionType.consumMateriale)
+          .toList();
+    }
+    return _transactions;
+  }
+
+  /// Total materiale consumate pentru lucrările partenerului
+  double get _totalMateriale => _transactions
+      .where((t) => t.type == PartnerTransactionType.consumMateriale)
+      .fold<double>(0, (acc, t) => acc + t.amount);
+
+  Future<void> _showAddTransactionDialog({
+    required PartnerTransactionDirection direction,
+  }) async {
+    final amountCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    final notesCtrl = TextEditingController();
+    var selectedDate = DateTime.now();
+    var selectedMethod = PartnerTransactionPaymentMethod.cash;
+    // incasareManuala = am primit bani; plataManuala = am plătit → ambele platit implicit
+    var selectedStatus = PartnerTransactionStatus.platit;
+    final type = direction == PartnerTransactionDirection.intrare
+        ? PartnerTransactionType.incasareManuala
+        : PartnerTransactionType.plataManuala;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            direction == PartnerTransactionDirection.intrare
+                ? 'Adaugă încasare'
+                : 'Adaugă plată',
+          ),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Sumă (RON)',
+                      prefixIcon: Icon(Icons.attach_money),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descCtrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: const InputDecoration(
+                      labelText: 'Descriere',
+                      prefixIcon: Icon(Icons.description_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.calendar_today_outlined),
+                    title: Text(
+                      'Data: ${DateFormat('dd.MM.yyyy').format(selectedDate)}',
+                    ),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: selectedDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime.now().add(const Duration(days: 365)),
+                      );
+                      if (picked != null) {
+                        setDialogState(() => selectedDate = picked);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<PartnerTransactionPaymentMethod>(
+                    initialValue: selectedMethod,
+                    decoration: const InputDecoration(
+                      labelText: 'Metodă plată',
+                    ),
+                    items: PartnerTransactionPaymentMethod.values
+                        .map(
+                          (m) => DropdownMenuItem(
+                            value: m,
+                            child: Text(m.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => selectedMethod = v);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<PartnerTransactionStatus>(
+                    initialValue: selectedStatus,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: PartnerTransactionStatus.values
+                        .map(
+                          (s) => DropdownMenuItem(
+                            value: s,
+                            child: Text(s.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => selectedStatus = v);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: notesCtrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Note (opțional)',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final amount = double.tryParse(
+                      amountCtrl.text.replaceAll(',', '.'),
+                    ) ??
+                    0;
+                if (amount <= 0) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(
+                      content: Text('Suma trebuie să fie mai mare decât 0.'),
+                    ),
+                  );
+                  return;
+                }
+                Navigator.of(ctx).pop(true);
+              },
+              child: const Text('Salvează'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved != true) return;
+
+    final amount = double.tryParse(
+          amountCtrl.text.replaceAll(',', '.'),
+        ) ??
+        0;
+    final now = DateTime.now();
+    final transaction = PartnerTransaction(
+      id: PartnerTransaction.generateId(),
+      partnerId: widget.partnerId,
+      partnerName: widget.partnerName,
+      type: type,
+      direction: direction,
+      amount: amount,
+      date: selectedDate,
+      description: descCtrl.text.trim().isEmpty
+          ? type.label
+          : descCtrl.text.trim(),
+      paymentMethod: selectedMethod,
+      status: selectedStatus,
+      notes: notesCtrl.text.trim(),
+      createdAt: now,
+      updatedAt: now,
+    );
+
+    // Repository se ocupă de queue intern — nu apelăm din pagină (CLAUDE.md)
+    await _repository.upsertTransaction(transaction);
+
+    amountCtrl.dispose();
+    descCtrl.dispose();
+    notesCtrl.dispose();
+
+    await _load();
+
+    // Alertă locală dacă soldul net depășește -1000 RON
+    final updatedSummary = _summary;
+    if (updatedSummary != null && updatedSummary.soldNet < -1000) {
+      await NotificationRuntimeService.instance.showLocalNotification(
+        title: '⚠️ Sold negativ partener',
+        body:
+            '${widget.partnerName}: sold net ${_fmt.format(updatedSummary.soldNet)} RON',
+        data: <String, dynamic>{
+          'partner_id': widget.partnerId,
+          'module': 'partner_financial',
+        },
+      );
+    }
+  }
+
+  Future<void> _deleteTransaction(PartnerTransaction transaction) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Șterge tranzacția?'),
+        content: Text(
+          'Se va șterge "${transaction.description}" — ${_fmt.format(transaction.amount)} RON.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Șterge'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    // Optimistic UI — elimină imediat din listă, operație în fundal (BUG 9)
+    setState(() {
+      _transactions = _transactions
+          .where((t) => t.id != transaction.id)
+          .toList(growable: false);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Tranzacție ștearsă.')),
+    );
+
+    // Repository se ocupă de queue intern — nu apelăm din pagină (CLAUDE.md)
+    _repository.deleteTransaction(transaction.id).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la ștergere: $e')),
+        );
+        _load(); // restaurează starea la eroare
+      }
+    });
+  }
+
+  Future<void> _editTransaction(PartnerTransaction transaction) async {
+    final amountCtrl = TextEditingController(
+        text: transaction.amount.toStringAsFixed(2));
+    final descCtrl =
+        TextEditingController(text: transaction.description);
+    final notesCtrl = TextEditingController(text: transaction.notes);
+    var selectedDate = transaction.date;
+    var selectedMethod = transaction.paymentMethod;
+    var selectedStatus = transaction.status;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            transaction.direction == PartnerTransactionDirection.intrare
+                ? 'Editează încasare'
+                : 'Editează plată',
+          ),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Sumă (RON)',
+                      prefixIcon: Icon(Icons.attach_money),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descCtrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: const InputDecoration(
+                      labelText: 'Descriere',
+                      prefixIcon: Icon(Icons.description_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.calendar_today_outlined),
+                    title: Text(
+                        'Data: ${DateFormat('dd.MM.yyyy').format(selectedDate)}'),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: selectedDate,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime.now()
+                            .add(const Duration(days: 365)),
+                      );
+                      if (picked != null) {
+                        setDialogState(() => selectedDate = picked);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<PartnerTransactionPaymentMethod>(
+                    initialValue: selectedMethod,
+                    decoration:
+                        const InputDecoration(labelText: 'Modalitate'),
+                    items: PartnerTransactionPaymentMethod.values
+                        .map((m) => DropdownMenuItem(
+                            value: m, child: Text(m.label)))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) {
+                        setDialogState(() => selectedMethod = v);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<PartnerTransactionStatus>(
+                    initialValue: selectedStatus,
+                    decoration:
+                        const InputDecoration(labelText: 'Status'),
+                    items: PartnerTransactionStatus.values
+                        .map((s) => DropdownMenuItem(
+                            value: s, child: Text(s.label)))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) {
+                        setDialogState(() => selectedStatus = v);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: notesCtrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                        labelText: 'Note (opțional)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Renunță')),
+            FilledButton(
+              onPressed: () {
+                final amount = double.tryParse(
+                        amountCtrl.text.replaceAll(',', '.')) ??
+                    0;
+                if (amount <= 0) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(
+                        content: Text(
+                            'Suma trebuie să fie mai mare decât 0.')),
+                  );
+                  return;
+                }
+                Navigator.of(ctx).pop(true);
+              },
+              child: const Text('Salvează'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved != true) {
+      amountCtrl.dispose();
+      descCtrl.dispose();
+      notesCtrl.dispose();
+      return;
+    }
+
+    final amount =
+        double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0;
+    final description = descCtrl.text.trim().isEmpty
+        ? transaction.description
+        : descCtrl.text.trim();
+    final notes = notesCtrl.text.trim();
+    amountCtrl.dispose();
+    descCtrl.dispose();
+    notesCtrl.dispose();
+
+    final updated = transaction.copyWith(
+      amount: amount,
+      description: description,
+      date: selectedDate,
+      paymentMethod: selectedMethod,
+      status: selectedStatus,
+      notes: notes,
+      updatedAt: DateTime.now(),
+    );
+
+    await _repository.upsertTransaction(updated);
+    await _load();
+  }
+
+  String _formatDate(DateTime date) => DateFormat('dd.MM.yyyy').format(date);
+
+  Widget _buildSummaryCard() {
+    final s = _summary;
+    final soldNet = s?.soldNet ?? 0;
+    final soldColor =
+        soldNet >= 0 ? Colors.green.shade700 : Colors.red.shade700;
+
+    return Card(
+      margin: const EdgeInsets.all(12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.partnerName,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isMobile = constraints.maxWidth < 700;
+                final b1 = _SummaryBox(
+                  label: 'De încasat',
+                  value: '${_fmt.format(s?.totalDeIncasat ?? 0)} RON',
+                  color: Colors.green.shade700,
+                );
+                final b2 = _SummaryBox(
+                  label: 'De plătit',
+                  value: '${_fmt.format(s?.totalDePlata ?? 0)} RON',
+                  color: Colors.red.shade700,
+                );
+                final b3 = _SummaryBox(
+                  label: 'Sold NET',
+                  value: '${soldNet >= 0 ? '+' : ''}${_fmt.format(soldNet)} RON',
+                  color: soldColor,
+                  bold: true,
+                );
+                if (isMobile) {
+                  return Column(
+                    children: [b1, const SizedBox(height: 8), b2, const SizedBox(height: 8), b3],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: b1),
+                    const SizedBox(width: 8),
+                    Expanded(child: b2),
+                    const SizedBox(width: 8),
+                    Expanded(child: b3),
+                  ],
+                );
+              },
+            ),
+            if (_totalMateriale > 0) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border:
+                      Border.all(color: Colors.orange.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.inventory_2_outlined,
+                        size: 16, color: Colors.orange.shade700),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Materiale/kituri folosite pentru lucrările acestui partener',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.orange.shade800,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${_fmt.format(_totalMateriale)} RON',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => _showAddTransactionDialog(
+                      direction: PartnerTransactionDirection.intrare,
+                    ),
+                    icon: const Icon(Icons.arrow_downward, size: 18),
+                    label: const Text('Încasează'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.green.shade600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () => _showAddTransactionDialog(
+                      direction: PartnerTransactionDirection.iesire,
+                    ),
+                    icon: const Icon(Icons.arrow_upward, size: 18),
+                    label: const Text('Plătește'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.red.shade600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final result = await Navigator.of(context).push<bool>(
+                        MaterialPageRoute<bool>(
+                          builder: (_) => PartnerSaleForm(
+                            partnerId: widget.partnerId,
+                            partnerName: widget.partnerName,
+                          ),
+                        ),
+                      );
+                      if (result == true) await _load();
+                    },
+                    icon: const Icon(Icons.sell_outlined, size: 18),
+                    label: const Text('Vânzare catalog'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      final result = await Navigator.of(context).push<bool>(
+                        MaterialPageRoute<bool>(
+                          builder: (_) => PartnerPurchaseForm(
+                            partnerId: widget.partnerId,
+                            partnerName: widget.partnerName,
+                          ),
+                        ),
+                      );
+                      if (result == true) await _load();
+                    },
+                    icon: const Icon(Icons.shopping_cart_outlined, size: 18),
+                    label: const Text('Achiziție'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterChips() {
+    final filters = [
+      ('toate', 'Toate'),
+      ('programari', 'Programări'),
+      ('materiale', 'Materiale'),
+      ('vanzari', 'Vânzări'),
+      ('achizitii', 'Achiziții'),
+      ('manuale', 'Plăți manuale'),
+    ];
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: filters
+            .map(
+              (f) => Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: FilterChip(
+                  label: Text(f.$2),
+                  selected: _filter == f.$1,
+                  onSelected: (_) => setState(() => _filter = f.$1),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+
+  Widget _buildTransactionTile(PartnerTransaction t) {
+    final isIntrare = t.direction == PartnerTransactionDirection.intrare;
+    final isMateriale = t.type == PartnerTransactionType.consumMateriale;
+    final amountStr = '${isIntrare ? '+' : '-'}${_fmt.format(t.amount)} RON';
+    final isPlatit = t.status == PartnerTransactionStatus.platit;
+
+    // Card special pentru materiale — expandabil cu detaliu linii sau kit
+    if (isMateriale && (t.materialLines.isNotEmpty || t.kitName.isNotEmpty)) {
+      return Card(
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: ExpansionTile(
+          leading: CircleAvatar(
+            backgroundColor: Colors.orange.shade50,
+            child: Icon(Icons.inventory_2_outlined,
+                color: Colors.orange.shade700, size: 20),
+          ),
+          title: Text(
+            t.description,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14),
+          ),
+          subtitle: Text(
+            '${_formatDate(t.date)} · Materiale/kituri folosite',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                amountStr,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orange.shade700,
+                  fontSize: 13,
+                ),
+              ),
+              if (t.materialLines.isNotEmpty)
+                Text(
+                  '${t.materialLines.length} art.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                )
+              else if (t.kitName.isNotEmpty)
+                Text(
+                  'Kit',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: Colors.orange.shade700),
+                ),
+            ],
+          ),
+          children: [
+            // Kit folosit (dacă există)
+            if (t.kitName.isNotEmpty)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.cases_outlined,
+                        size: 16, color: Colors.orange.shade700),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Kit: ${t.kitName}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: Colors.orange.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            // Tabel materiale
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isMobile = constraints.maxWidth < 700;
+                if (isMobile) {
+                  return Column(
+                    children: t.materialLines.map((line) => Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${line.name} (${line.unit})',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${_fmt.format(line.quantity)} × ${_fmt.format(line.unitCost)} = ${_fmt.format(line.totalCost)} RON',
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                          ),
+                        ],
+                      ),
+                    )).toList(),
+                  );
+                }
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 4,
+                            child: Text('Material',
+                                style: Theme.of(context).textTheme.labelSmall),
+                          ),
+                          SizedBox(
+                            width: 60,
+                            child: Text('Cant.',
+                                style: Theme.of(context).textTheme.labelSmall,
+                                textAlign: TextAlign.right),
+                          ),
+                          SizedBox(
+                            width: 70,
+                            child: Text('Preț/u.',
+                                style: Theme.of(context).textTheme.labelSmall,
+                                textAlign: TextAlign.right),
+                          ),
+                          SizedBox(
+                            width: 75,
+                            child: Text('Total',
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                                textAlign: TextAlign.right),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                    ...t.materialLines.map(
+                      (line) => Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 4,
+                              child: Text(
+                                '${line.name} (${line.unit})',
+                                style: const TextStyle(fontSize: 12),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            SizedBox(
+                              width: 60,
+                              child: Text(
+                                _fmt.format(line.quantity),
+                                style: const TextStyle(fontSize: 12),
+                                textAlign: TextAlign.right,
+                              ),
+                            ),
+                            SizedBox(
+                              width: 70,
+                              child: Text(
+                                _fmt.format(line.unitCost),
+                                style: const TextStyle(fontSize: 12),
+                                textAlign: TextAlign.right,
+                              ),
+                            ),
+                            SizedBox(
+                              width: 75,
+                              child: Text(
+                                _fmt.format(line.totalCost),
+                                style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w600),
+                                textAlign: TextAlign.right,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+            // Total materiale
+            const Divider(height: 1, indent: 16, endIndent: 16),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Text('Total materiale: ',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(
+                    '${_fmt.format(t.amount)} RON',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Card standard pentru celelalte tipuri de tranzacții
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            CircleAvatar(
+              backgroundColor:
+                  isIntrare ? Colors.green.shade50 : Colors.red.shade50,
+              child: Icon(
+                isIntrare ? Icons.arrow_downward : Icons.arrow_upward,
+                color:
+                    isIntrare ? Colors.green.shade700 : Colors.red.shade700,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    t.description,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${_formatDate(t.date)} · ${t.type.label}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (t.referenceId.isNotEmpty)
+                    Text(
+                      'Ref: ${t.referenceId}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  amountStr,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: isIntrare
+                        ? Colors.green.shade700
+                        : Colors.red.shade700,
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Builder(builder: (ctx) {
+                  final dir = t.financialDirection;
+                  final String badgeText;
+                  final Color badgeColor;
+                  switch (dir) {
+                    case 'credit_neincasat':
+                      badgeText = 'Neîncasat';
+                      badgeColor = Colors.orange.shade700;
+                      break;
+                    case 'credit_incasat':
+                      badgeText = '✅ Încasat';
+                      badgeColor = Colors.green.shade700;
+                      break;
+                    case 'plata_primita':
+                      badgeText = '✅ Plată primită';
+                      badgeColor = Colors.green.shade700;
+                      break;
+                    case 'plata_efectuata':
+                      badgeText = 'De plătit';
+                      badgeColor = Colors.red.shade700;
+                      break;
+                    case 'plata_efectuata_achitata':
+                      badgeText = '✅ Achitat';
+                      badgeColor = Colors.green.shade700;
+                      break;
+                    case 'cost_materiale':
+                      badgeText = 'Cost mat.';
+                      badgeColor = Colors.orange.shade700;
+                      break;
+                    default:
+                      badgeText = t.status.label;
+                      badgeColor = isPlatit
+                          ? Colors.green.shade700
+                          : Colors.orange.shade700;
+                  }
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: badgeColor.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: badgeColor.withValues(alpha: 0.3)),
+                    ),
+                    child: Text(
+                      badgeText,
+                      style: TextStyle(fontSize: 10, color: badgeColor),
+                    ),
+                  );
+                }),
+              ],
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              tooltip: 'Editează tranzacția',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _editTransaction(t),
+            ),
+            IconButton(
+              icon:
+                  Icon(Icons.delete_outline, size: 18, color: Colors.red.shade400),
+              tooltip: 'Șterge tranzacția',
+              visualDensity: VisualDensity.compact,
+              onPressed: () => _deleteTransaction(t),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Financiar partener'),
+        actions: [
+          HelpButton(content: AppHelp.partnerFinanciar),
+          IconButton(
+            icon: const Icon(Icons.calculate_outlined),
+            tooltip: 'Recalculează sold',
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              await _repository.rebuildSummary(widget.partnerId, widget.partnerName);
+              await _load();
+              if (!mounted) return;
+              messenger.showSnackBar(
+                const SnackBar(content: Text('Sold recalculat.')),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh_outlined),
+            tooltip: 'Reîncarcă',
+            onPressed: _load,
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(child: _buildSummaryCard()),
+                  SliverToBoxAdapter(child: _buildFilterChips()),
+                  const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                  if (_filtered.isEmpty)
+                    const SliverFillRemaining(
+                      child: Center(
+                        child: Text('Nicio tranzacție înregistrată.'),
+                      ),
+                    )
+                  else
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (ctx, i) => _buildTransactionTile(_filtered[i]),
+                        childCount: _filtered.length,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'fab_plata',
+            onPressed: () => _showAddTransactionDialog(
+              direction: PartnerTransactionDirection.iesire,
+            ),
+            backgroundColor: Colors.red.shade600,
+            tooltip: 'Adaugă plată',
+            child: const Icon(Icons.arrow_upward, color: Colors.white),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton(
+            heroTag: 'fab_incasare',
+            onPressed: () => _showAddTransactionDialog(
+              direction: PartnerTransactionDirection.intrare,
+            ),
+            backgroundColor: Colors.green.shade600,
+            tooltip: 'Adaugă încasare',
+            child: const Icon(Icons.arrow_downward, color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryBox extends StatelessWidget {
+  const _SummaryBox({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.bold = false,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: color,
+                ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: TextStyle(
+              color: color,
+              fontWeight: bold ? FontWeight.bold : FontWeight.w600,
+              fontSize: bold ? 14 : 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

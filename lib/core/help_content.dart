@@ -1039,4 +1039,96 @@ class AppHelp {
           ),
         ],
       );
+
+  // ---------------------------------------------------------------------------
+  // DASHBOARD FINANCIAR
+  // ---------------------------------------------------------------------------
+
+  static HelpContent get dashboardFinanciar => const HelpContent(
+        title: 'Dashboard Financiar',
+        intro:
+            'Vizualizare consolidată a situației financiare a firmei: încasări, profit, datorii, activitate și grafic lunar. Datele se citesc din cache local — funcționează și fără internet.',
+        sections: [
+          HelpSection(
+            icon: Icons.payments_outlined,
+            title: 'Încasări',
+            steps: [
+              'Luna aceasta — suma totală încasată în luna curentă.',
+              'Luna trecută — comparație cu luna anterioară.',
+              'An curent — total de la 1 ianuarie până azi.',
+            ],
+          ),
+          HelpSection(
+            icon: Icons.trending_up,
+            title: 'Profit și costuri',
+            steps: [
+              'Profit brut = Încasări − Costuri angajați − Costuri parteneri − Materiale.',
+              'Marja de profit este afișată procentual.',
+              'Culoarea verde = profit pozitiv, roșu = pierdere.',
+            ],
+          ),
+          HelpSection(
+            icon: Icons.warning_amber_outlined,
+            title: 'Plăți restante',
+            steps: [
+              'Afișează suma totală neîncasată de la parteneri și clienți.',
+              'Verde = fără restanțe, roșu = există creanțe restante.',
+              'Numărul de facturi restante este afișat în paranteză.',
+            ],
+          ),
+          HelpSection(
+            icon: Icons.bar_chart_outlined,
+            title: 'Grafic 6 luni',
+            steps: [
+              'Albastru = Încasări, Portocaliu = Costuri, Verde = Profit.',
+              'Profitul negativ apare în roșu.',
+              'Datele sunt calculate din programările și plățile înregistrate.',
+            ],
+            note:
+                'Datele sunt offline-first — se actualizează automat când se adaugă noi programări sau plăți.',
+          ),
+        ],
+      );
+
+  static HelpContent get clientProfile => const HelpContent(
+        title: 'Fișa completă client',
+        intro:
+            'Pagina centralizează toate informațiile despre un client: rezumat, istoric activitate, situație financiară și echipamente.',
+        sections: [
+          HelpSection(
+            icon: Icons.person_outline,
+            title: 'Rezumat',
+            steps: [
+              'Stat cards: număr programări, lucrări în curs, total facturat, documente emise.',
+              'Ultima activitate: cea mai recentă programare și lucrare.',
+              'Note — editabile inline, se salvează automat cu butonul din câmp.',
+            ],
+          ),
+          HelpSection(
+            icon: Icons.history_outlined,
+            title: 'Istoric',
+            steps: [
+              'Filtrează după tip (Programări / Lucrări / Documente) sau an.',
+              'Lista este sortată cronologic descendent.',
+            ],
+          ),
+          HelpSection(
+            icon: Icons.euro_outlined,
+            title: 'Financiar',
+            steps: [
+              'Total intervenții = suma prețurilor de intervenție din programări.',
+              'Total oferte/documente = suma valorilor din ofertele emise.',
+              'Graficul arată evoluția pe ultimele 6 luni.',
+            ],
+          ),
+          HelpSection(
+            icon: Icons.build_outlined,
+            title: 'Echipamente',
+            steps: [
+              'Lista echipamentelor menționate în programările clientului.',
+              'Afișează data ultimei intervenții și numărul total de intervenții per echipament.',
+            ],
+          ),
+        ],
+      );
 }

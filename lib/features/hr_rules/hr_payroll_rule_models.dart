@@ -340,17 +340,18 @@ class HrPayrollRuleSeed {
           'employee_cass_percent': 10.0,
           'income_tax_percent': 10.0,
           'employer_cam_percent': 2.25,
-          'deductions_formula_version': 'ro_standard_v2_ded_personala',
+          'deductions_formula_version': 'ro_standard_v3_ded_personala_2026',
           'employee_personal_deduction_supported': true,
-          'personal_deduction_formula': 'ro_ded_personala_oug89_2025',
-          'personal_deduction_base_ron': 699.0,
+          'personal_deduction_formula': 'ro_ded_personala_oug89_2025_actualizat',
+          'personal_deduction_base_ron': 600.0,
           'personal_deduction_threshold_gross_ron': 4050.0,
-          'personal_deduction_max_gross_factor': 3.0,
+          'personal_deduction_upper_limit_ron': 7000.0,
+          'cass_includes_meal_tickets': true,
           'notes':
-              'OUG 89/2025: deducerea personala de baza 699 RON pentru brut <= 4300 RON; reducere liniara pana la 3x salariu minim; zero peste. Impozit 10% se aplica pe baza neta dupa CAS+CASS-deducere. Dependenti si exceptii speciale raman pentru patch-uri ulterioare.',
+              'OUG 89/2025 actualizat 2026: baza deducere 600 RON (0 dependenti), reducere liniara intre 4050-7000 RON brut total (salariu+tichete). CASS 10% se calculeaza pe salariu+tichete impreuna. Dependenti: +100 RON/dependent pana la 4+ (max 1000). Impozit 10% pe venit net dupa CAS+CASS-deducere.',
         },
         legalBasis:
-            'Codul fiscal (Legea nr. 227/2015) - art. 64, art. 138 lit. a), art. 156, art. 220^3; OUG 89/2025 privind deducerea personala - https://legislatie.just.ro/Public/DetaliiDocument/178854',
+            'Codul fiscal (Legea nr. 227/2015) - art. 64, art. 138 lit. a), art. 156, art. 220^3; OUG 89/2025 privind deducerea personala; OUG 115/2023 art. 2 Titlul V - CASS pe tichete - https://legislatie.just.ro/Public/DetaliiDocument/178854',
         isDefault: true,
         isOverridable: false,
         createdAt: timestamp,
@@ -632,10 +633,11 @@ class HrPayrollRuleSeed {
         rulePayload: const <String, dynamic>{
           'daily_cap_ron': 45.0,
           'currency': 'RON',
-          'fiscal_treatment':
-              'exempt_cas_subject_cass_subject_income_tax_10pct',
+          'fiscal_treatment': 'net_direct',
           'notes':
-              'Conform OUG 115/2023 si Legii 296/2023 si OUG 89/2025 (vigoare 2026): tichete in limita plafonului zilnic SCUTITE de CAS (25%), SUPUSE CASS (10%) si impozitului pe venit (10%) retinute din salariul net. Plafon zilnic 2026: 45 RON (Legea 201/2025).',
+              'PRO TERM SRL 2026: Suma introdusa in pontaj = valoare neta primita de angajat. '
+              'Nu se calculeaza CAS/CASS/impozit suplimentar pe tichete. '
+              'Tichete adaugate direct la net final fara alte deduceri.',
         },
         legalBasis:
             'Legea 165/2018; OUG 115/2023 Titlul V; Legea 296/2023; OUG 89/2025; Codul Fiscal art. 76 alin.(4); Legea 201/2025 plafon 45 RON',

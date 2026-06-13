@@ -1,14 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 
-import '../../core/help_content.dart';
-import '../../core/widgets/help_button.dart';
+import '../../core/help/help_module_button.dart';
 
 import '../notifications/send_document_dialog.dart';
 import '../notifications/document_email_templates.dart';
@@ -24,12 +24,14 @@ import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import '../clients/client_models.dart';
 import '../clients/add_client_quick_dialog.dart';
+import '../../core/widgets/client_autocomplete_field.dart';
 import '../field_photos/field_photos_page.dart';
 import '../jobs/job_models.dart';
 import '../programari/appointment_models.dart';
 import '../reclamatii/signature_capture_page.dart';
 import '../registratura/registry_models.dart';
 import 'agfr_models.dart';
+import 'agfr_refrigerant_data.dart';
 import 'agfr_report_pdf_service.dart';
 import 'agfr_weighing_import_service.dart';
 
@@ -598,23 +600,14 @@ class _AgfrPageState extends State<AgfrPage> {
                       Row(
                         children: [
                           Expanded(
-                            child: DropdownButtonFormField<String>(
-                              initialValue:
-                                  _clients.any((c) => c.id == selectedClientId)
-                                      ? selectedClientId
-                                      : null,
-                              decoration:
-                                  const InputDecoration(labelText: 'Client'),
-                              items: _clients
-                                  .map(
-                                    (client) => DropdownMenuItem<String>(
-                                      value: client.id,
-                                      child: Text(client.name),
-                                    ),
-                                  )
-                                  .toList(growable: false),
-                              onChanged: (value) => setDialogState(() {
-                                selectedClientId = (value ?? '').trim();
+                            child: ClientAutocompleteField(
+                              key: ValueKey(
+                                  'agfr-client-${selectedClientId.isEmpty ? 'none' : selectedClientId}'),
+                              clients: _clients,
+                              initialClient: _clientById(selectedClientId),
+                              labelText: 'Client',
+                              onClientSelected: (c) => setDialogState(() {
+                                selectedClientId = c?.id ?? '';
                                 selectedEntityType =
                                     _clientById(selectedClientId)?.type ??
                                         selectedEntityType;
@@ -778,11 +771,38 @@ class _AgfrPageState extends State<AgfrPage> {
                             .toList(growable: false),
                         onChanged: (value) => setDialogState(() {
                           selectedRefrigerantEnum = value;
-                          if (value != AgfrRefrigerantType.altul) {
+                          if (value != null && value != AgfrRefrigerantType.altul) {
                             refrigerantCustomController.clear();
+                            // Auto-fill GWP din datele statice
+                            final gwp = AgfrRefrigerantData.gwpFor(value.value);
+                            if (gwp > 0) gwpController.text = gwp.toString();
                           }
                         }),
                       ),
+                      // ── Banner avertizare refrigerant periculos ───────
+                      Builder(builder: (_) {
+                        final spec = selectedRefrigerantEnum != null
+                            ? AgfrRefrigerantData.specs[selectedRefrigerantEnum!.value]
+                            : null;
+                        if (spec?.note == null) return const SizedBox.shrink();
+                        return Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            border: Border.all(color: Colors.orange),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.orange.shade800, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(
+                              '⚠️ ${spec!.note}',
+                              style: TextStyle(color: Colors.orange.shade900, fontSize: 12),
+                            )),
+                          ]),
+                        );
+                      }),
                       if (selectedRefrigerantEnum ==
                               AgfrRefrigerantType.altul ||
                           selectedRefrigerantEnum == null) ...[
@@ -804,12 +824,23 @@ class _AgfrPageState extends State<AgfrPage> {
                             width: 140,
                             child: TextField(
                               controller: gwpController,
+                              readOnly: selectedRefrigerantEnum != null &&
+                                  selectedRefrigerantEnum != AgfrRefrigerantType.altul &&
+                                  AgfrRefrigerantData.gwpFor(selectedRefrigerantEnum!.value) > 0,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
                                 decimal: true,
                               ),
-                              decoration:
-                                  const InputDecoration(labelText: 'GWP'),
+                              decoration: InputDecoration(
+                                labelText: 'GWP',
+                                suffixIcon: (selectedRefrigerantEnum != null &&
+                                    selectedRefrigerantEnum != AgfrRefrigerantType.altul &&
+                                    AgfrRefrigerantData.gwpFor(selectedRefrigerantEnum!.value) > 0)
+                                    ? const Icon(Icons.lock_outline, size: 14, color: Colors.grey)
+                                    : null,
+                                helperText: 'Reg. UE 517/2014',
+                                helperStyle: const TextStyle(fontSize: 9),
+                              ),
                             ),
                           ),
                           SizedBox(
@@ -843,22 +874,43 @@ class _AgfrPageState extends State<AgfrPage> {
                         ],
                       ),
                       const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            label: Text(
-                              'Total agent: ${totalCharge.toStringAsFixed(2)} kg',
-                            ),
+                      // ── Calcul automat CO₂ echivalent ─────────────────
+                      if (totalCharge > 0 || co2 > 0)
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.blue.shade200),
                           ),
-                          Chip(
-                            label: Text(
-                              'CO2 echiv.: ${co2.toStringAsFixed(3)} t',
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Calcul automat CO₂ echivalent',
+                                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.blue.shade800)),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 4,
+                                children: [
+                                  Chip(label: Text('Total agent: ${totalCharge.toStringAsFixed(2)} kg', style: const TextStyle(fontSize: 12))),
+                                  Chip(label: Text('CO₂e: ${co2.toStringAsFixed(3)} t', style: const TextStyle(fontSize: 12))),
+                                ],
+                              ),
+                              if (co2 > 0) ...[
+                                const SizedBox(height: 4),
+                                Row(children: [
+                                  Icon(Icons.schedule_outlined, size: 13, color: Colors.blue.shade700),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    AgfrRefrigerantData.intervalVerificareScurgeri(co2),
+                                    style: TextStyle(fontSize: 11, color: Colors.blue.shade800),
+                                  ),
+                                ]),
+                              ],
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
                       const SizedBox(height: 12),
                       TextField(
                         textCapitalization: TextCapitalization.sentences,
@@ -1019,8 +1071,14 @@ class _AgfrPageState extends State<AgfrPage> {
           current == null ? '' : current.vacuumDurationHours.toStringAsFixed(2),
     );
     final notesController = TextEditingController(text: current?.notes ?? '');
+    // Task 5 — Auto-completare tehnician din Firebase user curent
+    String techDefaultName = current?.technicianName ?? '';
+    if (techDefaultName.isEmpty) {
+      final fbUser = FirebaseAuth.instance.currentUser;
+      techDefaultName = fbUser?.displayName ?? fbUser?.email ?? '';
+    }
     final technicianNameController =
-        TextEditingController(text: current?.technicianName ?? '');
+        TextEditingController(text: techDefaultName);
     final technicianCertificateController = TextEditingController(
       text: current?.technicianCertificateNumber ?? '',
     );
@@ -1238,11 +1296,35 @@ class _AgfrPageState extends State<AgfrPage> {
                             .toList(growable: false),
                         onChanged: (value) => setDialogState(() {
                           selectedRefrigerantEnum = value;
-                          if (value != AgfrRefrigerantType.altul) {
+                          if (value != null && value != AgfrRefrigerantType.altul) {
                             refrigerantCustomController.clear();
                           }
                         }),
                       ),
+                      // ── Banner avertizare refrigerant periculos ───────
+                      Builder(builder: (_) {
+                        final spec = selectedRefrigerantEnum != null
+                            ? AgfrRefrigerantData.specs[selectedRefrigerantEnum!.value]
+                            : null;
+                        if (spec?.note == null) return const SizedBox.shrink();
+                        return Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            border: Border.all(color: Colors.orange),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(children: [
+                            Icon(Icons.warning_amber_rounded, color: Colors.orange.shade800, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text(
+                              '⚠️ ${spec!.note}',
+                              style: TextStyle(color: Colors.orange.shade900, fontSize: 12),
+                            )),
+                          ]),
+                        );
+                      }),
                       if (selectedRefrigerantEnum == null ||
                           selectedRefrigerantEnum ==
                               AgfrRefrigerantType.altul) ...[
@@ -1297,6 +1379,52 @@ class _AgfrPageState extends State<AgfrPage> {
                           ),
                         ],
                       ),
+                      // ── CO₂ echivalent calculat din cantitate încărcată ──
+                      Builder(builder: (_) {
+                        final gwpStr = selectedRefrigerantEnum != null &&
+                            selectedRefrigerantEnum != AgfrRefrigerantType.altul
+                            ? AgfrRefrigerantData.gwpFor(selectedRefrigerantEnum!.value)
+                            : 0;
+                        final charged = _parseDouble(chargedController.text);
+                        final recovered = _parseDouble(recoveredController.text);
+                        if (gwpStr <= 0 && charged == 0 && recovered == 0) {
+                          return const SizedBox.shrink();
+                        }
+                        final co2Incarcat = (charged * gwpStr) / 1000.0;
+                        final co2Recuperat = (recovered * gwpStr) / 1000.0;
+                        final interval = co2Incarcat > 0
+                            ? AgfrRefrigerantData.intervalVerificareScurgeri(co2Incarcat)
+                            : null;
+                        return Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.blue.shade200),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('CO₂ echivalent',
+                                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12, color: Colors.blue.shade800)),
+                              const SizedBox(height: 4),
+                              Wrap(spacing: 8, runSpacing: 4, children: [
+                                if (charged > 0) Chip(label: Text('Înc: ${co2Incarcat.toStringAsFixed(3)} t CO₂e', style: const TextStyle(fontSize: 11))),
+                                if (recovered > 0) Chip(label: Text('Rec: ${co2Recuperat.toStringAsFixed(3)} t CO₂e', style: const TextStyle(fontSize: 11))),
+                              ]),
+                              if (interval != null) ...[
+                                const SizedBox(height: 4),
+                                Row(children: [
+                                  Icon(Icons.schedule_outlined, size: 13, color: Colors.blue.shade700),
+                                  const SizedBox(width: 4),
+                                  Text(interval, style: TextStyle(fontSize: 11, color: Colors.blue.shade800)),
+                                ]),
+                              ],
+                            ],
+                          ),
+                        );
+                      }),
                       const SizedBox(height: 12),
                       Wrap(
                         spacing: 12,
@@ -3157,11 +3285,19 @@ class _AgfrPageState extends State<AgfrPage> {
         : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
     final storagePath =
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    } catch (_) {}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: 'application/pdf'),
-    );
+    try {
+      await ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'application/pdf'),
+      );
+    } catch (e) {
+      debugPrint('[AGFR] ❌ Storage upload failed: $e');
+      rethrow;
+    }
     return <String, dynamic>{
       'filename': normalizedName,
       'storage_path': ref.fullPath,
@@ -3800,7 +3936,7 @@ class _AgfrPageState extends State<AgfrPage> {
                 label: const Text('Cantarire'),
               ),
               const SizedBox(width: 8),
-              HelpButton(content: AppHelp.agfr),
+              const HelpModuleButton(moduleId: 'agfr'),
             ],
           ),
           const SizedBox(height: 16),

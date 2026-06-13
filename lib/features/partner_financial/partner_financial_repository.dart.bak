@@ -1,8 +1,10 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
@@ -11,6 +13,11 @@ import 'partner_financial_models.dart';
 class PartnerFinancialRepository {
   static const String _transactionsLocalKey = 'partner_transactions_v1';
   static const String _summariesLocalKey = 'partner_financial_summaries_v1';
+
+  // ── Statics diagnostice (CLAUDE.md CHECKLIST) ─────────────────────────────
+  static String? lastFirestoreError;
+  static int lastFirestoreCount = -1;
+  static int lastLocalCount = 0;
 
   bool get _isCloudAvailable => FirebaseBootstrap.isInitialized;
 
@@ -32,6 +39,7 @@ class PartnerFinancialRepository {
     final local = await _readLocalTransactions();
     final filtered =
         local.where((t) => t.partnerId == partnerId).toList(growable: false);
+    lastLocalCount = filtered.length;
     if (!_isCloudAvailable) return _sortTransactions(filtered);
 
     try {
@@ -43,8 +51,23 @@ class PartnerFinancialRepository {
       final cloud = snapshot.docs
           .map((doc) => PartnerTransaction.fromMap(doc.data()))
           .toList(growable: false);
-      // Merge: cloud + local-only (create offline, neajunse în Firestore)
-      final knownIds = cloud.map((t) => t.id).toSet();
+      lastFirestoreCount = cloud.length;
+      lastFirestoreError = null;
+      // BUG 7 fix: preferă versiunea locală pentru items cu queue pending
+      // (modificări offline nu au ajuns încă în Firestore — cloud are versiunea veche)
+      final pendingIds = await OfflineSyncRuntime.instance
+          .pendingUpsertEntityIds(CloudEntityType.partnerTransactions);
+      final localById = <String, PartnerTransaction>{
+        for (final t in filtered) t.id: t
+      };
+      final resolvedCloud = cloud.map((c) {
+        if (pendingIds.contains(c.id) && localById.containsKey(c.id)) {
+          return localById[c.id]!;
+        }
+        return c;
+      }).toList(growable: false);
+      // Merge: cloud (rezolvat) + local-only (create offline, neajunse în Firestore)
+      final knownIds = resolvedCloud.map((t) => t.id).toSet();
       final localOnly = filtered
           .where((t) => !knownIds.contains(t.id))
           .toList(growable: false);
@@ -55,12 +78,14 @@ class PartnerFinancialRepository {
       }
       await _writeLocalTransactions([
         ...local.where((t) => t.partnerId != partnerId),
-        ...cloud,
+        ...resolvedCloud,
         ...localOnly,
       ]);
-      // Returnăm cloud + local-only (nu doar cloud ca înainte)
-      return _sortTransactions([...cloud, ...localOnly]);
-    } catch (_) {
+      // Returnăm cloud (rezolvat) + local-only (nu doar cloud ca înainte)
+      return _sortTransactions([...resolvedCloud, ...localOnly]);
+    } catch (e) {
+      lastFirestoreError = e.toString();
+      lastFirestoreCount = -1;
       return _sortTransactions(filtered);
     }
   }
@@ -105,24 +130,28 @@ class PartnerFinancialRepository {
     await OfflineSyncRuntime.instance
         .queuePartnerTransactionUpsert(transaction.toMap());
 
+    // Firebase direct — fire-and-forget (BUG 8: nu await → nu blochează UI)
     if (_isCloudAvailable) {
-      try {
-        await _transactionsCollection.doc(transaction.id).set(
-              transaction.toMap(),
-              SetOptions(merge: true),
-            );
-      } catch (_) {}
+      _transactionsCollection
+          .doc(transaction.id)
+          .set(transaction.toMap(), SetOptions(merge: true))
+          .catchError((_) {});
     }
 
-    await _rebuildSummary(transaction.partnerId, transaction.partnerName);
+    await rebuildSummary(transaction.partnerId, transaction.partnerName);
   }
 
   /// Upsert în lot — O(1) citire + scriere indiferent de numărul tranzacțiilor.
   /// FOLOSIȚI ASTA în loc de upsertTransaction() apelat în buclă.
   /// Evită O(n²) de citiri/scrieri SharedPreferences.
+  ///
+  /// [preserveExistingStatus] = true → dacă tranzacția există deja local,
+  /// păstrează statusul existent (nu suprascrie modificările manuale de status
+  /// cu valorile recalculate din programări). Folosiți pentru _syncFromAppointments().
   Future<void> upsertTransactionsBatch(
-    List<PartnerTransaction> newOrUpdated,
-  ) async {
+    List<PartnerTransaction> newOrUpdated, {
+    bool preserveExistingStatus = false,
+  }) async {
     if (newOrUpdated.isEmpty) return;
 
     // Citire o singură dată
@@ -136,7 +165,12 @@ class PartnerFinancialRepository {
     for (final t in newOrUpdated) {
       final idx = existingById[t.id];
       if (idx != null) {
-        existing[idx] = t;
+        if (preserveExistingStatus) {
+          // Păstrează statusul editat manual — nu suprascrie cu statusul din programare
+          existing[idx] = t.copyWith(status: existing[idx].status);
+        } else {
+          existing[idx] = t;
+        }
       } else {
         existing.add(t);
         existingById[t.id] = existing.length - 1;
@@ -155,18 +189,14 @@ class PartnerFinancialRepository {
       ),
     );
 
-    // Firebase în paralel (best-effort)
+    // Firebase în paralel — fire-and-forget (BUG 8)
     if (_isCloudAvailable) {
-      await Future.wait(
-        newOrUpdated.map((t) async {
-          try {
-            await _transactionsCollection.doc(t.id).set(
-                  t.toMap(),
-                  SetOptions(merge: true),
-                );
-          } catch (_) {}
-        }),
-      );
+      for (final t in newOrUpdated) {
+        _transactionsCollection
+            .doc(t.id)
+            .set(t.toMap(), SetOptions(merge: true))
+            .catchError((_) {});
+      }
     }
 
     // Reconstruiește sumarele pentru toți partenerii afectați (fără duplicate)
@@ -175,7 +205,7 @@ class PartnerFinancialRepository {
       affectedPartners[t.partnerId] = t.partnerName;
     }
     for (final entry in affectedPartners.entries) {
-      await _rebuildSummary(entry.key, entry.value);
+      await rebuildSummary(entry.key, entry.value);
     }
   }
 
@@ -203,14 +233,16 @@ class PartnerFinancialRepository {
     await OfflineSyncRuntime.instance
         .queuePartnerTransactionDelete(transactionId);
 
+    // Firebase direct — fire-and-forget (BUG 8)
     if (_isCloudAvailable) {
-      try {
-        await _transactionsCollection.doc(transactionId).delete();
-      } catch (_) {}
+      _transactionsCollection
+          .doc(transactionId)
+          .delete()
+          .catchError((_) {});
     }
 
     if (existing.partnerId.isNotEmpty) {
-      await _rebuildSummary(existing.partnerId, existing.partnerName);
+      await rebuildSummary(existing.partnerId, existing.partnerName);
     }
   }
 
@@ -247,13 +279,13 @@ class PartnerFinancialRepository {
       final cloud = snapshot.docs
           .map((doc) => PartnerFinancialSummary.fromMap(doc.data()))
           .toList(growable: false);
-      final all = [...cloud];
-      final knownIds = cloud.map((s) => s.partnerId).toSet();
-      for (final s in local) {
-        if (!knownIds.contains(s.partnerId)) all.add(s);
-      }
-      await _writeLocalSummaries(all);
-      return all;
+      // Preferă LOCAL (proaspăt calculat de rebuildSummary) față de Firestore (stale).
+      // Adaugă din cloud DOAR partenerii care nu există în local.
+      final localIds = local.map((s) => s.partnerId).toSet();
+      final cloudOnly = cloud.where((s) => !localIds.contains(s.partnerId)).toList();
+      final merged = [...local, ...cloudOnly];
+      await _writeLocalSummaries(merged);
+      return merged;
     } catch (_) {
       return local;
     }
@@ -263,13 +295,16 @@ class PartnerFinancialRepository {
   // REBUILD SUMAR (calculat din tranzacții locale)
   // ---------------------------------------------------------------------------
 
-  Future<PartnerFinancialSummary> _rebuildSummary(
+  Future<PartnerFinancialSummary> rebuildSummary(
     String partnerId,
     String partnerName,
   ) async {
     final allTransactions = await _readLocalTransactions();
-    final partnerTransactions =
-        allTransactions.where((t) => t.partnerId == partnerId).toList();
+    // Deduplică după ID — protecție împotriva eventualelor duplicate în cache
+    final seenIds = <String>{};
+    final partnerTransactions = allTransactions
+        .where((t) => t.partnerId == partnerId && seenIds.add(t.id))
+        .toList();
 
     // Guard: dacă cache-ul local e gol, nu suprascriem sumarul din Firebase cu zero.
     // Poate că suntem pe un dispozitiv nou care nu a sincronizat încă datele.
@@ -285,35 +320,58 @@ class PartnerFinancialRepository {
       } catch (_) {}
     }
 
-    double totalDeIncasat = 0;
-    double totalDePlata = 0;
+    // Formula definitivă — bazată pe financialDirection (getter robust în model):
+    //
+    //   credit_neincasat         → crediteNeincasate   (de primit de la partener)
+    //   credit_incasat           → ignorat             (credit marcat plătit direct)
+    //   plata_primita            → platiPrimite        (MEREU reduce De încasat)
+    //   plata_efectuata          → debiteNeachitate    (de plătit partenerului)
+    //   plata_efectuata_achitata → ignorat             (achitat deja)
+    //   cost_materiale           → ignorat             (banner portocaliu separat)
+    //
+    // incasareManuala = MEREU 'plata_primita' indiferent de câmpul status
+    // → corectează bug-ul cu date vechi (status=neplatit pe manuală)
+    double crediteNeincasate = 0;
+    double platiPrimite = 0;
+    double debiteNeachitate = 0;
     DateTime? lastDate;
+
     for (final t in partnerTransactions) {
-      // Tranzacțiile marcate ca "Plătit" sunt deja decontate — nu mai contribuie
-      // la soldul restant (De încasat / De plătit).
-      // Tranzacțiile "Parțial" sau "Neîncasat" rămân în sold.
-      if (t.status == PartnerTransactionStatus.platit) {
-        // Actualizăm totuși ultima dată de tranzacție
-        if (lastDate == null || t.date.isAfter(lastDate)) {
-          lastDate = t.date;
-        }
-        continue;
-      }
-      if (t.direction == PartnerTransactionDirection.intrare) {
-        totalDeIncasat += t.amount;
-      } else {
-        totalDePlata += t.amount;
-      }
-      if (lastDate == null || t.date.isAfter(lastDate)) {
-        lastDate = t.date;
+      if (lastDate == null || t.date.isAfter(lastDate)) lastDate = t.date;
+      final amount = t.amount.abs();
+      switch (t.financialDirection) {
+        case 'credit_neincasat':
+          crediteNeincasate += amount;
+          break;
+        case 'plata_primita':
+          platiPrimite += amount;
+          break;
+        case 'plata_efectuata':
+          debiteNeachitate += amount;
+          break;
+        case 'credit_incasat':
+        case 'plata_efectuata_achitata':
+        case 'cost_materiale':
+          break; // ignorat în sold
       }
     }
+
+    final deIncasat = (crediteNeincasate - platiPrimite).clamp(0.0, double.infinity);
+    final soldNet = deIncasat - debiteNeachitate;
+
+    debugPrint('[Financiar $partnerId] crediteNeincasate=$crediteNeincasate');
+    debugPrint('[Financiar $partnerId] platiPrimite=$platiPrimite');
+    debugPrint('[Financiar $partnerId] deIncasat=$deIncasat');
+    debugPrint('[Financiar $partnerId] debiteNeachitate=$debiteNeachitate');
+    debugPrint('[Financiar $partnerId] soldNet=$soldNet');
 
     final summary = PartnerFinancialSummary(
       partnerId: partnerId,
       partnerName: partnerName,
-      totalDeIncasat: totalDeIncasat,
-      totalDePlata: totalDePlata,
+      totalDeIncasat: deIncasat,
+      totalDePlata: debiteNeachitate,
+      totalIncasat: platiPrimite,
+      totalPlatit: 0,
       lastTransactionDate: lastDate,
       transactionCount: partnerTransactions.length,
       updatedAt: DateTime.now(),
@@ -325,16 +383,54 @@ class PartnerFinancialRepository {
     await OfflineSyncRuntime.instance
         .queuePartnerFinancialSummaryUpsert(summary.toMap());
 
+    // Firebase direct — fire-and-forget (BUG 8)
     if (_isCloudAvailable) {
-      try {
-        await _summariesCollection.doc(partnerId).set(
-              summary.toMap(),
-              SetOptions(merge: true),
-            );
-      } catch (_) {}
+      _summariesCollection
+          .doc(partnerId)
+          .set(summary.toMap(), SetOptions(merge: true))
+          .catchError((_) {});
     }
 
     return summary;
+  }
+
+  /// Migrare date vechi: re-salvează toate tranzacțiile locale scriind
+  /// câmpul 'financial_direction' în JSON (din getter-ul computed al modelului).
+  /// Tranzacțiile vechi din SharedPreferences nu aveau acest câmp.
+  /// Returnează numărul de tranzacții migrate.
+  Future<int> migrateTransactions() async {
+    final all = await _readLocalTransactions();
+    if (all.isEmpty) return 0;
+    // Re-salvare: toMap() include acum 'financial_direction' → scrie în cache
+    await _writeLocalTransactions(all);
+    // Sync fire-and-forget în Firestore pentru câmpul nou
+    if (_isCloudAvailable) {
+      for (final t in all) {
+        _transactionsCollection
+            .doc(t.id)
+            .set({'financial_direction': t.financialDirection}, SetOptions(merge: true))
+            .catchError((_) {});
+      }
+    }
+    debugPrint('[FinanciarMigration] Migrat ${all.length} tranzacții cu financial_direction');
+    return all.length;
+  }
+
+  /// Reconstruiește sumarele pentru TOȚI partenerii care au tranzacții locale.
+  /// Apelat din dashboard pentru a corecta valorile stale din Firestore.
+  Future<int> rebuildAllSummaries() async {
+    await migrateTransactions();
+    final allTransactions = await _readLocalTransactions();
+    final partners = <String, String>{};
+    for (final t in allTransactions) {
+      if (t.partnerId.isNotEmpty) {
+        partners[t.partnerId] = t.partnerName;
+      }
+    }
+    for (final entry in partners.entries) {
+      await rebuildSummary(entry.key, entry.value);
+    }
+    return partners.length;
   }
 
   // ---------------------------------------------------------------------------
@@ -413,5 +509,34 @@ class PartnerFinancialRepository {
 
   List<PartnerTransaction> _sortTransactions(List<PartnerTransaction> items) {
     return [...items]..sort((a, b) => b.date.compareTo(a.date));
+  }
+
+  // ── Sync forțat: publică toate tranzacțiile locale în Firestore ──────────
+  Future<int> forceSyncLocalToCloud() async {
+    if (!_isCloudAvailable) return 0;
+    final locals = await _readLocalTransactions();
+    if (locals.isEmpty) return 0;
+    int synced = 0;
+    for (final t in locals) {
+      try {
+        await _transactionsCollection
+            .doc(t.id)
+            .set(t.toMap(), SetOptions(merge: true));
+        await OfflineSyncRuntime.instance
+            .queuePartnerTransactionUpsert(t.toMap());
+        synced++;
+      } catch (e) {
+        lastFirestoreError = e.toString();
+      }
+    }
+    // Re-publică și sumarele
+    final affected = <String, String>{};
+    for (final t in locals) {
+      affected[t.partnerId] = t.partnerName;
+    }
+    for (final entry in affected.entries) {
+      await rebuildSummary(entry.key, entry.value);
+    }
+    return synced;
   }
 }

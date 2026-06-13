@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/auth_models.dart';
+import '../../core/pdf_actions_helper.dart';
 import '../../core/auth_session.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
@@ -230,8 +231,15 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
       );
       if (!mounted) return;
       setState(() {
-        _message = 'Fluturas exportat: $path';
+        _message = 'Fluturaș exportat.';
       });
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Fluturaș salariu generat',
+        shareSubject: 'Fluturaș salariu',
+        shareText: 'Fluturaș salariu generat din aplicație.',
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -251,8 +259,15 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
       );
       if (!mounted) return;
       setState(() {
-        _message = 'Cerere concediu exportata: $path';
+        _message = 'Cerere concediu exportată.';
       });
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Cerere concediu generată',
+        shareSubject: 'Cerere concediu',
+        shareText: 'Cerere de concediu generată din aplicație.',
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -395,7 +410,7 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
                             endDate = picked;
                             updateComputedDays(setDialogState);
                           },
-                          child: Text('Sfarsit: ${_formatDate(endDate)}'),
+                          child: Text('Sfârșit: ${_formatDate(endDate)}'),
                         ),
                       ),
                     ],
@@ -422,6 +437,7 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
                   ),
                   const SizedBox(height: 12),
                   TextField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: medicalCodeController,
                     decoration: const InputDecoration(
                       labelText: 'Cod medical',
@@ -429,6 +445,7 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
                   ),
                   const SizedBox(height: 12),
                   TextField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: documentRefController,
                     decoration: const InputDecoration(
                       labelText: 'Document referinta',
@@ -436,6 +453,7 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
                   ),
                   const SizedBox(height: 12),
                   TextField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: notesController,
                     minLines: 2,
                     maxLines: 4,
@@ -469,7 +487,7 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
                 if (endDate.isBefore(startDate)) {
                   setDialogState(() {
                     dialogError =
-                        'Data de sfarsit nu poate fi inainte de data de inceput.';
+                        'Data de sfârșit nu poate fi înainte de data de început.';
                   });
                   return;
                 }
@@ -880,29 +898,57 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
                           'Cod medical ${_orDash(item.medicalCode)} | '
                           'Document ${_orDash(item.documentRef)}',
                         ),
-                        trailing: Wrap(
-                          spacing: 8,
-                          children: [
-                            TextButton(
-                              onPressed: () => _showLeaveDetails(item),
-                              child: const Text('Vezi'),
+                        trailing: PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_vert),
+                          tooltip: 'Acțiuni',
+                          itemBuilder: (_) => [
+                            const PopupMenuItem(
+                              value: 'view',
+                              child: ListTile(
+                                leading: Icon(Icons.visibility_outlined),
+                                title: Text('Vezi detalii'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
                             ),
                             if (_canEditLeave(item))
-                              TextButton(
-                                onPressed: () =>
-                                    _showLeaveEditor(existing: item),
-                                child: const Text('Editeaza'),
+                              const PopupMenuItem(
+                                value: 'edit',
+                                child: ListTile(
+                                  leading: Icon(Icons.edit_outlined),
+                                  title: Text('Editează'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
                               ),
                             if (_canSubmitLeave(item))
-                              TextButton(
-                                onPressed: () => _submitLeave(item),
-                                child: const Text('Trimite'),
+                              const PopupMenuItem(
+                                value: 'submit',
+                                child: ListTile(
+                                  leading: Icon(Icons.send_outlined),
+                                  title: Text('Trimite'),
+                                  contentPadding: EdgeInsets.zero,
+                                ),
                               ),
-                            TextButton(
-                              onPressed: () => _exportLeaveRequestPdf(item),
-                              child: const Text('Genereaza cerere'),
+                            const PopupMenuItem(
+                              value: 'pdf',
+                              child: ListTile(
+                                leading: Icon(Icons.picture_as_pdf_outlined),
+                                title: Text('Generează cerere PDF'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
                             ),
                           ],
+                          onSelected: (value) {
+                            switch (value) {
+                              case 'view':
+                                _showLeaveDetails(item);
+                              case 'edit':
+                                _showLeaveEditor(existing: item);
+                              case 'submit':
+                                _submitLeave(item);
+                              case 'pdf':
+                                _exportLeaveRequestPdf(item);
+                            }
+                          },
                         ),
                       ),
                     ),

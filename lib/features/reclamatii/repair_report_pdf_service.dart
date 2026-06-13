@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
+
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -11,8 +13,6 @@ import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_font_bundle.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
-import 'complaint_models.dart';
-import 'pv_pif_pdf_common.dart';
 import 'repair_report_models.dart';
 
 class RepairReportPdfService {
@@ -27,162 +27,176 @@ class RepairReportPdfService {
     final branding = DocumentBrandingData.fromCompanyProfile(company);
     final template = company.pdfExportSettings.visualTemplate;
     final palette = resolvePdfTemplatePalette(template);
+    final hasPhotos =
+        report.photoBase64List.isNotEmpty || report.photoUrls.isNotEmpty;
+    final annexPages =
+        hasPhotos ? await _buildPhotoAnnexPages(report, pdfFonts) : <pw.Page>[];
+
+    // Titlu document in functie de tipul PV
+    final docTitle = _pvTypePdfTitle(report.pvType);
+    final docNumber = report.reportNumber.trim().isEmpty
+        ? '—'
+        : report.reportNumber.trim();
+
+    // Continut sectiunile 1-7 (cu fallback la campurile vechi)
+    final sec1 = report.motivulInterventiei.trim().isNotEmpty
+        ? report.motivulInterventiei.trim()
+        : report.complaintDescription.trim();
+    final sec2 = report.constatariLocFinding.trim().isNotEmpty
+        ? report.constatariLocFinding.trim()
+        : report.findings.trim();
+    final sec3 = report.lucrariEfectuateDetailed.trim().isNotEmpty
+        ? report.lucrariEfectuateDetailed.trim()
+        : report.workPerformed.trim();
+    final sec4 = report.observatiiTehnice.trim();
+    final sec5 = report.concluzie.trim();
+    final sec6 = report.recomandari.trim().isNotEmpty
+        ? report.recomandari.trim()
+        : report.recommendations.trim();
+    final sec7 = report.mentiuni.trim();
+
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(28),
+        margin: const pw.EdgeInsets.all(24),
         build: (context) => [
+          // Antet firmă + titlu document
           buildClassicDocumentHeader(
             branding: branding,
-            documentTitle: 'PROCES-VERBAL / PIF DE INTERVENTIE TEHNICA',
+            documentTitle: docTitle,
             template: template,
             metadata: <MapEntry<String, String>>[
-              MapEntry(
-                'Numar',
-                report.reportNumber.trim().isEmpty
-                    ? report.id
-                    : report.reportNumber.trim(),
-              ),
+              MapEntry('Nr.', docNumber),
               MapEntry('Data', _date(report.interventionDate)),
-              MapEntry('Tehnician', report.technicianName),
-              MapEntry('Beneficiar', report.beneficiaryName),
+              MapEntry('Status', report.resolutionStatus.label),
             ],
           ),
-          pw.SizedBox(height: 16),
-          _section(
-              'Date interventie',
-              [
-                _row('Beneficiar', report.beneficiaryName),
-                if (report.contractorName.trim().isNotEmpty)
-                  _row('Societate contractanta', report.contractorName),
-                _row('Persoana de contact', report.contactPerson),
-                _row('Telefon', report.phone),
-                _row('Email', report.email),
-                _row('Locatie', report.location),
-                _row('Tehnician', report.technicianName),
-                _row('Echipa', report.teamName),
-                _row('Status rezolvare', report.resolutionStatus.label),
-              ],
-              palette: palette),
-          if (_hasEquipmentData(report)) ...[
-            pw.SizedBox(height: 12),
+          pw.SizedBox(height: 10),
+
+          // Banner revenire (PV înlănțuit)
+          if (report.isFollowUp && report.previousReportNumber.isNotEmpty) ...[
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(8),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.blue50,
+                border: pw.Border.all(color: PdfColors.blue200),
+                borderRadius: pw.BorderRadius.circular(4),
+              ),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'INTERVENȚIA NR. ${report.interventionNumber} — REVENIRE dupa ${report.previousReportNumber}',
+                    style: pw.TextStyle(
+                        fontWeight: pw.FontWeight.bold,
+                        fontSize: 9,
+                        color: PdfColors.blue800),
+                  ),
+                  if (report.previousInterventionSummary.isNotEmpty) ...[
+                    pw.SizedBox(height: 4),
+                    pw.Text(
+                      'Rezumat anterior: ${report.previousInterventionSummary}',
+                      style: const pw.TextStyle(
+                          fontSize: 8, color: PdfColors.blue700),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 8),
+          ],
+
+          // TABEL HEADER (4 coloane: Label | Value | Label | Value)
+          _buildHeaderTable(company, report, pdfFonts),
+          pw.SizedBox(height: 10),
+
+          // Sectiunile 1-7 (skip automat daca sunt goale)
+          if (sec1.isNotEmpty) ...[
+            _contentSection('1. Motivul interventiei', sec1, pdfFonts),
+            pw.SizedBox(height: 6),
+          ],
+          if (sec2.isNotEmpty) ...[
+            _contentSection('2. Constatari la fata locului', sec2, pdfFonts),
+            pw.SizedBox(height: 6),
+          ],
+          if (sec3.isNotEmpty) ...[
+            _contentSection('3. Lucrari efectuate', sec3, pdfFonts),
+            pw.SizedBox(height: 6),
+          ],
+          if (sec4.isNotEmpty) ...[
+            _contentSection('4. Observatii tehnice', sec4, pdfFonts),
+            pw.SizedBox(height: 6),
+          ],
+          if (sec5.isNotEmpty) ...[
+            _contentSection('5. Concluzie', sec5, pdfFonts),
+            pw.SizedBox(height: 6),
+          ],
+          if (sec6.isNotEmpty) ...[
+            _contentSection('6. Recomandari', sec6, pdfFonts),
+            pw.SizedBox(height: 6),
+          ],
+          if (sec7.isNotEmpty) ...[
+            _contentSection('7. Mentiuni', sec7, pdfFonts),
+            pw.SizedBox(height: 6),
+          ],
+
+          // Materiale si piese (daca exista)
+          if (report.materialeDetailed.trim().isNotEmpty ||
+              report.materialsUsed.trim().isNotEmpty) ...[
             _section(
-                'Echipament / Utilaj',
+                'Materiale si piese',
                 [
-                  _row('Tip echipament',
-                      _equipmentTypeLabel(report.equipmentType)),
-                  _row('Brand', report.equipmentBrand),
-                  _row('Model', report.equipmentModel),
-                  _row('Serie unitate exterioara', report.outdoorUnitSerial),
-                  _row('Serii unitati interioare', report.indoorUnitSerials),
-                  _row('Detalii tehnice', report.equipmentDetails),
+                  if (report.materialeDetailed.trim().isNotEmpty)
+                    _paragraph('Cod / denumire / cantitate',
+                        report.materialeDetailed.trim()),
+                  if (report.materialeDetailed.trim().isEmpty &&
+                      report.materialsUsed.trim().isNotEmpty)
+                    _paragraph('Materiale folosite', report.materialsUsed),
+                  if (report.traseulPieselorDefecte.trim().isNotEmpty)
+                    _paragraph('Traseu piese defecte/inlocuite',
+                        report.traseulPieselorDefecte),
                 ],
                 palette: palette),
+            pw.SizedBox(height: 6),
           ],
-          pw.SizedBox(height: 12),
+
+          // Informatii document
           _section(
-              'Continut',
+              'Informatii document',
               [
-                _paragraph('Descriere reclamatie', report.complaintDescription),
-                _paragraph('Constatare', report.findings),
-                _paragraph('Lucrari efectuate', report.workPerformed),
-                _paragraph('Materiale / piese folosite', report.materialsUsed),
-                _paragraph('Recomandari / observatii', report.recommendations),
-              ],
-              palette: palette),
-          pw.SizedBox(height: 12),
-          _section(
-              'Checklist tehnic interventie',
-              [
-                PvPifPdfCommon.checkLine(
-                  label: 'Identificare aparat (tip/brand/model/serii)',
-                  completed: _hasEquipmentData(report),
-                ),
-                PvPifPdfCommon.checkLine(
-                  label: 'Simptom reclamat documentat',
-                  completed: report.complaintDescription.trim().isNotEmpty,
-                ),
-                PvPifPdfCommon.checkLine(
-                  label: 'Constatare tehnica completata',
-                  completed: report.findings.trim().isNotEmpty,
-                ),
-                PvPifPdfCommon.checkLine(
-                  label: 'Operatiuni executate descrise',
-                  completed: report.workPerformed.trim().isNotEmpty,
-                ),
-                PvPifPdfCommon.checkLine(
-                  label: 'Materiale/piese consemnate',
-                  completed: report.materialsUsed.trim().isNotEmpty,
-                ),
-                PvPifPdfCommon.checkLine(
-                  label: 'Recomandari post-interventie',
-                  completed: report.recommendations.trim().isNotEmpty,
-                ),
-              ],
-              palette: palette),
-          pw.SizedBox(height: 12),
-          _section(
-              'Probe functionale / parametri urmariti',
-              [
-                _paragraph(
-                  'Probe functionale executate',
-                  PvPifPdfCommon.functionalChecksText,
-                ),
-                _paragraph(
-                  'Parametri relevanti in teren',
-                  PvPifPdfCommon.fieldParametersText,
-                ),
-              ],
-              palette: palette),
-          pw.SizedBox(height: 12),
-          _section(
-              'Materiale si piese (evidenta)',
-              [
-                _paragraph(
-                  'Cod articol / denumire / cantitate',
-                  report.materialsUsed,
-                ),
-                _paragraph(
-                  'Traseu piese defecte/inlocuite',
-                  PvPifPdfCommon.partsTraceabilityText,
-                ),
-              ],
-              palette: palette),
-          pw.SizedBox(height: 12),
-          _section(
-              'Identificare administrativa',
-              [
-                _row('ID document', report.id),
-                _row('ID reclamatie', report.complaintId),
-                _row('ID programare', report.appointmentId),
-                _row('ID lucrare', report.jobId),
-                _row('Document emis de', company.companyName.trim()),
+                _row('Nr. document', docNumber),
+                _row('Emis de', company.companyName.trim()),
                 _row('CUI emitent', company.cui.trim()),
+                if (report.complaintId.trim().isNotEmpty &&
+                    report.complaintId.trim() != '-')
+                  _row(
+                    'Ref. reclamatie',
+                    report.complaintId.length >= 8
+                        ? report.complaintId.substring(0, 8).toUpperCase()
+                        : report.complaintId.toUpperCase(),
+                  ),
               ],
               palette: palette),
           pw.SizedBox(height: 12),
-          _section(
-              'Declaratii si mentiuni',
-              [
-                _paragraph(
-                  'Scop document',
-                  'Prezentul document consemneaza constatarea tehnica si operatiunile efectuate la fata locului pentru echipamentul mentionat.',
-                ),
-                _paragraph(
-                  'Conditii garantie',
-                  'Interventia se analizeaza in raport cu certificatul de garantie, istoricul de service si conditiile de utilizare/exploatare declarate de beneficiar.',
-                ),
-                _paragraph(
-                  'Observații juridice',
-                  PvPifPdfCommon.legalObservationsText,
-                ),
-                _paragraph(
-                  'Anexe foto teren',
-                  PvPifPdfCommon.fieldPhotoAnnexText,
-                ),
-              ],
-              palette: palette),
-          pw.SizedBox(height: 18),
+
+          // Nota anexa foto
+          if (hasPhotos)
+            pw.Container(
+              margin: const pw.EdgeInsets.only(bottom: 10),
+              padding: const pw.EdgeInsets.all(5),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.blue50,
+                border: pw.Border.all(color: PdfColors.blue200),
+                borderRadius: pw.BorderRadius.circular(4),
+              ),
+              child: pw.Text(
+                'Anexat: ${report.photoBase64List.isNotEmpty ? report.photoBase64List.length : report.photoUrls.length} fotografii — vezi paginile urmatoare',
+                style: const pw.TextStyle(fontSize: 8, color: PdfColors.blue800),
+              ),
+            ),
+
+          // Semnaturi
           _signatureSection(
             clientSignature: _tryDecodeBase64(report.clientSignatureBase64),
             technicianSignature:
@@ -191,7 +205,129 @@ class RepairReportPdfService {
         ],
       ),
     );
+    for (final page in annexPages) {
+      doc.addPage(page);
+    }
     return doc.save();
+  }
+
+  static String _pvTypePdfTitle(String pvType) {
+    switch (pvType) {
+      case 'interventie':
+        return 'PROCES-VERBAL DE INTERVENTIE';
+      case 'montaj':
+        return 'PROCES-VERBAL DE RECEPTIE MONTAJ';
+      case 'garantie':
+        return 'PROCES-VERBAL DE INTERVENTIE IN GARANTIE';
+      default:
+        return 'PROCES-VERBAL DE CONSTATARE TEHNICA';
+    }
+  }
+
+  // Sectiune cu titlu pe fond rosu PRO TERM si continut text
+  static pw.Widget _contentSection(
+      String title, String content, PdfFontBundle fonts) {
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(4),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Container(
+            width: double.infinity,
+            padding:
+                const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: const pw.BoxDecoration(
+              color: PdfColor(0.7765, 0.1569, 0.1569), // #C62828
+              borderRadius: pw.BorderRadius.only(
+                topLeft: pw.Radius.circular(4),
+                topRight: pw.Radius.circular(4),
+              ),
+            ),
+            child: pw.Text(
+              title,
+              style: pw.TextStyle(
+                color: PdfColors.white,
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 9,
+                font: fonts.bold,
+              ),
+            ),
+          ),
+          pw.Padding(
+            padding: const pw.EdgeInsets.all(8),
+            child: pw.Text(
+              content,
+              style: pw.TextStyle(fontSize: 8.5, font: fonts.base),
+              textAlign: pw.TextAlign.justify,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Tabel header 4 coloane (Label | Value | Label | Value)
+  static pw.Widget _buildHeaderTable(
+      CompanyProfile company, RepairReportRecord report, PdfFontBundle fonts) {
+    final labelStyle = pw.TextStyle(
+        fontWeight: pw.FontWeight.bold, fontSize: 8, font: fonts.bold);
+    final valueStyle = pw.TextStyle(fontSize: 8, font: fonts.base);
+    const labelBg = PdfColor(0.9608, 0.9608, 0.9608); // #F5F5F5
+
+    pw.Widget cell(String text,
+        {bool isLabel = false, bool span = false}) {
+      return pw.Container(
+        color: isLabel ? labelBg : null,
+        padding:
+            const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: pw.Text(
+          text.trim().isEmpty ? '—' : text.trim(),
+          style: isLabel ? labelStyle : valueStyle,
+        ),
+      );
+    }
+
+    final equipLabel = [
+      report.equipmentBrand,
+      report.equipmentModel,
+    ].where((s) => s.trim().isNotEmpty).join(' / ');
+
+    final techPhone = [
+      company.phone.trim(),
+      company.email.trim(),
+    ].where((s) => s.isNotEmpty).join(' / ');
+
+    final rows = <List<String>>[
+      ['Data constatarii', _date(report.interventionDate), 'Locatia', report.location],
+      ['Beneficiar', report.beneficiaryName, 'Reprezentant beneficiar', report.reprezentantBeneficiar],
+      ['Firma service / tehnician', '${company.companyName.trim()} — ${report.technicianName.trim()}', 'Telefon / e-mail', techPhone],
+      ['Echipament / model', equipLabel.isEmpty ? '—' : equipLabel, 'Serie / ODU', report.outdoorUnitSerial.trim().isEmpty ? '—' : report.outdoorUnitSerial.trim()],
+      if (report.agentFrigorific.trim().isNotEmpty || report.cantitateRecuperata.trim().isNotEmpty)
+        ['Agent frigorific', report.agentFrigorific, 'Cantitate recuperata', report.cantitateRecuperata],
+      if (report.coduriEroare.trim().isNotEmpty || report.stareTest.trim().isNotEmpty)
+        ['Motiv / coduri eroare', report.coduriEroare, 'Stare test', report.stareTest],
+    ];
+
+    return pw.Table(
+      border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+      columnWidths: const {
+        0: pw.FixedColumnWidth(110),
+        1: pw.FlexColumnWidth(),
+        2: pw.FixedColumnWidth(110),
+        3: pw.FlexColumnWidth(),
+      },
+      children: rows
+          .map((row) => pw.TableRow(children: [
+                cell(row[0], isLabel: true),
+                cell(row[1]),
+                cell(row[2], isLabel: true),
+                cell(row[3]),
+              ]))
+          .toList(),
+    );
   }
 
   static Future<String> export({
@@ -342,20 +478,6 @@ class RepairReportPdfService {
     );
   }
 
-  static bool _hasEquipmentData(RepairReportRecord report) {
-    return report.equipmentType.trim().isNotEmpty ||
-        report.equipmentBrand.trim().isNotEmpty ||
-        report.equipmentModel.trim().isNotEmpty ||
-        report.outdoorUnitSerial.trim().isNotEmpty ||
-        report.indoorUnitSerials.trim().isNotEmpty ||
-        report.equipmentDetails.trim().isNotEmpty;
-  }
-
-  static String _equipmentTypeLabel(String raw) {
-    return ComplaintEquipmentType.fromValue(raw)?.label ??
-        (raw.trim().isEmpty ? '-' : raw.trim());
-  }
-
   static String _date(DateTime value) {
     return '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year}';
   }
@@ -375,5 +497,150 @@ class RepairReportPdfService {
         return null;
       }
     }
+  }
+
+  static Future<List<pw.Page>> _buildPhotoAnnexPages(
+    RepairReportRecord report,
+    PdfFontBundle pdfFonts,
+  ) async {
+    // Construiește lista de imagini: base64 local (offline) > URL Firebase
+    final images = <pw.MemoryImage>[];
+    final captions = <String>[];
+
+    for (int i = 0; i < report.photoBase64List.length; i++) {
+      final b64 = report.photoBase64List[i];
+      if (b64.isEmpty) continue;
+      try {
+        final bytes = Uint8List.fromList(const Base64Decoder().convert(b64));
+        images.add(pw.MemoryImage(bytes));
+        captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
+      } catch (_) {}
+    }
+
+    // Fallback la URL Firebase Storage dacă nu avem base64
+    if (images.isEmpty) {
+      for (int i = 0; i < report.photoUrls.length; i++) {
+        final url = report.photoUrls[i];
+        if (url.isEmpty || !url.startsWith('https://')) continue;
+        try {
+          final response = await http.get(Uri.parse(url))
+              .timeout(const Duration(seconds: 10));
+          if (response.statusCode == 200) {
+            images.add(pw.MemoryImage(response.bodyBytes));
+            captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (images.isEmpty) return [];
+
+    const photosPerPage = 2;
+    final pages = <pw.Page>[];
+
+    for (int pageIdx = 0; pageIdx * photosPerPage < images.length; pageIdx++) {
+      final startIdx = pageIdx * photosPerPage;
+      final endIdx = (startIdx + photosPerPage).clamp(0, images.length);
+      final pageImages = images.sublist(startIdx, endIdx);
+      final pageCaptions = captions.sublist(startIdx, endIdx);
+      final totalPhotos = images.length;
+
+      pages.add(pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(15 * PdfPageFormat.mm),
+        build: (context) => pw.Column(
+          children: [
+            // Header anexă
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+              decoration: pw.BoxDecoration(
+                color: PdfColors.red800,
+                borderRadius: pw.BorderRadius.circular(4),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    'ANEXĂ FOTOGRAFII — ${report.reportNumber.isEmpty ? report.id : report.reportNumber}',
+                    style: pw.TextStyle(
+                      color: PdfColors.white,
+                      fontWeight: pw.FontWeight.bold,
+                      fontSize: 10,
+                      font: pdfFonts.bold,
+                    ),
+                  ),
+                  pw.Text(
+                    'Foto ${startIdx + 1}-$endIdx din $totalPhotos',
+                    style: pw.TextStyle(color: PdfColors.white, fontSize: 8, font: pdfFonts.base),
+                  ),
+                ],
+              ),
+            ),
+            pw.SizedBox(height: 10),
+            // Pozele pe pagină (2 stivuite vertical)
+            pw.Expanded(
+              child: pw.Column(
+                children: List.generate(pageImages.length, (imgIdx) {
+                  return pw.Expanded(
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Expanded(
+                          child: pw.Container(
+                            width: double.infinity,
+                            decoration: pw.BoxDecoration(
+                              border: pw.Border.all(color: PdfColors.grey300),
+                              borderRadius: pw.BorderRadius.circular(4),
+                            ),
+                            child: pw.ClipRRect(
+                              horizontalRadius: 4,
+                              verticalRadius: 4,
+                              child: pw.Image(pageImages[imgIdx], fit: pw.BoxFit.contain),
+                            ),
+                          ),
+                        ),
+                        pw.SizedBox(height: 4),
+                        pw.Row(
+                          children: [
+                            pw.Text(
+                              'Foto ${startIdx + imgIdx + 1}',
+                              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8, font: pdfFonts.bold),
+                            ),
+                            if (pageCaptions[imgIdx].isNotEmpty) ...[
+                              pw.Text(' — ', style: pw.TextStyle(fontSize: 8, font: pdfFonts.base)),
+                              pw.Text(pageCaptions[imgIdx], style: pw.TextStyle(fontSize: 8, font: pdfFonts.base)),
+                            ],
+                          ],
+                        ),
+                        if (imgIdx < pageImages.length - 1)
+                          pw.SizedBox(height: 8),
+                      ],
+                    ),
+                  );
+                }),
+              ),
+            ),
+            // Footer
+            pw.Divider(),
+            pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  'Anexă la: ${report.reportNumber.isEmpty ? report.id : report.reportNumber} — ${report.beneficiaryName}',
+                  style: pw.TextStyle(fontSize: 7, color: PdfColors.grey600, font: pdfFonts.base),
+                ),
+                pw.Text(
+                  'Data: ${_date(report.interventionDate)}',
+                  style: pw.TextStyle(fontSize: 7, color: PdfColors.grey600, font: pdfFonts.base),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ));
+    }
+
+    return pages;
   }
 }

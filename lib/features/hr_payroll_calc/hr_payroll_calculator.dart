@@ -81,6 +81,9 @@ class HrPayrollCalculator {
         ? _asString(mealTicketPayload['fiscal_treatment'])
         : _asString(snapshot.sourceRefs['meal_ticket_fiscal_treatment']);
     final mealTicketDailyCapRon = _asDouble(mealTicketPayload['daily_cap_ron']);
+    // net_direct = suma introdusa e deja neta; nu se calculeaza taxe pe TM
+    final isNetDirectTm = mealTicketFiscalTreatment == 'net_direct' ||
+        mealTicketFiscalTreatment == 'scutit_total';
 
     final grossBaseSalary = snapshot.baseSalaryGross;
     final grossBonusesTaxable = _sumEntries(
@@ -137,19 +140,16 @@ class HrPayrollCalculator {
             .clamp(0.0, double.infinity)
         : 0.0;
 
-    // ── Taxe pe tichete de masa ────────────────────────────────────────────
-    // Conform OUG 115/2023 (vigoare ian 2024), Legii 296/2023 si OUG 89/2025:
-    // - Tichete SCUTITE de CAS (25%) in limita plafonului zilnic
-    // - Tichete SUPUSE CASS (10%) — retinut din salariul net (OUG 115/2023 Titlul V)
-    // - Tichete SUPUSE impozitului pe venit (10%) — retinut din salariul net
-    // Ambele taxe se retin de angajator si se vireaza la stat.
+    // ── Tichete de masa ────────────────────────────────────────────────────
+    // net_direct: suma introdusa e neta — zero taxe, adaugata direct la net
+    // combined:   CASS+impozit calculat pe baza salariu+TM (OUG 89/2025)
+    // Campurile de mai jos sunt INFORMATIVE (incluse in totalele de mai jos).
+    final mealTicketCassAmount = (!isNetDirectTm && mealTicketsWithinCapValue > 0)
+        ? _roundRon(mealTicketsWithinCapValue * (cassPercent / 100.0))
+        : 0.0;
     final mealTicketIncomeTaxAmount =
-        snapshot.mealTicketsEnabled && mealTicketsWithinCapValue > 0
-            ? mealTicketsWithinCapValue * (incomeTaxPercent / 100.0)
-            : 0.0;
-    final mealTicketCassAmount =
-        snapshot.mealTicketsEnabled && mealTicketsWithinCapValue > 0
-            ? mealTicketsWithinCapValue * (cassPercent / 100.0)
+        (!isNetDirectTm && mealTicketsWithinCapValue > 0)
+            ? _roundRon(mealTicketsWithinCapValue * (incomeTaxPercent / 100.0))
             : 0.0;
 
     final deductionTotal = _sumEntries(
@@ -192,27 +192,38 @@ class HrPayrollCalculator {
         nightWorkSupplementAmount +
         overtimeSupplementAmount +
         mealTicketExcessTaxableAsSalary;
-    final employeeCasAmount = grossTotalTaxable * (casPercent / 100.0);
-    final employeeCassAmount = grossTotalTaxable * (cassPercent / 100.0);
+    // CAS: scutit pe TM (orice tratament)
+    final employeeCasAmount = _roundRon(grossTotalTaxable * (casPercent / 100.0));
+    // CASS: net_direct → numai pe salariu; combined → pe salariu+TM
+    final employeeCassAmount = _roundRon(
+        isNetDirectTm
+            ? grossTotalTaxable * (cassPercent / 100.0)
+            : (grossTotalTaxable + mealTicketsWithinCapValue) *
+                (cassPercent / 100.0));
     final employerCamAmount = grossTotalTaxable * (employerCamPercent / 100.0);
-    final taxableBaseAfterContributions =
-        grossTotalTaxable - employeeCasAmount - employeeCassAmount;
-    final personalDeductionAmount = _calculatePersonalDeduction(
-      grossTotalTaxable: grossTotalTaxable + mealTicketsWithinCapValue,
-      payload: salaryPayload,
-    );
-    final taxableBaseForIncomeTax =
-        (taxableBaseAfterContributions - personalDeductionAmount)
-            .clamp(0.0, double.infinity);
-    final incomeTaxAmount = taxableBaseForIncomeTax > 0
-        ? taxableBaseForIncomeTax * (incomeTaxPercent / 100.0)
-        : 0.0;
-    final netBeforeDeductions = grossTotalTaxable +
+    // venitNet: net_direct → TM NU e in baza de impozit (adaugat direct la final)
+    final venitNet = grossTotalTaxable +
+        (isNetDirectTm ? 0.0 : mealTicketsWithinCapValue) +
         grossBonusesNonTaxable +
         grossNonTaxableAllowances -
         employeeCasAmount -
-        employeeCassAmount -
-        incomeTaxAmount;
+        employeeCassAmount;
+    final taxableBaseAfterContributions = venitNet;
+    // Deducere personala: net_direct → prag calculat fara TM
+    final personalDeductionAmount = _calculatePersonalDeduction(
+      grossTotalTaxable: isNetDirectTm
+          ? grossTotalTaxable
+          : grossTotalTaxable + mealTicketsWithinCapValue,
+      payload: salaryPayload,
+      nrDependenti: snapshot.nrPersoaneIntretinere,
+    );
+    final taxableBaseForIncomeTax =
+        (venitNet - personalDeductionAmount).clamp(0.0, double.infinity);
+    final incomeTaxAmount = taxableBaseForIncomeTax > 0
+        ? _roundRon(taxableBaseForIncomeTax * (incomeTaxPercent / 100.0))
+        : 0.0;
+    // Baza pentru popriri = venit net dupa toate contributiile fiscale
+    final netBeforeDeductions = venitNet - incomeTaxAmount;
 
     // ── Popriri cu plafonare legala CPC art. 729 ──────────────────────────
     // Baza de calcul = venitul lunar net (dupa CAS+CASS+impozit, inainte de
@@ -229,13 +240,12 @@ class HrPayrollCalculator {
     final garnishmentReservedTotal = garnishmentResult['total'] as double;
     final garnishmentCapApplied = garnishmentResult['capped'] as bool;
 
+    // net_direct: TM adaugat net direct la final (fara taxe)
     final netFinal = netBeforeDeductions -
         deductionTotal -
         advanceRecoveryTotal -
-        garnishmentReservedTotal -
-        mealTicketIncomeTaxAmount -
-        mealTicketCassAmount +
-        mealTicketsWithinCapValue;
+        garnishmentReservedTotal +
+        (isNetDirectTm ? mealTicketsWithinCapValue : 0.0);
 
     if (salaryTaxRule == null && effectiveSalaryTaxRule != null) {
       notes.add(
@@ -277,17 +287,24 @@ class HrPayrollCalculator {
       );
     }
     if (snapshot.mealTicketsTotalValue > 0) {
-      notes.add(
-        'Tichete de masa: ${snapshot.mealTicketsTotalValue.toStringAsFixed(2)} RON'
-        ' (${snapshot.mealTicketEligibleDays.toStringAsFixed(0)} zile × ${snapshot.mealTicketValuePerDay.toStringAsFixed(2)} RON/zi)'
-        ' - impozit venit ${mealTicketIncomeTaxAmount.toStringAsFixed(2)} RON (10%) + CASS ${mealTicketCassAmount.toStringAsFixed(2)} RON (10%) retinute din net'
-        ' (scutite CAS; CASS si impozit datorate conform OUG 115/2023; Legea 296/2023).',
-      );
-      if (mealTicketExcessTaxableAsSalary > 0) {
+      if (isNetDirectTm) {
         notes.add(
-          'Excedent tichete peste plafon legal: ${mealTicketExcessTaxableAsSalary.toStringAsFixed(2)} RON.'
-          ' Aceasta componenta a fost tratata ca avantaj salarial taxabil integral (CAS/CASS/impozit).',
+          'Tichete de masa: ${snapshot.mealTicketsTotalValue.toStringAsFixed(2)} RON'
+          ' (${snapshot.mealTicketEligibleDays.toStringAsFixed(0)} zile × ${snapshot.mealTicketValuePerDay.toStringAsFixed(2)} RON/zi)'
+          ' — suma neta directa; fara CAS/CASS/impozit suplimentar; adaugata direct la net final.',
         );
+      } else {
+        notes.add(
+          'Tichete de masa: ${snapshot.mealTicketsTotalValue.toStringAsFixed(2)} RON'
+          ' (${snapshot.mealTicketEligibleDays.toStringAsFixed(0)} zile × ${snapshot.mealTicketValuePerDay.toStringAsFixed(2)} RON/zi)'
+          ' — scutite CAS; CASS calculata pe salariu+TM impreuna; impozit pe venit pe baza neta (OUG 89/2025).',
+        );
+        if (mealTicketExcessTaxableAsSalary > 0) {
+          notes.add(
+            'Excedent tichete peste plafon legal: ${mealTicketExcessTaxableAsSalary.toStringAsFixed(2)} RON.'
+            ' Aceasta componenta a fost tratata ca avantaj salarial taxabil integral (CAS/CASS/impozit).',
+          );
+        }
       }
     }
 
@@ -309,6 +326,9 @@ class HrPayrollCalculator {
         'employer_cam_percent': employerCamPercent,
         'personal_deduction_amount': personalDeductionAmount,
         'taxable_base_for_income_tax': taxableBaseForIncomeTax,
+        'venit_net': venitNet,
+        'meal_ticket_total': mealTicketsWithinCapValue,
+        'net_without_tm': netFinal - mealTicketsWithinCapValue,
       },
       'gross_components': <String, dynamic>{
         'base_salary_gross': grossBaseSalary,
@@ -431,19 +451,34 @@ class HrPayrollCalculator {
   double _calculatePersonalDeduction({
     required double grossTotalTaxable,
     required Map<String, dynamic> payload,
+    int nrDependenti = 0,
   }) {
     if (payload['employee_personal_deduction_supported'] != true) return 0.0;
-    final baseDeduction = _asDouble(payload['personal_deduction_base_ron']);
+    final base = _asDouble(payload['personal_deduction_base_ron']); // 600 RON
+    // Deducere suplimentara per persoana intretinuta (OUG 89/2025)
+    final deductionBase = base +
+        (nrDependenti <= 0
+            ? 0
+            : nrDependenti == 1
+                ? 100
+                : nrDependenti == 2
+                    ? 200
+                    : nrDependenti == 3
+                        ? 300
+                        : 400);
     final threshold =
-        _asDouble(payload['personal_deduction_threshold_gross_ron']);
-    final maxFactor = _asDouble(payload['personal_deduction_max_gross_factor']);
-    if (baseDeduction <= 0 || threshold <= 0) return 0.0;
-    if (grossTotalTaxable <= threshold) return baseDeduction;
-    final maxGross = threshold * (maxFactor > 0 ? maxFactor : 3.0);
+        _asDouble(payload['personal_deduction_threshold_gross_ron']); // 4050
+    final upperLimitRaw = payload['personal_deduction_upper_limit_ron'];
+    // Plafon superior: din payload (7000 RON) sau fallback proportional
+    final maxGross = upperLimitRaw != null
+        ? _asDouble(upperLimitRaw)
+        : threshold * 1.7284;
+    if (deductionBase <= 0 || threshold <= 0) return 0.0;
+    if (grossTotalTaxable <= threshold) return deductionBase;
     if (grossTotalTaxable >= maxGross) return 0.0;
-    return baseDeduction *
-        (maxGross - grossTotalTaxable) /
-        (maxGross - threshold);
+    final deduction =
+        deductionBase * (maxGross - grossTotalTaxable) / (maxGross - threshold);
+    return _roundRon(deduction);
   }
 
   /// Calculeaza suma popririle cu plafonare legala conform CPC art. 729.
@@ -569,4 +604,6 @@ class HrPayrollCalculator {
     if (raw is num) return raw.toInt();
     return int.tryParse((raw ?? '').toString()) ?? 0;
   }
+
+  double _roundRon(double v) => v.round().toDouble();
 }

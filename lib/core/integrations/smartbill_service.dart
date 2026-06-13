@@ -5,8 +5,26 @@ import 'package:intl/intl.dart';
 
 import '../smartbill_settings.dart';
 
+/// Rezultatul emiterii unui document SmartBill
+class SmartBillResult {
+  const SmartBillResult({
+    required this.success,
+    this.numarFactura = '',
+    this.serieFactura = '',
+    this.eroare = '',
+  });
+  final bool success;
+  final String numarFactura;
+  final String serieFactura;
+  final String eroare;
+}
+
 class SmartBillService {
   SmartBillService({http.Client? client}) : _client = client ?? http.Client();
+
+  /// Singleton — pentru acces din orice modul fără a pasa settings de fiecare dată.
+  /// Settings sunt furnizate la apel via CompanyProfile.
+  static final instance = SmartBillService();
 
   static const String _baseUrl = 'https://ws.smartbill.ro/SBORO/api';
 
@@ -186,6 +204,105 @@ class SmartBillService {
     );
     _throwIfSmartBillFault(root);
     return SmartBillInvoicePaymentStatus.fromMap(root);
+  }
+
+  // ── Metode de nivel înalt — factură din lucrare / proforma din ofertă ───────
+
+  /// Emite factură SmartBill folosind datele realizate (cantitateReala + pretUnitarReal).
+  /// IMPORTANT: se facturează ce s-a REALIZAT efectiv, nu ce s-a ofertat.
+  Future<SmartBillResult> genereazaFacturadinLucrare({
+    required SmartBillSettings settings,
+    required String clientName,
+    required String jobCode,
+    required String sourceOfferNumber,
+    required List<Map<String, dynamic>> linii, // {denumire, um, cantitate, pret, isService}
+    String issueDate = '',
+  }) async {
+    final date = issueDate.isNotEmpty
+        ? issueDate
+        : DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final mentions =
+        'Ref. lucrare: $jobCode${sourceOfferNumber.isNotEmpty ? " · Ofertă: $sourceOfferNumber" : ""}';
+    final payload = <String, dynamic>{
+      'companyVatCode': settings.companyVatCode.trim(),
+      'client': <String, dynamic>{
+        'name': clientName,
+        'isTaxPayer': false,
+        'saveToDb': false,
+      },
+      'isDraft': false,
+      'issueDate': date,
+      'seriesName': settings.invoiceSeriesName.trim(),
+      'mentions': mentions,
+      'products': linii,
+    };
+    try {
+      final resp = await issueInvoice(settings, payload);
+      return SmartBillResult(
+        success: true,
+        numarFactura: resp.number,
+        serieFactura: resp.series,
+      );
+    } on SmartBillApiException catch (e) {
+      return SmartBillResult(success: false, eroare: e.message);
+    } catch (e) {
+      return SmartBillResult(success: false, eroare: e.toString());
+    }
+  }
+
+  /// Emite proforma SmartBill din ofertă acceptată.
+  Future<SmartBillResult> genereazaProformadinOferta({
+    required SmartBillSettings settings,
+    required String clientName,
+    required String ofertaNumar,
+    required List<Map<String, dynamic>> linii,
+    String issueDate = '',
+  }) async {
+    final date = issueDate.isNotEmpty
+        ? issueDate
+        : DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final payload = <String, dynamic>{
+      'companyVatCode': settings.companyVatCode.trim(),
+      'client': <String, dynamic>{'name': clientName, 'saveToDb': false},
+      'isDraft': false,
+      'issueDate': date,
+      'seriesName': settings.estimateSeriesName.trim(),
+      'mentions': 'Ref. ofertă: $ofertaNumar',
+      'products': linii,
+    };
+    try {
+      final resp = await issueEstimate(settings, payload);
+      return SmartBillResult(
+        success: true,
+        numarFactura: resp.number,
+        serieFactura: resp.series,
+      );
+    } on SmartBillApiException catch (e) {
+      return SmartBillResult(success: false, eroare: e.message);
+    } catch (e) {
+      return SmartBillResult(success: false, eroare: e.toString());
+    }
+  }
+
+  /// Verifică dacă există deja o factură pentru acest cod de lucrare.
+  Future<bool> existaFacturaForJob(
+    SmartBillSettings settings,
+    String jobCode,
+  ) async {
+    try {
+      await _get(
+        '/invoice',
+        settings,
+        queryParameters: {
+          'cif': settings.companyVatCode.trim(),
+          'seriesName': settings.invoiceSeriesName.trim(),
+          'clientName': jobCode,
+        },
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<Map<String, dynamic>> _get(

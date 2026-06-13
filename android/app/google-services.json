@@ -12,7 +12,12 @@
           "package_name": "com.example.devizpro_ultra"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "322174025333-rq0f2vet3n58i2l79dk875dcjudgu3ma.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBySKgFjhHMTaIdkdI2LWJPDMAM-bu3aDc"
@@ -20,7 +25,41 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "322174025333-rq0f2vet3n58i2l79dk875dcjudgu3ma.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:322174025333:android:acf0e3a13b2d22de06023c",
+        "android_client_info": {
+          "package_name": "ro.proterm.proventaris"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "322174025333-rq0f2vet3n58i2l79dk875dcjudgu3ma.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBySKgFjhHMTaIdkdI2LWJPDMAM-bu3aDc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "322174025333-rq0f2vet3n58i2l79dk875dcjudgu3ma.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

@@ -758,45 +758,53 @@ class _ProgramariProfitabilitatePageState
 
   Widget _buildSumarCards() {
     final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Row(
-        children: [
-          Expanded(
-            child: _SumarCard(
-              label: 'Încasat',
-              value: '${_totalIncasat.toStringAsFixed(2)} RON',
-              icon: Icons.payments_outlined,
-              color: colorScheme.primary,
-              sub: '$_nrCuIncasare programări',
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 700;
+        final c1 = _SumarCard(
+          label: 'Încasat',
+          value: '${_totalIncasat.toStringAsFixed(2)} RON',
+          icon: Icons.payments_outlined,
+          color: colorScheme.primary,
+          sub: '$_nrCuIncasare programări',
+        );
+        final c2 = _SumarCard(
+          label: 'Cost materiale',
+          value: '${_totalCostMateriale.toStringAsFixed(2)} RON',
+          icon: Icons.inventory_2_outlined,
+          color: colorScheme.secondary,
+          sub: '${_filtratePerioada.length} total',
+        );
+        final c3 = _SumarCard(
+          label: 'Profit net',
+          value: '${_totalProfit.toStringAsFixed(2)} RON',
+          icon: Icons.trending_up_outlined,
+          color: _totalProfit >= 0 ? Colors.green.shade700 : Colors.red,
+          sub: _totalCostMateriale > 0 && _totalIncasat > 0
+              ? 'Marjă: ${((_totalProfit / _totalIncasat) * 100).toStringAsFixed(1)}%'
+              : '',
+        );
+        if (isMobile) {
+          return Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [c1, const SizedBox(height: 8), c2, const SizedBox(height: 8), c3],
             ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Expanded(child: c1),
+              const SizedBox(width: 8),
+              Expanded(child: c2),
+              const SizedBox(width: 8),
+              Expanded(child: c3),
+            ],
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _SumarCard(
-              label: 'Cost materiale',
-              value: '${_totalCostMateriale.toStringAsFixed(2)} RON',
-              icon: Icons.inventory_2_outlined,
-              color: colorScheme.secondary,
-              sub: '${_filtratePerioada.length} total',
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _SumarCard(
-              label: 'Profit net',
-              value: '${_totalProfit.toStringAsFixed(2)} RON',
-              icon: Icons.trending_up_outlined,
-              color: _totalProfit >= 0
-                  ? Colors.green.shade700
-                  : Colors.red,
-              sub: _totalCostMateriale > 0 && _totalIncasat > 0
-                  ? 'Marjă: ${((_totalProfit / _totalIncasat) * 100).toStringAsFixed(1)}%'
-                  : '',
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 

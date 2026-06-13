@@ -1,0 +1,327 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../core/pdf/pdf_font_helper.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import 'job_site_document_models.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF Service pentru PV montaj / PIF — cu bloc de semnătură electronică
+// ─────────────────────────────────────────────────────────────────────────────
+
+class JobSiteDocumentPdfService {
+  const JobSiteDocumentPdfService._();
+
+  static final _dateFmt = DateFormat('dd.MM.yyyy', 'ro_RO');
+
+  static String _fmt(DateTime dt) => _dateFmt.format(dt);
+
+  static String _safe(String? s) => (s ?? '').trim().isEmpty ? '-' : (s ?? '').trim();
+
+  /// Generează PDF și salvează pe disc. Returnează calea fișierului.
+  static Future<String> export({
+    required AppDataRepository repository,
+    required JobSiteDocumentRecord document,
+    bool saveAs = false,
+  }) async {
+    await PdfFontHelper.initialize();
+    final bytes = await _buildPdfBytes(document);
+    final fileName = '${document.documentType.shortCode}'
+        '_${document.documentNumber.isEmpty ? document.id : document.documentNumber}'
+        '.pdf';
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: bytes,
+      fileName: fileName,
+      category: PdfDocumentCategory.jobs,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static Future<Uint8List> _buildPdfBytes(JobSiteDocumentRecord doc) async {
+    final pdfDoc = pw.Document(theme: PdfFontHelper.theme);
+
+    // Bloc semnătură client (din base64)
+    pw.Widget? clientSignatureWidget;
+    if (doc.clientSignatureBase64.trim().isNotEmpty) {
+      try {
+        final bytes = base64Decode(doc.clientSignatureBase64.trim());
+        final img = pw.MemoryImage(bytes);
+        clientSignatureWidget = pw.Image(img, width: 140, height: 60, fit: pw.BoxFit.contain);
+      } catch (_) {
+        clientSignatureWidget = null;
+      }
+    }
+
+    pdfDoc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 28, vertical: 22),
+        build: (_) => [
+          _header(doc),
+          pw.SizedBox(height: 10),
+          _section('Informații document', [
+            _row('Număr document', _safe(doc.documentNumber)),
+            _row('Dată document', _fmt(doc.documentDate)),
+            _row('Proiect', _safe(doc.projectName)),
+            _row('Locație', _safe(doc.location)),
+            _row('Status', _safe(doc.status)),
+            _row('Status funcțional', _safe(doc.functionalStatus)),
+          ]),
+          pw.SizedBox(height: 6),
+          _section('Reprezentanți', [
+            _row('Beneficiar', _safe(doc.beneficiaryRepresentative)),
+            _row('Executant', _safe(doc.executorRepresentative)),
+          ]),
+          if (doc.checkItems.isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            _section('Verificări tehnice', _buildChecklist(doc.checkItems)),
+          ],
+          if (doc.measurements.isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            _section('Măsurători și probe', _buildMeasurements(doc.measurements)),
+          ],
+          if (doc.probesSummary.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            _section('Sumar probe', [pw.Text(_safe(doc.probesSummary), style: const pw.TextStyle(fontSize: 10))]),
+          ],
+          if (doc.observations.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            _section('Observații', [pw.Text(_safe(doc.observations), style: const pw.TextStyle(fontSize: 10))]),
+          ],
+          if (doc.conclusions.trim().isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            _section('Concluzii', [pw.Text(_safe(doc.conclusions), style: const pw.TextStyle(fontSize: 10))]),
+          ],
+          if (doc.annexes.isNotEmpty) ...[
+            pw.SizedBox(height: 6),
+            _buildAnnexes(doc.annexes),
+          ],
+          pw.SizedBox(height: 16),
+          _signatureBlock(
+            clientRep: doc.beneficiaryRepresentative,
+            executorRep: doc.executorRepresentative,
+            date: doc.documentDate,
+            clientSignatureWidget: clientSignatureWidget,
+          ),
+        ],
+      ),
+    );
+
+    return pdfDoc.save();
+  }
+
+  static pw.Widget _header(JobSiteDocumentRecord doc) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+      decoration: pw.BoxDecoration(
+        color: PdfColors.blue900,
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            doc.documentType.label.toUpperCase(),
+            style: pw.TextStyle(
+              color: PdfColors.white,
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 14,
+            ),
+          ),
+          if (doc.documentTitle.trim().isNotEmpty)
+            pw.Text(
+              doc.documentTitle,
+              style: const pw.TextStyle(color: PdfColors.white, fontSize: 11),
+            ),
+          if (doc.documentSubtitle.trim().isNotEmpty)
+            pw.Text(
+              doc.documentSubtitle,
+              style: const pw.TextStyle(color: PdfColors.white, fontSize: 9),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _section(String title, List<pw.Widget> children) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(8),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            title,
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 11),
+          ),
+          pw.Divider(height: 6, color: PdfColors.grey300),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _row(String label, String value) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 2),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.SizedBox(
+            width: 160,
+            child: pw.Text(label, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+          ),
+          pw.Expanded(child: pw.Text(value, style: const pw.TextStyle(fontSize: 10))),
+        ],
+      ),
+    );
+  }
+
+  static List<pw.Widget> _buildChecklist(List<JobSiteDocumentCheckItem> items) {
+    return items.map((item) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 1),
+        child: pw.Row(
+          children: [
+            pw.Text(item.value ? '☑' : '☐', style: const pw.TextStyle(fontSize: 11)),
+            pw.SizedBox(width: 4),
+            pw.Expanded(child: pw.Text(item.label, style: const pw.TextStyle(fontSize: 10))),
+            if (item.notes.trim().isNotEmpty)
+              pw.Text(' (${item.notes})', style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+          ],
+        ),
+      );
+    }).toList();
+  }
+
+  static List<pw.Widget> _buildMeasurements(List<JobSiteDocumentMeasurement> items) {
+    return items.map((item) {
+      final val = item.value.trim().isEmpty ? '-' : '${item.value} ${item.unit}'.trim();
+      return _row(item.label, val);
+    }).toList();
+  }
+
+  static pw.Widget _buildAnnexes(List<JobSiteDocumentAnnex> annexes) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: annexes.map((annex) {
+        return pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 6),
+          child: _section(
+            'Anexă: ${annex.title}',
+            [
+              if (annex.description.trim().isNotEmpty)
+                pw.Text(annex.description, style: const pw.TextStyle(fontSize: 9)),
+              ...annex.items.take(40).map((item) => pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(vertical: 1),
+                    child: pw.Row(
+                      children: [
+                        pw.Expanded(
+                          child: pw.Text('• ${item.label}', style: const pw.TextStyle(fontSize: 9)),
+                        ),
+                        pw.Text('${item.quantity} ${item.unit}'.trim(),
+                            style: const pw.TextStyle(fontSize: 9)),
+                      ],
+                    ),
+                  )),
+              if (annex.items.length > 40)
+                pw.Text('... și ${annex.items.length - 40} poziții.',
+                    style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  // ── Bloc semnături ──────────────────────────────────────────────────────
+  static pw.Widget _signatureBlock({
+    required String clientRep,
+    required String executorRep,
+    required DateTime date,
+    pw.Widget? clientSignatureWidget,
+  }) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey400),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      child: pw.Column(
+        children: [
+          pw.Text(
+            'Data: ${_fmt(date)}',
+            style: const pw.TextStyle(fontSize: 10),
+          ),
+          pw.SizedBox(height: 10),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              // Semnătură client
+              pw.Expanded(
+                child: pw.Column(
+                  children: [
+                    pw.Text(
+                      'Semnătură client / beneficiar',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+                    ),
+                    pw.SizedBox(height: 6),
+                    if (clientSignatureWidget != null)
+                      clientSignatureWidget
+                    else
+                      pw.Container(
+                        height: 60,
+                        decoration: pw.BoxDecoration(
+                          border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey600)),
+                        ),
+                      ),
+                    pw.SizedBox(height: 4),
+                    pw.Text(
+                      clientRep.trim().isEmpty ? '____________________' : clientRep,
+                      style: const pw.TextStyle(fontSize: 9),
+                    ),
+                  ],
+                ),
+              ),
+              pw.SizedBox(width: 20),
+              // Semnătură executant
+              pw.Expanded(
+                child: pw.Column(
+                  children: [
+                    pw.Text(
+                      'Semnătură executant',
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+                    ),
+                    pw.SizedBox(height: 6),
+                    pw.Container(
+                      height: 60,
+                      decoration: pw.BoxDecoration(
+                        border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey600)),
+                      ),
+                    ),
+                    pw.SizedBox(height: 4),
+                    pw.Text(
+                      executorRep.trim().isEmpty ? '____________________' : executorRep,
+                      style: const pw.TextStyle(fontSize: 9),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}

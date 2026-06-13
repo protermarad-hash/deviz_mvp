@@ -3,11 +3,13 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/company_profile.dart';
+import '../../core/help/help_module_button.dart';
 import '../../core/integrations/smartbill_stock_cache_service.dart';
 import '../../core/integrations/smartbill_service.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/client_info_card.dart';
+import '../../core/widgets/client_autocomplete_field.dart';
 import '../../core/widgets/smartbill_bon_consum_dialog.dart';
 import '../clients/client_models.dart';
 import '../master/master_local_store.dart';
@@ -15,10 +17,13 @@ import '../materials/materials_catalog_service.dart';
 import '../oferte/deviz_articol_template_models.dart';
 import '../oferte/deviz_articol_template_repository.dart';
 import '../registratura/registry_service.dart';
+import 'package:uuid/uuid.dart';
 import 'deviz_tehnic_email_dialog.dart';
 import 'deviz_tehnic_models.dart';
 import 'deviz_tehnic_pdf_service.dart';
 import 'deviz_tehnic_repository.dart';
+
+const double _kArticolMobileBreakpoint = 700;
 
 /// Pagina de creare / editare deviz tehnic cu logică Excel:
 /// fiecare articol are 4 componente de cost (Mat, Man, Utilaj, Transport).
@@ -56,8 +61,13 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   final _tvaCtrl = TextEditingController(text: '21');
   final _zileCtrl = TextEditingController(text: '30');
 
+  // Lista locală — extinsă când utilizatorul adaugă client inline
+  List<ClientRecord> _localClients = const [];
+
   String? _selectedClientId;
   String _selectedClientName = '';
+  final _contactPersonCtrl = TextEditingController();
+  final _contactDepartmentCtrl = TextEditingController();
   DateTime _dataEmiterii = DateTime.now();
   List<_ArticolState> _articole = [];
   bool _saving = false;
@@ -81,6 +91,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   @override
   void initState() {
     super.initState();
+    _localClients = [...widget.clients];
     final ex = widget.existing;
     if (ex != null) {
       _numarCtrl.text = ex.numar;
@@ -94,6 +105,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       _zileCtrl.text = ex.zileValabilitate.toString();
       _selectedClientId = ex.clientId.isEmpty ? null : ex.clientId;
       _selectedClientName = ex.clientName;
+      _contactPersonCtrl.text = ex.contactPerson;
+      _contactDepartmentCtrl.text = ex.contactDepartment;
       _dataEmiterii = ex.dataEmiterii;
       _articole = ex.articole.map(_ArticolState.fromModel).toList();
       // Câmpuri noi
@@ -260,6 +273,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     _profitCtrl.dispose();
     _tvaCtrl.dispose();
     _zileCtrl.dispose();
+    _contactPersonCtrl.dispose();
+    _contactDepartmentCtrl.dispose();
     for (final a in _articole) {
       a.dispose();
     }
@@ -530,6 +545,11 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     }
   }
 
+  ClientRecord? _clientById(String? id) {
+    if (id == null || id.trim().isEmpty) return null;
+    return _localClients.where((c) => c.id == id).firstOrNull;
+  }
+
   DevizTehnicRecord _buildRecord() {
     final now = DateTime.now();
     final ex = widget.existing;
@@ -540,6 +560,12 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       obiectiv: _obiectivCtrl.text.trim(),
       clientId: _selectedClientId ?? '',
       clientName: _selectedClientName,
+      clientCui: _clientById(_selectedClientId)?.cui ?? ex?.clientCui ?? '',
+      clientAddress: _clientById(_selectedClientId)?.address ?? ex?.clientAddress ?? '',
+      clientPhone: _clientById(_selectedClientId)?.allPhoneNumbers.firstOrNull ?? _clientById(_selectedClientId)?.phone ?? ex?.clientPhone ?? '',
+      clientEmail: _clientById(_selectedClientId)?.email ?? ex?.clientEmail ?? '',
+      contactPerson: _contactPersonCtrl.text.trim(),
+      contactDepartment: _contactDepartmentCtrl.text.trim(),
       dataEmiterii: _dataEmiterii,
       zileValabilitate: int.tryParse(_zileCtrl.text) ?? 30,
       articole: _buildArticole,
@@ -569,6 +595,11 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       );
       return;
     }
+    // Verificare integritate: ID-uri unice per articol
+    assert(
+      _articole.map((a) => a.id).toSet().length == _articole.length,
+      'Articole duplicate detectate în deviz tehnic!',
+    );
     setState(() => _saving = true);
     try {
       final record = _buildRecord();
@@ -643,9 +674,13 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     final isNew = widget.existing == null;
     return Scaffold(
       appBar: AppBar(
-        title: Text(isNew
-            ? '${_tipDocument.label} nou'
-            : 'Editează ${_tipDocument.label.toLowerCase()}'),
+        title: Text(
+          isNew
+              ? '${_tipDocument.label} nou'
+              : (widget.existing!.numar.isNotEmpty
+                    ? widget.existing!.numar
+                    : _tipDocument.label),
+        ),
         actions: [
           if (!isNew) ...[
             IconButton(
@@ -679,6 +714,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
               icon: const Icon(Icons.save_outlined),
               label: const Text('Salvează'),
             ),
+          const HelpModuleButton(moduleId: 'deviz_tehnic'),
         ],
       ),
       body: Form(
@@ -807,60 +843,66 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                 ),
                 const SizedBox(height: 8),
                 // Client
-                DropdownButtonFormField<String>(
-                  value: _selectedClientId,
-                  decoration: const InputDecoration(labelText: 'Client'),
-                  hint: const Text('Selectează client'),
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('— Fără client —')),
-                    ...widget.clients.map(
-                      (c) => DropdownMenuItem(
-                        value: c.id,
-                        child: Text(c.name),
-                      ),
-                    ),
-                  ],
-                  onChanged: (v) {
+                ClientAutocompleteField(
+                  key: ValueKey('dvz-client-${_selectedClientId ?? 'none'}'),
+                  clients: _localClients,
+                  initialClient: _clientById(_selectedClientId),
+                  labelText: 'Client',
+                  onClientSelected: (c) {
                     setState(() {
-                      _selectedClientId = v;
-                      _selectedClientName = v == null
-                          ? ''
-                          : widget.clients
-                                  .firstWhere(
-                                    (c) => c.id == v,
-                                    orElse: () => ClientRecord(
-                                      id: v,
-                                      clientCode: '',
-                                      name: '',
-                                      phone: '',
-                                      email: '',
-                                      address: '',
-                                      city: '',
-                                      county: '',
-                                      notes: '',
-                                      isActive: true,
-                                      contactPerson: '',
-                                      type: ClientType.persoanaJuridica,
-                                      departments: const [],
-                                      createdAt: DateTime.now(),
-                                      updatedAt: DateTime.now(),
-                                    ),
-                                  )
-                                  .name;
+                      _selectedClientId = c?.id;
+                      _selectedClientName = c?.name ?? '';
+                      if (c != null && _contactPersonCtrl.text.isEmpty &&
+                          c.contactPerson.isNotEmpty) {
+                        _contactPersonCtrl.text = c.contactPerson;
+                      }
                     });
                   },
+                  repository: widget.appRepository,
+                  tipEntitate: 'Client',
+                  onClientAdded: (c) => setState(() {
+                    _localClients = [..._localClients, c];
+                    _selectedClientId = c.id;
+                    _selectedClientName = c.name;
+                    if (_contactPersonCtrl.text.isEmpty &&
+                        c.contactPerson.isNotEmpty) {
+                      _contactPersonCtrl.text = c.contactPerson;
+                    }
+                  }),
                 ),
                 // Card detalii client — apare când e selectat un client
                 if (_selectedClientId != null) ...[
                   const SizedBox(height: 8),
                   Builder(
                     builder: (context) {
-                      final client = widget.clients.where((c) => c.id == _selectedClientId).firstOrNull;
+                      final client = _clientById(_selectedClientId);
                       if (client == null) return const SizedBox.shrink();
                       return ClientInfoCard(client: client, compact: true);
                     },
                   ),
                 ],
+                const SizedBox(height: 8),
+                // Persoană contact
+                TextFormField(
+                  controller: _contactPersonCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    labelText: 'Persoană de contact',
+                    hintText: 'ex: Ion Popescu',
+                    prefixIcon: Icon(Icons.person_outlined),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Departament
+                TextFormField(
+                  controller: _contactDepartmentCtrl,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Departament',
+                    hintText: 'ex: Mentenanță, Achiziții',
+                    prefixIcon: Icon(Icons.business_outlined),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 16),
@@ -869,78 +911,91 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isMobile = constraints.maxWidth < _kArticolMobileBreakpoint;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          'Articole deviz (${_articole.length})',
-                          style: Theme.of(context).textTheme.titleMedium,
+                        OverflowBar(
+                          alignment: MainAxisAlignment.spaceBetween,
+                          spacing: 8,
+                          overflowSpacing: 8,
+                          overflowAlignment: OverflowBarAlignment.end,
+                          children: [
+                            Text(
+                              'Articole deviz (${_articole.length})',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_articole.isNotEmpty) ...[
+                                  OutlinedButton.icon(
+                                    onPressed: _actualizatePretiriDinCatalog,
+                                    icon: const Icon(Icons.sync, size: 16),
+                                    label: const Text('Actualizează prețuri'),
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 6),
+                                      textStyle: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                ],
+                                FilledButton.icon(
+                                  onPressed: _addArticol,
+                                  icon: const Icon(Icons.add, size: 18),
+                                  label: const Text('Adaugă articol'),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
-                        const Spacer(),
-                        if (_articole.isNotEmpty) ...[
-                          OutlinedButton.icon(
-                            onPressed: _actualizatePretiriDinCatalog,
-                            icon: const Icon(Icons.sync, size: 16),
-                            label: const Text('Actualizează prețuri'),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 6),
-                              textStyle: const TextStyle(fontSize: 12),
+                        const SizedBox(height: 4),
+                        if (!isMobile) ...[
+                          const _ArticolHeader(),
+                          const Divider(),
+                        ],
+                        if (_articole.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: Center(
+                              child: Text(
+                                'Niciun articol adăugat. Apasă „Adaugă articol".',
+                                style: TextStyle(color: Colors.grey),
+                              ),
                             ),
                           ),
-                          const SizedBox(width: 8),
-                        ],
-                        FilledButton.icon(
-                          onPressed: _addArticol,
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('Adaugă articol'),
+                        ...List.generate(_articole.length, (i) {
+                          final a = _articole[i];
+                          return _ArticolRow(
+                            key: ValueKey(a),
+                            index: i,
+                            state: a,
+                            sugestii: _sugestii,
+                            isMobile: isMobile,
+                            onChanged: () => setState(() {}),
+                            onRemove: () => _removeArticol(i),
+                            onMoveUp: i > 0 ? () => _moveArticol(i, i - 1) : null,
+                            onMoveDown: i < _articole.length - 1
+                                ? () => _moveArticol(i, i + 1)
+                                : null,
+                          );
+                        }),
+                        const Divider(height: 24),
+                        _TotalRow(
+                          label: 'TOTAL ARTICOLE',
+                          mat: _totalMat,
+                          man: _totalMan,
+                          utilaj: _totalUtilaj,
+                          transport: _totalTransport,
+                          total: _totalDirect,
+                          bold: true,
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 4),
-                    // Header tabel
-                    const _ArticolHeader(),
-                    const Divider(),
-                    // Lista articole
-                    if (_articole.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: Center(
-                          child: Text(
-                            'Niciun articol adăugat. Apasă „Adaugă articol".',
-                            style: TextStyle(color: Colors.grey),
-                          ),
-                        ),
-                      ),
-                    ...List.generate(_articole.length, (i) {
-                      final a = _articole[i];
-                      return _ArticolRow(
-                        key: ValueKey(a),
-                        index: i,
-                        state: a,
-                        sugestii: _sugestii,
-                        onChanged: () => setState(() {}),
-                        onRemove: () => _removeArticol(i),
-                        onMoveUp: i > 0 ? () => _moveArticol(i, i - 1) : null,
-                        onMoveDown: i < _articole.length - 1
-                            ? () => _moveArticol(i, i + 1)
-                            : null,
-                      );
-                    }),
-                    const Divider(height: 24),
-                    // Total per articole
-                    _TotalRow(
-                      label: 'TOTAL ARTICOLE',
-                      mat: _totalMat,
-                      man: _totalMan,
-                      utilaj: _totalUtilaj,
-                      transport: _totalTransport,
-                      total: _totalDirect,
-                      bold: true,
-                    ),
-                  ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -1256,6 +1311,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
 
 class _ArticolState {
   _ArticolState({
+    String? id,
     String denumire = '',
     String um = 'buc',
     double cantitate = 0,
@@ -1263,7 +1319,7 @@ class _ArticolState {
     double pretMan = 0,
     double pretUtilaj = 0,
     double pretTransport = 0,
-  }) {
+  }) : id = id?.isNotEmpty == true ? id! : const Uuid().v4() {
     denumireCtrl = TextEditingController(text: denumire);
     umCtrl = TextEditingController(text: um);
     cantCtrl = TextEditingController(
@@ -1276,10 +1332,14 @@ class _ArticolState {
         text: pretTransport == 0 ? '' : _fmt(pretTransport));
   }
 
+  /// ID unic generat la creare — persistat în toMap/fromMap.
+  final String id;
+
   /// 'catalog' = material din nomenclator, 'norme' = din baza proprie, '' = manual
   String sursa = '';
 
   static _ArticolState fromModel(DevizTehnicArticol a) => _ArticolState(
+        id: a.id,
         denumire: a.denumire,
         um: a.um,
         cantitate: a.cantitate,
@@ -1311,6 +1371,7 @@ class _ArticolState {
   double get totalArticol => cant * (mat + man + utilaj + transport);
 
   DevizTehnicArticol toModel() => DevizTehnicArticol(
+        id: id,
         denumire: denumireCtrl.text.trim(),
         um: umCtrl.text.trim().isEmpty ? 'buc' : umCtrl.text.trim(),
         cantitate: cant,
@@ -1434,6 +1495,7 @@ class _ArticolRow extends StatefulWidget {
     required this.index,
     required this.state,
     required this.sugestii,
+    required this.isMobile,
     required this.onChanged,
     required this.onRemove,
     this.onMoveUp,
@@ -1443,6 +1505,7 @@ class _ArticolRow extends StatefulWidget {
   final int index;
   final _ArticolState state;
   final List<_Sugestie> sugestii;
+  final bool isMobile;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
   final VoidCallback? onMoveUp;
@@ -1484,9 +1547,27 @@ class _ArticolRowState extends State<_ArticolRow> {
     super.dispose();
   }
 
-  Widget _numField(TextEditingController ctrl, {String hint = '0'}) {
+  InputDecoration _inputDecoration(String hint, {String? label, bool dense = true}) {
+    return InputDecoration(
+      labelText: label,
+      hintText: hint,
+      isDense: dense,
+      border: const OutlineInputBorder(),
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: widget.isMobile ? 12 : 6,
+        vertical: widget.isMobile ? 12 : 8,
+      ),
+    );
+  }
+
+  Widget _numField(
+    TextEditingController ctrl, {
+    String hint = '0',
+    String? label,
+    double width = 72,
+  }) {
     return SizedBox(
-      width: 72,
+      width: width,
       child: TextFormField(
         controller: ctrl,
         keyboardType:
@@ -1496,23 +1577,372 @@ class _ArticolRowState extends State<_ArticolRow> {
         ],
         textAlign: TextAlign.right,
         style: const TextStyle(fontSize: 13),
-        decoration: InputDecoration(
-          hintText: hint,
-          isDense: true,
-          border: const OutlineInputBorder(),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        decoration: _inputDecoration(hint, label: label, dense: !widget.isMobile),
+      ),
+    );
+  }
+
+  Widget _mobilePair({
+    required Widget left,
+    required Widget right,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: left),
+        const SizedBox(width: 12),
+        Expanded(child: right),
+      ],
+    );
+  }
+
+  Widget _mobileHeaderAction({
+    required Color background,
+    required Color foreground,
+    required IconData icon,
+    required VoidCallback? onTap,
+    required String tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: background,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Icon(icon, size: 20, color: foreground),
+          ),
         ),
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final total = widget.state.totalArticol;
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
-    final cs = Theme.of(context).colorScheme;
+  Widget _buildDesktopAutocompleteField() {
+    return Autocomplete<_Sugestie>(
+      displayStringForOption: (s) => s.denumire,
+      optionsBuilder: (textEditingValue) {
+        final q = textEditingValue.text.trim().toLowerCase();
+        if (q.isEmpty) return const [];
+        return widget.sugestii.where((s) =>
+            s.denumire.toLowerCase().contains(q));
+      },
+      onSelected: _applySugestie,
+      fieldViewBuilder:
+          (context, autocompleteCtrl, focusNode, onFieldSubmitted) {
+        if (autocompleteCtrl.text != widget.state.denumireCtrl.text) {
+          autocompleteCtrl.text = widget.state.denumireCtrl.text;
+        }
+        return TextFormField(
+          controller: autocompleteCtrl,
+          focusNode: focusNode,
+          textCapitalization: TextCapitalization.sentences,
+          style: const TextStyle(fontSize: 13),
+          decoration: _inputDecoration(
+            'Denumire articol ${widget.index + 1}',
+          ),
+          validator: (v) =>
+              (v == null || v.trim().isEmpty) ? 'Obligatoriu' : null,
+          onChanged: (value) {
+            widget.state.denumireCtrl.text = value;
+            widget.state.sursa = '';
+            widget.onChanged();
+          },
+          onFieldSubmitted: (_) => onFieldSubmitted(),
+        );
+      },
+      optionsViewBuilder: _optionsViewBuilder,
+    );
+  }
 
+  Widget _buildMobileAutocompleteField() {
+    return Autocomplete<_Sugestie>(
+      displayStringForOption: (s) => s.denumire,
+      optionsBuilder: (textEditingValue) {
+        final q = textEditingValue.text.trim().toLowerCase();
+        if (q.isEmpty) return const [];
+        return widget.sugestii.where((s) =>
+            s.denumire.toLowerCase().contains(q));
+      },
+      onSelected: _applySugestie,
+      fieldViewBuilder:
+          (context, autocompleteCtrl, focusNode, onFieldSubmitted) {
+        if (autocompleteCtrl.text != widget.state.denumireCtrl.text) {
+          autocompleteCtrl.text = widget.state.denumireCtrl.text;
+        }
+        return TextFormField(
+          controller: autocompleteCtrl,
+          focusNode: focusNode,
+          textCapitalization: TextCapitalization.sentences,
+          minLines: 1,
+          maxLines: 2,
+          style: const TextStyle(fontSize: 14),
+          decoration: _inputDecoration(
+            'Denumire articol ${widget.index + 1}',
+            label: 'Denumire articol',
+            dense: false,
+          ),
+          validator: (v) =>
+              (v == null || v.trim().isEmpty) ? 'Obligatoriu' : null,
+          onChanged: (value) {
+            widget.state.denumireCtrl.text = value;
+            widget.state.sursa = '';
+            widget.onChanged();
+          },
+          onFieldSubmitted: (_) => onFieldSubmitted(),
+        );
+      },
+      optionsViewBuilder: _optionsViewBuilder,
+    );
+  }
+
+  void _applySugestie(_Sugestie s) {
+    widget.state.denumireCtrl.text = s.denumire;
+    widget.state.umCtrl.text = s.um;
+    if (s.pretMat > 0) {
+      widget.state.matCtrl.text = _fmtV(s.pretMat);
+    }
+    if (s.pretMan > 0) {
+      widget.state.manCtrl.text = _fmtV(s.pretMan);
+    }
+    if (s.pretUtilaj > 0) {
+      widget.state.utilajCtrl.text = _fmtV(s.pretUtilaj);
+    }
+    if (s.pretTransport > 0) {
+      widget.state.transportCtrl.text = _fmtV(s.pretTransport);
+    }
+    widget.state.sursa = s.isTemplate ? 'norme' : 'catalog';
+    widget.onChanged();
+  }
+
+  Widget _optionsViewBuilder(
+    BuildContext context,
+    AutocompleteOnSelected<_Sugestie> onSelected,
+    Iterable<_Sugestie> options,
+  ) {
+    final rows = options.toList(growable: false);
+    final cs = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(8),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: 280,
+            minWidth: widget.isMobile ? 280 : 340,
+            maxWidth: widget.isMobile ? 420 : 600,
+          ),
+          child: ListView.builder(
+            shrinkWrap: true,
+            padding: EdgeInsets.zero,
+            itemCount: rows.length,
+            itemBuilder: (context, index) {
+              final s = rows[index];
+              final badgeColor = s.isTemplate
+                  ? cs.secondaryContainer
+                  : cs.surfaceContainerHighest;
+              final badgeText =
+                  s.isTemplate ? 'norme' : 'catalog';
+              return ListTile(
+                dense: !widget.isMobile,
+                title: Row(
+                  children: [
+                    Expanded(
+                      child: Text(s.denumire,
+                          style: const TextStyle(fontSize: 13)),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: badgeColor,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(badgeText,
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: s.isTemplate
+                                  ? cs.onSecondaryContainer
+                                  : cs.onSurfaceVariant)),
+                    ),
+                  ],
+                ),
+                subtitle: Text(
+                  _sugestieSubtitle(s),
+                  style: const TextStyle(fontSize: 11),
+                ),
+                onTap: () => onSelected(s),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileLayout(BuildContext context, NumberFormat fmt, ColorScheme cs) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLowest,
+        border: Border.all(color: cs.outlineVariant),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Articol ${widget.index + 1}',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        if (widget.state.sursa.isNotEmpty)
+                          _SursaBadge(sursa: widget.state.sursa),
+                        _mobileHeaderAction(
+                          background: cs.surfaceContainerHigh,
+                          foreground: cs.onSurface,
+                          icon: Icons.arrow_upward,
+                          onTap: widget.onMoveUp,
+                          tooltip: 'Mută sus',
+                        ),
+                        _mobileHeaderAction(
+                          background: cs.surfaceContainerHigh,
+                          foreground: cs.onSurface,
+                          icon: Icons.arrow_downward,
+                          onTap: widget.onMoveDown,
+                          tooltip: 'Mută jos',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              _mobileHeaderAction(
+                background: cs.errorContainer,
+                foreground: cs.onErrorContainer,
+                icon: Icons.delete_outline,
+                onTap: widget.onRemove,
+                tooltip: 'Șterge articol',
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildMobileAutocompleteField(),
+          const SizedBox(height: 12),
+          _mobilePair(
+            left: TextFormField(
+              controller: widget.state.umCtrl,
+              style: const TextStyle(fontSize: 14),
+              textAlign: TextAlign.center,
+              decoration: _inputDecoration(
+                'UM',
+                label: 'UM',
+                dense: false,
+              ),
+            ),
+            right: TextFormField(
+              controller: widget.state.cantCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+              ],
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 14),
+              decoration: _inputDecoration(
+                '0',
+                label: 'Cantitate',
+                dense: false,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _mobilePair(
+            left: _numField(
+              widget.state.matCtrl,
+              width: double.infinity,
+              hint: '0',
+              label: 'Materiale RON',
+            ),
+            right: _numField(
+              widget.state.manCtrl,
+              width: double.infinity,
+              hint: '0',
+              label: 'Manoperă RON',
+            ),
+          ),
+          const SizedBox(height: 12),
+          _mobilePair(
+            left: _numField(
+              widget.state.utilajCtrl,
+              width: double.infinity,
+              hint: '0',
+              label: 'Utilaj RON',
+            ),
+            right: _numField(
+              widget.state.transportCtrl,
+              width: double.infinity,
+              hint: '0',
+              label: 'Transport RON',
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: cs.primaryContainer.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Total articol',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: cs.onPrimaryContainer,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${fmt.format(widget.state.totalArticol)} RON',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: cs.onPrimaryContainer,
+                      ),
+                ),
+              ],
+            ),
+          ),
+          if (widget.state.cant > 0) ...[
+            const SizedBox(height: 10),
+            _SubtotalRow(state: widget.state, isMobile: true),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopLayout(BuildContext context, NumberFormat fmt, ColorScheme cs) {
     return Container(
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: cs.outlineVariant, width: 0.5)),
@@ -1523,7 +1953,6 @@ class _ArticolRowState extends State<_ArticolRow> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // reorder handle
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1543,145 +1972,21 @@ class _ArticolRowState extends State<_ArticolRow> {
                   ),
                 ],
               ),
-              // Denumire — autocomplete unificat: norme proprii + nomenclator materiale
               Expanded(
                 flex: 4,
-                child: Autocomplete<_Sugestie>(
-                  displayStringForOption: (s) => s.denumire,
-                  optionsBuilder: (textEditingValue) {
-                    final q = textEditingValue.text.trim().toLowerCase();
-                    if (q.isEmpty) return const [];
-                    return widget.sugestii.where((s) =>
-                        s.denumire.toLowerCase().contains(q));
-                  },
-                  onSelected: (s) {
-                    widget.state.denumireCtrl.text = s.denumire;
-                    widget.state.umCtrl.text = s.um;
-                    if (s.pretMat > 0) {
-                      widget.state.matCtrl.text = _fmtV(s.pretMat);
-                    }
-                    if (s.pretMan > 0) {
-                      widget.state.manCtrl.text = _fmtV(s.pretMan);
-                    }
-                    if (s.pretUtilaj > 0) {
-                      widget.state.utilajCtrl.text = _fmtV(s.pretUtilaj);
-                    }
-                    if (s.pretTransport > 0) {
-                      widget.state.transportCtrl.text = _fmtV(s.pretTransport);
-                    }
-                    widget.state.sursa = s.isTemplate ? 'norme' : 'catalog';
-                    widget.onChanged();
-                  },
-                  fieldViewBuilder:
-                      (context, autocompleteCtrl, focusNode, onFieldSubmitted) {
-                    if (autocompleteCtrl.text != widget.state.denumireCtrl.text) {
-                      autocompleteCtrl.text = widget.state.denumireCtrl.text;
-                    }
-                    return TextFormField(
-                      controller: autocompleteCtrl,
-                      focusNode: focusNode,
-                      textCapitalization: TextCapitalization.sentences,
-                      style: const TextStyle(fontSize: 13),
-                      decoration: InputDecoration(
-                        hintText: 'Denumire articol ${widget.index + 1}',
-                        isDense: true,
-                        border: const OutlineInputBorder(),
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 8),
-                      ),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty) ? 'Obligatoriu' : null,
-                      onChanged: (value) {
-                        widget.state.denumireCtrl.text = value;
-                        widget.state.sursa = '';
-                        widget.onChanged();
-                      },
-                      onFieldSubmitted: (_) => onFieldSubmitted(),
-                    );
-                  },
-                  optionsViewBuilder: (context, onSelected, options) {
-                    final rows = options.toList(growable: false);
-                    final cs = Theme.of(context).colorScheme;
-                    return Align(
-                      alignment: Alignment.topLeft,
-                      child: Material(
-                        elevation: 4,
-                        borderRadius: BorderRadius.circular(8),
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(
-                            maxHeight: 280,
-                            minWidth: 340,
-                            maxWidth: 600,
-                          ),
-                          child: ListView.builder(
-                            shrinkWrap: true,
-                            padding: EdgeInsets.zero,
-                            itemCount: rows.length,
-                            itemBuilder: (context, index) {
-                              final s = rows[index];
-                              final badgeColor = s.isTemplate
-                                  ? cs.secondaryContainer
-                                  : cs.surfaceContainerHighest;
-                              final badgeText =
-                                  s.isTemplate ? 'norme' : 'catalog';
-                              return ListTile(
-                                dense: true,
-                                title: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(s.denumire,
-                                          style:
-                                              const TextStyle(fontSize: 13)),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 6, vertical: 1),
-                                      decoration: BoxDecoration(
-                                        color: badgeColor,
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: Text(badgeText,
-                                          style: TextStyle(
-                                              fontSize: 10,
-                                              color: s.isTemplate
-                                                  ? cs.onSecondaryContainer
-                                                  : cs.onSurfaceVariant)),
-                                    ),
-                                  ],
-                                ),
-                                subtitle: Text(
-                                  _sugestieSubtitle(s),
-                                  style: const TextStyle(fontSize: 11),
-                                ),
-                                onTap: () => onSelected(s),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
+                child: _buildDesktopAutocompleteField(),
               ),
               const SizedBox(width: 4),
-              // UM
               SizedBox(
                 width: 52,
                 child: TextFormField(
                   controller: widget.state.umCtrl,
                   style: const TextStyle(fontSize: 13),
                   textAlign: TextAlign.center,
-                  decoration: const InputDecoration(
-                    hintText: 'UM',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                  ),
+                  decoration: _inputDecoration('UM'),
                 ),
               ),
               const SizedBox(width: 4),
-              // Cantitate
               SizedBox(
                 width: 64,
                 child: TextFormField(
@@ -1692,13 +1997,7 @@ class _ArticolRowState extends State<_ArticolRow> {
                   ],
                   textAlign: TextAlign.right,
                   style: const TextStyle(fontSize: 13),
-                  decoration: const InputDecoration(
-                    hintText: '0',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                  ),
+                  decoration: _inputDecoration('0'),
                 ),
               ),
               const SizedBox(width: 4),
@@ -1710,11 +2009,10 @@ class _ArticolRowState extends State<_ArticolRow> {
               const SizedBox(width: 4),
               _numField(widget.state.transportCtrl),
               const SizedBox(width: 8),
-              // Total articol
               SizedBox(
                 width: 80,
                 child: Text(
-                  fmt.format(total),
+                  fmt.format(widget.state.totalArticol),
                   textAlign: TextAlign.right,
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
@@ -1724,7 +2022,6 @@ class _ArticolRowState extends State<_ArticolRow> {
                 ),
               ),
               const SizedBox(width: 4),
-              // Actions
               SizedBox(
                 width: 60,
                 child: IconButton(
@@ -1736,7 +2033,6 @@ class _ArticolRowState extends State<_ArticolRow> {
               ),
             ],
           ),
-          // Badge sursă + subtotaluri
           Padding(
             padding: const EdgeInsets.only(left: 36, top: 2),
             child: Row(
@@ -1754,11 +2050,23 @@ class _ArticolRowState extends State<_ArticolRow> {
       ),
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    final cs = Theme.of(context).colorScheme;
+
+    if (widget.isMobile) {
+      return _buildMobileLayout(context, fmt, cs);
+    }
+    return _buildDesktopLayout(context, fmt, cs);
+  }
 }
 
 class _SubtotalRow extends StatelessWidget {
-  const _SubtotalRow({required this.state});
+  const _SubtotalRow({required this.state, this.isMobile = false});
   final _ArticolState state;
+  final bool isMobile;
 
   @override
   Widget build(BuildContext context) {
@@ -1777,6 +2085,31 @@ class _SubtotalRow extends StatelessWidget {
       items.add('Transport: ${fmt.format(state.cant * state.transport)}');
     }
     if (items.isEmpty) return const SizedBox.shrink();
+    if (isMobile) {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: items
+            .map(
+              (item) => Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  item,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+      );
+    }
     return Text(
       items.join('  |  '),
       style: TextStyle(
@@ -1903,43 +2236,109 @@ class _TotalRow extends StatelessWidget {
       fontWeight: bold ? FontWeight.bold : FontWeight.normal,
       fontSize: 13,
     );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: style)),
-          SizedBox(
-            width: 90,
-            child: Text('Mat: ${fmt.format(mat)}',
-                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
-          ),
-          SizedBox(
-            width: 90,
-            child: Text('Man: ${fmt.format(man)}',
-                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
-          ),
-          SizedBox(
-            width: 90,
-            child: Text('Utilaj: ${fmt.format(utilaj)}',
-                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
-          ),
-          SizedBox(
-            width: 96,
-            child: Text('Transp: ${fmt.format(transport)}',
-                style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
-          ),
-          SizedBox(
-            width: 100,
-            child: Text(
-              fmt.format(total),
-              textAlign: TextAlign.right,
-              style: style.copyWith(
-                color: Theme.of(context).colorScheme.primary,
-              ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < _kArticolMobileBreakpoint;
+        if (isMobile) {
+          final cs = Theme.of(context).colorScheme;
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: cs.outlineVariant),
             ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: style),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    'Mat: ${fmt.format(mat)}',
+                    'Man: ${fmt.format(man)}',
+                    'Utilaj: ${fmt.format(utilaj)}',
+                    'Transp: ${fmt.format(transport)}',
+                  ]
+                      .map(
+                        (item) => Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: cs.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            item,
+                            style: style.copyWith(fontSize: 12),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    'Total: ${fmt.format(total)} RON',
+                    textAlign: TextAlign.right,
+                    style: style.copyWith(
+                      fontSize: 15,
+                      color: cs.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Expanded(child: Text(label, style: style)),
+              SizedBox(
+                width: 90,
+                child: Text('Mat: ${fmt.format(mat)}',
+                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+              ),
+              SizedBox(
+                width: 90,
+                child: Text('Man: ${fmt.format(man)}',
+                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+              ),
+              SizedBox(
+                width: 90,
+                child: Text('Utilaj: ${fmt.format(utilaj)}',
+                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+              ),
+              SizedBox(
+                width: 96,
+                child: Text('Transp: ${fmt.format(transport)}',
+                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+              ),
+              SizedBox(
+                width: 100,
+                child: Text(
+                  fmt.format(total),
+                  textAlign: TextAlign.right,
+                  style: style.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/auth/app_role_policy.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
@@ -26,17 +27,21 @@ class JobSiteDocumentsPage extends StatefulWidget {
     required this.repository,
     required this.job,
     required this.clientName,
+    this.roleKey,
   });
 
   final AppDataRepository repository;
   final JobRecord job;
   final String clientName;
+  final String? roleKey;
 
   @override
   State<JobSiteDocumentsPage> createState() => _JobSiteDocumentsPageState();
 }
 
 class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
+  bool get _isTechnician => AppRolePolicy.isTechnician(widget.roleKey);
+
   final JobSiteDocumentTemplateService _templateService =
       const JobSiteDocumentTemplateService();
   static const List<String> _quickStatuses = <String>[
@@ -695,24 +700,54 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
                                   ),
                                 ),
                                 isThreeLine: true,
-                                trailing: Wrap(
-                                  spacing: 4,
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    // Buton rapid schimbare status
                                     _buildQuickStatusMenu(item),
-                                    IconButton(
-                                      tooltip: 'Deschide',
-                                      onPressed: () => _viewDocument(item),
-                                      icon: const Icon(Icons.open_in_new),
-                                    ),
-                                    IconButton(
-                                      tooltip: 'Editeaza',
-                                      onPressed: () => _editDocument(item),
-                                      icon: const Icon(Icons.edit_outlined),
-                                    ),
-                                    IconButton(
-                                      tooltip: 'Șterge',
-                                      onPressed: () => _deleteDocument(item),
-                                      icon: const Icon(Icons.delete_outline),
+                                    PopupMenuButton<String>(
+                                      icon: const Icon(Icons.more_vert),
+                                      tooltip: 'Acțiuni',
+                                      itemBuilder: (_) => [
+                                        const PopupMenuItem(
+                                          value: 'open',
+                                          child: ListTile(
+                                            leading: Icon(Icons.open_in_new),
+                                            title: Text('Deschide'),
+                                            contentPadding: EdgeInsets.zero,
+                                          ),
+                                        ),
+                                        if (!_isTechnician) ...[
+                                          const PopupMenuItem(
+                                            value: 'edit',
+                                            child: ListTile(
+                                              leading:
+                                                  Icon(Icons.edit_outlined),
+                                              title: Text('Editează'),
+                                              contentPadding: EdgeInsets.zero,
+                                            ),
+                                          ),
+                                          const PopupMenuItem(
+                                            value: 'delete',
+                                            child: ListTile(
+                                              leading:
+                                                  Icon(Icons.delete_outline),
+                                              title: Text('Șterge'),
+                                              contentPadding: EdgeInsets.zero,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                      onSelected: (value) {
+                                        switch (value) {
+                                          case 'open':
+                                            _viewDocument(item);
+                                          case 'edit':
+                                            _editDocument(item);
+                                          case 'delete':
+                                            _deleteDocument(item);
+                                        }
+                                      },
                                     ),
                                   ],
                                 ),
@@ -825,6 +860,7 @@ class _JobSiteDocumentDraftTemplateDialogState
     String? helperText,
   }) {
     return TextFormField(
+      textCapitalization: TextCapitalization.sentences,
       controller: controller,
       minLines: maxLines > 1 ? maxLines : null,
       maxLines: maxLines,
@@ -1670,6 +1706,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 260,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     enabled: false,
                     initialValue: widget.document.documentType.label,
                     decoration:
@@ -1679,6 +1716,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 220,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _documentNumberController,
                     decoration:
                         const InputDecoration(labelText: 'Număr document'),
@@ -1690,6 +1728,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 472,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _documentTitleController,
                     decoration: const InputDecoration(
                       labelText: 'Titlu document',
@@ -1699,6 +1738,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 472,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _documentSubtitleController,
                     decoration: const InputDecoration(
                       labelText: 'Subtitlu document',
@@ -1744,6 +1784,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _beneficiaryRepresentativeController,
                     decoration: const InputDecoration(
                       labelText: 'Reprezentant beneficiar',
@@ -1753,6 +1794,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _executorRepresentativeController,
                     decoration: const InputDecoration(
                       labelText: 'Reprezentant executant',
@@ -1762,6 +1804,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _projectNameController,
                     decoration: const InputDecoration(labelText: 'Proiect'),
                   ),
@@ -1769,6 +1812,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _locationController,
                     decoration: const InputDecoration(labelText: 'Locatie'),
                   ),
@@ -1776,6 +1820,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 240,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _functionalStatusController,
                     decoration:
                         const InputDecoration(labelText: 'Status functional'),
@@ -1811,6 +1856,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 732,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _observationsController,
                     minLines: 3,
                     maxLines: 5,
@@ -1821,6 +1867,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 732,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _conclusionsController,
                     minLines: 3,
                     maxLines: 5,
@@ -1830,6 +1877,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 732,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _probesSummaryController,
                     minLines: 2,
                     maxLines: 4,
@@ -1840,6 +1888,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 732,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _preparedForNextStepController,
                     decoration:
                         const InputDecoration(labelText: 'Etapa urmatoare'),
@@ -1848,6 +1897,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _registryEntryController,
                     decoration:
                         const InputDecoration(labelText: 'registryEntryId'),
@@ -1856,6 +1906,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     enabled: false,
                     initialValue: widget.document.documentTypeForRegistry,
                     decoration: const InputDecoration(
@@ -1866,6 +1917,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _generatedPathController,
                     decoration: const InputDecoration(
                       labelText: 'generatedDocumentPath',
@@ -1875,6 +1927,7 @@ class _JobSiteDocumentEditorDialogState
                 SizedBox(
                   width: 360,
                   child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
                     controller: _generatedFileNameController,
                     decoration: const InputDecoration(
                       labelText: 'generatedDocumentFileName',

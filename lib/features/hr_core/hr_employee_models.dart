@@ -15,6 +15,7 @@ class HrEmployeeProfile {
     required this.notes,
     required this.createdAt,
     required this.updatedAt,
+    this.nrPersoaneIntretinere = 0,
   });
 
   final String id;
@@ -29,6 +30,7 @@ class HrEmployeeProfile {
   final String notes;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int nrPersoaneIntretinere;
 
   HrEmployeeProfile copyWith({
     String? id,
@@ -43,6 +45,7 @@ class HrEmployeeProfile {
     String? notes,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? nrPersoaneIntretinere,
   }) {
     return HrEmployeeProfile(
       id: id ?? this.id,
@@ -57,6 +60,8 @@ class HrEmployeeProfile {
       notes: notes ?? this.notes,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      nrPersoaneIntretinere:
+          nrPersoaneIntretinere ?? this.nrPersoaneIntretinere,
     );
   }
 
@@ -81,6 +86,7 @@ class HrEmployeeProfile {
       notes: employee.notes,
       createdAt: now,
       updatedAt: now,
+      nrPersoaneIntretinere: 0,
     );
   }
 
@@ -98,6 +104,7 @@ class HrEmployeeProfile {
       'notes': notes,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'nr_persoane_intretinere': nrPersoaneIntretinere,
     };
   }
 
@@ -132,6 +139,11 @@ class HrEmployeeProfile {
       notes: (map['notes'] ?? '').toString(),
       createdAt: parseDate(map['created_at'] ?? map['createdAt']),
       updatedAt: parseDate(map['updated_at'] ?? map['updatedAt']),
+      nrPersoaneIntretinere:
+          (map['nr_persoane_intretinere'] ??
+                  map['nrPersoaneIntretinere'] ??
+                  0)
+              as int,
     );
   }
 }

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/document_file_service.dart';
@@ -24,12 +25,17 @@ class RepairReportEditorPage extends StatefulWidget {
     required this.complaint,
     this.appointment,
     this.currentReport,
+    this.previousReport,
+    this.interventionNumber = 1,
   });
 
   final AppDataRepository repository;
   final ComplaintRecord complaint;
   final Appointment? appointment;
   final RepairReportRecord? currentReport;
+  // Câmpuri de înlănțuire (Pasul 5 — PV următor)
+  final RepairReportRecord? previousReport;
+  final int interventionNumber;
 
   @override
   State<RepairReportEditorPage> createState() => _RepairReportEditorPageState();
@@ -59,6 +65,22 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
   late final TextEditingController _outdoorUnitSerialController;
   late final TextEditingController _indoorUnitSerialsController;
   late final TextEditingController _equipmentDetailsController;
+  // Câmpuri noi template PV Constatare Tehnică
+  late final TextEditingController _reprezentantBeneficiarController;
+  late final TextEditingController _agentFrigorificController;
+  late final TextEditingController _cantitateRecuperataController;
+  late final TextEditingController _coduriEroareController;
+  late final TextEditingController _stareTestController;
+  late final TextEditingController _motivulInterventeiController;
+  late final TextEditingController _constatariLocController;
+  late final TextEditingController _lucrariEfectuateDetController;
+  late final TextEditingController _observatiiTehController;
+  late final TextEditingController _concluziController;
+  late final TextEditingController _recomandariController;
+  late final TextEditingController _mentiuniController;
+  late final TextEditingController _materialeDetailedController;
+  late final TextEditingController _traseulPieselorController;
+  String _pvType = 'constatare';
   late RepairReportResolutionStatus _resolutionStatus;
   late DateTime _interventionDate;
   late String _reportId;
@@ -67,6 +89,9 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
   String _technicianSignatureBase64 = '';
   String _pdfPath = '';
   bool _saving = false;
+  List<String> _photoBase64List = [];
+  List<String> _photoUrls = [];
+  List<String> _photoCaptions = [];
 
   @override
   void initState() {
@@ -99,6 +124,30 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
         TextEditingController(text: seed.indoorUnitSerials);
     _equipmentDetailsController =
         TextEditingController(text: seed.equipmentDetails);
+    _reprezentantBeneficiarController =
+        TextEditingController(text: seed.reprezentantBeneficiar);
+    _agentFrigorificController =
+        TextEditingController(text: seed.agentFrigorific);
+    _cantitateRecuperataController =
+        TextEditingController(text: seed.cantitateRecuperata);
+    _coduriEroareController = TextEditingController(text: seed.coduriEroare);
+    _stareTestController = TextEditingController(text: seed.stareTest);
+    _motivulInterventeiController =
+        TextEditingController(text: seed.motivulInterventiei);
+    _constatariLocController =
+        TextEditingController(text: seed.constatariLocFinding);
+    _lucrariEfectuateDetController =
+        TextEditingController(text: seed.lucrariEfectuateDetailed);
+    _observatiiTehController =
+        TextEditingController(text: seed.observatiiTehnice);
+    _concluziController = TextEditingController(text: seed.concluzie);
+    _recomandariController = TextEditingController(text: seed.recomandari);
+    _mentiuniController = TextEditingController(text: seed.mentiuni);
+    _materialeDetailedController =
+        TextEditingController(text: seed.materialeDetailed);
+    _traseulPieselorController =
+        TextEditingController(text: seed.traseulPieselorDefecte);
+    _pvType = seed.pvType.isEmpty ? 'constatare' : seed.pvType;
     _resolutionStatus = seed.resolutionStatus;
     _interventionDate = seed.interventionDate;
     _reportId = seed.id;
@@ -106,6 +155,9 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     _clientSignatureBase64 = seed.clientSignatureBase64;
     _technicianSignatureBase64 = seed.technicianSignatureBase64;
     _pdfPath = seed.pdfPath;
+    _photoBase64List = List.of(seed.photoBase64List);
+    _photoUrls = List.of(seed.photoUrls);
+    _photoCaptions = List.of(seed.photoCaptions);
     if (widget.currentReport == null && seed.reportNumber.trim().isEmpty) {
       _assignAutomaticNumber();
     }
@@ -155,6 +207,20 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     _outdoorUnitSerialController.dispose();
     _indoorUnitSerialsController.dispose();
     _equipmentDetailsController.dispose();
+    _reprezentantBeneficiarController.dispose();
+    _agentFrigorificController.dispose();
+    _cantitateRecuperataController.dispose();
+    _coduriEroareController.dispose();
+    _stareTestController.dispose();
+    _motivulInterventeiController.dispose();
+    _constatariLocController.dispose();
+    _lucrariEfectuateDetController.dispose();
+    _observatiiTehController.dispose();
+    _concluziController.dispose();
+    _recomandariController.dispose();
+    _mentiuniController.dispose();
+    _materialeDetailedController.dispose();
+    _traseulPieselorController.dispose();
     super.dispose();
   }
 
@@ -249,6 +315,10 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
       resolutionStatus: RepairReportResolutionStatus.rezolvata,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
+      // Pre-completare din reclamatie (Pasul 5)
+      motivulInterventiei: complaint.problemDescription.trim(),
+      constatariLocFinding: '',
+      lucrariEfectuateDetailed: '',
     );
   }
 
@@ -319,6 +389,30 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
       resolutionStatus: _resolutionStatus,
       createdAt: _createdAt,
       updatedAt: DateTime.now(),
+      interventionNumber: widget.currentReport?.interventionNumber ?? widget.interventionNumber,
+      previousReportId: widget.previousReport?.id ?? (widget.currentReport?.previousReportId ?? ''),
+      previousReportNumber: widget.previousReport?.reportNumber ?? (widget.currentReport?.previousReportNumber ?? ''),
+      previousInterventionSummary: widget.previousReport?.findings ?? (widget.currentReport?.previousInterventionSummary ?? ''),
+      isFollowUp: widget.previousReport != null || (widget.currentReport?.isFollowUp ?? false),
+      photoBase64List: List.unmodifiable(_photoBase64List),
+      photoUrls: List.unmodifiable(_photoUrls),
+      photoCategories: const <String>[],
+      photoCaptions: List.unmodifiable(_photoCaptions),
+      pvType: _pvType,
+      reprezentantBeneficiar: _reprezentantBeneficiarController.text.trim(),
+      agentFrigorific: _agentFrigorificController.text.trim(),
+      cantitateRecuperata: _cantitateRecuperataController.text.trim(),
+      coduriEroare: _coduriEroareController.text.trim(),
+      stareTest: _stareTestController.text.trim(),
+      motivulInterventiei: _motivulInterventeiController.text.trim(),
+      constatariLocFinding: _constatariLocController.text.trim(),
+      lucrariEfectuateDetailed: _lucrariEfectuateDetController.text.trim(),
+      observatiiTehnice: _observatiiTehController.text.trim(),
+      concluzie: _concluziController.text.trim(),
+      recomandari: _recomandariController.text.trim(),
+      mentiuni: _mentiuniController.text.trim(),
+      materialeDetailed: _materialeDetailedController.text.trim(),
+      traseulPieselorDefecte: _traseulPieselorController.text.trim(),
     );
   }
 
@@ -355,6 +449,21 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     _outdoorUnitSerialController.text = report.outdoorUnitSerial;
     _indoorUnitSerialsController.text = report.indoorUnitSerials;
     _equipmentDetailsController.text = report.equipmentDetails;
+    _reprezentantBeneficiarController.text = report.reprezentantBeneficiar;
+    _agentFrigorificController.text = report.agentFrigorific;
+    _cantitateRecuperataController.text = report.cantitateRecuperata;
+    _coduriEroareController.text = report.coduriEroare;
+    _stareTestController.text = report.stareTest;
+    _motivulInterventeiController.text = report.motivulInterventiei;
+    _constatariLocController.text = report.constatariLocFinding;
+    _lucrariEfectuateDetController.text = report.lucrariEfectuateDetailed;
+    _observatiiTehController.text = report.observatiiTehnice;
+    _concluziController.text = report.concluzie;
+    _recomandariController.text = report.recomandari;
+    _mentiuniController.text = report.mentiuni;
+    _materialeDetailedController.text = report.materialeDetailed;
+    _traseulPieselorController.text = report.traseulPieselorDefecte;
+    _pvType = report.pvType.isEmpty ? 'constatare' : report.pvType;
   }
 
   void _applyTemplateToForm(
@@ -448,6 +557,150 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
         _technicianSignatureBase64 = '';
       }
     });
+  }
+
+  // ── Gestionare poze anexă PV ────────────────────────────────────────────
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    if (_photoBase64List.length >= 20) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Maximum 20 poze per PV.')),
+        );
+      }
+      return;
+    }
+    try {
+      final picker = ImagePicker();
+      final xFile = await picker.pickImage(
+        source: source,
+        imageQuality: 80,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
+      if (xFile == null || !mounted) return;
+      final bytes = await xFile.readAsBytes();
+      final b64 = base64Encode(bytes);
+      setState(() {
+        _photoBase64List.add(b64);
+        _photoCaptions.add('');
+        _photoUrls.add('');
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare adăugare poză: $e')),
+        );
+      }
+    }
+  }
+
+  void _removePhoto(int index) {
+    setState(() {
+      if (index < _photoBase64List.length) _photoBase64List.removeAt(index);
+      if (index < _photoUrls.length) _photoUrls.removeAt(index);
+      if (index < _photoCaptions.length) _photoCaptions.removeAt(index);
+    });
+  }
+
+  Widget _buildPhotoAnnexSection() {
+    return _section(
+      'Poze anexă PV (${_photoBase64List.length}/20)',
+      [
+        if (_photoBase64List.isNotEmpty)
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: 0.85,
+            ),
+            itemCount: _photoBase64List.length,
+            itemBuilder: (_, i) {
+              Uint8List? bytes;
+              try {
+                bytes = base64Decode(_photoBase64List[i]);
+              } catch (_) {}
+              return Column(
+                children: [
+                  Expanded(
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        if (bytes != null)
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: Image.memory(bytes, fit: BoxFit.cover),
+                          )
+                        else
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade200,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Icon(Icons.image_outlined),
+                          ),
+                        Positioned(
+                          top: 2,
+                          right: 2,
+                          child: GestureDetector(
+                            onTap: () => _removePhoto(i),
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Colors.red.shade600,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.close, size: 14, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextField(
+                    onChanged: (val) {
+                      if (i < _photoCaptions.length) _photoCaptions[i] = val;
+                    },
+                    controller: TextEditingController(
+                      text: i < _photoCaptions.length ? _photoCaptions[i] : '',
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: 'Descriere...',
+                      contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      isDense: true,
+                    ),
+                    style: const TextStyle(fontSize: 11),
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
+                ],
+              );
+            },
+          ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _photoBase64List.length >= 20
+                  ? null
+                  : () => _pickPhoto(ImageSource.camera),
+              icon: const Icon(Icons.camera_alt_outlined, size: 16),
+              label: const Text('Fă poză'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _photoBase64List.length >= 20
+                  ? null
+                  : () => _pickPhoto(ImageSource.gallery),
+              icon: const Icon(Icons.photo_library_outlined, size: 16),
+              label: const Text('Din galerie'),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   Uint8List? _decodeSignature(String base64Value) {
@@ -698,6 +951,19 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     return '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year}';
   }
 
+  static String _pvTypeTitle(String pvType) {
+    switch (pvType) {
+      case 'interventie':
+        return 'PV Interventie';
+      case 'montaj':
+        return 'PV Receptie Montaj';
+      case 'garantie':
+        return 'PV Garantie';
+      default:
+        return 'PV Constatare Tehnica';
+    }
+  }
+
   Widget _section(String title, List<Widget> children) {
     return Card(
       margin: EdgeInsets.zero,
@@ -721,8 +987,8 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
       appBar: AppBar(
         title: Text(
           widget.currentReport == null
-              ? 'Proces verbal reparatie'
-              : 'Editeaza proces verbal',
+              ? _pvTypeTitle(_pvType)
+              : 'Editeaza PV',
         ),
         actions: [
           IconButton(
@@ -754,9 +1020,79 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (widget.previousReport != null) ...[
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    border: Border.all(color: Colors.blue.shade200),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.link, size: 16, color: Colors.blue),
+                          const SizedBox(width: 6),
+                          Text(
+                            'INTERVENȚIA NR. ${widget.interventionNumber} — REVENIRE',
+                            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue, fontSize: 13),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Continuare după PV ${widget.previousReport!.reportNumber.isEmpty ? widget.previousReport!.id : widget.previousReport!.reportNumber}'
+                        ' din ${widget.previousReport!.interventionDate.day.toString().padLeft(2,'0')}.${widget.previousReport!.interventionDate.month.toString().padLeft(2,'0')}.${widget.previousReport!.interventionDate.year}',
+                        style: TextStyle(fontSize: 12, color: Colors.blue.shade700),
+                      ),
+                      if (widget.previousReport!.findings.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        const Text('Constatare anterioară:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                        Text(widget.previousReport!.findings, style: const TextStyle(fontSize: 11)),
+                      ],
+                      if (widget.previousReport!.workPerformed.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        const Text('Lucrări efectuate anterior:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                        Text(widget.previousReport!.workPerformed, style: const TextStyle(fontSize: 11)),
+                      ],
+                      const SizedBox(height: 4),
+                      Text(
+                        'Status anterior: ${widget.previousReport!.resolutionStatus.label}',
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               _section(
                 'Document',
                 [
+                  DropdownButtonFormField<String>(
+                    initialValue: _pvType,
+                    decoration: const InputDecoration(labelText: 'Tip PV'),
+                    items: const [
+                      DropdownMenuItem(
+                          value: 'constatare',
+                          child: Text('PV Constatare Tehnica')),
+                      DropdownMenuItem(
+                          value: 'interventie',
+                          child: Text('PV Interventie')),
+                      DropdownMenuItem(
+                          value: 'montaj',
+                          child: Text('PV Receptie Montaj')),
+                      DropdownMenuItem(
+                          value: 'garantie',
+                          child: Text('PV Garantie')),
+                    ],
+                    onChanged: (val) {
+                      if (val == null) return;
+                      setState(() => _pvType = val);
+                    },
+                  ),
+                  const SizedBox(height: 12),
                   TextField(
                     textCapitalization: TextCapitalization.sentences,
                     controller: _reportNumberController,
@@ -799,6 +1135,13 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
                     textCapitalization: TextCapitalization.sentences,
                     controller: _beneficiaryController,
                     decoration: const InputDecoration(labelText: 'Beneficiar'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _reprezentantBeneficiarController,
+                    decoration: const InputDecoration(
+                        labelText: 'Reprezentant beneficiar'),
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -984,6 +1327,178 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              _section(
+                'Date tehnice instalatie',
+                [
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: _agentFrigorificController,
+                          decoration: const InputDecoration(
+                              labelText: 'Agent frigorific (ex: R410A, R32)'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: _cantitateRecuperataController,
+                          decoration: const InputDecoration(
+                              labelText: 'Cantitate recuperata (ex: 7,22 kg)'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: _coduriEroareController,
+                          decoration: const InputDecoration(
+                              labelText: 'Coduri eroare (ex: P9 / JA / E1)'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: _stareTestController,
+                          decoration: const InputDecoration(
+                              labelText: 'Stare test (ex: AC debugging)'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                '1. Motivul interventiei',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _motivulInterventeiController,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      hintText:
+                          'Descrieti motivul tehnic al interventiei...',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                '2. Constatari la fata locului',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _constatariLocController,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      hintText: 'Enumerati constatarile tehnice...',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                '3. Lucrari efectuate',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _lucrariEfectuateDetController,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      hintText: 'Descrieti lucrarile efectuate...',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                '4. Observatii tehnice',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _observatiiTehController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      hintText: 'Observatii si interpretari tehnice...',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                '5. Concluzie',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _concluziController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      hintText: 'Concluzia tehnica si recomandarea...',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                '6. Recomandari',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _recomandariController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      hintText: 'Enumerati recomandarile tehnice...',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                '7. Mentiuni',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _mentiuniController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      hintText: 'Mentiuni suplimentare...',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _section(
+                'Materiale si piese detaliate',
+                [
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _materialeDetailedController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'Cod articol / denumire / cantitate',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _traseulPieselorController,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Traseu piese defecte/inlocuite',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _buildPhotoAnnexSection(),
               const SizedBox(height: 12),
               _section(
                 'Semnaturi',

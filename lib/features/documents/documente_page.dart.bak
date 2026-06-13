@@ -11,6 +11,8 @@ import '../agfr/agfr_models.dart';
 import '../clients/client_models.dart';
 import '../product_catalog/product_sales_models.dart';
 import '../registratura/registry_models.dart';
+import '../../core/widgets/help_button.dart';
+import '../../core/help_content.dart';
 
 class DocumentePage extends StatefulWidget {
   const DocumentePage({
@@ -383,14 +385,20 @@ class _DocumentePageState extends State<DocumentePage> {
       .toSet();
 
   Future<void> _openFile(_DocumentHubItem item) async {
-    final result = await DocumentFileService.openFile(item.filePath);
+    final result = await DocumentFileService.openFile(
+      item.filePath,
+      fallbackFileName: item.preferredFileName,
+    );
     if (!mounted) return;
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(result.message)));
   }
 
   Future<void> _openFolder(_DocumentHubItem item) async {
-    final ok = await DocumentFileService.openFolderForFile(item.filePath);
+    final ok = await DocumentFileService.openFolderForFile(
+      item.filePath,
+      fallbackFileName: item.preferredFileName,
+    );
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -430,6 +438,7 @@ class _DocumentePageState extends State<DocumentePage> {
             onPressed: _load,
             icon: const Icon(Icons.refresh),
           ),
+          HelpButton(content: AppHelp.documente),
         ],
       ),
       body: _loading
@@ -444,6 +453,7 @@ class _DocumentePageState extends State<DocumentePage> {
                       child: Column(
                         children: [
                           TextField(
+                            textCapitalization: TextCapitalization.sentences,
                             controller: _searchController,
                             decoration: InputDecoration(
                               labelText: 'Cauta document',
@@ -745,4 +755,17 @@ class _DocumentHubItem {
 
   String get clientLabel =>
       clientName.trim().isEmpty ? 'Nealocat clientului' : clientName.trim();
+
+  String get preferredFileName {
+    final explicitName = fileName.trim();
+    if (explicitName.isNotEmpty) {
+      return explicitName;
+    }
+    final normalized = filePath.trim().replaceAll('\\', '/');
+    if (normalized.isEmpty) {
+      return '';
+    }
+    final segments = normalized.split('/');
+    return segments.isEmpty ? normalized : segments.last.trim();
+  }
 }

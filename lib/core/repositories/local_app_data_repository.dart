@@ -667,8 +667,10 @@ class LocalAppDataRepository implements AppDataRepository {
     _programariLog(
       'local save end duration_ms=${localStopwatch.elapsedMilliseconds} count=${items.length}',
     );
-    // 2. Queue offline — garantează sincronizarea (CLAUDE.md: queue în repository)
-    unawaited(OfflineSyncRuntime.instance.queueAppointment(appointment));
+    // 2. Queue offline — await OBLIGATORIU: BUG 7 fix din listAppointments()
+    // verifică pendingUpsertEntityIds() care citește coada. Dacă queue nu e
+    // scris (unawaited), pendingIds este gol la reload → cloud suprascrie local.
+    await OfflineSyncRuntime.instance.queueAppointment(appointment);
     // 3. Firestore direct — best-effort, fire-and-forget (BUG 8: nu await)
     if (_isAppointmentsCloudAvailable) {
       _programariLog('cloud save start id=${appointment.id}');
@@ -703,8 +705,8 @@ class LocalAppDataRepository implements AppDataRepository {
     await _writeAppointments(items);
     // 2. Adaugă în pending set local (pentru filtrare la listare)
     await _addDeletedAppointmentId(trimmedId);
-    // 3. Queue delete (CLAUDE.md: queue în repository)
-    unawaited(OfflineSyncRuntime.instance.queueAppointmentDelete(trimmedId));
+    // 3. Queue delete — await (consistent cu upsert, listAppointments pendingIds check)
+    await OfflineSyncRuntime.instance.queueAppointmentDelete(trimmedId);
     // 4. Firestore direct — best-effort, fire-and-forget (BUG 8: nu await)
     if (_isAppointmentsCloudAvailable) {
       _appointmentsCollection.doc(trimmedId).delete().then((_) {

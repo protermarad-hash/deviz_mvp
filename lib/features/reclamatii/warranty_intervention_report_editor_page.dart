@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'dart:io';
@@ -34,6 +35,14 @@ class WarrantyInterventionReportEditorPage extends StatefulWidget {
     this.appointment,
     this.currentReport,
     this.existingTicket,
+    this.resolvedBeneficiaryName = '',
+    this.resolvedContractorName = '',
+    this.resolvedTechnicianName = '',
+    this.resolvedTeamName = '',
+    this.resolvedAgfrEquipmentLabel = '',
+    this.resolvedAgfrInterventionLabel = '',
+    this.resolvedAgfrReportLabel = '',
+    this.resolvedOfferLabel = '',
   });
 
   final AppDataRepository repository;
@@ -43,6 +52,14 @@ class WarrantyInterventionReportEditorPage extends StatefulWidget {
   final Appointment? appointment;
   final WarrantyInterventionReportRecord? currentReport;
   final WarrantyServiceTicketRecord? existingTicket;
+  final String resolvedBeneficiaryName;
+  final String resolvedContractorName;
+  final String resolvedTechnicianName;
+  final String resolvedTeamName;
+  final String resolvedAgfrEquipmentLabel;
+  final String resolvedAgfrInterventionLabel;
+  final String resolvedAgfrReportLabel;
+  final String resolvedOfferLabel;
 
   @override
   State<WarrantyInterventionReportEditorPage> createState() =>
@@ -119,8 +136,41 @@ class _WarrantyInterventionReportEditorPageState
         TextEditingController(text: seed.partsReplacedText);
     _recommendationsController =
         TextEditingController(text: seed.recommendations);
+    _hydrateReadableDefaults();
     if (widget.currentReport == null && seed.documentNumber.trim().isEmpty) {
       _assignAutomaticNumber();
+    }
+  }
+
+  void _hydrateReadableDefaults() {
+    _technicianController.text = _preferReadableValue(
+      currentValue: _technicianController.text,
+      preferredValue: _resolvedTechnicianName(),
+      rawValues: <String>[
+        widget.complaint.fieldTechnicianId,
+        widget.complaint.assignedEmployeeId,
+        widget.appointment?.assignedUserEmail ?? '',
+        if (widget.appointment?.assignedEmployeeIds.isNotEmpty ?? false)
+          widget.appointment!.assignedEmployeeIds.first,
+      ],
+    );
+    _teamController.text = _preferReadableValue(
+      currentValue: _teamController.text,
+      preferredValue: _resolvedTeamName(),
+      rawValues: <String>[
+        widget.complaint.fieldTeamId,
+        widget.complaint.assignedTeamId,
+        widget.appointment?.teamId ?? '',
+        if (widget.appointment?.assignedTeamIds.isNotEmpty ?? false)
+          widget.appointment!.assignedTeamIds.first,
+      ],
+    );
+    if (widget.currentReport == null) {
+      _clientNameController.text = _preferReadableValue(
+        currentValue: _clientNameController.text,
+        preferredValue: _resolvedBeneficiaryName(),
+        rawValues: const <String>[],
+      );
     }
   }
 
@@ -199,6 +249,68 @@ class _WarrantyInterventionReportEditorPageState
     return '$left\n\n$right';
   }
 
+  String _preferReadableValue({
+    required String currentValue,
+    required String preferredValue,
+    required Iterable<String> rawValues,
+  }) {
+    final current = currentValue.trim();
+    final preferred = preferredValue.trim();
+    final raw = rawValues
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toSet();
+    if (current.isEmpty) {
+      return preferred;
+    }
+    // Dacă current este un ID raw (din rawValues), preferăm numele rezolvat,
+    // chiar dacă preferred este gol — mai bine câmp gol decât ID brut în PDF.
+    if (raw.contains(current)) {
+      return preferred;
+    }
+    if (preferred.isEmpty) {
+      return current;
+    }
+    return current;
+  }
+
+  String _resolvedBeneficiaryName() {
+    if (widget.resolvedBeneficiaryName.trim().isNotEmpty) {
+      return widget.resolvedBeneficiaryName.trim();
+    }
+    final fallback = widget.complaint.beneficiaryName.trim();
+    if (fallback.isNotEmpty) {
+      return fallback;
+    }
+    return widget.appointment?.clientName.trim() ?? '';
+  }
+
+  String _resolvedContractorName() {
+    if (widget.resolvedContractorName.trim().isNotEmpty) {
+      return widget.resolvedContractorName.trim();
+    }
+    return widget.complaint.contractorName.trim();
+  }
+
+  String _resolvedTechnicianName() {
+    if (widget.resolvedTechnicianName.trim().isNotEmpty &&
+        widget.resolvedTechnicianName.trim() != '-') {
+      return widget.resolvedTechnicianName.trim();
+    }
+    // Nu întoarcem ID-uri brute (Firebase UID / email) — returnăm gol dacă nu
+    // putem rezolva un nume lizibil. PDF-ul va afișa '-' în loc de ID.
+    return '';
+  }
+
+  String _resolvedTeamName() {
+    if (widget.resolvedTeamName.trim().isNotEmpty &&
+        widget.resolvedTeamName.trim() != '-') {
+      return widget.resolvedTeamName.trim();
+    }
+    // Nu întoarcem ID-uri brute de echipă — returnăm gol dacă nu știm numele.
+    return '';
+  }
+
   WarrantyInterventionReportRecord _seedFromContext() {
     final complaint = widget.complaint;
     final certificate = widget.certificate;
@@ -217,8 +329,8 @@ class _WarrantyInterventionReportEditorPageState
       warrantyCertificateId: certificate?.id ?? complaint.warrantyCertificateId,
       warrantyServiceTicketId: existingTicket?.id ?? '',
       clientId: complaint.beneficiaryClientId.trim(),
-      clientName: complaint.beneficiaryName.trim().isNotEmpty
-          ? complaint.beneficiaryName.trim()
+      clientName: _resolvedBeneficiaryName().isNotEmpty
+          ? _resolvedBeneficiaryName()
           : (appointment?.clientName.trim().isNotEmpty ?? false)
               ? appointment!.clientName.trim()
               : complaint.contactPerson.trim(),
@@ -243,18 +355,8 @@ class _WarrantyInterventionReportEditorPageState
       beneficiaryRepresentative: complaint.contactPerson.trim().isNotEmpty
           ? complaint.contactPerson.trim()
           : (appointment?.contactPerson.trim() ?? ''),
-      technicianName: complaint.fieldTechnicianId.trim().isNotEmpty
-          ? complaint.fieldTechnicianId.trim()
-          : (appointment?.assignedUserEmail.trim().isNotEmpty ?? false)
-              ? appointment!.assignedUserEmail.trim()
-              : (appointment?.assignedEmployeeIds.isNotEmpty ?? false)
-                  ? appointment!.assignedEmployeeIds.first
-                  : complaint.assignedEmployeeId.trim(),
-      teamName: complaint.fieldTeamId.trim().isNotEmpty
-          ? complaint.fieldTeamId.trim()
-          : (appointment?.assignedTeamIds.isNotEmpty ?? false)
-              ? appointment!.assignedTeamIds.first
-              : (appointment?.teamId.trim() ?? complaint.assignedTeamId),
+      technicianName: _resolvedTechnicianName(),
+      teamName: _resolvedTeamName(),
       findings: complaint.fieldFinding.trim().isNotEmpty
           ? complaint.fieldFinding.trim()
           : complaint.problemDescription.trim(),
@@ -353,7 +455,31 @@ class _WarrantyInterventionReportEditorPageState
         repository: widget.repository,
         company: company,
         report: report,
+        complaint: widget.complaint,
+        appointment: widget.appointment,
         certificate: widget.certificate,
+        resolvedBeneficiaryName: _resolvedBeneficiaryName(),
+        resolvedContractorName: _resolvedContractorName(),
+        resolvedTechnicianName: _preferReadableValue(
+          currentValue: report.technicianName,
+          preferredValue: _resolvedTechnicianName(),
+          rawValues: <String>[
+            widget.complaint.fieldTechnicianId,
+            widget.complaint.assignedEmployeeId,
+          ],
+        ),
+        resolvedTeamName: _preferReadableValue(
+          currentValue: report.teamName,
+          preferredValue: _resolvedTeamName(),
+          rawValues: <String>[
+            widget.complaint.fieldTeamId,
+            widget.complaint.assignedTeamId,
+          ],
+        ),
+        resolvedAgfrEquipmentLabel: widget.resolvedAgfrEquipmentLabel,
+        resolvedAgfrInterventionLabel: widget.resolvedAgfrInterventionLabel,
+        resolvedAgfrReportLabel: widget.resolvedAgfrReportLabel,
+        resolvedOfferLabel: widget.resolvedOfferLabel,
         saveAs: saveAs,
       );
       report = report.copyWith(
@@ -533,11 +659,19 @@ class _WarrantyInterventionReportEditorPageState
         : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
     final storagePath =
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    } catch (_) {}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: 'application/pdf'),
-    );
+    try {
+      await ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'application/pdf'),
+      );
+    } catch (e) {
+      debugPrint('[WarrantyIntervention] ❌ Storage upload failed: $e');
+      rethrow;
+    }
     return <String, dynamic>{
       'filename': normalizedName,
       'storage_path': ref.fullPath,

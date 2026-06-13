@@ -1,3 +1,5 @@
+import 'hr_payroll_payment_models.dart';
+
 class HrPayrollRun {
   const HrPayrollRun({
     required this.id,
@@ -221,6 +223,117 @@ class HrPayslip {
       generatedAt: parseDate(map['generated_at'] ?? map['generatedAt']),
       createdAt: parseDate(map['created_at'] ?? map['createdAt']),
       updatedAt: parseDate(map['updated_at'] ?? map['updatedAt']),
+    );
+  }
+}
+
+// ── Sumar financiar complet per angajat pentru o lună ────────────────────────
+class HrPayrollEmployeeFinancialSummary {
+  const HrPayrollEmployeeFinancialSummary({
+    required this.employeeId,
+    required this.employeeName,
+    required this.functia,
+    required this.oreLucrate,
+    required this.brutTotal,
+    required this.cas,
+    required this.cass,
+    required this.impozit,
+    required this.deducerePersonala,
+    required this.ticheteValoare,
+    required this.netFaraTichete,
+    required this.netFinal,
+    required this.avansPlatit,
+    required this.restDePlata,
+    required this.salariuPlatit,
+    required this.totalPlatit,
+    required this.popririRetinute,
+    required this.popririPlatite,
+    required this.popririRestDePlata,
+    required this.esteAchitatIntegral,
+  });
+
+  final String employeeId;
+  final String employeeName;
+  final String functia;
+  final int oreLucrate;
+  final double brutTotal;
+  final double cas;
+  final double cass;
+  final double impozit;
+  final double deducerePersonala;
+  final double ticheteValoare;
+  final double netFaraTichete;
+  final double netFinal;
+  final double avansPlatit;
+  final double restDePlata;
+  final double salariuPlatit;
+  final double totalPlatit;
+  final double popririRetinute;
+  final double popririPlatite;
+  final double popririRestDePlata;
+  final bool esteAchitatIntegral;
+
+  static HrPayrollEmployeeFinancialSummary calculeaza({
+    required HrPayslip payslip,
+    required List<HrPayrollPayment> platiAngajat,
+    required String functia,
+    required String employeeName,
+  }) {
+    double bd(String section, String key) {
+      final sec = payslip.breakdown[section];
+      if (sec is Map) {
+        final v = sec[key];
+        if (v is num) return v.toDouble();
+      }
+      return 0.0;
+    }
+
+    final luna = payslip.payrollMonth;
+    final platiLuna = platiAngajat
+        .where((p) =>
+            p.payrollMonth.year == luna.year &&
+            p.payrollMonth.month == luna.month)
+        .toList();
+
+    // Avansul RETINUT e deja scazut din netFinal prin advanceRecoveryTotal
+    // (vine din deductionEntries din snapshot, nu din HrPayrollPayment)
+    final avansRetinut = payslip.advanceRecoveryTotal;
+
+    // Virat cont = sumele efectiv platite/virate angajatului (HrPayrollPayment)
+    final viratCont = platiLuna
+        .where((p) => p.paymentType == 'salariu')
+        .fold(0.0, (s, p) => s + p.amount);
+    final popririPlate = platiLuna
+        .where((p) => p.paymentType == 'poprire')
+        .fold(0.0, (s, p) => s + p.amount);
+
+    // Rest = ce mai trebuie virat (netFinal e deja dupa scaderea avansului)
+    final restDePlata =
+        (payslip.netFinal - viratCont).clamp(0.0, double.infinity);
+
+    return HrPayrollEmployeeFinancialSummary(
+      employeeId: payslip.employeeId,
+      employeeName: employeeName,
+      functia: functia,
+      oreLucrate: bd('attendance_leave_inputs', 'worked_hours').round(),
+      brutTotal: payslip.grossTotal,
+      cas: payslip.casAmount,
+      cass: payslip.cassAmount,
+      impozit: payslip.incomeTaxAmount,
+      deducerePersonala:
+          bd('salary_tax_percentages', 'personal_deduction_amount'),
+      ticheteValoare: bd('salary_tax_percentages', 'meal_ticket_total'),
+      netFaraTichete: bd('salary_tax_percentages', 'net_without_tm'),
+      netFinal: payslip.netFinal,
+      avansPlatit: avansRetinut,
+      restDePlata: restDePlata,
+      salariuPlatit: viratCont,
+      totalPlatit: avansRetinut + viratCont,
+      popririRetinute: payslip.garnishmentReservedTotal,
+      popririPlatite: popririPlate,
+      popririRestDePlata: (payslip.garnishmentReservedTotal - popririPlate)
+          .clamp(0.0, double.infinity),
+      esteAchitatIntegral: viratCont >= payslip.netFinal - 0.005,
     );
   }
 }

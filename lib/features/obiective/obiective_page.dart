@@ -1,0 +1,486 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'obiective_models.dart';
+import 'obiective_repository.dart';
+
+class ObiectivePage extends StatefulWidget {
+  const ObiectivePage({super.key});
+
+  @override
+  State<ObiectivePage> createState() => _ObiectivePageState();
+}
+
+class _ObiectivePageState extends State<ObiectivePage> {
+  final _repo = ObiectiveRepository.instance;
+
+  ObiectivLunar? _obiectiv;
+  ObiectivProgress? _progress;
+  bool _loading = true;
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
+
+  static const String _appointmentsKey = 'ultra_appointments_v1';
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_load);
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => _loading = true);
+
+    final obiectiv = await _repo.getOrCreateCurrent();
+    final progress = await _calcProgress(obiectiv);
+
+    if (!mounted) return;
+    setState(() {
+      _obiectiv = obiectiv;
+      _progress = progress;
+      _loading = false;
+    });
+  }
+
+  Future<ObiectivProgress> _calcProgress(ObiectivLunar o) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_appointmentsKey) ?? '[]';
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return ObiectivProgress(
+            obiectiv: o,
+            incasariActuale: 0,
+            lucrariNoi: 0,
+            programariRON: 0,
+            oferteTrimise: 0,
+            rataConversieActuala: 0);
+      }
+
+      final monthStart = DateTime(_selectedMonth.year, _selectedMonth.month);
+      final monthEnd =
+          DateTime(_selectedMonth.year, _selectedMonth.month + 1);
+
+      final appointments = decoded
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .where((a) {
+        final dt = DateTime.tryParse(
+            (a['start_time'] ?? a['startTime'] ?? '').toString());
+        if (dt == null) return false;
+        return !dt.isBefore(monthStart) && dt.isBefore(monthEnd);
+      }).toList();
+
+      double incasari = 0;
+      double programariRON = 0;
+      for (final a in appointments) {
+        incasari +=
+            (a['admin_collected_amount'] as num? ?? 0).toDouble();
+        programariRON +=
+            (a['pret_interventie'] as num? ?? 0).toDouble();
+      }
+
+      return ObiectivProgress(
+        obiectiv: o,
+        incasariActuale: incasari,
+        lucrariNoi: appointments
+            .where((a) =>
+                (a['status'] ?? '').toString() == 'finalizata')
+            .length
+            .toDouble(),
+        programariRON: programariRON,
+        oferteTrimise: 0, // din CrmRepository dacă e necesar
+        rataConversieActuala: 0,
+      );
+    } catch (_) {
+      return ObiectivProgress(
+          obiectiv: o,
+          incasariActuale: 0,
+          lucrariNoi: 0,
+          programariRON: 0,
+          oferteTrimise: 0,
+          rataConversieActuala: 0);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final isCurrentMonth = _selectedMonth.year == now.year &&
+        _selectedMonth.month == now.month;
+    final dayOfMonth = now.day;
+    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
+    final fractionOfMonth =
+        isCurrentMonth ? dayOfMonth / daysInMonth : 1.0;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Obiective lunare'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.chevron_left),
+            onPressed: () {
+              setState(() {
+                _selectedMonth = DateTime(
+                    _selectedMonth.year, _selectedMonth.month - 1);
+              });
+              _load();
+            },
+          ),
+          TextButton(
+            onPressed: null,
+            child: Text(
+              '${_monthName(_selectedMonth.month)} ${_selectedMonth.year}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.chevron_right),
+            onPressed: isCurrentMonth
+                ? null
+                : () {
+                    setState(() {
+                      _selectedMonth = DateTime(
+                          _selectedMonth.year, _selectedMonth.month + 1);
+                    });
+                    _load();
+                  },
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: 'Editeaza target-uri',
+            onPressed: _loading ? null : _showEditDialog,
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _buildContent(fractionOfMonth, isCurrentMonth),
+    );
+  }
+
+  Widget _buildContent(double fractionOfMonth, bool isCurrentMonth) {
+    final p = _progress;
+    final o = _obiectiv;
+    if (p == null || o == null) {
+      return const Center(child: Text('Fara obiective definite.'));
+    }
+
+    final hasTargets = o.targetIncasariRON > 0 ||
+        o.targetLucrariNoi > 0 ||
+        o.targetProgramariRON > 0;
+
+    if (!hasTargets) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.flag_outlined, size: 48, color: Colors.grey),
+            const SizedBox(height: 12),
+            const Text('Niciun target definit pentru aceasta luna.'),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Seteaza target-uri'),
+              onPressed: _showEditDialog,
+            ),
+          ],
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (isCurrentMonth) ...[
+            _buildProiectieCard(p, fractionOfMonth),
+            const SizedBox(height: 16),
+          ],
+          if (o.targetIncasariRON > 0)
+            _buildKpiCard(
+              icon: Icons.monetization_on_outlined,
+              titlu: 'Incasari',
+              realizat: p.incasariActuale,
+              target: o.targetIncasariRON,
+              progres: p.progresIncasari,
+              suffix: 'RON',
+              color: Colors.green,
+            ),
+          if (o.targetLucrariNoi > 0)
+            _buildKpiCard(
+              icon: Icons.build_outlined,
+              titlu: 'Lucrari finalizate',
+              realizat: p.lucrariNoi,
+              target: o.targetLucrariNoi,
+              progres: p.progresLucrari,
+              suffix: 'lucrari',
+              color: Colors.blue,
+            ),
+          if (o.targetProgramariRON > 0)
+            _buildKpiCard(
+              icon: Icons.calendar_today_outlined,
+              titlu: 'Valoare programari',
+              realizat: p.programariRON,
+              target: o.targetProgramariRON,
+              progres: p.progresProgramari,
+              suffix: 'RON',
+              color: Colors.purple,
+            ),
+          if (o.targetOferteTrimise > 0)
+            _buildKpiCard(
+              icon: Icons.description_outlined,
+              titlu: 'Oferte trimise',
+              realizat: p.oferteTrimise,
+              target: o.targetOferteTrimise,
+              progres: p.progresOferte,
+              suffix: 'oferte',
+              color: Colors.orange,
+            ),
+          if (o.targetRataConversie > 0)
+            _buildKpiCard(
+              icon: Icons.trending_up_outlined,
+              titlu: 'Rata conversie',
+              realizat: p.rataConversieActuala,
+              target: o.targetRataConversie,
+              progres: p.progresConversie,
+              suffix: '%',
+              color: Colors.teal,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProiectieCard(ObiectivProgress p, double fractionOfMonth) {
+    if (fractionOfMonth <= 0) return const SizedBox.shrink();
+    final proiectie =
+        p.incasariActuale / fractionOfMonth;
+    final target = p.obiectiv.targetIncasariRON;
+    final procent =
+        target > 0 ? (proiectie / target * 100) : 0.0;
+    final isOnTrack = procent >= 100;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isOnTrack
+            ? Colors.green.shade50
+            : Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: isOnTrack
+                ? Colors.green.shade200
+                : Colors.orange.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isOnTrack ? Icons.check_circle_outline : Icons.info_outline,
+            color:
+                isOnTrack ? Colors.green : Colors.orange,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              isOnTrack
+                  ? 'La ritmul actual vei atinge ${procent.toStringAsFixed(0)}% din target (${proiectie.toStringAsFixed(0)} RON proiectie)'
+                  : 'La ritmul actual vei atinge ${procent.toStringAsFixed(0)}% din target — accelerati!',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: isOnTrack ? Colors.green.shade800 : Colors.orange.shade800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKpiCard({
+    required IconData icon,
+    required String titlu,
+    required double realizat,
+    required double target,
+    required double progres,
+    required String suffix,
+    required Color color,
+  }) {
+    final depasit = progres >= 100;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: color, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                    child: Text(titlu,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600))),
+                if (depasit)
+                  const Text('TARGET DEPASIT!',
+                      style: TextStyle(
+                          color: Colors.green,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: (progres / 100).clamp(0.0, 1.0),
+                backgroundColor: Colors.grey.shade200,
+                color: depasit ? Colors.green : color,
+                minHeight: 10,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Realizat: ${realizat.toStringAsFixed(realizat == realizat.roundToDouble() ? 0 : 1)} $suffix',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: color,
+                      fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  'Target: ${target.toStringAsFixed(target == target.roundToDouble() ? 0 : 1)} $suffix',
+                  style: const TextStyle(
+                      fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+            if (!depasit && target > realizat)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Ramane: ${(target - realizat).toStringAsFixed(target == target.roundToDouble() ? 0 : 1)} $suffix',
+                  style: const TextStyle(
+                      fontSize: 11, color: Colors.grey),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showEditDialog() async {
+    final o = _obiectiv ?? await _repo.getOrCreateCurrent();
+    if (!mounted) return;
+    final incasariCtrl = TextEditingController(
+        text: o.targetIncasariRON.toStringAsFixed(0));
+    final lucrariCtrl = TextEditingController(
+        text: o.targetLucrariNoi.toStringAsFixed(0));
+    final programariCtrl = TextEditingController(
+        text: o.targetProgramariRON.toStringAsFixed(0));
+    final oferteCtrl = TextEditingController(
+        text: o.targetOferteTrimise.toStringAsFixed(0));
+    final conversieCtrl = TextEditingController(
+        text: o.targetRataConversie.toStringAsFixed(0));
+    final noteCtrl = TextEditingController(text: o.note);
+
+    try {
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(
+              'Target-uri ${_monthName(o.luna)} ${o.an}'),
+          content: SizedBox(
+            width: 380,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _targetField(incasariCtrl, 'Incasari tinta (RON)'),
+                  _targetField(lucrariCtrl, 'Lucrari finalizate (nr.)'),
+                  _targetField(
+                      programariCtrl, 'Valoare programari (RON)'),
+                  _targetField(
+                      oferteCtrl, 'Oferte trimise (nr.)'),
+                  _targetField(
+                      conversieCtrl, 'Rata conversie tinta (%)'),
+                  const SizedBox(height: 8),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: noteCtrl,
+                    decoration:
+                        const InputDecoration(labelText: 'Note'),
+                    maxLines: 2,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Anuleaza')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Salveaza')),
+          ],
+        ),
+      );
+      if (saved != true || !mounted) return;
+      final updated = o.copyWith(
+        targetIncasariRON: double.tryParse(
+                incasariCtrl.text.replaceAll(',', '.')) ??
+            o.targetIncasariRON,
+        targetLucrariNoi: double.tryParse(
+                lucrariCtrl.text.replaceAll(',', '.')) ??
+            o.targetLucrariNoi,
+        targetProgramariRON: double.tryParse(
+                programariCtrl.text.replaceAll(',', '.')) ??
+            o.targetProgramariRON,
+        targetOferteTrimise: double.tryParse(
+                oferteCtrl.text.replaceAll(',', '.')) ??
+            o.targetOferteTrimise,
+        targetRataConversie: double.tryParse(
+                conversieCtrl.text.replaceAll(',', '.')) ??
+            o.targetRataConversie,
+        note: noteCtrl.text.trim(),
+      );
+      // Optimistic UI — actualizează obiectivul imediat
+      setState(() => _obiectiv = updated);
+      _repo.upsert(updated).catchError((e) {
+        if (mounted) _load();
+      });
+    } finally {
+      incasariCtrl.dispose();
+      lucrariCtrl.dispose();
+      programariCtrl.dispose();
+      oferteCtrl.dispose();
+      conversieCtrl.dispose();
+      noteCtrl.dispose();
+    }
+  }
+
+  Widget _targetField(TextEditingController ctrl, String label) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: TextField(
+          controller: ctrl,
+          keyboardType:
+              const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(labelText: label),
+        ),
+      );
+
+  String _monthName(int luna) {
+    const n = ['', 'Ianuarie', 'Februarie', 'Martie', 'Aprilie', 'Mai',
+      'Iunie', 'Iulie', 'August', 'Septembrie', 'Octombrie', 'Noiembrie',
+      'Decembrie'];
+    return luna >= 1 && luna <= 12 ? n[luna] : '$luna';
+  }
+}

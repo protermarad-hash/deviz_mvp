@@ -805,24 +805,29 @@ class _HrMonthlyTimesheetPageState extends State<HrMonthlyTimesheetPage> {
       for (final option in MonthlyTimesheetCodeOption.defaults)
         option.code: record.totalCodeCount(option.code),
     };
-    return Scrollbar(
-      thumbVisibility: true,
-      controller: _horizontalScrollController,
-      child: SingleChildScrollView(
-        controller: _horizontalScrollController,
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: 310 + 92 + 110 + (_daysInMonth * 56) + 72 + 220 + 90,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 700) {
+          return _buildMobileGrid(record, monthlySummary);
+        }
+        return Scrollbar(
+          thumbVisibility: true,
+          controller: _horizontalScrollController,
+          child: SingleChildScrollView(
+            controller: _horizontalScrollController,
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: 310 + 92 + 110 + (_daysInMonth * 56) + 72 + 220 + 90,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               Row(
                 children: [
                   _headerCell('Angajat', width: 310),
                   _headerCell('Actiuni', width: 92),
-                  _headerCell('TM buget\n(RON)', width: 110),
+                  _headerCell('TM buget\n(RON net)', width: 110),
                   for (var day = 1; day <= _daysInMonth; day++)
                     Container(
                       width: 56,
@@ -849,7 +854,7 @@ class _HrMonthlyTimesheetPageState extends State<HrMonthlyTimesheetPage> {
                   _headerCell('Ore', width: 72),
                   for (final option in MonthlyTimesheetCodeOption.defaults)
                     _headerCell(option.code, width: 52),
-                  _headerCell('TM\nRON/zi', width: 90),
+                  _headerCell('TM\nRON/zi\n(net)', width: 90),
                 ],
               ),
               for (final row in record.rows)
@@ -1123,10 +1128,219 @@ class _HrMonthlyTimesheetPageState extends State<HrMonthlyTimesheetPage> {
                   ),
                 ],
               ),
-            ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMobileGrid(
+    MonthlyTimesheetRecord record,
+    Map<String, int> monthlySummary,
+  ) {
+    final totalMealBudget = record.rows.fold<double>(
+      0,
+      (sum, row) => sum + row.mealTicketBudgetRon,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Sumar lună',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Text('Ore totale: ${record.totalWorkedHours.toStringAsFixed(0)}'),
+                Text('Buget tichete: ${totalMealBudget.toStringAsFixed(0)} RON'),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: MonthlyTimesheetCodeOption.defaults
+                      .map(
+                        (option) => Chip(
+                          label: Text(
+                            '${option.code}: ${monthlySummary[option.code] ?? 0}',
+                          ),
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
+        ...record.rows.map((row) {
+          final budget = row.mealTicketBudgetRon;
+          final eligibleDays = _eligibleDaysForRow(row);
+          final perDay = (budget > 0 && eligibleDays > 0)
+              ? budget / eligibleDays
+              : 0.0;
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              row.employeeName,
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            if (row.notes.trim().toUpperCase().contains('CCC'))
+                              Text(
+                                'CCC activ',
+                                style: TextStyle(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              )
+                            else if (row.teamName.trim().isNotEmpty)
+                              Text(
+                                row.teamName.trim(),
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                          ],
+                        ),
+                      ),
+                      Wrap(
+                        spacing: 4,
+                        children: [
+                          IconButton(
+                            tooltip: 'Aplică valoare pe interval',
+                            onPressed: () => _applyRangeForRow(row),
+                            icon: const Icon(Icons.date_range_outlined, size: 18),
+                          ),
+                          IconButton(
+                            tooltip: 'Copiază interval',
+                            onPressed: () => _copyRangeFromRow(row),
+                            icon:
+                                const Icon(Icons.content_copy_outlined, size: 18),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _budgetControllers[row.employeeId],
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[\d.,]')),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'Buget tichete de masă (RON)',
+                    ),
+                    onChanged: (value) => _updateBudget(row.employeeId, value),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      Chip(label: Text('Ore: ${row.totalWorkedHours.toStringAsFixed(0)}')),
+                      Chip(label: Text('TM/zi: ${perDay.toStringAsFixed(2)} RON')),
+                      Chip(label: Text('Zile eligibile: $eligibleDays')),
+                      for (final option in MonthlyTimesheetCodeOption.defaults)
+                        Chip(label: Text('${option.code}: ${row.countCode(option.code)}')),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ...List.generate(_daysInMonth, (index) {
+                    final day = index + 1;
+                    final value = row.dayValues['$day'] ?? '';
+                    final readOnly = _isChildcareLeaveDay(
+                      _contractsByEmployeeId[row.employeeId.trim()],
+                      day,
+                    );
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 88,
+                            child: Text(
+                              'Ziua $day\n${_weekdayLabel(day)}',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: _isWeekend(day)
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: _dayCellColor(value: value, day: day),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: TextField(
+                                controller:
+                                    _controllers[_cellKey(row.employeeId, day)],
+                                readOnly: readOnly,
+                                textAlign: TextAlign.center,
+                                textCapitalization:
+                                    TextCapitalization.characters,
+                                decoration: InputDecoration(
+                                  border: InputBorder.none,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 14,
+                                  ),
+                                  hintText: _isWeekend(day) ? '-' : '',
+                                ),
+                                style: TextStyle(
+                                  fontWeight: value.trim().isEmpty
+                                      ? FontWeight.w400
+                                      : FontWeight.w600,
+                                  color: _isUnusualValue(value)
+                                      ? Theme.of(context)
+                                          .colorScheme
+                                          .onErrorContainer
+                                      : MonthlyTimesheetValueParser.codeFromValue(
+                                                  value) ==
+                                              'CCC'
+                                          ? Theme.of(context)
+                                              .colorScheme
+                                              .onTertiaryContainer
+                                          : null,
+                                ),
+                                onChanged: (next) =>
+                                    _updateCell(row.employeeId, day, next),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
     );
   }
 
@@ -1694,7 +1908,9 @@ class _SalaryResultsDialog extends StatelessWidget {
             const SizedBox(height: 12),
             Flexible(
               child: SingleChildScrollView(
-                child: DataTable(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: DataTable(
                   columns: const [
                     DataColumn(label: Text('Angajat')),
                     DataColumn(label: Text('Salariu net')),
@@ -1727,6 +1943,7 @@ class _SalaryResultsDialog extends StatelessWidget {
                 ),
               ),
             ),
+          ),
           ],
         ),
       ),

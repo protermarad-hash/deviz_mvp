@@ -49,7 +49,8 @@ class _AddClientQuickDialogContent extends StatefulWidget {
 class _AddClientQuickDialogContentState
     extends State<_AddClientQuickDialogContent> {
   final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
+  // Lista dinamică de controllere pentru telefoane
+  final List<TextEditingController> _phoneControllers = [TextEditingController()];
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _cuiController = TextEditingController();
   final TextEditingController _addressController = TextEditingController();
@@ -70,7 +71,9 @@ class _AddClientQuickDialogContentState
   @override
   void dispose() {
     _nameController.dispose();
-    _phoneController.dispose();
+    for (final c in _phoneControllers) {
+      c.dispose();
+    }
     _emailController.dispose();
     _cuiController.dispose();
     _addressController.dispose();
@@ -136,7 +139,7 @@ class _AddClientQuickDialogContentState
         name: name,
         type: _selectedType,
         contactPerson: '',
-        phone: _phoneController.text.trim(),
+        phone: _phoneControllers.isNotEmpty ? _phoneControllers.first.text.trim() : '',
         email: _emailController.text.trim(),
         cui: _cuiController.text.trim(),
         regCom: _regComController.text.trim(),
@@ -149,6 +152,10 @@ class _AddClientQuickDialogContentState
         notes: '',
         departments: const [],
         contactPeople: const [],
+        phoneNumbers: _phoneControllers
+            .map((c) => c.text.trim())
+            .where((p) => p.isNotEmpty)
+            .toList(),
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -212,7 +219,7 @@ class _AddClientQuickDialogContentState
                   cuiController: _cuiController,
                   nameController: _nameController,
                   tradeRegisterController: _regComController,
-                  phoneController: _phoneController,
+                  phoneController: _phoneControllers.first,
                   addressController: _addressController,
                   cityController: _cityController,
                   countyController: _countyController,
@@ -224,24 +231,47 @@ class _AddClientQuickDialogContentState
                 ),
               const SizedBox(height: 12),
 
-              // Telefon si Email
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: _phoneController,
-                      decoration: const InputDecoration(labelText: 'Telefon'),
+              // Numere de telefon (dinamice)
+              ...List.generate(_phoneControllers.length, (i) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        keyboardType: TextInputType.phone,
+                        controller: _phoneControllers[i],
+                        decoration: InputDecoration(
+                          labelText: i == 0 ? 'Telefon principal' : 'Telefon ${i + 1}',
+                          prefixIcon: const Icon(Icons.phone_outlined),
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      controller: _emailController,
-                      decoration: const InputDecoration(labelText: 'Email'),
-                    ),
-                  ),
-                ],
+                    if (_phoneControllers.length > 1)
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                        onPressed: () => setState(() {
+                          _phoneControllers[i].dispose();
+                          _phoneControllers.removeAt(i);
+                        }),
+                      ),
+                  ],
+                ),
+              )),
+              if (_phoneControllers.length < 5)
+                TextButton.icon(
+                  icon: const Icon(Icons.add_call, size: 16),
+                  label: const Text('Adaugă număr de telefon'),
+                  onPressed: () => setState(() => _phoneControllers.add(TextEditingController())),
+                ),
+              const SizedBox(height: 6),
+
+              // Email
+              TextField(
+                controller: _emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  prefixIcon: Icon(Icons.email_outlined),
+                ),
               ),
               const SizedBox(height: 12),
 

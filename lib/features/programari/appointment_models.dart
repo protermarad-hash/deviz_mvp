@@ -447,6 +447,8 @@ class Appointment {
     this.forPartnerReceiveStatus = PartnerPaymentStatus.neplatit,
     this.forPartnerReceiveDate,
     this.forPartnerReceiveNotes = '',
+    this.clientPhoneNumbers = const <String>[],
+    this.stocScazut = false,
   });
 
   final String id;
@@ -525,6 +527,10 @@ class Appointment {
   final PartnerPaymentStatus forPartnerReceiveStatus;
   final DateTime? forPartnerReceiveDate;
   final String forPartnerReceiveNotes;
+  final List<String> clientPhoneNumbers;
+  /// True dacă stocul a fost deja scăzut pentru materialele acestei programări.
+  /// Previne scăderi duble la editări ulterioare.
+  final bool stocScazut;
 
   Appointment copyWith({
     String? id,
@@ -594,6 +600,8 @@ class Appointment {
     DateTime? forPartnerReceiveDate,
     bool clearForPartnerReceiveDate = false,
     String? forPartnerReceiveNotes,
+    List<String>? clientPhoneNumbers,
+    bool? stocScazut,
   }) {
     return Appointment(
       id: id ?? this.id,
@@ -681,6 +689,8 @@ class Appointment {
           : (forPartnerReceiveDate ?? this.forPartnerReceiveDate),
       forPartnerReceiveNotes:
           forPartnerReceiveNotes ?? this.forPartnerReceiveNotes,
+      clientPhoneNumbers: clientPhoneNumbers ?? this.clientPhoneNumbers,
+      stocScazut: stocScazut ?? this.stocScazut,
     );
   }
 
@@ -801,6 +811,8 @@ class Appointment {
       'for_partner_receive_status': forPartnerReceiveStatus.value,
       'for_partner_receive_date': forPartnerReceiveDate?.toIso8601String(),
       'for_partner_receive_notes': forPartnerReceiveNotes,
+      'client_phone_numbers': clientPhoneNumbers,
+      'stoc_scazut': stocScazut,
     };
   }
 
@@ -1055,6 +1067,18 @@ class Appointment {
               map['forPartnerReceiveNotes'] ??
               '')
           .toString(),
+      stocScazut: (map['stoc_scazut'] ?? map['stocScazut'] ?? false) == true,
+      clientPhoneNumbers: (() {
+        final raw = map['client_phone_numbers'] ?? map['clientPhoneNumbers'];
+        if (raw is List) {
+          return List<String>.from(
+            raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty),
+          );
+        }
+        // Fallback: migrare din contactPhone
+        final single = (map['contact_phone'] ?? '').toString().trim();
+        return single.isNotEmpty ? [single] : const <String>[];
+      })(),
     );
   }
 

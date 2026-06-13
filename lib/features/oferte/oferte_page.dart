@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
@@ -32,8 +34,8 @@ import 'offer_standard_catalog_service.dart';
 import 'oferte_cloud_repository.dart';
 import 'bnr_exchange_rate_service.dart';
 import 'deviz_articole_baza_page.dart';
-import '../../core/widgets/help_button.dart';
-import '../../core/help_content.dart';
+import '../../core/help/help_module_button.dart';
+import '../../core/widgets/client_autocomplete_field.dart';
 
 class OfertePage extends StatefulWidget {
   const OfertePage({
@@ -65,7 +67,7 @@ class OfertePage extends StatefulWidget {
 }
 
 class _OfertePageState extends State<OfertePage>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   static const String _prefKeyStatus = 'oferte_filter_status_v1';
   static const String _prefKeyClient = 'oferte_filter_client_v1';
   static const String _prefKeySearch = 'oferte_filter_search_v1';
@@ -75,6 +77,8 @@ class _OfertePageState extends State<OfertePage>
   @override
   bool get wantKeepAlive => true;
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _analysisClientSearchController =
+      TextEditingController();
   final LocalOferteRepository _localRepository = LocalOferteRepository();
   final OfferEditorDefaultsStore _defaultsStore = OfferEditorDefaultsStore();
   final OfferStandardCatalogService _standardCatalogService =
@@ -100,6 +104,7 @@ class _OfertePageState extends State<OfertePage>
   List<OfferCommercialPackageTemplate> _packageTemplates =
       const <OfferCommercialPackageTemplate>[];
   OfferStatus? _statusFilter;
+  String _tipOfertaFilter = 'toate'; // 'toate' | 'oferta_lucrari' | 'deviz_tehnic' | 'mini_oferta' | 'deviz_filtre'
   String? _clientFilter;
   OferteCloudRepository? _cloudRepository;
   LucrariCloudRepository? _lucrariCloudRepository;
@@ -108,10 +113,20 @@ class _OfertePageState extends State<OfertePage>
   OfferEditorDefaults _offerDefaults = const OfferEditorDefaults();
   bool _didHandleInitialDraft = false;
   bool _didHandleInitialFocus = false;
+  late final TabController _tabController;
+  List<String> _analysisStatusFilters = <String>[];
+  String _analysisPerioadaFilter = 'toate';
+  String _analysisTipFilter = 'toate';
+  String _analysisSearchClient = '';
+  Set<String> _selectedIds = <String>{};
+  final Map<String, bool> _expandedGroups = <String, bool>{};
+  DateTimeRange? _analysisCustomRange;
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this)
+      ..addListener(_handleTabChanged);
     _aiAssistantService = AiAssistantService(repository: widget.repository);
     if (FirebaseBootstrap.isInitialized) {
       _cloudRepository = FirebaseOferteRepository();
@@ -120,12 +135,24 @@ class _OfertePageState extends State<OfertePage>
       _setLocalCacheSource(FirebaseBootstrap.lastErrorMessage);
     }
     _searchController.addListener(_refreshUi);
+    _analysisClientSearchController.addListener(() {
+      setState(() {
+        _analysisSearchClient = _analysisClientSearchController.text.trim();
+      });
+    });
     _bindCloudOffers();
     _loadOfferDefaults();
     _loadFilterPreferences();
     // Ascultă modificările de clienți din orice altă pagină (ex: modul Clienți)
     LocalAppDataRepository.clientsChangeCount.addListener(_handleClientsChanged);
     Future.microtask(_load);
+  }
+
+  void _handleTabChanged() {
+    if (_tabController.indexIsChanging || !mounted) {
+      return;
+    }
+    setState(() {});
   }
 
   Future<void> _loadFilterPreferences() async {
@@ -187,10 +214,14 @@ class _OfertePageState extends State<OfertePage>
 
   @override
   void dispose() {
+    _tabController
+      ..removeListener(_handleTabChanged)
+      ..dispose();
     LocalAppDataRepository.clientsChangeCount.removeListener(_handleClientsChanged);
     _clientsReloadDebounce?.cancel();
     _preferencesDebounce?.cancel();
     _offersSubscription?.cancel();
+    _analysisClientSearchController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -570,13 +601,19 @@ class _OfertePageState extends State<OfertePage>
   }
 
   List<OfferRecord> get _filteredItems {
-    return OfferListFilter.apply(
+    var items = OfferListFilter.apply(
       items: _items,
       searchQuery: _searchController.text,
       status: _statusFilter,
       clientId: _clientFilter,
       resolveClientName: _resolveClientName,
     );
+    if (_tipOfertaFilter != 'toate') {
+      items = items
+          .where((item) => item.tipOferta == _tipOfertaFilter)
+          .toList(growable: false);
+    }
+    return items;
   }
 
   String _resolveClientName(OfferRecord item) {
@@ -682,6 +719,28 @@ class _OfertePageState extends State<OfertePage>
     );
   }
 
+  Widget _buildTipOfertaBadge(String tipOferta) {
+    final (label, color) = switch (tipOferta) {
+      'deviz_tehnic'  => ('Deviz tehnic', Colors.purple),
+      'mini_oferta'   => ('Mini ofertă', Colors.orange),
+      'deviz_filtre'  => ('Filtre CTA', Colors.teal),
+      _               => ('Ofertă', Colors.blue),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+            fontSize: 10, color: color, fontWeight: FontWeight.w500),
+      ),
+    );
+  }
+
   Widget _buildExpiryChip(OfferRecord item) {
     final expiry = item.validUntil;
     if (expiry == null) return const SizedBox.shrink();
@@ -783,6 +842,189 @@ class _OfertePageState extends State<OfertePage>
     final reason = (_fallbackReason ?? '').trim();
     if (reason.isEmpty) return ' Operație salvată în cache local.';
     return ' Operație salvată în cache local până la revenirea cloud.';
+  }
+
+  String _formatCurrency(double value, {String currency = 'RON'}) {
+    final fmt = NumberFormat('#,##0.00', 'ro_RO');
+    return '${fmt.format(value)} $currency';
+  }
+
+  DateTimeRange? _analysisDateRange() {
+    final now = DateTime.now();
+    switch (_analysisPerioadaFilter) {
+      case 'luna_curenta':
+        return DateTimeRange(
+          start: DateTime(now.year, now.month, 1),
+          end: DateTime(now.year, now.month + 1, 0),
+        );
+      case 'luna_trecuta':
+        final previousMonth = DateTime(now.year, now.month - 1, 1);
+        return DateTimeRange(
+          start: previousMonth,
+          end: DateTime(previousMonth.year, previousMonth.month + 1, 0),
+        );
+      case 'an_curent':
+        return DateTimeRange(
+          start: DateTime(now.year, 1, 1),
+          end: DateTime(now.year, 12, 31),
+        );
+      case 'custom':
+        return _analysisCustomRange;
+      case 'toate':
+      default:
+        return null;
+    }
+  }
+
+  List<OfferRecord> get _analysisFilteredItems {
+    Iterable<OfferRecord> items = _items;
+
+    if (_analysisStatusFilters.isNotEmpty) {
+      items = items.where(
+        (item) => _analysisStatusFilters.contains(item.status.value),
+      );
+    }
+
+    final range = _analysisDateRange();
+    if (range != null) {
+      final start = DateTime(range.start.year, range.start.month, range.start.day);
+      final end = DateTime(
+        range.end.year,
+        range.end.month,
+        range.end.day,
+        23,
+        59,
+        59,
+      );
+      items = items.where(
+        (item) => !item.issueDate.isBefore(start) && !item.issueDate.isAfter(end),
+      );
+    }
+
+    if (_analysisTipFilter != 'toate') {
+      items = items.where((item) => item.tipDocument.value == _analysisTipFilter);
+    }
+
+    final clientQuery = _analysisSearchClient.trim().toLowerCase();
+    if (clientQuery.isNotEmpty) {
+      items = items.where(
+        (item) => _resolveClientName(item).toLowerCase().contains(clientQuery),
+      );
+    }
+
+    final filtered = items.toList(growable: false)
+      ..sort((a, b) => b.issueDate.compareTo(a.issueDate));
+    _selectedIds =
+        _selectedIds.where((id) => filtered.any((item) => item.id == id)).toSet();
+    return filtered;
+  }
+
+  Map<String, List<OfferRecord>> _groupByClient(List<OfferRecord> offers) {
+    final map = <String, List<OfferRecord>>{};
+    for (final offer in offers) {
+      final resolvedName = _resolveClientName(offer).trim();
+      final key = resolvedName.isEmpty || resolvedName == '-'
+          ? 'Fără client'
+          : resolvedName;
+      map.putIfAbsent(key, () => <OfferRecord>[]).add(offer);
+    }
+    return Map<String, List<OfferRecord>>.fromEntries(
+      map.entries.toList()
+        ..sort((a, b) => b.value.length.compareTo(a.value.length)),
+    );
+  }
+
+  double _selectedWithoutVatTotal() {
+    final byId = {for (final item in _items) item.id: item};
+    return _selectedIds.fold<double>(
+      0,
+      (sum, id) => sum + (byId[id]?.subtotalComercial ?? 0),
+    );
+  }
+
+  double _selectedWithVatTotal() {
+    final byId = {for (final item in _items) item.id: item};
+    return _selectedIds.fold<double>(
+      0,
+      (sum, id) => sum + (byId[id]?.totalValue ?? 0),
+    );
+  }
+
+  double _acceptanceRate(List<OfferRecord> list) {
+    if (list.isEmpty) return 0;
+    return list.where((item) => item.status == OfferStatus.accepted).length /
+        list.length *
+        100;
+  }
+
+  void _toggleAnalysisStatus(String value) {
+    setState(() {
+      if (value == 'toate') {
+        _analysisStatusFilters = <String>[];
+        return;
+      }
+      final next = [..._analysisStatusFilters];
+      if (next.contains(value)) {
+        next.remove(value);
+      } else {
+        next.add(value);
+      }
+      _analysisStatusFilters = next;
+    });
+  }
+
+  Future<void> _pickCustomAnalysisRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 1),
+      initialDateRange: _analysisCustomRange,
+    );
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _analysisCustomRange = picked;
+      _analysisPerioadaFilter = 'custom';
+    });
+  }
+
+  void _toggleSelectOffer(String offerId, bool selected) {
+    setState(() {
+      if (selected) {
+        _selectedIds.add(offerId);
+      } else {
+        _selectedIds.remove(offerId);
+      }
+    });
+  }
+
+  void _toggleSelectClientGroup(
+    String clientName,
+    List<OfferRecord> offers,
+    bool selected,
+  ) {
+    setState(() {
+      final ids = offers.map((item) => item.id);
+      if (selected) {
+        _selectedIds.addAll(ids);
+      } else {
+        _selectedIds.removeAll(ids);
+      }
+      _expandedGroups[clientName] = true;
+    });
+  }
+
+  Future<void> _copySelectedAnalysisTotals() async {
+    final text = 'Oferte selectate: ${_selectedIds.length}\n'
+        'Fără TVA: ${_formatCurrency(_selectedWithoutVatTotal())}\n'
+        'Cu TVA: ${_formatCurrency(_selectedWithVatTotal())}';
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Valorile selectate au fost copiate.')),
+    );
   }
 
   double _displayedOfferTotal(OfferRecord offer) {
@@ -954,6 +1196,7 @@ class _OfertePageState extends State<OfertePage>
         defaults: _offerDefaults,
         onSave: _saveOfferResolved,
         defaultTipDocument: defaultTipDocument,
+        repository: widget.repository,
       ),
     );
     if (savedOffer != null) {
@@ -1081,6 +1324,28 @@ class _OfertePageState extends State<OfertePage>
       sourceOfferTitle: offer.title,
       createdByUserId: offer.createdByUserId,
       createdByUserEmail: offer.createdByUserEmail,
+      // Populare linii planificate din liniile ofertei (excluzând linii de tip text)
+      liniiPlanificate: offer.lines
+          .where((l) => l.lineType != OfferLineType.text)
+          .toList()
+          .asMap()
+          .entries
+          .map((entry) {
+            final l = entry.value;
+            return JobLine.fromOfertaLine(
+              id: '',
+              ofertaLineId: l.id,
+              denumire: l.name,
+              um: l.unit,
+              cantitate: l.quantity,
+              pretUnitar: l.unitPrice,
+              categorie: l.lineType == OfferLineType.manopera
+                  ? 'manopera'
+                  : 'material',
+            );
+          })
+          .toList(growable: false),
+      totalOferta: _displayedOfferTotal(offer),
     );
 
     await _saveJobResolved(job);
@@ -1112,35 +1377,49 @@ class _OfertePageState extends State<OfertePage>
   }
 
   Future<void> _deleteOffer(OfferRecord item) async {
-    if (_isOfferFrozen(item)) {
-      _showConvertedFrozenMessage(item);
+    // Protecție: oferta convertită în lucrare nu poate fi ștearsă
+    if (item.isConverted) {
+      final jobCode = _findJobById(item.convertedToJobId)?.jobCode.trim() ?? '';
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          'Nu poți șterge o ofertă cu lucrare asociată'
+          '${jobCode.isNotEmpty ? " ($jobCode)" : " (${item.convertedToJobId})"}'
+          '. Șterge mai întâi lucrarea.',
+        ),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 5),
+      ));
       return;
     }
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Ștergere ofertă'),
+        title: const Text('Șterge oferta?'),
         content: Text(
-          'Sigur vrei sa stergi oferta ${item.offerNumber}?',
+          'Oferta ${item.offerNumber} va fi ștearsă definitiv.\n'
+          'Această acțiune nu poate fi anulată.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Renunță'),
+            child: const Text('Anulează'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Șterge'),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Șterge definitiv'),
           ),
         ],
       ),
     );
     if (confirm != true) return;
-    await _deleteOfferResolved(item.id);
-    await _load();
+    // Optimistic UI
+    if (mounted) setState(() => _items.removeWhere((o) => o.id == item.id));
+    _deleteOfferResolved(item.id).catchError((_) => _load());
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Oferta a fost stearsa.${_storageModeHint()}')),
+      SnackBar(content: Text('Oferta ${item.offerNumber} ștearsă.')),
     );
   }
 
@@ -1285,6 +1564,7 @@ class _OfertePageState extends State<OfertePage>
               setState(() {
                 _searchController.clear();
                 _statusFilter = null;
+                _tipOfertaFilter = 'toate';
                 _clientFilter = null;
               });
               _schedulePersistFilterPreferences();
@@ -1304,6 +1584,20 @@ class _OfertePageState extends State<OfertePage>
               labelText: 'Cauta dupa numar, titlu, client',
               prefixIcon: Icon(Icons.search),
             ),
+          ),
+          const SizedBox(height: 12),
+          // Filtru tip ofertă
+          DropdownButtonFormField<String>(
+            initialValue: _tipOfertaFilter,
+            decoration: const InputDecoration(labelText: 'Tip document'),
+            items: const [
+              DropdownMenuItem(value: 'toate', child: Text('Toate tipurile')),
+              DropdownMenuItem(value: 'oferta_lucrari', child: Text('Ofertă lucrări')),
+              DropdownMenuItem(value: 'deviz_tehnic', child: Text('Deviz tehnic')),
+              DropdownMenuItem(value: 'mini_oferta', child: Text('Mini ofertă')),
+              DropdownMenuItem(value: 'deviz_filtre', child: Text('Filtre CTA')),
+            ],
+            onChanged: (v) => setState(() => _tipOfertaFilter = v ?? 'toate'),
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<OfferStatus?>(
@@ -1462,6 +1756,474 @@ class _OfertePageState extends State<OfertePage>
     );
   }
 
+  Widget _buildStatusDistributionTable(List<OfferRecord> offers) {
+    final rows = OfferStatus.values
+        .map((status) {
+          final matches = offers.where((item) => item.status == status).toList();
+          final count = matches.length;
+          final withoutVat =
+              matches.fold<double>(0, (sum, item) => sum + item.subtotalComercial);
+          final percentage = offers.isEmpty ? 0.0 : count / offers.length * 100;
+          return (
+            status: status,
+            count: count,
+            withoutVat: withoutVat,
+            percentage: percentage,
+          );
+        })
+        .where((row) => row.count > 0)
+        .toList();
+
+    if (rows.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxBarWidth = constraints.maxWidth - 220;
+        return Column(
+          children: rows.map((row) {
+            final color = _offerStatusBaseColor(row.status);
+            final barWidth = maxBarWidth <= 0
+                ? 0.0
+                : maxBarWidth * (row.percentage.clamp(0, 100) / 100);
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 92,
+                    child: Text(
+                      row.status.label,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 38,
+                    child: Text(
+                      '${row.count}',
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  SizedBox(
+                    width: 120,
+                    child: Text(
+                      _formatCurrency(row.withoutVat),
+                      textAlign: TextAlign.right,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Container(
+                          width: barWidth,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: color,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text('${row.percentage.toStringAsFixed(0)}%'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _analysisStatCard({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnalysisFilters() {
+    final isCustom = _analysisPerioadaFilter == 'custom';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Filtre analiză',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilterChip(
+                  label: const Text('Toate'),
+                  selected: _analysisStatusFilters.isEmpty,
+                  onSelected: (_) => _toggleAnalysisStatus('toate'),
+                ),
+                ...OfferStatus.values.map(
+                  (status) => FilterChip(
+                    label: Text(status.label),
+                    selected: _analysisStatusFilters.contains(status.value),
+                    onSelected: (_) => _toggleAnalysisStatus(status.value),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                SizedBox(
+                  width: 220,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _analysisPerioadaFilter,
+                    decoration: const InputDecoration(labelText: 'Perioadă'),
+                    items: const [
+                      DropdownMenuItem(value: 'toate', child: Text('Toate')),
+                      DropdownMenuItem(
+                          value: 'luna_curenta', child: Text('Luna aceasta')),
+                      DropdownMenuItem(
+                          value: 'luna_trecuta', child: Text('Luna trecută')),
+                      DropdownMenuItem(
+                          value: 'an_curent', child: Text('An curent')),
+                      DropdownMenuItem(value: 'custom', child: Text('Custom')),
+                    ],
+                    onChanged: (value) async {
+                      if (value == null) return;
+                      if (value == 'custom') {
+                        await _pickCustomAnalysisRange();
+                        return;
+                      }
+                      setState(() {
+                        _analysisPerioadaFilter = value;
+                      });
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _analysisTipFilter,
+                    decoration: const InputDecoration(labelText: 'Tip document'),
+                    items: [
+                      const DropdownMenuItem(
+                        value: 'toate',
+                        child: Text('Toate'),
+                      ),
+                      ...TipDocumentDeviz.values.map(
+                        (tip) => DropdownMenuItem(
+                          value: tip.value,
+                          child: Text(tip.label),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _analysisTipFilter = value;
+                      });
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 280,
+                  child: TextField(
+                    controller: _analysisClientSearchController,
+                    decoration: const InputDecoration(
+                      labelText: 'Client',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (isCustom && _analysisCustomRange != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Interval custom: ${DateFormat('dd.MM.yyyy').format(_analysisCustomRange!.start)} - ${DateFormat('dd.MM.yyyy').format(_analysisCustomRange!.end)}',
+                style: TextStyle(color: Colors.grey.shade700),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnalysisSelectedBar() {
+    if (_tabController.index != 1 || _selectedIds.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          border: Border(
+            top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x14000000),
+              blurRadius: 10,
+              offset: Offset(0, -2),
+            ),
+          ],
+        ),
+        child: Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              '☑ ${_selectedIds.length} oferte selectate',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text('Fără TVA: ${_formatCurrency(_selectedWithoutVatTotal())}'),
+            Text('Cu TVA: ${_formatCurrency(_selectedWithVatTotal())}'),
+            OutlinedButton(
+              onPressed: () => setState(() => _selectedIds.clear()),
+              child: const Text('Deselectează tot'),
+            ),
+            FilledButton.tonal(
+              onPressed: _copySelectedAnalysisTotals,
+              child: const Text('Copiază val.'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAnalysisTab() {
+    final items = _analysisFilteredItems;
+    final grouped = _groupByClient(items);
+    final totalValue = items.fold<double>(0, (sum, item) => sum + item.totalValue);
+    final acceptedValue = items
+        .where((item) => item.status == OfferStatus.accepted)
+        .fold<double>(0, (sum, item) => sum + item.totalValue);
+    final awaitingValue = items
+        .where((item) => item.status == OfferStatus.awaiting)
+        .fold<double>(0, (sum, item) => sum + item.totalValue);
+
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        12,
+        16,
+        16 + AppViewportGuard.bottomSpacing(reserveForFab: true),
+      ),
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final isNarrow = constraints.maxWidth < 900;
+            final cards = [
+              _analysisStatCard(
+                label: 'Total oferte',
+                value: _formatCurrency(totalValue),
+                icon: Icons.request_quote_outlined,
+                color: Colors.blue.shade700,
+              ),
+              _analysisStatCard(
+                label: 'Acceptate valoare',
+                value: _formatCurrency(acceptedValue),
+                icon: Icons.check_circle_outline,
+                color: Colors.green.shade700,
+              ),
+              _analysisStatCard(
+                label: 'În așteptare valoare',
+                value: _formatCurrency(awaitingValue),
+                icon: Icons.schedule_outlined,
+                color: Colors.orange.shade700,
+              ),
+              _analysisStatCard(
+                label: 'Rata acceptare',
+                value: '${_acceptanceRate(items).toStringAsFixed(0)}%',
+                icon: Icons.insights_outlined,
+                color: Colors.purple.shade700,
+              ),
+            ];
+            if (isNarrow) {
+              return Column(
+                children: [
+                  for (final card in cards) ...[
+                    card,
+                    const SizedBox(height: 10),
+                  ],
+                ],
+              );
+            }
+            return Row(
+              children: [
+                for (var i = 0; i < cards.length; i++) ...[
+                  Expanded(child: cards[i]),
+                  if (i != cards.length - 1) const SizedBox(width: 12),
+                ],
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+        _buildAnalysisFilters(),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Distribuție pe status',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                _buildStatusDistributionTable(items),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (grouped.isEmpty)
+          const Card(
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Nu există oferte pentru filtrele selectate.'),
+            ),
+          )
+        else
+          ...grouped.entries.map((entry) {
+            final clientName = entry.key;
+            final offers = entry.value;
+            final allSelected = offers.every((item) => _selectedIds.contains(item.id));
+            final groupTotal = offers.fold<double>(0, (sum, item) => sum + item.totalValue);
+            return Card(
+              margin: const EdgeInsets.only(bottom: 12),
+              child: ExpansionTile(
+                initiallyExpanded: _expandedGroups[clientName] ?? false,
+                onExpansionChanged: (expanded) {
+                  setState(() {
+                    _expandedGroups[clientName] = expanded;
+                  });
+                },
+                title: Text(
+                  '$clientName (${offers.length} oferte)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text('Total grup: ${_formatCurrency(groupTotal)}'),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                children: [
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: allSelected,
+                        onChanged: (value) => _toggleSelectClientGroup(
+                          clientName,
+                          offers,
+                          value ?? false,
+                        ),
+                      ),
+                      const Text('Selectează tot grupul'),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ...offers.map((offer) {
+                    final selected = _selectedIds.contains(offer.id);
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: CheckboxListTile(
+                        value: selected,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        onChanged: (value) =>
+                            _toggleSelectOffer(offer.id, value ?? false),
+                        title: Text(
+                          '${offer.offerNumber}  [${offer.status.label}]',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                offer.title.trim().isEmpty
+                                    ? offer.tipDocument.label
+                                    : offer.title.trim(),
+                              ),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 12,
+                                runSpacing: 6,
+                                children: [
+                                  Text(
+                                    'Fără TVA: ${_formatCurrency(offer.subtotalComercial, currency: offer.currency)}',
+                                  ),
+                                  Text(
+                                    'TVA: ${_formatCurrency(offer.vatValue, currency: offer.currency)}',
+                                  ),
+                                  Text(
+                                    'Cu TVA: ${_formatCurrency(offer.totalValue, currency: offer.currency)}',
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -1474,11 +2236,56 @@ class _OfertePageState extends State<OfertePage>
     final showInlineSidePanel = width >= 1280;
     final sideDrawerWidth = width >= 900 ? 380.0 : width * 0.92;
 
+    final tabBar = TabBar(
+      controller: _tabController,
+      tabs: const [
+        Tab(text: 'Oferte'),
+        Tab(text: 'Analiză'),
+      ],
+    );
+
+    final offersTab = AdaptiveSidePanelLayout(
+      showSidePanel: showInlineSidePanel,
+      sidePanelWidth: width >= 1480 ? 388 : 360,
+      sidePanel: Padding(
+        padding: const EdgeInsets.fromLTRB(0, 12, 16, 16),
+        child: _buildOffersSidePanel(items),
+      ),
+      mainContent: Padding(
+        padding: EdgeInsets.only(
+          bottom: AppViewportGuard.bottomSpacing(reserveForFab: true),
+        ),
+        child: Column(
+          children: [
+            _buildOffersToolbar(showPanelButton: !showInlineSidePanel),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: items.isEmpty
+                    ? Center(child: Text(_emptyStateMessage()))
+                    : ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          final statusColor = _offerStatusColor(item);
+                          return _buildOfferCard(item, statusColor);
+                        },
+                      ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
     return Scaffold(
       appBar: widget.hideAppBar
           ? null
           : AppBar(
               title: const Text('Oferte'),
+              bottom: tabBar,
               actions: [
                 IconButton(
                   tooltip: 'Baza proprie de norme',
@@ -1495,7 +2302,7 @@ class _OfertePageState extends State<OfertePage>
                   onPressed: _openRequirementAiDialog,
                   icon: const Icon(Icons.auto_awesome_outlined),
                 ),
-                HelpButton(content: AppHelp.oferte),
+                const HelpModuleButton(moduleId: 'oferte'),
                 if (!showInlineSidePanel)
                   Builder(
                     builder: (context) => IconButton(
@@ -1517,45 +2324,31 @@ class _OfertePageState extends State<OfertePage>
                 ),
               ),
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(),
-        icon: const Icon(Icons.add),
-        label: const Text('Adaugă ofertă'),
-      ),
-      body: AdaptiveSidePanelLayout(
-        showSidePanel: showInlineSidePanel,
-        sidePanelWidth: width >= 1480 ? 388 : 360,
-        sidePanel: Padding(
-          padding: const EdgeInsets.fromLTRB(0, 12, 16, 16),
-          child: _buildOffersSidePanel(items),
-        ),
-        mainContent: Padding(
-          padding: EdgeInsets.only(
-            bottom: AppViewportGuard.bottomSpacing(reserveForFab: true),
+      floatingActionButton: _tabController.index == 0
+          ? FloatingActionButton.extended(
+              onPressed: () => _openEditor(),
+              icon: const Icon(Icons.add),
+              label: const Text('Adaugă ofertă'),
+            )
+          : null,
+      bottomNavigationBar: _buildAnalysisSelectedBar(),
+      body: Column(
+        children: [
+          if (widget.hideAppBar)
+            Material(
+              color: Theme.of(context).colorScheme.surface,
+              child: tabBar,
+            ),
+          Expanded(
+            child: TabBarView(
+              controller: _tabController,
+              children: [
+                offersTab,
+                _buildAnalysisTab(),
+              ],
+            ),
           ),
-          child: Column(
-            children: [
-              _buildOffersToolbar(showPanelButton: !showInlineSidePanel),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: items.isEmpty
-                      ? Center(child: Text(_emptyStateMessage()))
-                      : ListView.separated(
-                          itemCount: items.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final item = items[index];
-                            final statusColor = _offerStatusColor(item);
-                            return _buildOfferCard(item, statusColor);
-                          },
-                        ),
-                ),
-              ),
-            ],
-          ),
-        ),
+        ],
       ),
     );
   }
@@ -1745,6 +2538,9 @@ class _OfertePageState extends State<OfertePage>
                     _buildOfferStatusChip(item),
                     const SizedBox(width: 6),
                     _buildExpiryChip(item),
+                    const SizedBox(width: 6),
+                    if (item.tipOferta != 'oferta_lucrari')
+                      _buildTipOfertaBadge(item.tipOferta),
                     const Spacer(),
                     _buildOfferStatusMenu(item),
                   ],
@@ -2263,11 +3059,13 @@ class _OfferFormDialog extends StatefulWidget {
     this.currentUserId,
     this.currentUserEmail,
     this.defaultTipDocument,
+    this.repository,
   });
 
   final OfferRecord? existing;
   final OfferRecord? initialDraft;
   final List<ClientRecord> clients;
+  final AppDataRepository? repository;
   final List<JobRecord> jobs;
   final Future<void> Function(OfferRecord offer) onSave;
   final OfferEditorDefaults defaults;
@@ -2295,6 +3093,9 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
   final ScrollController _dialogScrollController = ScrollController();
   final BnrExchangeRateService _bnrService = const BnrExchangeRateService();
 
+  // Lista locală de clienți — extinsă când utilizatorul adaugă unul nou inline
+  List<ClientRecord> _localClients = const [];
+
   bool _saving = false;
   bool _loadingBnrRate = false;
   bool _manualClientSelection = false;
@@ -2316,6 +3117,7 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
   @override
   void initState() {
     super.initState();
+    _localClients = [...widget.clients];
     final seed = widget.existing ?? widget.initialDraft;
     if (seed != null) {
       _offerNumber = widget.existing == null && seed.offerNumber.trim().isEmpty
@@ -2472,7 +3274,7 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
   ClientRecord? _clientById(String? id) {
     final value = (id ?? '').trim();
     if (value.isEmpty) return null;
-    for (final item in widget.clients) {
+    for (final item in _localClients) {
       if (item.id == value) return item;
     }
     return null;
@@ -2808,6 +3610,10 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
       title: _titleController.text.trim(),
       clientId: resolvedClientId,
       clientName: resolvedClientName,
+      clientCui: selectedClient?.cui ?? (seed?.clientCui ?? ''),
+      clientAddress: selectedClient?.address ?? (seed?.clientAddress ?? ''),
+      clientPhone: selectedClient?.allPhoneNumbers.firstOrNull ?? selectedClient?.phone ?? (seed?.clientPhone ?? ''),
+      clientEmail: selectedClient?.email ?? (seed?.clientEmail ?? ''),
       departmentId: selectedDepartment?.id ?? '',
       departmentName: selectedDepartment?.name ?? '',
       contactPersonId: selectedContact?.id ?? '',
@@ -2952,22 +3758,18 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
                   onChanged: _onJobChanged,
                 ),
                 const SizedBox(height: 8),
-                DropdownButtonFormField<String?>(
-                  initialValue: _selectedClientId,
-                  decoration: const InputDecoration(labelText: 'Client'),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      value: null,
-                      child: Text('Selectează client'),
-                    ),
-                    ...widget.clients.map(
-                      (item) => DropdownMenuItem<String?>(
-                        value: item.id,
-                        child: Text(item.name),
-                      ),
-                    ),
-                  ],
-                  onChanged: _onClientChanged,
+                ClientAutocompleteField(
+                  key: ValueKey('offer-client-${_selectedClientId ?? 'none'}'),
+                  clients: _localClients,
+                  initialClient: _clientById(_selectedClientId),
+                  labelText: 'Client',
+                  onClientSelected: (c) => _onClientChanged(c?.id),
+                  repository: widget.repository,
+                  tipEntitate: 'Client',
+                  onClientAdded: (c) => setState(() {
+                    _localClients = [..._localClients, c];
+                    _selectedClientId = c.id;
+                  }),
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String?>(

@@ -24,9 +24,11 @@ import '../reclamatii/reclamatii_page.dart';
 import '../reclamatii/repair_report_models.dart';
 import '../reclamatii/warranty_intervention_report_models.dart';
 import '../agfr/agfr_models.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import 'client_models.dart';
-import '../../core/widgets/help_button.dart';
-import '../../core/help_content.dart';
+import 'client_profile_page.dart';
+import '../../core/help/help_module_button.dart';
 
 class ClientsPage extends StatefulWidget {
   const ClientsPage({
@@ -379,6 +381,7 @@ class _ClientsPageState extends State<ClientsPage> {
           item.phone.toLowerCase().contains(query) ||
           item.phone2.toLowerCase().contains(query) ||
           item.phone3.toLowerCase().contains(query) ||
+          item.phoneNumbers.any((p) => p.toLowerCase().contains(query)) ||
           item.email.toLowerCase().contains(query) ||
           item.cui.toLowerCase().contains(query) ||
           item.clientCode.toLowerCase().contains(query) ||
@@ -1192,6 +1195,9 @@ class _ClientsPageState extends State<ClientsPage> {
                       phone2: phone2.text.trim(),
                       phone3: phone3.text.trim(),
                       email: email.text.trim(),
+                      phoneNumbers: [phone.text.trim(), phone2.text.trim(), phone3.text.trim()]
+                          .where((p) => p.isNotEmpty)
+                          .toList(),
                       cui: cui.text.trim(),
                       regCom: reg.text.trim(),
                       iban: iban.text.trim(),
@@ -2163,6 +2169,63 @@ class _ClientsPageState extends State<ClientsPage> {
     );
   }
 
+  // ── Fișă completă client ─────────────────────────────────────────────────
+  Future<void> _openClientProfile(ClientRecord client) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ClientProfilePage(
+          client: client,
+          repository: widget.repository,
+          onClientUpdated: (updated) {
+            setState(() {
+              _items = [
+                for (final c in _items)
+                  if (c.id == updated.id) updated else c,
+              ];
+            });
+          },
+        ),
+      ),
+    );
+  }
+
+  // ── Apel telefon ──────────────────────────────────────────────────────────
+  Future<void> _callPhone(String rawPhone) async {
+    final digits = rawPhone.replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return;
+    String e164;
+    if (digits.startsWith('40')) {
+      e164 = digits;
+    } else if (digits.startsWith('0')) {
+      e164 = '4$digits';
+    } else {
+      e164 = '40$digits';
+    }
+    final uri = Uri.parse('tel:+$e164');
+    if (await canLaunchUrl(uri)) await launchUrl(uri);
+  }
+
+  // ── WhatsApp ──────────────────────────────────────────────────────────────
+  Future<void> _openWhatsApp(ClientRecord client) async {
+    final digits = client.phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return;
+    String e164;
+    if (digits.startsWith('40')) {
+      e164 = digits;
+    } else if (digits.startsWith('0')) {
+      e164 = '4$digits';
+    } else {
+      e164 = '40$digits';
+    }
+    final msg = Uri.encodeComponent(
+      'Bună ziua! Vă contactăm de la PRO TERM SRL în legătură cu serviciile noastre.',
+    );
+    final uri = Uri.parse('https://wa.me/$e164?text=$msg');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
   Future<void> _openClientHistory(ClientRecord client) async {
     await showDialog<void>(
       context: context,
@@ -2570,7 +2633,7 @@ class _ClientsPageState extends State<ClientsPage> {
       appBar: AppBar(
         title: const Text('Clienți'),
         actions: [
-          HelpButton(content: AppHelp.clienti),
+          const HelpModuleButton(moduleId: 'clienti'),
         ],
       ),
       floatingActionButton: Row(
@@ -2847,7 +2910,7 @@ class _ClientsPageState extends State<ClientsPage> {
                       ].where((s) => s.isNotEmpty).join(', ');
                       return Card(
                         child: ListTile(
-                          onTap: () => _openClientHistory(item),
+                          onTap: () => _openClientProfile(item),
                           title: Text('${item.clientCode} • ${item.name}'),
                           subtitle: Text(
                             'Contact: ${item.contactPerson.isEmpty ? '-' : item.contactPerson} | '
@@ -2863,55 +2926,82 @@ class _ClientsPageState extends State<ClientsPage> {
                             'Tip: ${item.type.label} | '
                             'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
                           ),
-                          trailing: PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert),
-                            tooltip: 'Acțiuni',
-                            itemBuilder: (_) => [
-                              const PopupMenuItem(
-                                value: 'history',
-                                child: ListTile(
-                                  leading: Icon(Icons.history_outlined),
-                                  title: Text('Istoric client'),
-                                  contentPadding: EdgeInsets.zero,
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (item.phone.isNotEmpty) ...[
+                                IconButton(
+                                  icon: const Icon(Icons.phone_outlined, size: 20),
+                                  tooltip: 'Sună',
+                                  onPressed: () => _callPhone(item.phone),
                                 ),
-                              ),
-                              const PopupMenuItem(
-                                value: 'centralizer',
-                                child: ListTile(
-                                  leading: Icon(Icons.post_add_outlined),
-                                  title: Text('Centralizator selectiv'),
-                                  contentPadding: EdgeInsets.zero,
+                                IconButton(
+                                  icon: const Icon(Icons.chat_outlined, size: 20, color: Color(0xFF25D366)),
+                                  tooltip: 'WhatsApp',
+                                  onPressed: () => _openWhatsApp(item),
                                 ),
-                              ),
-                              const PopupMenuItem(
-                                value: 'edit',
-                                child: ListTile(
-                                  leading: Icon(Icons.edit_outlined),
-                                  title: Text('Editează'),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                              const PopupMenuItem(
-                                value: 'delete',
-                                child: ListTile(
-                                  leading: Icon(Icons.delete_outline),
-                                  title: Text('Șterge'),
-                                  contentPadding: EdgeInsets.zero,
-                                ),
+                              ],
+                              PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert),
+                                tooltip: 'Acțiuni',
+                                itemBuilder: (_) => [
+                                  const PopupMenuItem(
+                                    value: 'profile',
+                                    child: ListTile(
+                                      leading: Icon(Icons.person_outlined),
+                                      title: Text('Fișă client'),
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'history',
+                                    child: ListTile(
+                                      leading: Icon(Icons.history_outlined),
+                                      title: Text('Istoric client'),
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'centralizer',
+                                    child: ListTile(
+                                      leading: Icon(Icons.post_add_outlined),
+                                      title: Text('Centralizator selectiv'),
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'edit',
+                                    child: ListTile(
+                                      leading: Icon(Icons.edit_outlined),
+                                      title: Text('Editează'),
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'delete',
+                                    child: ListTile(
+                                      leading: Icon(Icons.delete_outline),
+                                      title: Text('Șterge'),
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                  ),
+                                ],
+                                onSelected: (value) {
+                                  switch (value) {
+                                    case 'profile':
+                                      _openClientProfile(item);
+                                    case 'history':
+                                      _openClientHistory(item);
+                                    case 'centralizer':
+                                      _openCentralizerGeneratorForClient(item);
+                                    case 'edit':
+                                      _openForm(current: item);
+                                    case 'delete':
+                                      _delete(item);
+                                  }
+                                },
                               ),
                             ],
-                            onSelected: (value) {
-                              switch (value) {
-                                case 'history':
-                                  _openClientHistory(item);
-                                case 'centralizer':
-                                  _openCentralizerGeneratorForClient(item);
-                                case 'edit':
-                                  _openForm(current: item);
-                                case 'delete':
-                                  _delete(item);
-                              }
-                            },
                           ),
                         ),
                       );

@@ -9,6 +9,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import 'offer_acceptance_form_pdf_service.dart';
+import 'offer_acceptance_models.dart';
 import 'offer_currency_converter.dart';
 import 'offer_models.dart';
 import 'offer_partner_models.dart';
@@ -112,6 +114,17 @@ class OfferPdfService {
         jobLabel: jobLabel,
         issuerLabel: issuerLabel,
         branding: branding,
+      );
+      OfferAcceptanceFormPdfService.addAcceptancePageToDoc(
+        doc: doc,
+        offer: offer,
+        branding: branding,
+        clauses: offer.acceptanceClauses.isEmpty
+            ? OfferAcceptanceClause.defaults(
+                totalLabel: offer.subtotalComercial.toStringAsFixed(0),
+                currency: offer.currency,
+              )
+            : offer.acceptanceClauses,
       );
       final bytes = await doc.save();
       final fileName = exportFileName(offer);
@@ -324,6 +337,14 @@ class OfferPdfService {
 
     final clientInfoEntries = <MapEntry<String, String>>[
       MapEntry('Client', clientLabel),
+      if (offer.clientCui.trim().isNotEmpty)
+        MapEntry('CUI client', offer.clientCui.trim()),
+      if (offer.clientAddress.trim().isNotEmpty)
+        MapEntry('Adresă client', offer.clientAddress.trim()),
+      if (offer.clientPhone.trim().isNotEmpty)
+        MapEntry('Tel. client', offer.clientPhone.trim()),
+      if (offer.clientEmail.trim().isNotEmpty)
+        MapEntry('Email client', offer.clientEmail.trim()),
       if (offer.commercialRecipientName.trim().isNotEmpty)
         MapEntry(
           'Destinatar comercial / platitor',
@@ -334,11 +355,11 @@ class OfferPdfService {
       if (offer.departmentName.trim().isNotEmpty)
         MapEntry('Departament', offer.departmentName.trim()),
       if (offer.contactPersonName.trim().isNotEmpty)
-        MapEntry('Persoana contact', offer.contactPersonName.trim()),
+        MapEntry('Att', offer.contactPersonName.trim()),
       if (offer.contactPersonEmail.trim().isNotEmpty)
-        MapEntry('Email', offer.contactPersonEmail.trim()),
+        MapEntry('Email contact', offer.contactPersonEmail.trim()),
       if (offer.contactPersonPhone.trim().isNotEmpty)
-        MapEntry('Telefon', offer.contactPersonPhone.trim()),
+        MapEntry('Tel. contact', offer.contactPersonPhone.trim()),
       if (offer.complaintNumber.trim().isNotEmpty)
         MapEntry('Reclamatie sursa', offer.complaintNumber.trim()),
       if (offer.appointmentId.trim().isNotEmpty)
@@ -356,6 +377,7 @@ class OfferPdfService {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.fromLTRB(18, 12, 18, 20),
+        header: (ctx) => _buildRepeatHeader(ctx, branding, 'OFERTĂ ${offer.offerNumber}'),
         footer: (ctx) => _buildPageFooter(ctx, branding),
         build: (_) => [
           buildClassicDocumentHeader(
@@ -894,6 +916,17 @@ class OfferPdfService {
       ),
     );
 
+    OfferAcceptanceFormPdfService.addAcceptancePageToDoc(
+      doc: doc,
+      offer: offer,
+      branding: branding,
+      clauses: offer.acceptanceClauses.isEmpty
+          ? OfferAcceptanceClause.defaults(
+              totalLabel: offer.subtotalComercial.toStringAsFixed(0),
+              currency: offer.currency,
+            )
+          : offer.acceptanceClauses,
+    );
     final bytes = await doc.save();
     final fileName = exportFileName(offer);
     return PdfSaveService.savePdf(
@@ -924,6 +957,17 @@ class OfferPdfService {
         jobLabel: jobLabel,
         issuerLabel: issuerLabel,
         branding: branding,
+      );
+      OfferAcceptanceFormPdfService.addAcceptancePageToDoc(
+        doc: doc,
+        offer: offer,
+        branding: branding,
+        clauses: offer.acceptanceClauses.isEmpty
+            ? OfferAcceptanceClause.defaults(
+                totalLabel: offer.subtotalComercial.toStringAsFixed(0),
+                currency: offer.currency,
+              )
+            : offer.acceptanceClauses,
       );
       final bytes = await doc.save();
       await Printing.sharePdf(
@@ -1126,6 +1170,14 @@ class OfferPdfService {
 
     final clientInfoEntries = <MapEntry<String, String>>[
       MapEntry('Client', clientLabel),
+      if (offer.clientCui.trim().isNotEmpty)
+        MapEntry('CUI client', offer.clientCui.trim()),
+      if (offer.clientAddress.trim().isNotEmpty)
+        MapEntry('Adresă client', offer.clientAddress.trim()),
+      if (offer.clientPhone.trim().isNotEmpty)
+        MapEntry('Tel. client', offer.clientPhone.trim()),
+      if (offer.clientEmail.trim().isNotEmpty)
+        MapEntry('Email client', offer.clientEmail.trim()),
       if (offer.commercialRecipientName.trim().isNotEmpty)
         MapEntry(
           'Destinatar comercial / platitor',
@@ -1136,11 +1188,11 @@ class OfferPdfService {
       if (offer.departmentName.trim().isNotEmpty)
         MapEntry('Departament', offer.departmentName.trim()),
       if (offer.contactPersonName.trim().isNotEmpty)
-        MapEntry('Persoana contact', offer.contactPersonName.trim()),
+        MapEntry('Att', offer.contactPersonName.trim()),
       if (offer.contactPersonEmail.trim().isNotEmpty)
-        MapEntry('Email', offer.contactPersonEmail.trim()),
+        MapEntry('Email contact', offer.contactPersonEmail.trim()),
       if (offer.contactPersonPhone.trim().isNotEmpty)
-        MapEntry('Telefon', offer.contactPersonPhone.trim()),
+        MapEntry('Tel. contact', offer.contactPersonPhone.trim()),
       if (offer.complaintNumber.trim().isNotEmpty)
         MapEntry('Reclamatie sursa', offer.complaintNumber.trim()),
       if (offer.appointmentId.trim().isNotEmpty)
@@ -1158,6 +1210,7 @@ class OfferPdfService {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.fromLTRB(18, 12, 18, 20),
+        header: (ctx) => _buildRepeatHeader(ctx, branding, '${offer.tipDocument.pdfTitle} ${offer.offerNumber}'),
         footer: (ctx) => _buildPageFooter(ctx, branding),
         build: (_) => [
           buildClassicDocumentHeader(
@@ -1582,10 +1635,54 @@ class OfferPdfService {
       ),
     );
 
+    OfferAcceptanceFormPdfService.addAcceptancePageToDoc(
+      doc: doc,
+      offer: offer,
+      branding: branding,
+      clauses: offer.acceptanceClauses.isEmpty
+          ? OfferAcceptanceClause.defaults(
+              totalLabel: offer.subtotalComercial.toStringAsFixed(0),
+              currency: offer.currency,
+            )
+          : offer.acceptanceClauses,
+    );
     final bytes = await doc.save();
     await Printing.sharePdf(
       bytes: bytes,
       filename: exportFileName(offer),
+    );
+  }
+
+  static pw.Widget _buildRepeatHeader(
+    pw.Context ctx,
+    DocumentBrandingData b,
+    String docLabel,
+  ) {
+    if (ctx.pageNumber <= 1) return pw.SizedBox(height: 0);
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(bottom: 4),
+      decoration: pw.BoxDecoration(
+        border: pw.Border(
+          bottom: pw.BorderSide(color: _panelBorderColor, width: 0.5),
+        ),
+      ),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            b.companyName,
+            style: pw.TextStyle(
+              fontSize: 7,
+              fontWeight: pw.FontWeight.bold,
+              color: _secondaryColor,
+            ),
+          ),
+          pw.Text(
+            docLabel,
+            style: pw.TextStyle(fontSize: 7, color: _secondaryColor),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1886,6 +1983,7 @@ class OfferPdfService {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(20, 18, 20, 20),
+        header: (ctx) => _buildRepeatHeader(ctx, branding, 'OFERTĂ ${offer.offerNumber}'),
         footer: (ctx) => _buildPageFooter(ctx, branding),
         build: (_) => [
           pw.Row(

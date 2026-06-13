@@ -1,0 +1,100 @@
+import 'dart:convert';
+
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SignatureService — salvare semnătură locală + Firebase Storage (best-effort)
+// Nu creează module noi Firestore. Semnătura se stochează în modelul existent
+// JobSiteDocumentRecord.clientSignatureBase64 (câmp deja existent).
+// ─────────────────────────────────────────────────────────────────────────────
+
+class SignatureService {
+  SignatureService._();
+  static final SignatureService instance = SignatureService._();
+
+  static const String _localKeyPrefix = 'signature_b64_';
+
+  // ── Salvare locală în SharedPreferences (base64) ────────────────────────
+  Future<void> saveLocalSignature({
+    required String key,
+    required Uint8List pngBytes,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final b64 = base64Encode(pngBytes);
+      await prefs.setString('$_localKeyPrefix$key', b64);
+    } catch (e) {
+      debugPrint('[Signature] ❌ saveLocal error: $e');
+    }
+  }
+
+  // ── Citire din cache local ────────────────────────────────────────────────
+  Future<Uint8List?> loadLocalSignature(String key) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final b64 = prefs.getString('$_localKeyPrefix$key');
+      if (b64 == null || b64.isEmpty) return null;
+      return base64Decode(b64);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Obține base64 string (pentru stocare în model) ────────────────────────
+  String toBase64(Uint8List pngBytes) => base64Encode(pngBytes);
+
+  Uint8List? fromBase64(String b64) {
+    if (b64.trim().isEmpty) return null;
+    try {
+      return base64Decode(b64);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Upload în Firebase Storage (best-effort, nu blochează UI) ────────────
+  // path: signatures/{jobId}/{documentType}_{timestamp}.png
+  Future<String?> uploadToStorage({
+    required Uint8List pngBytes,
+    required String jobId,
+    required String documentType,
+  }) async {
+    try {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final path = 'signatures/$jobId/${documentType}_$ts.png';
+      final ref = FirebaseStorage.instance.ref(path);
+      await ref.putData(
+        pngBytes,
+        SettableMetadata(contentType: 'image/png'),
+      );
+      final url = await ref.getDownloadURL();
+      return url;
+    } catch (e) {
+      debugPrint('[Signature] ❌ uploadToStorage error: $e');
+      return null;
+    }
+  }
+
+  // ── Combinat: salvează local + upload async în background ─────────────────
+  // Returnează imediat base64 pentru salvare în model.
+  // Upload în Storage rulează în background (fire-and-forget).
+  Future<String> saveSignature({
+    required Uint8List pngBytes,
+    required String localKey,
+    String jobId = '',
+    String documentType = 'signature',
+  }) async {
+    final b64 = toBase64(pngBytes);
+    await saveLocalSignature(key: localKey, pngBytes: pngBytes);
+    if (jobId.isNotEmpty) {
+      uploadToStorage(
+        pngBytes: pngBytes,
+        jobId: jobId,
+        documentType: documentType,
+      ).catchError((_) => null);
+    }
+    return b64;
+  }
+}

@@ -1,5 +1,5 @@
 name: devizpro_ultra
-version: 0.1.0+1
+version: 1.0.0+1
 publish_to: 'none'
 
 environment:
@@ -23,7 +23,7 @@ dependencies:
   pdf: ^3.11.3
   printing: ^5.14.2
   shared_preferences: ^2.5.3
-  file_picker: ^10.1.9
+  file_picker: ^11.0.2
   image_picker: ^1.1.2
   url_launcher: ^6.3.2
   open_filex: ^4.5.0
@@ -31,6 +31,9 @@ dependencies:
   flutter_local_notifications: ^19.2.1
   http: ^1.3.0
   archive: ^3.6.1
+  excel: ^4.0.0
+  geolocator: ^13.0.2
+  geocoding: ^3.0.0
 
 dev_dependencies:
   flutter_test:
@@ -38,8 +41,17 @@ dev_dependencies:
   flutter_lints: ^5.0.0
   flutter_launcher_icons: ^0.14.3
 
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: false
+  image_path: "assets/app_icon/proventaris_identity.png"
+  min_sdk_android: 21
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/app_icon/proventaris_identity.png"
+
 flutter:
   uses-material-design: true
   assets:
     - assets/fonts/arial.ttf
     - assets/fonts/arialbd.ttf
+    - assets/app_icon/

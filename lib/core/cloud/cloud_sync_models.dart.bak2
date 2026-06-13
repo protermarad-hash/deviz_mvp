@@ -2,6 +2,7 @@ enum CloudEntityType {
   users,
   teams,
   appointments,
+  appointmentMaterialKitTemplates,
   clients,
   offers,
   jobs,
@@ -17,6 +18,18 @@ enum CloudEntityType {
   agfrWeighingReports,
   vehicles,
   registryEntries,
+  partnerTransactions,
+  partnerFinancialSummary,
+  devizArticoleTemplate,
+  fieldPhotos,
+  devizeTehnice,
+  devizeFiltreCta,
+  appTasks,
+  employeePayEntries,
+  employeePayments,
+  employeeFinancialSummary,
+  employeeSettings,
+  unknown,
 }
 
 class CloudSyncItem {
@@ -91,7 +104,7 @@ class CloudSyncItem {
       id: map['id'] as String? ?? '',
       entityType: CloudEntityType.values.firstWhere(
         (value) => value.name == (map['entityType'] as String? ?? ''),
-        orElse: () => CloudEntityType.documents,
+        orElse: () => CloudEntityType.unknown,
       ),
       entityId: map['entityId'] as String? ?? '',
       payload: Map<String, dynamic>.from(

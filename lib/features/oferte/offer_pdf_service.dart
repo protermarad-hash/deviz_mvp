@@ -26,6 +26,20 @@ class OfferPdfService {
   static final PdfColor _panelBorderColor = PdfColor.fromHex('#D8E0E8');
   static final PdfColor _noteColor = PdfColor.fromHex('#FAF5EA');
 
+  /// Titlul PDF efectiv — ține cont de tipOferta (iun 2026)
+  static String _efectivTitluPdf(OfferRecord offer) {
+    switch (offer.tipOferta) {
+      case 'mini_oferta':
+        return 'OFERTĂ RAPIDĂ';
+      case 'deviz_tehnic':
+        return 'DEVIZ TEHNIC';
+      case 'deviz_filtre':
+        return 'DEVIZ FILTRE CTA';
+      default:
+        return offer.tipDocument.pdfTitle;
+    }
+  }
+
   static String exportFileName(OfferRecord offer) {
     return _fileName(offer.offerNumber, offer.title);
   }
@@ -337,6 +351,14 @@ class OfferPdfService {
 
     final clientInfoEntries = <MapEntry<String, String>>[
       MapEntry('Client', clientLabel),
+      if (offer.clientCui.trim().isNotEmpty)
+        MapEntry('CUI client', offer.clientCui.trim()),
+      if (offer.clientAddress.trim().isNotEmpty)
+        MapEntry('Adresă client', offer.clientAddress.trim()),
+      if (offer.clientPhone.trim().isNotEmpty)
+        MapEntry('Tel. client', offer.clientPhone.trim()),
+      if (offer.clientEmail.trim().isNotEmpty)
+        MapEntry('Email client', offer.clientEmail.trim()),
       if (offer.commercialRecipientName.trim().isNotEmpty)
         MapEntry(
           'Destinatar comercial / platitor',
@@ -347,11 +369,11 @@ class OfferPdfService {
       if (offer.departmentName.trim().isNotEmpty)
         MapEntry('Departament', offer.departmentName.trim()),
       if (offer.contactPersonName.trim().isNotEmpty)
-        MapEntry('Persoana contact', offer.contactPersonName.trim()),
+        MapEntry('Att', offer.contactPersonName.trim()),
       if (offer.contactPersonEmail.trim().isNotEmpty)
-        MapEntry('Email', offer.contactPersonEmail.trim()),
+        MapEntry('Email contact', offer.contactPersonEmail.trim()),
       if (offer.contactPersonPhone.trim().isNotEmpty)
-        MapEntry('Telefon', offer.contactPersonPhone.trim()),
+        MapEntry('Tel. contact', offer.contactPersonPhone.trim()),
       if (offer.complaintNumber.trim().isNotEmpty)
         MapEntry('Reclamatie sursa', offer.complaintNumber.trim()),
       if (offer.appointmentId.trim().isNotEmpty)
@@ -369,6 +391,7 @@ class OfferPdfService {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.fromLTRB(18, 12, 18, 20),
+        header: (ctx) => _buildRepeatHeader(ctx, branding, 'OFERTĂ ${offer.offerNumber}'),
         footer: (ctx) => _buildPageFooter(ctx, branding),
         build: (_) => [
           buildClassicDocumentHeader(
@@ -1161,6 +1184,14 @@ class OfferPdfService {
 
     final clientInfoEntries = <MapEntry<String, String>>[
       MapEntry('Client', clientLabel),
+      if (offer.clientCui.trim().isNotEmpty)
+        MapEntry('CUI client', offer.clientCui.trim()),
+      if (offer.clientAddress.trim().isNotEmpty)
+        MapEntry('Adresă client', offer.clientAddress.trim()),
+      if (offer.clientPhone.trim().isNotEmpty)
+        MapEntry('Tel. client', offer.clientPhone.trim()),
+      if (offer.clientEmail.trim().isNotEmpty)
+        MapEntry('Email client', offer.clientEmail.trim()),
       if (offer.commercialRecipientName.trim().isNotEmpty)
         MapEntry(
           'Destinatar comercial / platitor',
@@ -1171,11 +1202,11 @@ class OfferPdfService {
       if (offer.departmentName.trim().isNotEmpty)
         MapEntry('Departament', offer.departmentName.trim()),
       if (offer.contactPersonName.trim().isNotEmpty)
-        MapEntry('Persoana contact', offer.contactPersonName.trim()),
+        MapEntry('Att', offer.contactPersonName.trim()),
       if (offer.contactPersonEmail.trim().isNotEmpty)
-        MapEntry('Email', offer.contactPersonEmail.trim()),
+        MapEntry('Email contact', offer.contactPersonEmail.trim()),
       if (offer.contactPersonPhone.trim().isNotEmpty)
-        MapEntry('Telefon', offer.contactPersonPhone.trim()),
+        MapEntry('Tel. contact', offer.contactPersonPhone.trim()),
       if (offer.complaintNumber.trim().isNotEmpty)
         MapEntry('Reclamatie sursa', offer.complaintNumber.trim()),
       if (offer.appointmentId.trim().isNotEmpty)
@@ -1193,11 +1224,12 @@ class OfferPdfService {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4.landscape,
         margin: const pw.EdgeInsets.fromLTRB(18, 12, 18, 20),
+        header: (ctx) => _buildRepeatHeader(ctx, branding, '${offer.tipDocument.pdfTitle} ${offer.offerNumber}'),
         footer: (ctx) => _buildPageFooter(ctx, branding),
         build: (_) => [
           buildClassicDocumentHeader(
             branding: branding,
-            documentTitle: offer.tipDocument.pdfTitle,
+            documentTitle: _efectivTitluPdf(offer),
             documentSubtitle: offer.title.trim(),
             template: template,
             metadata: <MapEntry<String, String>>[
@@ -1207,6 +1239,10 @@ class OfferPdfService {
               MapEntry('Status', offer.lifecycleLabel),
               MapEntry('Emitent', issuerLabel),
               MapEntry('Moneda', currencyLabel()),
+              if (offer.sursa == 'reclamatie' && offer.sursaNumar.isNotEmpty)
+                MapEntry('Ref. reclamatie', offer.sursaNumar),
+              if (offer.sursa == 'programare' && offer.sursaNumar.isNotEmpty)
+                MapEntry('Ref. programare', offer.sursaNumar),
             ],
           ),
           pw.SizedBox(height: 6),
@@ -1635,6 +1671,39 @@ class OfferPdfService {
     );
   }
 
+  static pw.Widget _buildRepeatHeader(
+    pw.Context ctx,
+    DocumentBrandingData b,
+    String docLabel,
+  ) {
+    if (ctx.pageNumber <= 1) return pw.SizedBox(height: 0);
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(bottom: 4),
+      decoration: pw.BoxDecoration(
+        border: pw.Border(
+          bottom: pw.BorderSide(color: _panelBorderColor, width: 0.5),
+        ),
+      ),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            b.companyName,
+            style: pw.TextStyle(
+              fontSize: 7,
+              fontWeight: pw.FontWeight.bold,
+              color: _secondaryColor,
+            ),
+          ),
+          pw.Text(
+            docLabel,
+            style: pw.TextStyle(fontSize: 7, color: _secondaryColor),
+          ),
+        ],
+      ),
+    );
+  }
+
   static pw.Widget _buildPageFooter(
     pw.Context ctx,
     DocumentBrandingData b,
@@ -1932,6 +2001,7 @@ class OfferPdfService {
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(20, 18, 20, 20),
+        header: (ctx) => _buildRepeatHeader(ctx, branding, 'OFERTĂ ${offer.offerNumber}'),
         footer: (ctx) => _buildPageFooter(ctx, branding),
         build: (_) => [
           pw.Row(

@@ -1,0 +1,244 @@
+import 'package:flutter/material.dart';
+
+import '../../core/repositories/app_data_repository.dart';
+import '../../features/clients/client_models.dart';
+
+/// Dialog rapid pentru adăugarea unui client/partener/beneficiar direct din orice modul.
+/// Folosit de [ClientAutocompleteField] când este furnizat [repository].
+class QuickAddClientDialog extends StatefulWidget {
+  const QuickAddClientDialog({
+    super.key,
+    required this.repository,
+    this.prefillName,
+    this.tipEntitate = 'Client',
+    required this.onCreated,
+  });
+
+  final AppDataRepository repository;
+  final String? prefillName;
+  final String tipEntitate;
+  final void Function(ClientRecord created) onCreated;
+
+  @override
+  State<QuickAddClientDialog> createState() => _QuickAddClientDialogState();
+}
+
+class _QuickAddClientDialogState extends State<QuickAddClientDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _numeCtrl;
+  final _telefonCtrl = TextEditingController();
+  final _adresaCtrl = TextEditingController();
+  final _contactCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _cuiCtrl = TextEditingController();
+  bool _isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _numeCtrl = TextEditingController(
+      text: widget.prefillName?.trim() ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _numeCtrl.dispose();
+    _telefonCtrl.dispose();
+    _adresaCtrl.dispose();
+    _contactCtrl.dispose();
+    _emailCtrl.dispose();
+    _cuiCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onSave() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSaving = true);
+    try {
+      final clientCode = await widget.repository.nextClientCode();
+      final phone = _telefonCtrl.text.trim();
+      final newClient = ClientRecord(
+        id: 'client-${DateTime.now().millisecondsSinceEpoch}',
+        clientCode: clientCode,
+        externalClientCode: '',
+        externalClientSource: '',
+        type: ClientType.persoanaJuridica,
+        name: _numeCtrl.text.trim(),
+        contactPerson: _contactCtrl.text.trim(),
+        phone: phone,
+        phone2: '',
+        phone3: '',
+        phoneNumbers: phone.isNotEmpty ? [phone] : const [],
+        email: _emailCtrl.text.trim(),
+        cui: _cuiCtrl.text.trim(),
+        regCom: '',
+        iban: '',
+        bank: '',
+        address: _adresaCtrl.text.trim(),
+        city: '',
+        county: '',
+        notes: '',
+        departments: const [],
+        contactPeople: const [],
+        isActive: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      final saved = await widget.repository.saveClient(newClient);
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onCreated(saved);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          '${widget.tipEntitate} "${saved.name}" adăugat și selectat ✓',
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 3),
+      ));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Eroare la salvare: $e'),
+          backgroundColor: Colors.red,
+        ));
+        setState(() => _isSaving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(children: [
+        const Icon(Icons.person_add_outlined, color: Color(0xFFC62828)),
+        const SizedBox(width: 8),
+        Text('${widget.tipEntitate} nou'),
+      ]),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      content: SizedBox(
+        width: 440,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: _numeCtrl,
+                  autofocus: widget.prefillName?.isEmpty != false,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(
+                    labelText: 'Nume ${widget.tipEntitate} *',
+                    prefixIcon: const Icon(Icons.business_outlined),
+                  ),
+                  validator: (v) =>
+                      v?.trim().isEmpty == true ? 'Obligatoriu' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _telefonCtrl,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Telefon',
+                    prefixIcon: Icon(Icons.phone_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _adresaCtrl,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Adresă / Localitate',
+                    prefixIcon: Icon(Icons.location_on_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _contactCtrl,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(
+                    labelText: 'Persoană contact',
+                    prefixIcon: Icon(Icons.person_outlined),
+                  ),
+                ),
+                ExpansionTile(
+                  title: Text(
+                    'Date suplimentare (opțional)',
+                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  ),
+                  tilePadding: EdgeInsets.zero,
+                  children: [
+                    TextFormField(
+                      controller: _emailCtrl,
+                      keyboardType: TextInputType.emailAddress,
+                      textCapitalization: TextCapitalization.none,
+                      decoration: const InputDecoration(
+                        labelText: 'Email',
+                        prefixIcon: Icon(Icons.email_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _cuiCtrl,
+                      textCapitalization: TextCapitalization.none,
+                      decoration: const InputDecoration(
+                        labelText: 'CUI / CNP',
+                        prefixIcon: Icon(Icons.badge_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.pop(context),
+          child: const Text('Renunță'),
+        ),
+        FilledButton.icon(
+          onPressed: _isSaving ? null : _onSave,
+          icon: _isSaving
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Icon(Icons.save_outlined),
+          label: const Text('Salvează și selectează'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFC62828),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Helper pentru a deschide dialogul rapid de adăugare client/partener/beneficiar.
+/// Returnează clientul creat sau null dacă utilizatorul a renunțat.
+Future<ClientRecord?> showQuickAddClientDialog(
+  BuildContext context, {
+  required AppDataRepository repository,
+  String? prefillName,
+  String tipEntitate = 'Client',
+}) async {
+  ClientRecord? result;
+  await showDialog<void>(
+    context: context,
+    builder: (_) => QuickAddClientDialog(
+      repository: repository,
+      prefillName: prefillName,
+      tipEntitate: tipEntitate,
+      onCreated: (c) => result = c,
+    ),
+  );
+  return result;
+}

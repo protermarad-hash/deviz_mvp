@@ -330,7 +330,9 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
     );
     final notesController = TextEditingController(text: item?.notes ?? '');
     String? dialogError;
+    // Controllere dispuse la ieșire din metodă indiferent de cale (try/finally).
 
+    try {
     void updateComputedDays(StateSetter setDialogState) {
       final diff = endDate.difference(startDate).inDays + 1;
       final safeDays = diff < 1 ? 1 : diff;
@@ -560,6 +562,13 @@ class _HrEmployeeSelfServicePageState extends State<HrEmployeeSelfServicePage> {
             ? 'Cererea de concediu a fost salvata.'
             : 'Cererea de concediu a fost actualizata.';
       });
+    }
+    } finally {
+      calendarDaysController.dispose();
+      workingDaysController.dispose();
+      medicalCodeController.dispose();
+      documentRefController.dispose();
+      notesController.dispose();
     }
   }
 

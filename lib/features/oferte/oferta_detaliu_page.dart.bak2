@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -29,7 +30,6 @@ import '../reclamatii/signature_capture_page.dart';
 import 'deviz_articol_template_models.dart';
 import 'deviz_articol_template_repository.dart';
 import 'offer_acceptance_clauses_dialog.dart';
-import 'offer_acceptance_form_pdf_service.dart';
 import 'offer_acceptance_models.dart';
 import 'offer_currency_converter.dart';
 import 'offer_commercial_package_models.dart';
@@ -40,12 +40,16 @@ import 'offer_line_resource_dialog.dart';
 import 'offer_partner_models.dart';
 import 'offer_pdf_service.dart';
 import 'offer_models.dart';
+import '../../core/integrations/smartbill_service.dart';
+import '../../core/integrations/smartbill_stock_cache_service.dart';
+import '../../core/widgets/smartbill_bon_consum_dialog.dart';
 import 'offer_smartbill_models.dart';
 import 'offer_smartbill_sync_service.dart';
 import 'offer_standard_catalog_models.dart';
 import 'offer_standard_labor_line_dialog.dart';
 import '../notifications/notification_service.dart';
 import '../notifications/notification_models.dart';
+import '../../core/widgets/client_info_card.dart';
 
 class OfertaDetaliuPage extends StatefulWidget {
   const OfertaDetaliuPage({
@@ -97,8 +101,11 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       MaterialsCatalogService();
   final OfferSmartBillSyncService _smartBillSyncService =
       OfferSmartBillSyncService();
+  final SmartBillStockCacheService _stockCacheService =
+      SmartBillStockCacheService();
   final OfferLaborResourcesCatalogService _laborResourcesService =
       OfferLaborResourcesCatalogService();
+  Map<String, SmartBillStockItem> _smartbillStock = {};
   List<PartnerRecord> _masterPartners = const <PartnerRecord>[];
   List<PartnerWorkerRecord> _masterPartnerWorkers =
       const <PartnerWorkerRecord>[];
@@ -124,6 +131,21 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     _loadPdfTemplatePreference();
     _loadLaborResources();
     _loadPartnerCatalog();
+    _loadSmartBillStock();
+  }
+
+  /// Preia stocul SmartBill din cache (auto la deschidere).
+  Future<void> _loadSmartBillStock() async {
+    try {
+      final profile = await widget.repository.loadCompanyProfile();
+      final settings = profile.smartBillSettings;
+      if (!settings.isConsumptionConfigured) return;
+      final stock = await _stockCacheService.syncIfStale(settings);
+      if (!mounted) return;
+      setState(() => _smartbillStock = stock);
+    } catch (_) {
+      // Silențios — stocul rămâne gol dacă SmartBill nu e configurat/accesibil
+    }
   }
 
   Future<void> _loadPdfTemplatePreference() async {
@@ -835,43 +857,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     await _saveOperationalMetadata(next);
   }
 
-  Future<void> _generateAcceptanceFormPdf() async {
-    setState(() => _saving = true);
-    try {
-      final clauses = _resolvedAcceptanceClauses();
-      final company = await widget.repository.loadCompanyProfile();
-      final bytes = await OfferAcceptanceFormPdfService.buildBytes(
-        offer: _offer,
-        company: company,
-        clauses: clauses,
-      );
-      final fileName = OfferAcceptanceFormPdfService.exportFileName(_offer);
-      final path = await PdfSaveService.savePdf(
-        repository: widget.repository,
-        bytes: bytes,
-        fileName: fileName,
-        category: PdfDocumentCategory.offers,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Formular generat: $path'),
-          action: SnackBarAction(
-            label: 'Deschide',
-            onPressed: () => _openFileExternal(path),
-          ),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Eroare generare formular: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
   Future<void> _captureAcceptanceSignature() async {
     final bytes = await Navigator.of(context).push<Uint8List>(
       MaterialPageRoute<Uint8List>(
@@ -894,13 +879,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       clearAcceptanceFormSignedAt: true,
     );
     await _saveOperationalMetadata(next);
-  }
-
-  void _openFileExternal(String path) {
-    try {
-      final uri = Uri.file(path);
-      launchUrl(uri);
-    } catch (_) {}
   }
 
   Widget _buildAcceptanceFormCard() {
@@ -1028,11 +1006,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
                   icon: const Icon(Icons.tune_outlined, size: 16),
                   label: const Text('Editează clauze'),
                 ),
-                OutlinedButton.icon(
-                  onPressed: _saving ? null : _generateAcceptanceFormPdf,
-                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
-                  label: const Text('Generează PDF'),
-                ),
                 FilledButton.tonal(
                   onPressed: _saving ? null : _captureAcceptanceSignature,
                   child: Row(
@@ -1123,31 +1096,22 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   String _commercialLineSubtitle(OfferLineItem sourceLine, OfferLineItem line) {
-    final isAggregatedLabor = sourceLine.id == '__labor_aggregate__' &&
-        sourceLine.lineType == OfferLineType.manopera;
     final buffer = StringBuffer()
-      ..writeln('Tip: ${isAggregatedLabor ? 'Manopera' : line.lineType.label}')
-      ..writeln(
-        sourceLine.description.trim().isEmpty ? '-' : sourceLine.description,
-      )
-      ..write(
-        'UM: ${line.unit} • Cantitate: ${line.quantity.toStringAsFixed(2)}'
-        ' • Preț unitar: ${_displayAmountWithLabels(line.unitPrice, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}'
-        ' • Total linie: ${_displayAmountWithLabels(line.effectiveLineTotal, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}',
-      );
-    if (isAggregatedLabor) {
-      buffer
-        ..writeln()
-        ..write(
-          'Cost intern estimat: ${_moneyCommercial(_internalLaborEstimatedCost)}'
-          ' • Preț comercial estimat: ${_moneyCommercial(_estimatedCommercialLaborValue)}'
-          ' • Diferență estimată: ${_moneyCommercial(_estimatedLaborMargin)}',
-        );
-    } else if (sourceLine.lineType == OfferLineType.manopera &&
+      ..writeln('Tip: ${line.lineType.label}');
+    // Descrierea dată de utilizator — dacă e goală, nu afișăm nimic
+    if (sourceLine.description.trim().isNotEmpty) {
+      buffer.writeln(sourceLine.description.trim());
+    }
+    buffer.write(
+      'UM: ${line.unit} • Cantitate: ${line.quantity.toStringAsFixed(2)}'
+      ' • Preț unitar: ${_displayAmountWithLabels(line.unitPrice, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}'
+      ' • Total linie: ${_displayAmountWithLabels(line.effectiveLineTotal, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}',
+    );
+    if (sourceLine.lineType == OfferLineType.manopera &&
         sourceLine.laborSourceMode == OfferLaborSourceMode.standard) {
       buffer
         ..writeln()
-        ..write('Cost intern: indisponibil in aceasta varianta standard');
+        ..write('Cost intern: indisponibil în această variantă standard');
     }
     return buffer.toString();
   }
@@ -1400,6 +1364,86 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Nu am putut deschide linkul $label.')),
     );
+  }
+
+  /// Emite bon de consum SmartBill cu materialele din ofertă.
+  Future<void> _emiteBonConsum() async {
+    // Extrage materialele din ofertă (linii de tip material cu cantitate > 0)
+    final materiale = <BonConsumArticol>[];
+    for (final line in _offer.lines) {
+      if (line.lineType != OfferLineType.material) continue;
+      if (line.name.trim().isEmpty) continue;
+      if (line.quantity <= 0) continue;
+      materiale.add(BonConsumArticol(
+        denumire: line.name.trim(),
+        cantitate: line.quantity,
+        um: line.unit.isNotEmpty ? line.unit : 'buc',
+        pretUnitar: line.unitPrice,
+      ));
+    }
+
+    if (materiale.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nu există materiale cu cantitate în ofertă.'),
+        ),
+      );
+      return;
+    }
+
+    // Preia setările SmartBill
+    CompanyProfile profile;
+    try {
+      profile = await widget.repository.loadCompanyProfile();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nu s-a putut accesa profilul firmei.')),
+      );
+      return;
+    }
+
+    final settings = profile.smartBillSettings;
+    if (!settings.isConfigured) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'SmartBill nu este configurat. Mergi la Setări → SmartBill.'),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
+    final titlu = _offer.offerNumber.trim().isNotEmpty
+        ? 'Ofertă ${_offer.offerNumber}'
+        : _offer.title.trim().isNotEmpty
+            ? _offer.title.trim()
+            : 'Ofertă client';
+
+    final response = await showDialog<SmartBillConsumptionNoteResponse>(
+      context: context,
+      builder: (_) => SmartBillBonConsumDialog(
+        settings: settings,
+        articole: materiale,
+        documentTitle: titlu,
+        stockMap: _smartbillStock,
+      ),
+    );
+
+    if (response != null && mounted) {
+      final label = response.documentLabel.isNotEmpty
+          ? response.documentLabel
+          : 'emis cu succes';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Bon de consum $label emis în SmartBill.'),
+          backgroundColor: Colors.green.shade700,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
   }
 
   String _smartBillDocumentCaption(OfferSmartBillDocumentState document) {
@@ -1818,7 +1862,9 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
           content: RadioGroup<TipDocumentDeviz>(
             groupValue: selected,
             onChanged: (v) {
-              if (v != null) setDialogState(() => selected = v);
+              if (v != null) {
+                setDialogState(() => selected = v);
+              }
             },
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2287,44 +2333,12 @@ if (Test-Path \$attachment) {
 
       if (!mounted) return true;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Email pus in coada: ${queueItem.id}')),
-      );
-
-      final resolved = await notif.waitForEmailQueueFinalStatus(queueItem.id);
-      final status = (resolved?.status ?? '').trim().toLowerCase();
-      if (!mounted) return status != 'failed';
-
-      if (status == 'sent') {
-        await _markOfferAsSentIfDraft();
-        if (!mounted) return true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Email trimis cu succes (${queueItem.id}).')),
-        );
-        return true;
-      }
-
-      if (status == 'failed') {
-        final reason = (resolved?.errorMessage ?? '').trim();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              reason.isEmpty
-                  ? 'Email esuat (${queueItem.id}). Verifica notificarea din coada.'
-                  : 'Email esuat: $reason',
-            ),
-          ),
-        );
-        return false;
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Emailul este in procesare (${queueItem.id}). Verifica statusul in notification_email_queue.',
+            'Email pus in coada: ${queueItem.id}. Statusul final se vede in Notificari / Email log.',
           ),
         ),
       );
-
       return true;
     } catch (e) {
       final diagnosticMessage = _describeDirectEmailFailure(e);
@@ -2384,6 +2398,7 @@ if (Test-Path \$attachment) {
         : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
     final path =
         'notification_email_attachments/oferte/$safeEntity/${now}_$normalizedFileName';
+    await FirebaseAuth.instance.currentUser?.getIdToken(true);
     final ref = FirebaseStorage.instance.ref().child(path);
     await ref.putData(
       pdfBytes,
@@ -2535,6 +2550,7 @@ if (Test-Path \$attachment) {
         _cleanupOldOfferPdfs(newPath: path, offer: _offer);
         offerForActions = offerForActions.copyWith(
           pdfPath: path,
+          hasAcceptancePage: true,
           updatedAt: DateTime.now(),
         );
         _lastGeneratedPdfTemplate = selectedTemplate;
@@ -3057,6 +3073,7 @@ if (Test-Path \$attachment) {
         pretUnitarMan: newMan,
         lastUpdated: DateTime.now(),
         folositDeCateOri: 1,
+        catalogProductId: line.materialId.trim(),
       );
       await repo.upsertLocal(template);
       await OfflineSyncRuntime.instance
@@ -3069,6 +3086,9 @@ if (Test-Path \$attachment) {
       final updated = existing.copyWith(
         lastUpdated: DateTime.now(),
         folositDeCateOri: existing.folositDeCateOri + 1,
+        catalogProductId: line.materialId.trim().isNotEmpty
+            ? line.materialId.trim()
+            : existing.catalogProductId,
       );
       await repo.upsertLocal(updated);
       await OfflineSyncRuntime.instance
@@ -3116,6 +3136,9 @@ if (Test-Path \$attachment) {
       ),
     );
 
+    final resolvedCatalogId = line.materialId.trim().isNotEmpty
+        ? line.materialId.trim()
+        : existing.catalogProductId;
     final toSave = shouldUpdate == true
         ? existing.copyWith(
             um: line.unit.trim().isNotEmpty
@@ -3127,10 +3150,12 @@ if (Test-Path \$attachment) {
                 isStandardLabor ? newMan : existing.pretUnitarMan,
             lastUpdated: DateTime.now(),
             folositDeCateOri: existing.folositDeCateOri + 1,
+            catalogProductId: resolvedCatalogId,
           )
         : existing.copyWith(
             lastUpdated: DateTime.now(),
             folositDeCateOri: existing.folositDeCateOri + 1,
+            catalogProductId: resolvedCatalogId,
           );
     await repo.upsertLocal(toSave);
     await OfflineSyncRuntime.instance
@@ -4248,6 +4273,8 @@ if (Test-Path \$attachment) {
                   _openAiAssistant();
                 case 'necesar':
                   _openMaterialNecessar();
+                case 'bon_consum':
+                  _emiteBonConsum();
                 case 'save_as':
                   _generatePdf(saveAs: true);
                 case 'share':
@@ -4278,6 +4305,15 @@ if (Test-Path \$attachment) {
                 child: const ListTile(
                   leading: Icon(Icons.format_list_bulleted_outlined),
                   title: Text('Necesar materiale'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'bon_consum',
+                child: ListTile(
+                  leading: Icon(Icons.inventory_2_outlined),
+                  title: Text('Bon consum SmartBill'),
                   contentPadding: EdgeInsets.zero,
                   dense: true,
                 ),
@@ -4468,6 +4504,16 @@ if (Test-Path \$attachment) {
                         _kv('Numar oferta', _offer.offerNumber),
                         _kv('Titlu', _offer.title),
                         _kv('Client', _resolveClientName()),
+                        // Card detalii identificare client
+                        if (_findOfferClient() != null)
+                          SizedBox(
+                            width: double.infinity,
+                            child: ClientInfoCard(
+                              client: _findOfferClient()!,
+                              compact: true,
+                              showTitle: false,
+                            ),
+                          ),
                         if (_offer.commercialRecipientName.trim().isNotEmpty)
                           _kv(
                             'Destinatar comercial / platitor',

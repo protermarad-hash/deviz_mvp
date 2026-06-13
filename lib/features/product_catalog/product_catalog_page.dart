@@ -2,6 +2,7 @@
 import 'dart:io';
 import 'dart:convert';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../notifications/send_document_dialog.dart';
 import '../notifications/document_email_templates.dart';
@@ -961,11 +962,19 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
         : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
     final storagePath =
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    } catch (_) {}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: 'application/pdf'),
-    );
+    try {
+      await ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'application/pdf'),
+      );
+    } catch (e) {
+      debugPrint('[ProductCatalog] ❌ Storage upload failed: $e');
+      rethrow;
+    }
     return <String, dynamic>{
       'filename': normalizedName,
       'storage_path': ref.fullPath,

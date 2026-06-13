@@ -243,25 +243,29 @@ class _TemplateSettingsPageState extends State<TemplateSettingsPage> {
     final subjectCtrl =
         TextEditingController(text: template.subject);
     final bodyCtrl = TextEditingController(text: template.body);
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => _TemplateEditorDialog(
-        template: template,
-        subjectController: subjectCtrl,
-        bodyController: bodyCtrl,
-      ),
-    );
-    if (saved != true || !mounted) return;
-    setState(() {
-      template.subject = subjectCtrl.text;
-      template.body = bodyCtrl.text;
-    });
-    await _store.save(_templates);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Șablon „${template.name}" salvat.')),
-    );
+    try {
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => _TemplateEditorDialog(
+          template: template,
+          subjectController: subjectCtrl,
+          bodyController: bodyCtrl,
+        ),
+      );
+      if (saved != true || !mounted) return;
+      setState(() {
+        template.subject = subjectCtrl.text;
+        template.body = bodyCtrl.text;
+      });
+      await _store.save(_templates);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Șablon „${template.name}" salvat.')),
+      );
+    } finally {
+      subjectCtrl.dispose();
+      bodyCtrl.dispose();
+    }
   }
 
   Future<void> _resetTemplate(DocumentTemplate template) async {

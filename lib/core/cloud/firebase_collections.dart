@@ -92,8 +92,20 @@ class FirebaseCollections {
   static const String complaintWorkOrders = 'complaint_work_orders';
   static const String partnerTransactions = 'partner_transactions';
   static const String partnerFinancialSummary = 'partner_financial_summary';
+  static const String partnerSettlements = 'partner_settlements';
   static const String devizArticoleTemplate = 'deviz_articole_template';
   static const String devizeTehnice = 'devize_tehnice';
   static const String devizeFiltreCta = 'devize_filtre_cta';
   static const String appTasks = 'app_tasks';
+  static const String employeePayEntries = 'employee_pay_entries';
+  static const String employeePayments = 'employee_payments';
+  static const String employeeFinancialSummary = 'employee_financial_summary';
+  static const String employeeSettings = 'employee_settings';
+  static const String hrPayrollPayments = 'hr_payroll_payments';
+  static const String stocItems = 'stoc_items';
+  static const String stocMiscari = 'stoc_miscari';
+  static const String gpsCheckins = 'gps_checkins';
+  static const String echipamenteInstalate = 'echipamente_instalate';
+  static const String crmRecords = 'crm_records';
+  static const String obiectiveLunare = 'obiective_lunare';
 }

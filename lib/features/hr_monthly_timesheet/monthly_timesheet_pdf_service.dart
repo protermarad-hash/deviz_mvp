@@ -11,6 +11,13 @@ import 'monthly_timesheet_models.dart';
 class MonthlyTimesheetPdfService {
   const MonthlyTimesheetPdfService._();
 
+  // A4 landscape 8mm margini — toate zilele pe o singură pagină
+  static const _pageFormat = PdfPageFormat(
+    297 * PdfPageFormat.mm,
+    210 * PdfPageFormat.mm,
+    marginAll: 8 * PdfPageFormat.mm,
+  );
+
   static Future<String> export({
     required AppDataRepository repository,
     required MonthlyTimesheetRecord record,
@@ -22,160 +29,177 @@ class MonthlyTimesheetPdfService {
     final companyProfile = await repository.loadCompanyProfile();
     final branding = DocumentBrandingData.fromCompanyProfile(companyProfile);
     final generatedAt = DateTime.now();
-    final days = List<int>.generate(record.daysInMonth, (index) => index + 1);
-    final dayChunks = <List<int>>[];
-    for (var start = 0; start < days.length; start += 16) {
-      final end = (start + 16) > days.length ? days.length : start + 16;
-      dayChunks.add(days.sublist(start, end));
-    }
-
-    String dateLabel(DateTime value) {
-      final d = value.day.toString().padLeft(2, '0');
-      final m = value.month.toString().padLeft(2, '0');
-      return '$d.$m.${value.year}';
-    }
+    final days = List<int>.generate(record.daysInMonth, (i) => i + 1);
 
     String monthLabel() =>
         '${record.month.toString().padLeft(2, '0')}.${record.year}';
 
-    String textOrDash(String value) {
-      final trimmed = value.trim();
-      return trimmed.isEmpty ? '-' : trimmed;
+    String dateLabel(DateTime v) {
+      final d = v.day.toString().padLeft(2, '0');
+      final m = v.month.toString().padLeft(2, '0');
+      return '$d.$m.${v.year}';
     }
 
-    String money(double value) => value.toStringAsFixed(2);
-
-    pw.Widget summaryBox(String label, String value) {
-      return pw.Container(
-        padding: const pw.EdgeInsets.all(8),
-        decoration: pw.BoxDecoration(
-          border: pw.Border.all(color: PdfColors.grey400),
-          borderRadius: pw.BorderRadius.circular(6),
-        ),
-        child: pw.Text('$label: $value'),
-      );
+    String textOrDash(String v) {
+      final t = v.trim();
+      return t.isEmpty ? '-' : t;
     }
 
-    for (var chunkIndex = 0; chunkIndex < dayChunks.length; chunkIndex++) {
-      final chunk = dayChunks[chunkIndex];
-      final headers = <String>[
-        'Angajat',
-        'Echipa',
-        'TM buget',
-        'TM RON/zi',
-        ...chunk.map((day) => day.toString()),
-        'Ore',
-        ...MonthlyTimesheetCodeOption.defaults.map((option) => option.code),
+    String money(double v) => v.toStringAsFixed(2);
+
+    // ── Header-uri coloane ────────────────────────────────────────────────────
+    final headers = <String>[
+      'Angajat',
+      'Echipă',
+      'TM',
+      'TM/zi',
+      ...days.map((d) => d.toString()),
+      'Ore',
+      ...MonthlyTimesheetCodeOption.defaults.map((o) => o.code),
+    ];
+
+    // ── Rânduri date ──────────────────────────────────────────────────────────
+    final dataRows = record.rows.map((row) {
+      final eligibleDays = _eligibleDays(record, row);
+      final tmPerDay = (row.mealTicketBudgetRon > 0 && eligibleDays > 0)
+          ? row.mealTicketBudgetRon / eligibleDays
+          : 0.0;
+      return <String>[
+        textOrDash(row.employeeName),
+        textOrDash(row.teamName),
+        money(row.mealTicketBudgetRon),
+        money(tmPerDay),
+        ...days.map((day) => textOrDash(row.dayValues['$day'] ?? '')),
+        row.totalWorkedHours.toStringAsFixed(0),
+        ...MonthlyTimesheetCodeOption.defaults
+            .map((opt) => row.countCode(opt.code).toString()),
       ];
-      final data = record.rows.map((row) {
-        final eligibleDays = _eligibleDays(record, row);
-        final tmPerDay = (row.mealTicketBudgetRon > 0 && eligibleDays > 0)
-            ? row.mealTicketBudgetRon / eligibleDays
-            : 0.0;
-        return <String>[
-          textOrDash(row.employeeName),
-          textOrDash(row.teamName),
-          money(row.mealTicketBudgetRon),
-          money(tmPerDay),
-          ...chunk.map((day) => textOrDash(row.dayValues['$day'] ?? '')),
-          row.totalWorkedHours.toStringAsFixed(0),
-          ...MonthlyTimesheetCodeOption.defaults
-              .map((option) => row.countCode(option.code).toString()),
-        ];
-      }).toList(growable: false);
+    }).toList(growable: false);
 
-      doc.addPage(
-        pw.MultiPage(
-          pageFormat: PdfPageFormat.a3.landscape,
-          margin: const pw.EdgeInsets.all(18),
-          build: (_) => [
-            if (chunkIndex == 0) ...[
-              buildClassicDocumentHeader(
-                branding: branding,
-                documentTitle: 'PONTAJ LUNAR TABELAR',
-                template: companyProfile.pdfExportSettings.visualTemplate,
-                metadata: <MapEntry<String, String>>[
-                  MapEntry<String, String>('Luna', monthLabel()),
-                  MapEntry<String, String>(
-                    'Data generare',
-                    dateLabel(generatedAt),
+    // ── Rând totale ───────────────────────────────────────────────────────────
+    final totalRow = <String>[
+      'TOTAL',
+      '',
+      money(record.rows.fold<double>(0, (s, r) => s + r.mealTicketBudgetRon)),
+      '',
+      ...days.map((_) => ''),
+      record.totalWorkedHours.toStringAsFixed(0),
+      ...MonthlyTimesheetCodeOption.defaults
+          .map((opt) => record.totalCodeCount(opt.code).toString()),
+    ];
+
+    final allRows = [...dataRows, totalRow];
+    final totalRowIndex = allRows.length - 1;
+
+    // ── Lățimi coloane (pt) ───────────────────────────────────────────────────
+    // Angajat=79, Echipă=40, TM=34, TM/zi=28, zile=13×31=403, Ore=23, 8×coduri=14×8=112
+    // Total=719pt < 796pt (281mm × 2.835) ✓
+    final int dayStart = 4;
+    final int oreIndex = dayStart + days.length;
+    final int codesStart = oreIndex + 1;
+
+    final columnWidths = <int, pw.TableColumnWidth>{
+      0: const pw.FixedColumnWidth(79),
+      1: const pw.FixedColumnWidth(40),
+      2: const pw.FixedColumnWidth(34),
+      3: const pw.FixedColumnWidth(28),
+      for (var i = dayStart; i < oreIndex; i++)
+        i: const pw.FixedColumnWidth(13),
+      oreIndex: const pw.FixedColumnWidth(23),
+      for (var i = codesStart; i < codesStart + 8; i++)
+        i: const pw.FixedColumnWidth(14),
+    };
+
+    doc.addPage(
+      pw.Page(
+        pageFormat: _pageFormat,
+        build: (_) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+          children: [
+            // ── Antet compact ────────────────────────────────────────────────
+            pw.Container(
+              padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+              decoration: const pw.BoxDecoration(
+                color: PdfColors.grey200,
+                border: pw.Border(
+                  bottom: pw.BorderSide(color: PdfColors.grey500, width: 0.5),
+                ),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Text(
+                    branding.companyName,
+                    style: pw.TextStyle(
+                      fontSize: 7,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
                   ),
-                  MapEntry<String, String>(
-                    'Angajati',
-                    '${record.rows.length}',
+                  pw.Text(
+                    'PONTAJ LUNAR TABELAR — ${monthLabel()}',
+                    style: pw.TextStyle(
+                      fontSize: 8,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
                   ),
-                  MapEntry<String, String>(
-                    'Total ore',
-                    record.totalWorkedHours.toStringAsFixed(0),
+                  pw.Text(
+                    'Angajați: ${record.rows.length}  |  '
+                    'Total ore: ${record.totalWorkedHours.toStringAsFixed(0)}  |  '
+                    'Generat: ${dateLabel(generatedAt)}',
+                    style: const pw.TextStyle(fontSize: 6),
                   ),
                 ],
               ),
-              pw.SizedBox(height: 10),
-            ],
-            pw.Text(
-              'Interval zile: ${chunk.first}-${chunk.last}',
-              style: pw.TextStyle(
-                fontSize: 12,
-                fontWeight: pw.FontWeight.bold,
-              ),
             ),
-            pw.SizedBox(height: 8),
-            if (data.isEmpty)
-              pw.Text('Nu exista randuri de pontaj pentru luna selectata.')
+            pw.SizedBox(height: 4),
+            if (dataRows.isEmpty)
+              pw.Expanded(
+                child: pw.Center(
+                  child: pw.Text(
+                    'Nu există rânduri de pontaj pentru luna selectată.',
+                  ),
+                ),
+              )
             else
               pw.TableHelper.fromTextArray(
-                border:
-                    pw.TableBorder.all(color: PdfColors.grey400, width: 0.4),
+                border: pw.TableBorder.all(
+                  color: PdfColors.grey400,
+                  width: 0.3,
+                ),
                 headerStyle: pw.TextStyle(
-                  fontSize: 7,
+                  fontSize: 5.5,
                   fontWeight: pw.FontWeight.bold,
                 ),
-                cellStyle: const pw.TextStyle(fontSize: 6.6),
+                cellStyle: const pw.TextStyle(fontSize: 5.0),
                 headerDecoration: const pw.BoxDecoration(
                   color: PdfColors.grey300,
                 ),
-                cellAlignment: pw.Alignment.center,
-                headers: headers,
-                data: data,
-                columnWidths: <int, pw.TableColumnWidth>{
-                  0: const pw.FixedColumnWidth(90),
-                  1: const pw.FixedColumnWidth(58),
-                  2: const pw.FixedColumnWidth(38),
-                  3: const pw.FixedColumnWidth(34),
-                  for (var i = 4; i < 4 + chunk.length; i++)
-                    i: const pw.FixedColumnWidth(18),
-                  4 + chunk.length: const pw.FixedColumnWidth(28),
-                  for (var i = 5 + chunk.length; i < headers.length; i++)
-                    i: const pw.FixedColumnWidth(18),
+                cellDecoration: (index, data, rowNum) {
+                  if (rowNum == totalRowIndex) {
+                    return const pw.BoxDecoration(color: PdfColors.grey200);
+                  }
+                  if (rowNum % 2 == 1) {
+                    return const pw.BoxDecoration(color: PdfColors.grey100);
+                  }
+                  return const pw.BoxDecoration();
                 },
+                cellPadding: const pw.EdgeInsets.symmetric(
+                  horizontal: 1,
+                  vertical: 1.5,
+                ),
+                cellAlignment: pw.Alignment.center,
+                cellAlignments: const {
+                  0: pw.Alignment.centerLeft,
+                  1: pw.Alignment.centerLeft,
+                },
+                headers: headers,
+                data: allRows,
+                columnWidths: columnWidths,
               ),
-            if (chunkIndex == dayChunks.length - 1) ...[
-              pw.SizedBox(height: 12),
-              pw.Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  summaryBox(
-                    'Total ore luna',
-                    record.totalWorkedHours.toStringAsFixed(0),
-                  ),
-                  summaryBox(
-                    'Total TM buget',
-                    '${money(record.rows.fold<double>(0, (sum, row) => sum + row.mealTicketBudgetRon))} RON',
-                  ),
-                  ...MonthlyTimesheetCodeOption.defaults.map(
-                    (option) => summaryBox(
-                      'Total ${option.code}',
-                      record.totalCodeCount(option.code).toString(),
-                    ),
-                  ),
-                ],
-              ),
-            ],
           ],
         ),
-      );
-    }
+      ),
+    );
 
     final fileName =
         'pontaj_lunar_${record.year}_${record.month.toString().padLeft(2, '0')}.pdf';
@@ -195,13 +219,9 @@ class MonthlyTimesheetPdfService {
   ) {
     var count = 0;
     for (var day = 1; day <= record.daysInMonth; day++) {
-      if (_isWeekend(record.year, record.month, day)) {
-        continue;
-      }
+      if (_isWeekend(record.year, record.month, day)) continue;
       final value = row.dayValues['$day'] ?? '';
-      if (MonthlyTimesheetValueParser.hoursFromValue(value) > 0) {
-        count++;
-      }
+      if (MonthlyTimesheetValueParser.hoursFromValue(value) > 0) count++;
     }
     return count;
   }

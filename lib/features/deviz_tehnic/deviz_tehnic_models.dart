@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 // ── Enumerare tip document ────────────────────────────────────────────────────
 
@@ -176,7 +177,8 @@ enum DevizTehnicPriceDisplay {
 /// Un articol din devizul tehnic.
 /// Fiecare articol are 4 componente de cost: Material, Manoperă, Utilaj, Transport.
 class DevizTehnicArticol {
-  const DevizTehnicArticol({
+  DevizTehnicArticol({
+    String? id,
     required this.denumire,
     required this.um,
     required this.cantitate,
@@ -184,8 +186,10 @@ class DevizTehnicArticol {
     this.pretMan = 0,
     this.pretUtilaj = 0,
     this.pretTransport = 0,
-  });
+  }) : id = id?.isNotEmpty == true ? id! : const Uuid().v4();
 
+  /// ID unic per articol — generat automat dacă nu e furnizat.
+  final String id;
   final String denumire;
   final String um;
   final double cantitate;
@@ -202,6 +206,7 @@ class DevizTehnicArticol {
       valoareMat + valoareMan + valoareUtilaj + valoareTransport;
 
   DevizTehnicArticol copyWith({
+    String? id,
     String? denumire,
     String? um,
     double? cantitate,
@@ -211,6 +216,7 @@ class DevizTehnicArticol {
     double? pretTransport,
   }) {
     return DevizTehnicArticol(
+      id: id ?? this.id,
       denumire: denumire ?? this.denumire,
       um: um ?? this.um,
       cantitate: cantitate ?? this.cantitate,
@@ -222,6 +228,7 @@ class DevizTehnicArticol {
   }
 
   Map<String, dynamic> toMap() => {
+        'id': id,
         'denumire': denumire,
         'um': um,
         'cantitate': cantitate,
@@ -233,6 +240,8 @@ class DevizTehnicArticol {
 
   factory DevizTehnicArticol.fromMap(Map<String, dynamic> m) =>
       DevizTehnicArticol(
+        // Backward compat: date vechi fără 'id' → UUID generat în constructor
+        id: (m['id'] ?? '').toString(),
         denumire: (m['denumire'] ?? '').toString(),
         um: (m['um'] ?? 'buc').toString(),
         cantitate: _d(m['cantitate']),
@@ -255,6 +264,12 @@ class DevizTehnicRecord {
     this.obiectiv = '',
     this.clientId = '',
     this.clientName = '',
+    this.clientCui = '',
+    this.clientAddress = '',
+    this.clientPhone = '',
+    this.clientEmail = '',
+    this.contactPerson = '',
+    this.contactDepartment = '',
     required this.dataEmiterii,
     this.zileValabilitate = 30,
     this.articole = const [],
@@ -281,6 +296,12 @@ class DevizTehnicRecord {
   final String obiectiv;
   final String clientId;
   final String clientName;
+  final String clientCui;
+  final String clientAddress;
+  final String clientPhone;
+  final String clientEmail;
+  final String contactPerson;
+  final String contactDepartment;
   final DateTime dataEmiterii;
   final int zileValabilitate;
   final List<DevizTehnicArticol> articole;
@@ -322,6 +343,12 @@ class DevizTehnicRecord {
     String? obiectiv,
     String? clientId,
     String? clientName,
+    String? clientCui,
+    String? clientAddress,
+    String? clientPhone,
+    String? clientEmail,
+    String? contactPerson,
+    String? contactDepartment,
     DateTime? dataEmiterii,
     int? zileValabilitate,
     List<DevizTehnicArticol>? articole,
@@ -345,6 +372,12 @@ class DevizTehnicRecord {
       obiectiv: obiectiv ?? this.obiectiv,
       clientId: clientId ?? this.clientId,
       clientName: clientName ?? this.clientName,
+      clientCui: clientCui ?? this.clientCui,
+      clientAddress: clientAddress ?? this.clientAddress,
+      clientPhone: clientPhone ?? this.clientPhone,
+      clientEmail: clientEmail ?? this.clientEmail,
+      contactPerson: contactPerson ?? this.contactPerson,
+      contactDepartment: contactDepartment ?? this.contactDepartment,
       dataEmiterii: dataEmiterii ?? this.dataEmiterii,
       zileValabilitate: zileValabilitate ?? this.zileValabilitate,
       articole: articole ?? this.articole,
@@ -372,6 +405,12 @@ class DevizTehnicRecord {
         'obiectiv': obiectiv,
         'client_id': clientId,
         'client_name': clientName,
+        'client_cui': clientCui,
+        'client_address': clientAddress,
+        'client_phone': clientPhone,
+        'client_email': clientEmail,
+        'contact_person': contactPerson,
+        'contact_department': contactDepartment,
         'data_emiterii': dataEmiterii.toIso8601String(),
         'zile_valabilitate': zileValabilitate,
         'articole': articole.map((a) => a.toMap()).toList(),
@@ -412,6 +451,12 @@ class DevizTehnicRecord {
       obiectiv: (m['obiectiv'] ?? '').toString(),
       clientId: (m['client_id'] ?? '').toString(),
       clientName: (m['client_name'] ?? '').toString(),
+      clientCui: (m['client_cui'] ?? '').toString(),
+      clientAddress: (m['client_address'] ?? '').toString(),
+      clientPhone: (m['client_phone'] ?? '').toString(),
+      clientEmail: (m['client_email'] ?? '').toString(),
+      contactPerson: (m['contact_person'] ?? '').toString(),
+      contactDepartment: (m['contact_department'] ?? '').toString(),
       dataEmiterii: parseDate(m['data_emiterii']),
       zileValabilitate: int.tryParse((m['zile_valabilitate'] ?? 30).toString()) ?? 30,
       articole: artList,

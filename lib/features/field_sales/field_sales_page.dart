@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
@@ -666,11 +667,19 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
         : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
     final storagePath =
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    } catch (_) {}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
-    await ref.putData(
-      bytes,
-      SettableMetadata(contentType: 'application/pdf'),
-    );
+    try {
+      await ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'application/pdf'),
+      );
+    } catch (e) {
+      debugPrint('[FieldSales] ❌ Storage upload failed: $e');
+      rethrow;
+    }
     return <String, dynamic>{
       'filename': normalizedName,
       'storage_path': ref.fullPath,
@@ -1294,6 +1303,8 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
   }
 
   Future<void> _createLead() async {
+    await _refreshCatalog();
+    if (!mounted) return;
     final lead = await showDialog<FieldLeadRecord>(
       context: context,
       builder: (context) => _FieldLeadDialog(
@@ -1301,6 +1312,7 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
         catalogItems: _catalogItems,
         currentUserId: _currentUserId,
         initialSourceModule: 'field_sales',
+        repository: widget.repository,
       ),
     );
     if (lead == null) return;
@@ -1807,93 +1819,100 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
 
   Widget _buildLeadsTab(BuildContext context) {
     final leads = _visibleLeads;
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Expanded(
-            flex: 2,
-            child: Column(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 700;
+        final leadList = Column(
+          children: [
+            Row(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        textCapitalization: TextCapitalization.sentences,
-                        controller: _leadSearchController,
-                        decoration: const InputDecoration(
-                          labelText: 'Cauta lead-uri',
-                          prefixIcon: Icon(Icons.search),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton.icon(
-                      onPressed: _createLead,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Lead nou'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
                 Expanded(
-                  child: leads.isEmpty
-                      ? const Center(
-                          child: Text('Nu exista lead-uri relevante.'))
-                      : ListView.separated(
-                          itemCount: leads.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final item = leads[index];
-                            final selected = _selectedLead?.id == item.id;
-                            return Card(
-                              color: selected
-                                  ? Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer
-                                  : null,
-                              child: ListTile(
-                                onTap: () {
-                                  setState(() {
-                                    _selectedLead = item;
-                                  });
-                                  _persistSavedPreferences();
-                                },
-                                title: Text(
-                                  item.clientName.trim().isEmpty
-                                      ? item.contactName
-                                      : item.clientName,
-                                ),
-                                subtitle: Text(
-                                  '${item.interestedInType.label} | ${item.status.label}\n${item.phone.trim().isEmpty ? '-' : item.phone}',
-                                ),
-                                isThreeLine: true,
-                              ),
-                            );
-                          },
-                        ),
+                  child: TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _leadSearchController,
+                    decoration: const InputDecoration(
+                      labelText: 'Cauta lead-uri',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                FilledButton.icon(
+                  onPressed: _createLead,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Lead nou'),
                 ),
               ],
             ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            flex: 3,
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: _selectedLead == null
-                    ? const Center(
-                        child:
-                            Text('Selecteaza un lead pentru actiuni rapide.'),
-                      )
-                    : _buildLeadDetails(context, _selectedLead!),
-              ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: leads.isEmpty
+                  ? const Center(child: Text('Nu exista lead-uri relevante.'))
+                  : ListView.separated(
+                      itemCount: leads.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final item = leads[index];
+                        final selected = _selectedLead?.id == item.id;
+                        return Card(
+                          color: selected
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : null,
+                          child: ListTile(
+                            onTap: () {
+                              setState(() => _selectedLead = item);
+                              _persistSavedPreferences();
+                            },
+                            title: Text(
+                              item.clientName.trim().isEmpty
+                                  ? item.contactName
+                                  : item.clientName,
+                            ),
+                            subtitle: Text(
+                              '${item.interestedInType.label} | ${item.status.label}\n${item.phone.trim().isEmpty ? '-' : item.phone}',
+                            ),
+                            isThreeLine: true,
+                          ),
+                        );
+                      },
+                    ),
             ),
+          ],
+        );
+        final detailPanel = Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _selectedLead == null
+                ? const Center(child: Text('Selecteaza un lead pentru actiuni rapide.'))
+                : _buildLeadDetails(context, _selectedLead!),
           ),
-        ],
-      ),
+        );
+        if (isWide) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(flex: 2, child: leadList),
+                const SizedBox(width: 16),
+                Expanded(flex: 3, child: detailPanel),
+              ],
+            ),
+          );
+        }
+        // Mobile: list on top, details below (only when a lead is selected)
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Expanded(flex: 2, child: leadList),
+              if (_selectedLead != null) ...[
+                const SizedBox(height: 12),
+                Expanded(flex: 3, child: detailPanel),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -2204,12 +2223,14 @@ class _FieldLeadDialog extends StatefulWidget {
     required this.catalogItems,
     required this.currentUserId,
     required this.initialSourceModule,
+    this.repository,
   });
 
   final List<ClientRecord> clients;
   final List<FieldCommercialProductView> catalogItems;
   final String currentUserId;
   final String initialSourceModule;
+  final AppDataRepository? repository;
 
   @override
   State<_FieldLeadDialog> createState() => _FieldLeadDialogState();
@@ -2225,6 +2246,13 @@ class _FieldLeadDialogState extends State<_FieldLeadDialog> {
   String? _clientId;
   FieldLeadInterestType _interestType = FieldLeadInterestType.produs;
   final Set<String> _selectedProductIds = <String>{};
+  List<ClientRecord> _localClients = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _localClients = [...widget.clients];
+  }
 
   @override
   void dispose() {
@@ -2248,10 +2276,10 @@ class _FieldLeadDialogState extends State<_FieldLeadDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ClientAutocompleteField(
-                clients: widget.clients,
-                initialClient: widget.clients.where(
-                  (c) => c.id == _clientId,
-                ).firstOrNull,
+                key: ValueKey('lead-client-${_clientId ?? 'none'}'),
+                clients: _localClients,
+                initialClient:
+                    _localClients.where((c) => c.id == _clientId).firstOrNull,
                 labelText: 'Caută client existent',
                 helperText: 'Tastează pentru a căuta în baza de date',
                 onClientSelected: (client) {
@@ -2266,6 +2294,17 @@ class _FieldLeadDialogState extends State<_FieldLeadDialog> {
                     }
                   });
                 },
+                repository: widget.repository,
+                tipEntitate: 'Client',
+                onClientAdded: (c) => setState(() {
+                  _localClients = [..._localClients, c];
+                  _clientId = c.id;
+                  _clientNameController.text = c.name;
+                  _contactNameController.text = c.contactPerson;
+                  _phoneController.text = c.phone;
+                  _emailController.text = c.email;
+                  _addressController.text = c.address;
+                }),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -2327,25 +2366,28 @@ class _FieldLeadDialogState extends State<_FieldLeadDialog> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                Column(
                   children: widget.catalogItems
                       .take(20)
                       .map(
-                        (item) => FilterChip(
-                          selected:
-                              _selectedProductIds.contains(item.product.id),
-                          label: Text(item.product.name),
-                          onSelected: (selected) {
+                        (item) => CheckboxListTile(
+                          value: _selectedProductIds.contains(item.product.id),
+                          title: Text(
+                            item.product.name,
+                            softWrap: true,
+                          ),
+                          onChanged: (selected) {
                             setState(() {
-                              if (selected) {
+                              if (selected == true) {
                                 _selectedProductIds.add(item.product.id);
                               } else {
                                 _selectedProductIds.remove(item.product.id);
                               }
                             });
                           },
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
                         ),
                       )
                       .toList(growable: false),

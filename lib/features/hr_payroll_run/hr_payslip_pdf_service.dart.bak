@@ -1,9 +1,11 @@
+import '../../core/pdf/pdf_font_helper.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../hr_variable_payroll/hr_variable_payroll_models.dart';
 import 'hr_payroll_run_models.dart';
 
 class HrPayslipPdfService {
@@ -15,8 +17,10 @@ class HrPayslipPdfService {
     String employeeName = '',
     String outputDirectory = '',
     bool saveAs = false,
+    List<HrGarnishment> garnishments = const [],
   }) async {
-    final doc = pw.Document();
+    await PdfFontHelper.initialize();
+    final doc = pw.Document(theme: PdfFontHelper.theme);
     final grossComponents = (payslip.breakdown['gross_components'] as Map?)
             ?.cast<String, dynamic>() ??
         const <String, dynamic>{};
@@ -276,6 +280,44 @@ class HrPayslipPdfService {
                 money(payslip.garnishmentReservedTotal),
               ),
             ]),
+            if (payslip.garnishmentReservedTotal > 0 ||
+                garnishments.isNotEmpty)
+              section('Detaliu popriri', [
+                if (garnishments.isEmpty)
+                  infoLine(
+                    'Total popriri',
+                    money(payslip.garnishmentReservedTotal),
+                  )
+                else
+                  ...garnishments.map((g) {
+                    final typeLabel = () {
+                      switch (g.garnishmentType.toLowerCase()) {
+                        case 'pension':
+                        case 'pensie':
+                          return 'Pensie alimentară';
+                        case 'credit':
+                          return 'Credit';
+                        case 'tax':
+                        case 'fiscal':
+                          return 'Fiscal';
+                        default:
+                          return g.garnishmentType;
+                      }
+                    }();
+                    final amountLabel = g.amountType == 'percent'
+                        ? '${g.amountValue.toStringAsFixed(0)}%'
+                        : money(g.amountValue);
+                    return infoLine(
+                      'P${g.legalPriority} – $typeLabel',
+                      '$amountLabel${g.sourceDoc.isNotEmpty ? ' (${g.sourceDoc})' : ''}',
+                    );
+                  }),
+                if (garnishments.length > 1)
+                  infoLine(
+                    'Total reținut',
+                    money(payslip.garnishmentReservedTotal),
+                  ),
+              ]),
             section('Net final', [
               infoLine('Net final', money(payslip.netFinal)),
             ]),

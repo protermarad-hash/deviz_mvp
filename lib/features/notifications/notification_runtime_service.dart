@@ -218,4 +218,58 @@ class NotificationRuntimeService {
       payload: data.isEmpty ? null : jsonEncode(data),
     );
   }
+
+  // ── Alerte specifice aplicației ───────────────────────────────────────────
+
+  Future<void> showReminderProgramare({
+    required String titlu,
+    required String beneficiar,
+    required String ora,
+    required String tehnician,
+    required String appointmentId,
+  }) async {
+    await showLocalNotification(
+      title: 'Programare maine: $titlu',
+      body: '$beneficiar • $ora • $tehnician',
+      data: <String, dynamic>{'type': 'programare', 'id': appointmentId},
+    );
+  }
+
+  Future<void> showAlertaStocMinim({
+    required String produsNume,
+    required double cantitateRamasa,
+    required String unitate,
+    required double pragMinim,
+  }) async {
+    await showLocalNotification(
+      title: 'Stoc minim: $produsNume',
+      body: 'Cantitate ramasa: ${cantitateRamasa.toStringAsFixed(1)} $unitate '
+          '(prag minim: ${pragMinim.toStringAsFixed(1)} $unitate)',
+      data: <String, dynamic>{'type': 'stoc', 'produs': produsNume},
+    );
+  }
+
+  Future<void> showProgramareFinalizata({
+    required String titlu,
+    required String tehnician,
+    required String appointmentId,
+  }) async {
+    await showLocalNotification(
+      title: 'Programare finalizata',
+      body: '$titlu — finalizata de $tehnician',
+      data: <String, dynamic>{'type': 'programare', 'id': appointmentId},
+    );
+  }
+
+  Future<void> showAlertaPlataRestanta({
+    required String partenerNume,
+    required double suma,
+    required int zileDeLa,
+  }) async {
+    await showLocalNotification(
+      title: 'Plata restanta: $partenerNume',
+      body: '${suma.toStringAsFixed(2)} RON restant de $zileDeLa zile',
+      data: <String, dynamic>{'type': 'financiar', 'partener': partenerNume},
+    );
+  }
 }

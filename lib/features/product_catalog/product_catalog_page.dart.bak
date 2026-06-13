@@ -11,8 +11,10 @@ import 'package:file_picker/file_picker.dart';
 
 import '../../core/company_profile.dart';
 import '../../core/document_file_service.dart';
+import '../../core/pdf_actions_helper.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
+import '../../core/widgets/app_network_image.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../clients/client_models.dart';
 import '../partners/partner_models.dart';
@@ -56,11 +58,30 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
   List<ClientRecord> _clients = const <ClientRecord>[];
   String _categoryFilter = '';
   String? _selectedProductId;
+  bool _filtersVisible = false;
 
   // Liste de prețuri rapide
   late final TabController _tabController;
   int _priceListMode = 0; // 0=pachete, 1=produse, 2=servicii
   String _capacityFilter = ''; // buton rapid de capacitate
+
+  /// Mapare cod categorie → nume complet pentru afișare
+  static String _categoryDisplayName(String code) {
+    const map = <String, String>{
+      'AP': 'Aparate AC',
+      'AR': 'Accesorii Refrigerare',
+      'AT': 'Accesorii Tehnice',
+      'AF': 'Accesorii Frigorifice',
+    };
+    return map[code.trim().toUpperCase()] ?? code;
+  }
+
+  int get _activeFilterCount {
+    int count = 0;
+    if (_categoryFilter.isNotEmpty) count++;
+    if (_searchController.text.trim().isNotEmpty) count++;
+    return count;
+  }
 
   @override
   void initState() {
@@ -281,13 +302,6 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
     return product.stockQuantity - _allocatedStockForProduct(product.id);
   }
 
-  String _stockSummary(ProductCatalogRecord product) {
-    final available = _availableStockForProduct(product);
-    return 'Stoc: ${product.stockQuantity.toStringAsFixed(2)} ${product.unit}'
-        ' | Alocat: ${_allocatedStockForProduct(product.id).toStringAsFixed(2)}'
-        ' | Disponibil: ${available.toStringAsFixed(2)}';
-  }
-
   Future<void> _adjustProductStock(ProductCatalogRecord product) async {
     final adjusted = await showDialog<ProductCatalogRecord>(
       context: context,
@@ -327,22 +341,6 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
       if (item.id == id) return item;
     }
     return null;
-  }
-
-  Future<void> _openGeneratedDocument(String filePath) async {
-    final result = await DocumentFileService.openFile(filePath);
-    if (result.opened || !mounted) {
-      return;
-    }
-    if (DocumentFileService.supportsFolderOpen) {
-      await DocumentFileService.openFolderForFile(filePath);
-    }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${result.message} Documentul a fost salvat: $filePath'),
-      ),
-    );
   }
 
   Future<void> _generateCatalogPdf({
@@ -460,18 +458,16 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
         );
         return;
       }
-      await _openGeneratedDocument(filePath);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            share
-                ? 'Catalogul PDF a fost generat si pregatit pentru share.'
-                : saveAs
-                    ? 'Catalogul PDF a fost salvat (Save As) si deschis: $filePath'
-                    : 'Catalogul PDF a fost generat si deschis: $filePath',
-          ),
-        ),
+        const SnackBar(content: Text('Catalog PDF generat.')),
+      );
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: filePath,
+        title: 'Catalog produse PDF generat',
+        shareSubject: 'Catalog produse',
+        shareText: 'Catalog comercial generat din aplicație.',
       );
     } on PdfSaveCanceledException {
       if (!mounted) return;
@@ -898,29 +894,12 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
             );
             if (!mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Email pus in coada: ${queueItem.id}')),
-            );
-            final resolved =
-                await notif.waitForEmailQueueFinalStatus(queueItem.id);
-            if (!mounted) return;
-            final status = (resolved?.status ?? '').trim().toLowerCase();
-            if (status == 'sent') {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                    content: Text('Email trimis cu succes (${queueItem.id}).')),
-              );
-            } else if (status == 'failed') {
-              final reason = (resolved?.errorMessage ?? '').trim();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    reason.isEmpty
-                        ? 'Email esuat (${queueItem.id}). Verifica notification_email_queue.'
-                        : 'Email esuat: $reason',
-                  ),
+              SnackBar(
+                content: Text(
+                  'Email pus in coada: ${queueItem.id}. Statusul final se vede in Notificari / Email log.',
                 ),
-              );
-            }
+              ),
+            );
             await _load();
           } catch (e) {
             if (!mounted) return;
@@ -931,8 +910,17 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
         }
         return;
       } else {
-        await _openGeneratedDocument(filePath);
+        if (!mounted) return;
+        await PdfActionsHelper.showPdfActions(
+          context,
+          filePath: filePath,
+          title: 'Certificat de garanție generat',
+          shareSubject:
+              'Certificat garanție ${persisted.fullCertificateNumber.trim().isEmpty ? persisted.id : persisted.fullCertificateNumber}',
+          shareText: 'Certificat de garanție generat din aplicație.',
+        );
       }
+      if (!mounted) return;
       await _load();
     } on PdfSaveCanceledException {
       if (!mounted) return;
@@ -1137,6 +1125,13 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Generează PDF listă prețuri',
+            onPressed: _products.isEmpty
+                ? null
+                : () => _generateCatalogPdf(share: false),
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+          ),
           IconButton(
             tooltip: 'Liste comerciale avansate',
             onPressed: _managePriceLists,
@@ -1414,18 +1409,27 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
     double size = 64,
   }) {
     if (imageUrl.isNotEmpty) {
-      return ClipRRect(
+      return AppNetworkImage(
+        url: imageUrl,
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
         borderRadius: BorderRadius.circular(10),
-        child: Image.network(
-          imageUrl,
+        errorWidget: _iconPlaceholder(
+          size: size,
+          bgColor: bgColor,
+          icon: fallbackIcon,
+          iconColor: iconColor,
+        ),
+        loadingWidget: SizedBox(
           width: size,
           height: size,
-          fit: BoxFit.contain,
-          errorBuilder: (_, __, ___) => _iconPlaceholder(
-            size: size,
-            bgColor: bgColor,
-            icon: fallbackIcon,
-            iconColor: iconColor,
+          child: Center(
+            child: SizedBox(
+              width: size * 0.4,
+              height: size * 0.4,
+              child: const CircularProgressIndicator(strokeWidth: 2),
+            ),
           ),
         ),
       );
@@ -2043,69 +2047,149 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
   }
 
   Widget _buildToolbar() {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            SizedBox(
-              width: 320,
-              child: TextField(
-                textCapitalization: TextCapitalization.sentences,
-                controller: _searchController,
-                decoration: const InputDecoration(
-                  labelText: 'Cauta dupa nume, brand, model, SKU',
-                  prefixIcon: Icon(Icons.search),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Pe ecrane largi (Windows/tablet ≥600px) filtrele sunt mereu vizibile
+        final isWide = constraints.maxWidth >= 600;
+        final showFilters = isWide || _filtersVisible;
+        final cs = Theme.of(context).colorScheme;
+        final hasFilters = _activeFilterCount > 0;
+
+        return Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Rândul 1: search + buton filtre (pe mobil) / search direct (pe desktop)
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Caută produs, brand, model, SKU...',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: _searchController.text.trim().isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() {});
+                                  },
+                                )
+                              : null,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                            horizontal: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // Buton filtre: vizibil DOAR pe mobil (pe desktop filtrele sunt mereu afișate)
+                    if (!isWide) ...[
+                      const SizedBox(width: 8),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: () => setState(
+                                () => _filtersVisible = !_filtersVisible),
+                            icon: Icon(
+                              _filtersVisible
+                                  ? Icons.filter_list_off
+                                  : Icons.filter_list,
+                              size: 18,
+                            ),
+                            label:
+                                Text(_filtersVisible ? 'Ascunde' : 'Filtre'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: hasFilters ? cs.primary : null,
+                              side: hasFilters
+                                  ? BorderSide(color: cs.primary, width: 1.5)
+                                  : null,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                            ),
+                          ),
+                          if (hasFilters)
+                            Positioned(
+                              top: -4,
+                              right: -4,
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  color: cs.primary,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Text(
+                                  '$_activeFilterCount',
+                                  style: TextStyle(
+                                    color: cs.onPrimary,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-            ),
-            SizedBox(
-              width: 240,
-              child: DropdownButtonFormField<String>(
-                initialValue: _categoryFilter.isEmpty ? null : _categoryFilter,
-                decoration: const InputDecoration(labelText: 'Categorie'),
-                items: [
-                  const DropdownMenuItem<String>(
-                    value: null,
-                    child: Text('Toate categoriile'),
-                  ),
-                  ..._categories.map(
-                    (item) => DropdownMenuItem<String>(
-                      value: item,
-                      child: Text(item),
+                // Rândul 2: filtre (mereu pe desktop, colapsabile pe mobil)
+                if (showFilters) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 36,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        FilterChip(
+                          label: const Text('Toate'),
+                          selected: _categoryFilter.isEmpty,
+                          onSelected: (_) =>
+                              setState(() => _categoryFilter = ''),
+                        ),
+                        const SizedBox(width: 6),
+                        ..._categories.map((cat) {
+                          final displayName = _categoryDisplayName(cat);
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: FilterChip(
+                              label: Text(displayName),
+                              selected: _categoryFilter == cat,
+                              onSelected: (sel) => setState(
+                                () => _categoryFilter = sel ? cat : '',
+                              ),
+                            ),
+                          );
+                        }),
+                      ],
                     ),
                   ),
+                  if ((_service.fallbackReason ?? '').trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Fallback: ${_service.fallbackReason}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
                 ],
-                onChanged: (value) =>
-                    setState(() => _categoryFilter = value ?? ''),
-              ),
+              ],
             ),
-            FilledButton.icon(
-              onPressed: _products.isEmpty
-                  ? null
-                  : () => _generateCatalogPdf(share: false),
-              icon: const Icon(Icons.picture_as_pdf_outlined),
-              label: const Text('Genereaza lista de pret PDF'),
-            ),
-            Chip(
-              label: Text('Sursa date: ${_service.dataSourceLabel}'),
-              visualDensity: VisualDensity.compact,
-            ),
-            if ((_service.fallbackReason ?? '').trim().isNotEmpty)
-              SizedBox(
-                width: 360,
-                child: Text(
-                  'Fallback: ${_service.fallbackReason}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -2124,61 +2208,208 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
         final item = rows[index];
         final selected = item.id == _selectedProductId;
         final referencePrice = _referencePriceForProduct(item.id);
-        final referenceCost = referencePrice == null
-            ? null
-            : _service.computeSupplierCost(referencePrice);
         final sales = _salesForProduct(item.id);
         final sale = sales.isEmpty ? null : sales.first;
         final availableStock = _availableStockForProduct(item);
 
+        final cs = Theme.of(context).colorScheme;
+        final categoryDisplay = _categoryDisplayName(item.category);
+        final hasPrice = referencePrice != null;
+        final priceText = hasPrice
+            ? _formatMoney(referencePrice.basePrice, referencePrice.currency)
+            : (item.listPrice > 0
+                ? _formatMoney(item.listPrice, 'RON')
+                : null);
         return Card(
-          color: selected
-              ? Theme.of(context).colorScheme.secondaryContainer
-              : null,
-          child: ListTile(
-            contentPadding: const EdgeInsets.all(12),
+          color: selected ? cs.secondaryContainer : null,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
             onTap: () {
               setState(() => _selectedProductId = item.id);
               if (!wide) {
                 _openMobileDetails(item);
               }
             },
-            title: Text(item.name),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'Categorie: ${item.category.isEmpty ? '-' : item.category}'
-                '\nBrand / model: ${item.brand.isEmpty ? '-' : item.brand} / ${item.model.isEmpty ? '-' : item.model}'
-                '\nCapacitate: ${item.capacity.isEmpty ? '-' : item.capacity}'
-                '\nSKU: ${item.sku.isEmpty ? '-' : item.sku} | UM: ${item.unit}'
-                '\nStatus stoc: ${item.stockStatus.label} | ${_stockSummary(item)}'
-                '\nTermen livrare: ${item.deliveryLeadTimeText.trim().isEmpty ? '-' : item.deliveryLeadTimeText.trim()}'
-                '\nPret furnizor curent: ${referencePrice == null ? '-' : _formatMoney(referencePrice.basePrice, referencePrice.currency)}'
-                '\nCost real intrare: ${referenceCost == null ? '-' : _formatMoney(referenceCost.finalEntryCost, referencePrice!.currency)}'
-                '\nStatus vanzare: ${sale == null ? '-' : sale.saleStatus.label}${sale?.clientName.trim().isNotEmpty == true ? ' | ${sale!.clientName.trim()}' : ''}'
-                '\nDocumente: imagini ${item.imagePaths.length} | PDF ${item.pdfPaths.length}',
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Rândul 1: categorie + status stoc
+                  Row(
+                    children: [
+                      if (item.category.isNotEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: cs.primaryContainer,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            categoryDisplay,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: cs.onPrimaryContainer,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: availableStock > 0
+                              ? Colors.green.shade100
+                              : Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          availableStock > 0
+                              ? '${availableStock.toStringAsFixed(0)} disp.'
+                              : 'Fără stoc',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: availableStock > 0
+                                ? Colors.green.shade800
+                                : Colors.orange.shade800,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      if (!item.isActive) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade200,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            'Inactiv',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // Rândul 2: numele produsului
+                  Text(
+                    item.name,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  // Rândul 3: brand · cod
+                  if (item.brand.isNotEmpty || item.sku.isNotEmpty)
+                    Text(
+                      [
+                        if (item.brand.isNotEmpty) item.brand,
+                        if (item.model.isNotEmpty) item.model,
+                        if (item.sku.isNotEmpty) 'Cod: ${item.sku}',
+                      ].join(' · '),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                    ),
+                  if (item.capacity.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'Capacitate: ${item.capacity}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  // Rândul 4: preț + acțiuni
+                  Row(
+                    children: [
+                      if (priceText != null) ...[
+                        Icon(Icons.monetization_on_outlined,
+                            size: 16, color: cs.primary),
+                        const SizedBox(width: 4),
+                        Text(
+                          priceText,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: cs.primary,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ] else
+                        Text(
+                          'Fără preț',
+                          style: TextStyle(
+                            color: cs.onSurfaceVariant,
+                            fontSize: 13,
+                          ),
+                        ),
+                      const Spacer(),
+                      SizedBox(
+                        height: 36,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _editProduct(existing: item),
+                          icon: const Icon(Icons.edit_outlined, size: 16),
+                          label: const Text('Editează'),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 0,
+                            ),
+                            textStyle: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        height: 36,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _deleteProduct(item),
+                          icon: const Icon(Icons.delete_outline, size: 16),
+                          label: const Text('Șterge'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: cs.error,
+                            side: BorderSide(color: cs.error),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 0,
+                            ),
+                            textStyle: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Rândul 5: status vânzare (dacă există)
+                  if (sale != null) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      'Vânzare: ${sale.saleStatus.label}'
+                      '${sale.clientName.trim().isNotEmpty ? ' · ${sale.clientName.trim()}' : ''}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                ],
               ),
-            ),
-            trailing: Wrap(
-              spacing: 4,
-              children: [
-                Chip(
-                  label: Text(availableStock > 0
-                      ? '${availableStock.toStringAsFixed(2)} disponibile'
-                      : 'fara stoc disponibil'),
-                  visualDensity: VisualDensity.compact,
-                ),
-                IconButton(
-                  onPressed: () => _editProduct(existing: item),
-                  icon: const Icon(Icons.edit_outlined),
-                  tooltip: 'Editeaza',
-                ),
-                IconButton(
-                  onPressed: () => _deleteProduct(item),
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: 'Șterge',
-                ),
-              ],
             ),
           ),
         );
@@ -3068,15 +3299,13 @@ class _ProductDialogState extends State<_ProductDialog> {
                       focusNode,
                       onFieldSubmitted,
                     ) {
-                      // Keep _categoryController in sync with Autocomplete's
-                      // internal controller.
-                      controller.addListener(() {
-                        _categoryController.text = controller.text;
-                      });
                       return TextFormField(
                         textCapitalization: TextCapitalization.sentences,
                         controller: controller,
                         focusNode: focusNode,
+                        onChanged: (value) {
+                          _categoryController.text = value;
+                        },
                         decoration:
                             const InputDecoration(labelText: 'Categorie'),
                       );
@@ -3143,13 +3372,13 @@ class _ProductDialogState extends State<_ProductDialog> {
                       focusNode,
                       onFieldSubmitted,
                     ) {
-                      controller.addListener(() {
-                        _brandController.text = controller.text;
-                      });
                       return TextFormField(
                         textCapitalization: TextCapitalization.sentences,
                         controller: controller,
                         focusNode: focusNode,
+                        onChanged: (value) {
+                          _brandController.text = value;
+                        },
                         decoration: const InputDecoration(labelText: 'Brand'),
                       );
                     },
@@ -3178,13 +3407,13 @@ class _ProductDialogState extends State<_ProductDialog> {
                       focusNode,
                       onFieldSubmitted,
                     ) {
-                      controller.addListener(() {
-                        _modelController.text = controller.text;
-                      });
                       return TextFormField(
                         textCapitalization: TextCapitalization.sentences,
                         controller: controller,
                         focusNode: focusNode,
+                        onChanged: (value) {
+                          _modelController.text = value;
+                        },
                         decoration: const InputDecoration(labelText: 'Model'),
                       );
                     },
@@ -3213,13 +3442,13 @@ class _ProductDialogState extends State<_ProductDialog> {
                       focusNode,
                       onFieldSubmitted,
                     ) {
-                      controller.addListener(() {
-                        _capacityController.text = controller.text;
-                      });
                       return TextFormField(
                         textCapitalization: TextCapitalization.sentences,
                         controller: controller,
                         focusNode: focusNode,
+                        onChanged: (value) {
+                          _capacityController.text = value;
+                        },
                         decoration: const InputDecoration(
                             labelText: 'Capacitate (kW/BTU)'),
                       );
@@ -3260,13 +3489,13 @@ class _ProductDialogState extends State<_ProductDialog> {
                             _linkedCapacityController.text = value;
                           },
                           fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                            controller.addListener(() {
-                              _linkedCapacityController.text = controller.text;
-                            });
                             return TextFormField(
                               textCapitalization: TextCapitalization.sentences,
                               controller: controller,
                               focusNode: focusNode,
+                              onChanged: (value) {
+                                _linkedCapacityController.text = value;
+                              },
                               decoration: const InputDecoration(
                                 labelText: 'Capacitate asociată',
                                 helperText: 'Conectează serviciul la produse cu aceeași capacitate',

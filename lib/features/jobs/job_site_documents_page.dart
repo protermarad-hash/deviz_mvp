@@ -14,10 +14,14 @@ import '../ai_assistant/ai_assistant_action_catalog.dart';
 import '../ai_assistant/ai_assistant_models.dart';
 import '../ai_assistant/ai_assistant_service.dart';
 import '../ai_assistant/ai_assistant_sheet.dart';
+import '../../core/pdf_actions_helper.dart';
+import '../../core/signature_service.dart';
+import '../../core/widgets/signature_pad_widget.dart';
 import 'firebase_job_site_documents_repository.dart';
 import 'job_models.dart';
 import 'job_site_document_import_service.dart';
 import 'job_site_document_models.dart';
+import 'job_site_document_pdf_service.dart';
 import 'job_site_document_services.dart';
 import 'job_site_documents_cloud_repository.dart';
 
@@ -457,6 +461,56 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
     return markers.any(lower.contains);
   }
 
+  // ── Semnătură electronică client + generare PDF ──────────────────────────
+
+  Future<void> _signAndGeneratePdf(JobSiteDocumentRecord document) async {
+    final signBytes = await showSignatureDialog(
+      context,
+      title: 'Semnătură client — ${document.documentType.label}',
+      label: 'Clientul semnează mai jos',
+    );
+    if (signBytes == null || !mounted) return;
+
+    final b64 = await SignatureService.instance.saveSignature(
+      pngBytes: signBytes,
+      localKey: 'pv_${document.id}',
+      jobId: document.jobId,
+      documentType: document.documentType.storageValue,
+    );
+
+    final signed = document.copyWith(
+      clientSignatureBase64: b64,
+      updatedAt: DateTime.now(),
+    );
+
+    await _saveDocument(signed);
+    if (!mounted) return;
+    await _generatePdf(signed);
+  }
+
+  Future<void> _generatePdf(JobSiteDocumentRecord document) async {
+    if (!mounted) return;
+    try {
+      final path = await JobSiteDocumentPdfService.export(
+        repository: widget.repository,
+        document: document,
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: document.documentTitle.isEmpty
+            ? document.documentType.label
+            : document.documentTitle,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare generare PDF: $e')),
+      );
+    }
+  }
+
   Future<void> _viewDocument(JobSiteDocumentRecord document) {
     return showDialog<void>(
       context: context,
@@ -717,6 +771,25 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
                                             contentPadding: EdgeInsets.zero,
                                           ),
                                         ),
+                                        PopupMenuItem(
+                                          value: 'sign_pdf',
+                                          child: ListTile(
+                                            leading: const Icon(Icons.draw_outlined),
+                                            title: const Text('Semnează & Generează PDF'),
+                                            subtitle: item.clientSignatureBase64.trim().isNotEmpty
+                                                ? const Text('Semnătură client existentă', style: TextStyle(fontSize: 11, color: Colors.green))
+                                                : null,
+                                            contentPadding: EdgeInsets.zero,
+                                          ),
+                                        ),
+                                        const PopupMenuItem(
+                                          value: 'pdf',
+                                          child: ListTile(
+                                            leading: Icon(Icons.picture_as_pdf_outlined),
+                                            title: Text('Generează PDF'),
+                                            contentPadding: EdgeInsets.zero,
+                                          ),
+                                        ),
                                         if (!_isTechnician) ...[
                                           const PopupMenuItem(
                                             value: 'edit',
@@ -742,6 +815,10 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
                                         switch (value) {
                                           case 'open':
                                             _viewDocument(item);
+                                          case 'sign_pdf':
+                                            _signAndGeneratePdf(item);
+                                          case 'pdf':
+                                            _generatePdf(item);
                                           case 'edit':
                                             _editDocument(item);
                                           case 'delete':

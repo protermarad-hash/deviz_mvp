@@ -1,6 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Firebase, HTTP calls, sync date cloud -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- flutter_local_notifications + firebase_messaging -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- geolocator — GPS check-in pe șantier -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Salvare PDF în Downloads pe Android 9 și mai vechi (API ≤28) -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <application
         android:label="@string/app_name"
         android:name="${applicationName}"

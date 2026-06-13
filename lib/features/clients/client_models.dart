@@ -171,6 +171,7 @@ class ClientRecord {
     this.bank = '',
     this.departments = const <ClientDepartment>[],
     this.contactPeople = const <ClientContactPerson>[],
+    this.phoneNumbers = const <String>[],
   });
 
   final String id;
@@ -183,6 +184,8 @@ class ClientRecord {
   final String phone;
   final String phone2;
   final String phone3;
+  // Lista consolidată de telefoane (include phone/phone2/phone3 + extras)
+  final List<String> phoneNumbers;
   final String email;
   final String cui;
   final String regCom;
@@ -223,6 +226,7 @@ class ClientRecord {
     bool? isActive,
     DateTime? createdAt,
     DateTime? updatedAt,
+    List<String>? phoneNumbers,
   }) {
     return ClientRecord(
       id: id ?? this.id,
@@ -249,7 +253,16 @@ class ClientRecord {
       isActive: isActive ?? this.isActive,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      phoneNumbers: phoneNumbers ?? this.phoneNumbers,
     );
+  }
+
+  // Helper: lista consolidată (phoneNumbers dacă completă, altfel din phone/phone2/phone3)
+  List<String> get allPhoneNumbers {
+    if (phoneNumbers.isNotEmpty) return phoneNumbers;
+    return [phone, phone2, phone3]
+        .where((p) => p.trim().isNotEmpty)
+        .toList();
   }
 
   Map<String, dynamic> toMap() {
@@ -278,6 +291,7 @@ class ClientRecord {
       'is_active': isActive,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'phone_numbers': phoneNumbers.isEmpty ? allPhoneNumbers : phoneNumbers,
     };
   }
 
@@ -357,6 +371,18 @@ class ClientRecord {
           DateTime.tryParse((map['created_at'] ?? '').toString()) ?? now,
       updatedAt:
           DateTime.tryParse((map['updated_at'] ?? '').toString()) ?? now,
+      phoneNumbers: (() {
+        // Migrare automată: phone_numbers list > phone/phone2/phone3
+        final raw = map['phone_numbers'] ?? map['phoneNumbers'];
+        if (raw is List && raw.isNotEmpty) {
+          return List<String>.from(raw.map((e) => e.toString().trim()).where((e) => e.isNotEmpty));
+        }
+        return <String>[
+          (map['phone'] ?? '').toString().trim(),
+          (map['phone2'] ?? '').toString().trim(),
+          (map['phone3'] ?? '').toString().trim(),
+        ].where((p) => p.isNotEmpty).toList();
+      })(),
     );
   }
 }

@@ -145,6 +145,8 @@ lib/
 ✅ deviz_articole_template: queueDevizArticolTemplateUpsert/Delete
 ✅ **devize_tehnice: queueDevizTehnicUpsert/Delete** — adăugat mai 2026
 ✅ **devize_filtre_cta: queueFiltreCtaUpsert/Delete** — adăugat mai 2026
+✅ **financiar_angajati: queueEmployeePayEntryUpsert/Delete + queueEmployeePaymentUpsert/Delete + queueEmployeeFinancialSummaryUpsert** — adăugat mai 2026
+✅ **hr_payroll_payments: queueHrPayrollPaymentUpsert/Delete** — colecție Firestore `hr_payroll_payments`, plăți avans+salariu per angajat per lună — adăugat mai 2026
 
 ⚠️ reclamatii: parțial (complaints în queue, dar repair_reports/warranty_reports NU)
 ⚠️ field_sales: fără queue propriu, se bazează pe oferte
@@ -733,6 +735,81 @@ textCapitalization: TextCapitalization.sentences
 
 ---
 
+## 🔡 REGULA DIACRITICE ROMÂNE — OBLIGATORIE
+
+ÎNTOTDEAUNA folosește diacriticele corecte în cod Dart:
+- `ă` (nu `Ä‚` sau `Äƒ`)
+- `â` (nu `Ã¢`)
+- `î` (nu `Ã®`)
+- `ș` (nu `ÅŸ` sau `È™`) — s cu virgulă jos, NU cu cedilă (ş)
+- `ț` (nu `È›`) — t cu virgulă jos, NU cu cedilă (ţ)
+
+**REGULĂ:** Fișierele `.dart` sunt UTF-8. Scrie direct caracterele românești, nu HTML entities, nu escape sequences.
+
+**CAUZA BUG-ULUI:** PowerShell 5.1 citește fișierele `.ps1` ca Windows-1252 (nu UTF-8) dacă lipsește BOM-ul. Bytes UTF-8 ai diacriticelor sunt re-interpretați ca Latin-1 și scrieți dublu-encodat în fișier.
+
+**SOLUȚIE:** Nu genera text românesc prin scripturi PowerShell. Editează fișierele Dart direct cu Edit tool — charset-ul este păstrat corect.
+
+**VERIFICARE obligatorie după orice text românesc generat:**
+```
+grep -rn "Ä\|È\|Ã\|ÅŸ" lib/ --include="*.dart"
+```
+Dacă găsește ceva = encoding greșit, fixează imediat cu Edit tool.
+
+```dart
+// GREȘIT:
+label: 'PlatÄƒ angajaÈ›i'
+text: 'ExecuÈ›ie'
+
+// CORECT:
+label: 'Plată angajați'
+text: 'Execuție'
+```
+
+---
+
+## 📐 LAYOUT PDF — CONSTANTE ȘI FORMATE (mai 2026)
+
+### ProTermPdfLayout — clasa de constante (`lib/core/pdf/pro_term_pdf_template.dart`):
+```dart
+ProTermPdfLayout.a4Portrait          // A4 portrait, 15mm margini
+ProTermPdfLayout.a4PortraitCompact   // A4 portrait, 10mm margini
+ProTermPdfLayout.a4Landscape         // A4 landscape, 10mm margini
+ProTermPdfLayout.a4LandscapeMicro    // A4 landscape, 8mm margini
+ProTermPdfLayout.a5Portrait          // A5 portrait, 10mm margini
+ProTermPdfLayout.fontTableMicro      // 5.5pt — pentru tabele foarte compacte
+ProTermPdfLayout.marginMicro         // 8mm × PdfPageFormat.mm
+```
+
+### Reguli format pagină per document:
+| Document | Format | Margini | Note |
+|---|---|---|---|
+| Pontaj lunar tabelar | A4 landscape | 8mm | `pw.Page` (1 pagină fixă), nu MultiPage |
+| Stat plată HR | A4 portrait | 10mm | 12 coloane: fără Venit net / Deducere / Baza calc |
+| Fluturași individual | A4 portrait | 10mm | 2 coloane: stânga=Venituri+Rețineri, dreapta=Taxe+Tichete+Net |
+| PV/PIF | A4 portrait | ≈10mm | Via `ProTermPdfTemplate.generateDocument()` |
+| Contract | A4 portrait | ≈10mm | Via `generateDocument()`, 9pt, ≤2 pagini |
+| Ofertă comercială | A4 landscape | 18/12/18/20pt | Header repeat page 2+ via `header:` callback |
+| Deviz tehnic | A4 portrait | 24pt | Header repeat via `header:` callback |
+| Devize filtre CTA | A4 landscape | 8mm | FiltreCtaPdfService |
+
+### Pontaj lunar — coloane (719pt < 796pt disponibil):
+- Angajat=79pt, Echipă=40pt, TM=34pt, TM/zi=28pt
+- Zile 1-31: 13pt × 31 = 403pt
+- Ore=23pt, CO/CM/CCC/INV/ABS/MAT/ST/ALT: 14pt × 8 = 112pt
+
+### Fluturași — layout 2 coloane:
+- Coloana stângă: Date generale + Venituri + Rețineri
+- Coloana dreaptă: Contribuții și taxe + Tichete de masă + Net final
+- Secțiuni opționale jos: Detaliu popriri + Plăți înregistrate + Referințe
+
+### Stat plată HR — 12 coloane (187mm < 190mm disponibil A4 portrait 10mm):
+- Angajat=35mm, Funcție=25mm, Ore=8mm, Brut=14mm, CAS=12mm, CASS=12mm
+- Impozit=12mm, Tichete=16mm, Rețineri=13mm, Net fără TM=14mm, NET FINAL=14mm, Status=12mm
+- Coloana "Rețineri" = `item['deduction_total']`
+
+---
+
 ## 🔤 REGULA PDF DIACRITICE
 
 NICIODATĂ PDF fără font cu suport românesc!
@@ -777,13 +854,55 @@ La ORICE pagină cu listă:
 
 ---
 
-## ❓ REGULA BUTON HELP
+## ❓ REGULA BUTON HELP — SISTEM INTELIGENT (iun 2026)
 
-În FIECARE modul/pagină nouă sau modificată:
+În FIECARE modul/pagină nouă sau modificată, folosește **noul sistem**:
 ```dart
-HelpButton(content: AppHelp.<cheieModul>)
+import '../../core/help/help_module_button.dart';
+// ...
+const HelpModuleButton(moduleId: 'cheie_modul')
 ```
-Conținut în `lib/core/help_content.dart` — română cu diacritice.
+
+### Module help disponibile (Firestore `help_content/{moduleId}`):
+- `programari` · `hr` · `reclamatii` · `financiar_parteneri` · `crm`
+- `stoc` · `echipamente` · `oferte` · `agfr` · `deviz_tehnic`
+- `jobs` · `clienti` · `garantii` · `dashboard`
+
+### Arhitectura sistemului Help:
+```
+lib/core/help/
+├── help_models.dart        ← HelpModule, HelpModuleStep, HelpModuleFaq
+├── help_repository.dart    ← singleton, cache memorie + Firestore
+├── help_module_button.dart ← HelpModuleButton widget (4 tab-uri: Info/Ghid/FAQ/AI)
+└── help_admin_page.dart    ← editor admin (ADMINISTRARE → Conținut Help)
+```
+
+### Funcționalități HelpModuleSheet:
+- **Tab Info** — descriere modul + sfaturi
+- **Tab Ghid** — pași numerotați cu iconițe
+- **Tab FAQ** — întrebări frecvente expandabile
+- **Tab AI Help** — întrebări libere via Claude Haiku (necesită cheie API în Setări → AI)
+
+### Inițializare (main.dart — deja implementat):
+```dart
+HelpRepository.instance.initialize().then((_) {
+  HelpRepository.instance.seedIfEmpty().catchError((_) {});
+});
+```
+
+### La adăugarea unui modul nou:
+1. Adaugă entry în `HelpRepository._defaultContent` (help_repository.dart)
+2. Adaugă `const HelpModuleButton(moduleId: 'new_module')` în AppBar
+3. Admin poate edita conținutul din ADMINISTRARE → Conținut Help
+
+### NU mai folosi sistemul vechi:
+```dart
+// ❌ VECHI — nu mai folosi pentru pagini noi:
+HelpButton(content: AppHelp.X)  // din widgets/help_button.dart
+
+// ✅ NOU — pentru orice pagină nouă sau modificată:
+HelpModuleButton(moduleId: 'cheie')
+```
 
 ---
 
@@ -844,11 +963,31 @@ Când un document se înregistrează în Registratură, numărul TREBUIE să fie
 - Query Firestore FĂRĂ `.orderBy()` — sortare în Dart
 - `consumMateriale` transactions: card expandabil apare când `materialLines.isNotEmpty || kitName.isNotEmpty`
 - Kit din programare → câmpul `material_usage.kit_template_name` (snake_case)
-- Sold net = intrări - ieșiri (calculat automat în `_rebuildSummary`)
 - Alertă locală dacă sold net < -1000 RON
 
+### ❗ FINANCIAR PARTENERI — REGULI OBLIGATORII (implementate iun 2026)
+
+**`PartnerTransaction.financialDirection`** = getter calculat din `type` + `status`:
+- `consumMateriale` → `'cost_materiale'` (exclus din sold, banner portocaliu)
+- `incasareManuala` → `'plata_primita'` **MEREU** (indiferent de status — date vechi pot fi neplatit)
+- `incasareProgramare`/`vanzareProdus` + platit → `'credit_incasat'` (ignorat)
+- `incasareProgramare`/`vanzareProdus` + neplatit → `'credit_neincasat'` (de primit)
+- `plata*/achizitie*` + platit → `'plata_efectuata_achitata'` (ignorat)
+- `plata*/achizitie*` + neplatit → `'plata_efectuata'` (de plătit)
+
+**Formula sold net**:
+```
+De încasat NET = max(Σ credit_neincasat − Σ plata_primita, 0)
+```
+
+**Reguli pentru cod nou**:
+- `rebuildSummary()` folosește EXCLUSIV `t.financialDirection` — NU `type` sau `status` direct
+- La orice tranzacție nouă creată de cod: `PartnerTransactionType` enum setează corect `financialDirection`
+- `migrateTransactions()` rulează la `_load()` pentru date vechi fără `financial_direction`
+- Badge-urile în UI citesc `t.financialDirection` (nu `t.status`)
+
 ### Collections Firestore:
-- `partner_transactions` — toate tranzacțiile
+- `partner_transactions` — toate tranzacțiile (includ câmpul `financial_direction` din iun 2026)
 - `partner_financial_summary` — sold net per partener
 
 ---
@@ -869,6 +1008,48 @@ Câmpul `offer.tipDocument` (backward compatible).
 
 ---
 
+## 🔍 ADĂUGARE RAPIDĂ CLIENT DIN ORICE MODUL (iun 2026)
+
+### Fișiere principale:
+- `lib/core/widgets/quick_add_client_dialog.dart` → `QuickAddClientSheet` (bottom sheet) + `showQuickAddClientDialog()` helper
+- `lib/core/widgets/client_autocomplete_field.dart` → parametri noi: `repository?`, `tipEntitate`, `onClientAdded?`
+
+### Cum funcționează:
+- Când `ClientAutocompleteField` primește `repository: widget.appRepository` și nu are `onCreateNew`, afișează automat butonul roșu „+ [tipEntitate]"
+- Butonul deschide `QuickAddClientSheet` (bottom sheet complet: identic cu formularul din modulul Clienți)
+- Câmpuri: Tip (PF/PJ), Nume*, ANAF autofill (pt PJ), CUI/CNP, Reg. Com., Persoână contact, Telefoane (multiple), Email, Bancă + IBAN, Adresă + Oraș + Județ, Observații
+- Clientul creat e salvat via `repository.saveClient()` și selectat automat în câmp
+- `onClientAdded` actualizează lista locală din state + schimbă `key` → widget se reconstruiește cu clientul selectat
+
+### Pattern obligatoriu în orice modul NOU cu selecție client:
+```dart
+ClientAutocompleteField(
+  key: ValueKey('modul-client-${_selectedClientId ?? "none"}'),
+  clients: _localClients,          // lista locală (nu widget.clients direct)
+  initialClient: _clientById(_selectedClientId),
+  onClientSelected: (c) => setState(() => _selectedClientId = c?.id),
+  repository: widget.repository,   // sau widget.appRepository
+  tipEntitate: 'Client',           // sau 'Beneficiar', 'Partener', 'Cumpărător'
+  onClientAdded: (c) => setState(() {
+    _localClients = [..._localClients, c];
+    _selectedClientId = c.id;
+  }),
+)
+```
+
+### Module actualizate (iun 2026):
+- `oferte_page.dart` → `_OfferFormDialog` primește `repository?` + `_localClients`
+- `jobs_page.dart` → `_JobFormDialog` cu `_extraClients` list
+- `reclamatii_list_page.dart` → `_NewComplaintDialog` cu `tipEntitate: 'Beneficiar'`
+- `deviz_tehnic_form_page.dart` → `_localClients` din `widget.appRepository`
+- `field_sales_page.dart` → `_FieldLeadDialog` primește `repository?`
+- `programari_page.dart` → câmpul Societate contractantă + `onClientAdded` cu page+dialog setState
+
+### NU mai crea buton „Adaugă" separat — folosește `repository:` în `ClientAutocompleteField`.
+### `AddClientQuickDialog` (form complet cu ANAF) rămâne pentru câmpul beneficiar din Programări.
+
+---
+
 ## ✅ CE ESTE IMPLEMENTAT
 
 - Autentificare utilizatori + nume real din Firestore în AppBar
@@ -881,6 +1062,7 @@ Câmpul `offer.tipDocument` (backward compatible).
 - Catalog materiale + stoc
 - HR: prezență, salarizare, fluturași, pontaje, concedii, deplasări
 - AGFR: echipamente, intervenții, rapoarte, cântărire
+- **AGFR F-Gas automatizări: GWP auto-fill la selecție refrigerant, CO₂ echivalent live, banner avertizare A2L/A3/interzis, auto-fill tehnician din Firebase user** (iun 2026)
 - Vehicule + registratură
 - Partner financial: tranzacții, sold net, dashboard, vânzare catalog, achiziție
 - **Poze teren: upload Storage + sync Firestore + offline queue** (mai 2026)
@@ -888,6 +1070,273 @@ Câmpul `offer.tipDocument` (backward compatible).
 - **Devize tehnice: sync cross-device, serii DVZ/OFR/STL, culori status, tip implicit** (mai 2026)
 - **Devize Filtre CTA: 15 CTA-uri template, editare prețuri, PDF A4 landscape, sync offline** (mai 2026)
 - **Modul Taskuri: To-Do List cu filtre, priorități, categorii, widget Dashboard, sync offline** (mai 2026)
+- **Financiar angajați: PayEntry per programare, plăți manuale, sold per angajat, filtrare perioadă, sync offline** (mai 2026)
+- **Tarif prestabilit per angajat: EmployeeSettings, tab Tarife în employee_financial_page, pre-fill în programări** (mai 2026)
+- **Colorare calendar: weekend + sărbători legale românești, Paște Ortodox, tooltips** (mai 2026)
+- **Dashboard Financiar consolidat: 8 secțiuni, grafic 6 luni, offline-first, admin+birou** (mai 2026)
+- **Semnătură electronică PV/PIF: SignaturePadWidget, SignatureService, JobSiteDocumentPdfService, Firebase Storage** (mai 2026)
+- **Fișă completă client: ClientProfilePage (4 tab-uri), WhatsApp + telefon în lista clienți** (mai 2026)
+- **Alertă garanții expirate: WarrantyAlertService, card în DashboardPage** (mai 2026)
+- **Template PDF unificat PRO TERM: ProTermPdfTemplate cu culori brand #C62828, header, tabel, semnătură** (mai 2026)
+- **PV/PIF PDF refăcut cu ProTermPdfTemplate: conținut specific per tip (montaj/ventilație/VRF)** (mai 2026)
+- **Contract PDF: ContractPdfService, 13 articole, dialog pre-completat, PdfActionsHelper** (mai 2026)
+- **Documente page: job site documents (PV/PIF) din Firestore job_site_documents** (mai 2026)
+- **HR Redesign: hub 4 tab-uri (Angajați/Pontaj/Fluturași/Setări HR), HrEmployeeDetailPage cu calculator interactiv + popriri, PDF flutuaraș cu detaliu popriri** (mai 2026)
+- **HR Formule fiscale OUG 89/2025: deducere personală 600/7000 RON, CASS pe salariu (TM net_direct), rotunjire RON, stat plată PDF 14 coloane** (mai 2026)
+- **TM = sumă netă directă (net_direct)**: fiscal_treatment = 'net_direct'; CASS calculată NUMAI pe salariu_brut (TM exclus din baza CASS); TM adăugat direct la netFinal fără taxe suplimentare; mealTicketCass = 0, mealTicketIncomeTax = 0 (mai 2026)
+- **Avans reținut = advanceRecoveryTotal** din payslip (deductionEntries, deja scăzut din netFinal); coloana 'Av.reținut' ≠ HrPayrollPayment; 'Virat' = HrPayrollPayment type='salariu'; 'Rest' = netFinal - viratCont (mai 2026)
+- **Plată salariu HR: HrPayrollPayment model, dialog înregistrare plată (avans/salariu), rest de plată live, tab Plăți în HrEmployeeDetailPage, secțiune fluturași PDF, card sumar Dashboard** (mai 2026)
+- **PDF compact pe o singură pagină: ProTermPdfLayout, pontaj A4 landscape 8mm fără chunking, stat plată 12 col A4 portrait, fluturași 2 col A4, repeat header oferte** (mai 2026)
+- **Stat de plată complet cu plăți: HrPayrollEmployeeFinancialSummary (lib/features/hr_payroll_run/hr_payroll_run_models.dart), DataTable 17 col în _buildPayslips(), dialog plată popriri (paymentType='poprire'), centralizator PDF A4 landscape 17 col cu avans/salariu plătit/rest/popriri** (mai 2026)
+- **CRM Pipeline vânzări: 3 tab-uri (Kanban/Listă/Statistici), dialog complet cu 11 câmpuri+autocomplete clienți, integrare auto cu Oferte la schimbare status, alertă startup leaduri cu acțiuni depășite, badge secțiune comercial** (mai 2026)
+- **Sistem Help inteligent: HelpModuleButton cu 4 tab-uri (Info/Ghid/FAQ/AI Help), HelpRepository + Firestore `help_content`, HelpAdminPage în ADMINISTRARE, 14 module cu conținut implicit, înlocuire HelpButton în 11 pagini** (iun 2026)
+- **Certificate garanție PDF — template complet 3 pagini** (mai 2026): `warranty_certificate_pdf_service.dart` — Pagina 1: header PRO TERM + tabel 6 rânduri (echipament, vânzător, cumpărător, instalator, persoane, text legal 7pt); Pagina 2: 3 taloane de intervenție (ordine 3→2→1) cu câmpuri goale (linii punctate) completabile manual; Pagina 3: condiții complete garanție OG 21/1992 (12 paragrafe, para 9 bold, footer). Date PRO TERM (CUI, adresă, email, tel) sunt fallback-uri dacă câmpurile din certificat sunt goale. Condiții garanție hardcodate în serviciu — NU se modifică fără aprobare. `warranty_certificates_page.dart` are buton regenerare bulk (🖨 icon) în toolbar — regenerează PDF-urile pentru toate certificatele din listă cu noul template, fără dialog per certificat.
+
+---
+
+## 👔 MODUL HR — REDESIGN (mai 2026)
+
+### Structură tab hub:
+- `hr_payroll_page.dart` → `DefaultTabController` cu 4 tab-uri:
+  - **Tab 0 — Angajați**: Card per angajat (brut, net estimat, badge popriri) + buton Calculator → `HrEmployeeDetailPage`
+  - **Tab 1 — Pontaj**: `_buildAttendance()` + `_buildLeaveRequests()` + `_buildLeaveAttendanceConflicts()` + buton Pontaj tabelar
+  - **Tab 2 — Fluturași**: `_buildHeader()` (selecție lună + acțiuni rulare) + `_buildPayroll*()` + `_buildPayslips()` + `_buildVariablePayroll()` + `_buildAccountingReports()`
+  - **Tab 3 — Setări HR**: `_buildHrAdmin()` + `_buildPayrollValidationDashboard()` (doar pentru `_canManageSensitiveHr`)
+
+### HrEmployeeDetailPage (`hr_employee_detail_page.dart`):
+- 3 sub-tab-uri: **Date personale** | **Calculator** | **Popriri**
+- **Calculator interactiv**: câmpuri brut, tichete/zi, zile tichete, ore noapte, ore suplimentare → calcul live cu debounce 300ms
+- Formule standalone (nu depinde de HrPayrollCalculator): CAS 25% pe salariu_brut, **CASS 10% pe salariu_brut** (TM exclus — net_direct), impozit 10% pe venitNet-deducere, CAM 2.25%, deducere personală (600 RON bază / 0 dep, prag 4050, plafon 7000 RON)
+- **mealTicketCass = 0, mealTicketIncomeTax = 0** — TM net_direct: nu se taxează CASS sau impozit suplimentar pe TM
+- **Tab Popriri**: listă popriri CPC art.729, adaugă/editează/șterge, buton "Distribuie proporțional" calculează cota per executor
+- Salvare popriri via `HrVariablePayrollCatalogService.upsertGarnishment()`
+- Optimistic UI la ștergere (BUG 9 pattern)
+
+### Fluturașul PDF cu detaliu popriri și plăți:
+- `HrPayslipPdfService.export()` → parametri opționali `garnishments: List<HrGarnishment>`, `payments: List<HrPayrollPayment>`
+- Secțiune "Detaliu popriri" apare dacă `garnishmentReservedTotal > 0 || garnishments.isNotEmpty`
+- Secțiune "Plăți înregistrate" apare dacă `payments.isNotEmpty` — afișează fiecare plată + total achitat + rest de plată
+- Secțiunea "Contributii si taxe" include acum: CAS, CASS, Venit net, Deducere personală, Baza calcul impozit, Impozit venit
+- Secțiunea "Net final" include: Net fără tichete + Tichete de masă + NET FINAL
+
+### Formule fiscale HR (OUG 89/2025) — ACTUALIZATE mai 2026:
+- **CAS** = round(grossTotalTaxable × 25%) — TM scutit de CAS
+- **CASS** = round(grossTotalTaxable × 10%) — TM exclus din baza CASS (TM net_direct, fără taxe suplimentare)
+- **venitNet** = grossTotalTaxable + TM - CAS - CASS + neimpozabile
+- **Deducere personală**: baza 600 RON (0 dep), +100/dep; prag 4050 RON, plafon 7000 RON; linear între prag și plafon
+  - 0 dep → 600 RON, 1 dep → 700, 2 dep → 800, 3 dep → 900, 4+ dep → 1000 RON
+- **taxableBase** = venitNet - deducerePersonală
+- **Impozit** = round(taxableBase × 10%)
+- **netFinal** = venitNet - impozit - rețineri - avans - popriri
+- **Net fără TM** = netFinal - mealTicketsWithinCap (coloană nouă în stat)
+- `nrPersoaneIntretinere` în `HrEmployeeProfile` + `HrPayrollInputSnapshot` (OUG 89/2025)
+- Câmp editabil în dialog profil HR (hr_payroll_page.dart)
+- Stat de plată PDF: 14 coloane (Angajat, Funcție, Ore, Brut, CAS, CASS, Venit net, Deducere, Baza calc, Impozit, Net fără TM, Tichete, NET FINAL, Status)
+
+### Reguli critice HR:
+- **NU modifica `hr_payroll_calculator.dart`** altfel decât formulele fiscale de mai sus
+- **NU modifica `hr_monthly_timesheet_page.dart`** — integrat ca-atare în Tab Pontaj
+- **NU modifica modelele de date** — HrPayslip, HrGarnishment etc. rămân neschimbate
+- Calculul din HrEmployeeDetailPage este estimativ (pentru ce-if), nu înlocuiește rularea oficială
+- La revenire din HrEmployeeDetailPage → `_reload()` automat (popririle pot fi schimbate)
+
+---
+
+## 💳 MODUL PLATĂ SALARIU HR (mai 2026)
+
+### Fișiere principale:
+- `lib/features/hr_payroll_run/hr_payroll_payment_models.dart` → model `HrPayrollPayment`
+- `lib/features/hr_payroll_run/hr_payroll_payment_repository.dart` → CRUD + offline queue singleton
+- `lib/features/hr_payroll_run/hr_payroll_page.dart` → stare `_paymentsByEmployee`, dialog `_showPaymentDialog()`, buton "Înregistrează plată" în lista fluturași
+- `lib/features/hr_payroll_run/hr_employee_detail_page.dart` → Tab 4 "Plăți" cu `_buildPaymentsTab()`
+
+### Model HrPayrollPayment:
+```dart
+HrPayrollPayment {
+  id, employeeId, employeeName,
+  payrollMonth (DateTime — normalizat la prima zi a lunii),
+  paymentType: 'avans' | 'salariu' | 'poprire',
+  amount (double),
+  paymentDate (DateTime),
+  metodaPlata: 'numerar' | 'virament' | 'card',
+  note, createdBy, createdAt
+}
+```
+
+### Colecție Firestore: `hr_payroll_payments`
+### SharedPreferences key: `'hr_payroll_payments_v1'`
+### Sync offline: `CloudEntityType.hrPayrollPayments` → `queueHrPayrollPaymentUpsert/Delete`
+
+### Repository — metode principale:
+- `savePayment(payment)` → local → queue → Firestore fire-and-forget
+- `deletePayment(paymentId)` → local → queue delete → Firestore fire-and-forget
+- `listPaymentsForEmployeeMonth(employeeId, payrollMonth)` → local only (fără Firestore)
+- `listPaymentsForMonth(payrollMonth)` → local only, returnează `Map<employeeId, List<payment>>`
+- `listPaymentsForEmployee(employeeId)` → merge cloud+local cu BUG7 fix
+- `calculateRestDePlata(employeeId, payrollMonth, netFinal)` → `netFinal - totalAchitat`
+- `forceSyncLocalToCloud()` → re-publică toate plățile locale
+
+### HrPayrollEmployeeFinancialSummary (hr_payroll_run_models.dart):
+- Model date complet per angajat: brutTotal, cas, cass, impozit, deducerePersonala, ticheteValoare, netFaraTichete, netFinal, avansPlatit, salariuPlatit, restDePlata, totalPlatit, popririRetinute, popririPlatite, popririRestDePlata, esteAchitatIntegral
+- `HrPayrollEmployeeFinancialSummary.calculeaza({payslip, platiAngajat, functia, employeeName})` → calcul automat din HrPayslip + List<HrPayrollPayment>
+- **Notă:** identificatorii sunt ASCII (fără diacritice) — Dart 3.x nu acceptă ă/â/î în identificatori
+
+### Flux UI în hr_payroll_page.dart:
+1. `_reload()` → `HrPayrollPaymentRepository.instance.listPaymentsForMonth(month)` → `_paymentsByEmployee`
+2. `_buildPayslips()` → `_buildPayslipsTable()` → DataTable 17 coloane cu scroll orizontal
+3. Butoane rapide per rând: avans (💰), rest (💳), poprire (⚖️ — vizibil dacă popririRetinute > 0)
+4. `_showGarnishmentPaymentDialog()` → HrPayrollPayment cu paymentType='poprire' → optimistic UI
+3. Menu ⋮ al fluturașului → "Înregistrează plată" → `_showPaymentDialog()`
+4. Dialog pre-completat cu rest de plată, tip implicit 'salariu', metoda 'numerar'
+5. Salvare: `HrPayrollPaymentRepository.instance.savePayment()` + optimistic UI update
+
+### Fluturașul PDF cu plăți:
+```dart
+HrPayslipPdfService.export(
+  ...,
+  payments: payslipPayments, // filtrare locală din _paymentsByEmployee
+)
+```
+Secțiune "Plăți înregistrate" apare automat în PDF dacă `payments.isNotEmpty`.
+
+### Card sumar Dashboard:
+- Apare în `_buildAdminSections()` dacă există plăți înregistrate în luna curentă
+- Arată: nr. angajați cu plăți, total avansuri, total salarii, total general
+- Vizibil: admin + birou
+- Date: `HrPayrollPaymentRepository.instance.listPaymentsForMonth(DateTime.now())` best-effort
+
+---
+
+## 📄 PACHETUL 3 — DOCUMENTE PROFESIONALE UNIFICATE
+
+### Fișiere principale:
+- `lib/core/pdf/pro_term_pdf_template.dart` → Template unificat cu culori brand PRO TERM SRL
+- `lib/features/jobs/job_site_document_pdf_service.dart` → PV Montaj / PIF — folosește ProTermPdfTemplate
+- `lib/features/jobs/contract_pdf_service.dart` → CONTRACT DE PRESTĂRI SERVICII cu 13 articole
+- `lib/features/documents/documente_page.dart` → Hub documente cu job_site_documents din Firestore
+
+### ProTermPdfTemplate — culori brand:
+- `primaryRed = PdfColor(0.7765, 0.1569, 0.1569)` ← #C62828 (constante, nu fromHex)
+- `lightRed = PdfColor(1.0, 0.9216, 0.9333)` ← #FFEBEE
+- `darkText = PdfColor(0.1294, 0.1294, 0.1294)` ← #212121
+- `mediumText = PdfColor(0.3804, 0.3804, 0.3804)` ← #616161
+- `lightGray = PdfColor(0.9608, 0.9608, 0.9608)` ← #F5F5F5
+- **IMPORTANT:** `PdfColor.fromHex()` NU este const — folosește `PdfColor(r, g, b)` pentru constante statice
+
+### ProTermPdfTemplate — metode:
+- `buildHeader(branding, documentTitle, documentNumber, documentDate, [documentSubtitle])`
+- `buildPartiesSection(branding, clientName, [clientAddress, clientCui, clientPhone])`
+- `buildJobInfoSection(jobCode, jobTitle, location, [teamName, technicians, startDate, endDate])`
+- `buildTable(headers, rows, [columnWidths, showTotal, totalLabel, totalValue])`
+- `buildSection(title, children)` — secțiune cu titlu roșu + divider
+- `buildSignatureSection(executantName, [clientName, date, electronicSignatureBytes, technicianName])`
+- `buildPageFooter(documentTitle, pageNumber, totalPages, date)`
+- `generateDocument({branding, documentTitle, documentNumber, documentDate, contentWidgets, ...})` — async
+- `buildInfoRow(label, value)` — linie label:value cu lățime fixă 160
+- `buildFinancialTotals({subtotal, vatPercent, vatAmount, totalWithVat, currency})`
+
+### ContractData — câmpuri:
+- `contractNumber`, `contractDate`, `clientName`, `clientAddress`, `clientCui`, `clientPhone`
+- `jobCode`, `jobTitle`, `location`, `teamName`, `teamMembers`
+- `materialTotal`, `laborTotal`, `vatPercent`, `currency`
+- `executionTerm`, `paymentTerm`, `advance`, `installments`, `penalties`
+- `materialsProvider`, `logistics`, `receptionClause`, `observations`
+
+### Cum se folosesc din altă pagină:
+```dart
+// PV/PIF — export direct
+final path = await JobSiteDocumentPdfService.export(
+  repository: widget.repository,
+  document: jobSiteDocumentRecord,
+);
+await PdfActionsHelper.showPdfActions(context, filePath: path, title: '...');
+
+// Contract — dialog + export
+// (totul în _onGenerateContract() din lucrare_detalii_page.dart)
+final path = await ContractPdfService.export(
+  repository: widget.repository,
+  data: ContractData(...),
+);
+await PdfActionsHelper.showPdfActions(context, filePath: path, title: '...');
+```
+
+### documente_page.dart — surse de date:
+1. `listRegistryEntries()` — registratură (cu filePath)
+2. `listAppointments()` → linkedDocuments (cu filePath)
+3. `listRepairReports()` — PV reparație (cu pdfPath)
+4. `listWarrantyInterventionReports()` — PV PIF / garanție (cu generatedDocumentPath)
+5. `listAgfrReports()` — PV AGFR (cu generatedDocumentPath)
+6. `listWarrantyCertificates()` — certificate garanție (cu generatedDocumentPath)
+7. **`Firestore job_site_documents` global query** — PV montaj / PIF (cu generatedDocumentPath) — best-effort online-only
+
+---
+
+## 📊 MODUL DASHBOARD FINANCIAR CONSOLIDAT
+
+### Fișiere principale:
+- `lib/features/dashboard/financial_dashboard_service.dart` → agregare date din SharedPreferences (offline-first)
+- `lib/features/dashboard/financial_dashboard_page.dart` → UI cu 8 secțiuni + grafic CustomPainter
+- Navigație: secțiunea FINANCIAR în `role_ready_shell.dart`, destinație `dashboard_financiar`
+
+### Surse de date (SharedPreferences keys):
+- `ultra_appointments_v1` — programări (Appointment.fromMap)
+- `ultra_jobs_v1` — lucrări (JobRecord.fromMap)
+- `employee_pay_entries_v1` — costuri angajați
+- `employee_financial_summaries_v1` — solduri angajați
+- `partner_financial_summaries_v1` — solduri parteneri
+
+### Secțiuni UI:
+1. **Încasări** — luna curentă / luna trecută / an curent
+2. **Profit lunar** — breakdown costuri + marjă
+3. **Alertă plăți restante** — parteneri + clienți + nr. facturi
+4. **Datorii de plătit** — angajați + parteneri + total
+5. **Grafic 6 luni** — CustomPainter (fără fl_chart): bare Încasări/Costuri/Profit
+6. **Activitate** — programări azi/săptămână, lucrări în curs/finalizate luna
+7. **Top parteneri de încasat** — top 3 sold pozitiv
+8. **Top angajați de plătit** — top 3 sold de plată
+
+### Reguli specifice:
+- NU face cereri Firestore — citește exclusiv din SharedPreferences
+- `onlineNotifier` listener pentru reîncărcare automată la conectare
+- `Future.microtask(_load)` în initState
+- Grafic fără librării externe — CustomPainter cu `dart:ui` explicit (`ui.TextDirection.ltr`)
+- Vizibil DOAR pentru admin și birou
+
+---
+
+## 💰 MODUL FINANCIAR ANGAJAȚI
+
+### Fișiere principale:
+- `lib/features/hr/employee_financial_models.dart` → EmployeePayEntry, EmployeePayment, EmployeeFinancialSummary
+- `lib/features/hr/employee_financial_repository.dart` → CRUD + offline queue + rebuild summary (singleton)
+- `lib/features/hr/employee_financial_page.dart` → Tab 1: Costuri perioadă | Tab 2: Istoric plăți
+
+### Colecții Firestore:
+- `employee_pay_entries` — suma datorată per angajat per programare
+- `employee_payments` — plăți efective înregistrate
+- `employee_financial_summary` — sumar sold per angajat (doc ID = employeeId)
+
+### Sync offline:
+- `CloudEntityType.employeePayEntries/employeePayments/employeeFinancialSummary`
+- Pattern standard: local → queue upsert/delete → Firebase fire-and-forget
+- `_rebuildSummary()` cu guard dacă local gol (BUG 2)
+- `forceSyncLocalToCloud()` — buton ☁️↔ în toolbar
+
+### Integrare programări:
+- Buton "Plată angajați" în dialogul detalii programare (vizibil pentru admin)
+- Dialog `_EmployeePayDialog` în `programari_page.dart` — pre-completare rapidă pentru angajații alocați
+- Leagă `EmployeePayEntry.appointmentId` cu `Appointment.id`
+
+### Navigație:
+- Destinație `financiar_angajati` în secțiunea HR din `role_ready_shell.dart`
+- Vizibil pentru: `admin`, `birou`
+
+### Reguli specifice:
+- NU .orderBy() în Firestore — sortare în Dart
+- `listPayEntriesForEmployee/Appointment()` → FĂRĂ cloud fetch (doar local) pentru appointment-ul curent
+- `listAllPayEntries()` → merge cloud+local cu perioadă opțională
+- Optimistic UI la ștergere plăți (BUG 9)
+- Firebase direct cu `.catchError((_){})` — nu await (BUG 8)
 
 ---
 
@@ -1018,10 +1467,497 @@ AppTask {
 
 ---
 
+---
+
+## ✍️ SEMNĂTURĂ ELECTRONICĂ PV/PIF
+
+### Fișiere principale:
+- `lib/core/widgets/signature_pad_widget.dart` → Canvas cu degetul/mouse-ul, exportă PNG via RepaintBoundary
+- `lib/core/signature_service.dart` → Salvare locală (SharedPreferences base64) + upload Firebase Storage best-effort
+- `lib/features/jobs/job_site_document_pdf_service.dart` → Export PDF complet cu bloc semnătură
+- `lib/features/jobs/job_site_documents_page.dart` → Butoane "Semnează & Generează PDF" + "Generează PDF"
+
+### Flux semnătură:
+1. `showSignatureDialog()` → afișează pad canvas în dialog
+2. `SignatureService.saveSignature()` → local base64 + upload Storage background
+3. `_saveDocument(signed)` → salvează `clientSignatureBase64` în document
+4. `JobSiteDocumentPdfService.export()` → generează PDF cu semnătura embedded
+
+### Storage path: `signatures/{jobId}/{documentType}_{timestamp}.png`
+### Cache local: `SharedPreferences` key `signature_b64_pv_{documentId}`
+### NU se creează colecții noi Firestore — câmp `clientSignatureBase64` existent în `JobSiteDocumentRecord`
+
+---
+
+## 👤 FIȘA COMPLETĂ CLIENT
+
+### Fișiere principale:
+- `lib/features/clients/client_profile_page.dart` → Pagină 4 tab-uri (Rezumat, Istoric, Financiar, Echipamente)
+- `lib/features/clients/clients_page.dart` → tap → ClientProfilePage; butoane telefon + WhatsApp în card
+
+### Tab-uri:
+- **Rezumat**: Avatar, info contact, 4 stat cards, ultima activitate, note editabile cu auto-save
+- **Istoric**: Timeline cronologică (programări + lucrări + oferte) cu filtre chip
+- **Financiar**: Total intervenții + oferte, grafic 6 luni CustomPainter
+- **Echipamente**: Lista echipamente unice din `equipmentDescription` al programărilor
+
+### Navigare:
+- `onTap` pe card client → `ClientProfilePage` (push MaterialPageRoute)
+- `onClientUpdated` callback actualizează lista din `clients_page.dart`
+
+---
+
+## 🔔 ALERTĂ GARANȚII EXPIRATE
+
+### Fișiere principale:
+- `lib/features/clients/warranty_alert_service.dart` → Singleton, citește `LocalProductCatalogStore.listWarrantyCertificates()`
+- `lib/features/dashboard/dashboard_page.dart` → Afișează `_buildWarrantyAlertsCard()` în `_buildAdminSections()`
+
+### Severități:
+- **expired** (roșu): `warrantyEndDate` < azi
+- **urgent** (portocaliu): expiră în ≤7 zile
+- **warning** (galben): expiră în ≤30 zile
+
+### Câmpuri folosite din `WarrantyCertificateRecord`:
+- `buyerClientId` / `buyerName` pentru identificare client
+- `brand` + `model` pentru descriere echipament
+- `warrantyEndDate` pentru calcul expirare
+
+---
+
+## 🔄 KIT PROPAGATION — PROGRAMĂRI
+
+### Fișiere principale:
+- `lib/features/programari/kit_propagation_service.dart` → singleton `KitPropagationService.instance`
+- `lib/features/programari/programare_kituri_page.dart` → integrare propagare după `upsertTemplate`
+
+### Cum funcționează:
+1. Utilizatorul modifică un kit în `ProgramareKituriPage`
+2. ÎNAINTE de salvare: `countAffectedAppointments(kit.id)` verifică câte programări sunt afectate
+3. Dacă există programări afectate: dialog confirmare cu opțiuni "Doar salvează rețeta" / "Salvează și actualizează toate"
+4. Dacă utilizatorul confirmă: `propagateKitChanges(saved, repository)` rulează în fundal (fire-and-forget)
+5. Snackbar verde cu numărul de programări actualizate
+
+### Comportament propagare:
+- Citește TOATE programările din SharedPreferences (`ultra_appointments_v1`) — fără query Firebase
+- Filtrează după `materialUsage.kitTemplateId == updatedKit.id`
+- Reconstruiește liniile din `AppointmentMaterialKitComponent.resolvedQuantity(linearMetersUsed)`
+- **`linearMetersUsed` se PĂSTREAZĂ din programare** — se recalculează doar cantitățile
+- Actualizează și `kitTemplateName` la noul nume al kitului
+- Salvare prin `repository.saveAppointment()` — pattern standard: local → queue → Firebase fire-and-forget
+
+### La ștergerea unui kit:
+- **NU se propagă** — programările existente păstrează datele istorice (`lines` rămân neschimbate)
+- Textul din dialog de ștergere: "Programarile deja salvate isi pastreaza consumul inregistrat."
+
+### Repository dependency:
+- `ProgramareKituriPage` primește `AppDataRepository? repository` (optional)
+- `role_ready_shell.dart` pasează `widget.appDataRepository`
+- Dacă `repository == null` (ex: folosit direct fără shell): propagarea nu rulează, kitul se salvează normal
+
+---
+
+## 🗂️ MODUL RECLAMAȚII — EXTINDERE (iun 2026)
+
+### Câmpuri noi în ComplaintRecord (backward compatible):
+- `tipSursa` — `'client_direct'` | `'colaborator'` | `'garantie_producator'` (default: `'client_direct'`)
+- `colaboratorId`, `colaboratorNume`, `colaboratorContact`, `colaboratorTelefon`, `colaboratorRefNumber`
+- `clientFinalId`, `clientFinalNume` — beneficiarul real când sursa e un colaborator
+
+### Formular reclamație nouă (`_NewComplaintDialog`):
+- `SegmentedButton` sursă: Client direct / Via colaborator / Garanție producător
+- Câmpuri colaborator (vizibile dacă tipSursa ≠ 'client_direct'):
+  - `PartnerAutocompleteField` pentru societatea colaboratoare
+  - Câmp nr. referință/dosar colaborator
+  - Câmp persoană contact colaborator
+  - `ClientAutocompleteField` pentru clientul final (beneficiarul real)
+- Partners se încarcă in background în `initState()` via `widget.repository.listPartners()`
+
+### Tab Ofertă rapidă (`ComplaintQuickOfferTab`):
+- **Fișier**: `lib/features/reclamatii/complaint_quick_offer_tab.dart`
+- Tab 5 în `ComplaintDetailPage` (TabController length = 5)
+- Secțiunea "Ofertă colaborator" apare NUMAI dacă `isAdmin == true` ȘI `tipSursa != 'client_direct'` ȘI `colaboratorNume.isNotEmpty`
+- `isAdmin` = `AppRolePolicy.canAccessOffice(_role)` (admin + birou)
+- Catalog produse: `MaterialsCatalogService().listMaterials()` → `MasterMaterial`
+- Salvare draft: `SharedPreferences` key `complaint_offer_client_{id}` / `complaint_offer_colaborator_{id}` / `complaint_offer_meta_{id}`
+- PDF: `ComplaintQuickOfferPdfService.export()` → fișier temporar → `PdfActionsHelper`
+- WhatsApp colaborator: `url_launcher` → `wa.me/{telefon}?text={mesaj pre-completat}`
+
+### Clase noi în `complaint_models.dart`:
+- `ComplaintOfferLine` — linie ofertă (denumire, um, cantitate, pretUnitar, categorie, total calculat)
+- `ComplaintQuickOffer` — ofertă completă cu lista de linii, TVA, notă, destinatar
+
+### PDF ofertă rapidă:
+- `lib/features/reclamatii/complaint_quick_offer_pdf_service.dart`
+- A4 portrait, margini 24pt, font Arial cu diacritice
+- Header PRO TERM + date reclamație + destinatar + tabel linii + total
+- Banner "DOCUMENT INTERN" pe oferta colaborator
+
+---
+
+## 🗂️ MODUL RECLAMAȚII — REDESIGN (mai 2026)
+
+### Structură nouă (înlocuiește ReclamatiiPage ca entry point):
+- `reclamatii_list_page.dart` → **ReclamatiiListPage** — lista carduri (entry point în navigație)
+- `complaint_detail_page.dart` → **ComplaintDetailPage** — detaliu cu 4 tab-uri (Sumar / Intervenții / PV-uri / Documente)
+- `complaint_intervention_editor_page.dart` → **ComplaintInterventionEditorPage** — editor intrare intervenție
+- `reclamatii_page.dart` → **ReclamatiiPage** — păstrat pentru editare completă reclamație
+
+### Navigație:
+- `role_ready_shell.dart` → destinația `reclamatii` folosește `ReclamatiiListPage`
+- Deep-link `initialFocusComplaintId` funcționează în `ReclamatiiListPage`
+- Tap pe card → `ComplaintDetailPage`
+- Tab Intervenții → `ComplaintInterventionEditorPage`
+- Tab PV-uri → `RepairReportEditorPage` cu suport înlănțuire
+
+### Înlănțuire PV-uri (câmpuri noi în RepairReportRecord):
+- `interventionNumber` — numărul intervenției
+- `previousReportId` / `previousReportNumber` — referință PV anterior
+- `previousInterventionSummary` — rezumat constatare anterioară
+- `isFollowUp` — true dacă e revenire
+- PDF afișează secțiune "INTERVENȚIA NR. X — REVENIRE" dacă `isFollowUp = true`
+
+### Câmpuri noi în ComplaintRecord (backward compatible):
+- `pvCount`, `lastInterventionDate`, `lastPvNumber`, `totalInterventions`
+
+### Câmpuri noi în RepairReportRecord (backward compatible):
+- `interventionNumber`, `previousReportId`, `previousReportNumber`, `previousInterventionSummary`, `isFollowUp`
+- `photoUrls`, `photoBase64List`, `photoCategories`, `photoCaptions` — poze anexă PV
+
+### Câmpuri noi în WarrantyInterventionReportRecord (backward compatible):
+- `photoUrls`, `photoBase64List`, `photoCategories`, `photoCaptions` — poze anexă PV garanție
+
+### Anexă fotografii în PDF PV:
+- `repair_report_editor_page.dart` → secțiune "Poze anexă PV" (grid 3 col, max 20 poze, caption per poză)
+- `repair_report_pdf_service.dart` → `_buildPhotoAnnexPages()` — 2 poze/pagină A4, header roșu PRO TERM, footer referință
+- `warranty_intervention_report_pdf_service.dart` → same pattern
+- Strategie: base64 local (offline) > URL Firebase Storage (fallback); dacă offline = PDF fără anexă, fără eroare
+
+## 📞 TELEFOANE MULTIPLE + EDITARE DATE CLIENT (mai 2026)
+
+### Model ClientRecord:
+- `phoneNumbers = const <String>[]` — lista consolidată de telefoane
+- Migrare automată în `fromMap()`: `phone_numbers` list > `phone`/`phone2`/`phone3`
+- `allPhoneNumbers` getter: returnează phoneNumbers dacă nevidă, altfel din phone/phone2/phone3
+- `toMap()` include `phone_numbers` + păstrează phone/phone2/phone3 pentru backward compat
+
+### Model Appointment:
+- `clientPhoneNumbers = const <String>[]` — lista telefoane client la programare
+- Migrare din `contactPhone` în `fromMap()`
+- Salvat în `client_phone_numbers`
+
+### Programări — Card editabil "Date client":
+- `_showClientDataEditDialog()` în `programari_page.dart` — editabil pentru TOȚI rolurile
+- Câmpuri editabile: beneficiar, locație, numere telefon (max 5)
+- Salvare: optimistic UI + `saveAppointment().catchError()`
+- Buton "Editează" în secțiunea "Contact si locatie" a dialogului detalii programare
+- Afișare multiple telefoane cu butoane apel direct `tel:` în detalii programare
+
+### Clienți — Formularul:
+- `add_client_quick_dialog.dart`: list dinamică `_phoneControllers` (max 5 telefoane, adaugă/șterge)
+- `clients_page.dart`: salvează `phoneNumbers`, caută în phoneNumbers
+
+## 💰 FIX LOGICĂ FINANCIAR PARTENERI (mai 2026)
+
+### Root cause:
+`rebuildSummary()` în `partner_financial_repository.dart` trata ALL `intrare` ca adăugând la `totalDeIncasat` și ALL `iesire` ca adăugând la `totalDePlata`. Dar:
+- `incasareManuala` (direction=intrare) = plată PRIMITĂ de la partener → trebuie să SCADĂ din `totalDeIncasat`
+- `plataManuala` (direction=iesire) = plată EFECTUATĂ către partener → trebuie să SCADĂ din `totalDePlata`
+
+### Fix în rebuildSummary():
+- `incasareManuala` → `totalDeIncasat -= t.amount` (indiferent de status — este o plată reală înregistrată)
+- `plataManuala` → `totalDePlata -= t.amount` (indiferent de status)
+- Celelalte tipuri: logica existentă cu skip pentru `status=platit`
+
+### Tip tranzacție și semantica corectă:
+- `incasareProgramare` (intrare): programare facturată partenerului → +De încasat
+- `vanzareProdus` (intrare): produs vândut partenerului → +De încasat
+- `consumMateriale` (intrare): materiale/kituri folosite pt lucrarea partenerului → +De încasat
+- `incasareManuala` (intrare): partenerul a plătit efectiv → -De încasat
+- `plataProgramare` (iesire): comision partener executant → +De plătit
+- `achizitieProodus` (iesire): produs cumpărat de la partener → +De plătit
+- `plataManuala` (iesire): noi am plătit partenerul efectiv → -De plătit
+
+### Exemple BOGDINSTAL (după fix):
+- De încasat inițial din programări: 11.975,14 RON
+- + Încasare manuală 2.300 RON → De încasat = 9.675,14 RON ✅
+- + Plată manuală 2.300 RON → De plătit scade cu 2.300 RON ✅
+
+### Adăugări UI:
+- Buton `calculate_outlined` în toolbar → forțează `rebuildSummary()` + reload + SnackBar
+
+## 📊 MODUL CRM — PIPELINE VÂNZĂRI (mai 2026)
+
+### Fișiere principale:
+- `lib/features/crm/crm_models.dart` → CrmRecord, CrmStadiu, CrmInteractiune, CrmStats
+- `lib/features/crm/crm_repository.dart` → CRUD + offline queue singleton (CrmRepository.instance)
+- `lib/features/crm/crm_page.dart` → Pagină principală cu 3 tab-uri (Pipeline Kanban / Listă / Statistici)
+
+### Model CrmRecord — câmpuri:
+```dart
+CrmRecord {
+  id, titlu, clientId, clientName, contactPerson,
+  phoneNumbers (List<String>), email,
+  stadiu (CrmStadiu), tipLucrare,
+  valoareEstimata (double), valoareFinala (double?),
+  sursa ('Direct'|'Referinta'|'Google'|'Facebook'|'Instagram'|'Alt'),
+  ofertaId, jobId,
+  dataContact, dataUrmatoareActiune (DateTime?), urmatoareActiune,
+  interactiuni (List<CrmInteractiune>), note, assignedTo,
+  createdAt, updatedAt
+}
+```
+
+### Stadii CrmStadiu (în ordine pipeline):
+- `lead` — Lead nou (albastru)
+- `calificat` — Calificat (violet)
+- `ofertaTrimisa` — Oferta trimisa (portocaliu)
+- `negociere` — Negociere (galben)
+- `castigat` — Castigat (verde)
+- `pierdut` — Pierdut (roșu)
+- `inactiv` — Inactiv (gri)
+
+### Colecție Firestore: `crm_records`
+### SharedPreferences key: `'crm_records_v1'`
+### Sync offline: `CloudEntityType.crmRecords` → `queueCrmRecordUpsert/Delete`
+
+### Repository — metode principale:
+- `upsertCrmRecord(r)` → local → queue → Firestore fire-and-forget
+- `deleteCrmRecord(id)` → local → queue delete → Firestore fire-and-forget
+- `listMerged()` → merge cloud+local (BUG7 pattern)
+- `listNecesitaActiune()` → leaduri cu dataUrmatoareActiune ≤ azi și esteActiv=true
+- `addInteractiune(recordId, interactiune)` → adaugă interacțiune la un lead
+- `getStats()` → CrmStats cu rate conversie, valori pipeline etc.
+- `createNew(...)` → factory cu id UUID + timestamps
+
+### Integrare cu Oferte (auto-CRM):
+- `oferta_detaliu_page.dart` → `_changeOfferStatus()` → `_syncCrmForOfferStatus()` (fire-and-forget)
+- Status `sent` → CrmRecord cu stadiu=`ofertaTrimisa`
+- Status `accepted` → CrmRecord stadiu=`castigat` + `valoareFinala=offer.totalValue`
+- Status `rejected` → CrmRecord stadiu=`pierdut`
+- Leagă CrmRecord prin câmpul `ofertaId`
+
+### Alertă startup (role_ready_shell.dart):
+- `_loadSectionBadgesInternal()` → `CrmRepository.instance.listNecesitaActiune()`
+- Dacă count > 0: badge secțiunea 'comercial' + SnackBar '📋 X lead-uri necesita actiune'
+- Alertă apare o singură dată per sesiune (`_crmAlertShownThisSession` flag static)
+- Buton 'Deschide CRM' navighează direct la modul
+
+### Dialog adăugare/editare lead — câmpuri:
+- Titlu (obligatoriu), Client cu autocomplete (obligatoriu)
+- Persoana contact, Telefon, Email
+- Stadiu (dropdown), Sursă (dropdown)
+- Tip lucrare, Valoare estimată RON
+- Data acțiunii (date picker cu buton clear), Acțiune de urmat
+- Note
+
+### Navigație:
+- Destinație `crm` în secțiunea `comercial` din `role_ready_shell.dart`
+- Vizibil: admin + birou
+- `CrmPage(repository: widget.appDataRepository)` — repository necesar pentru autocomplete clienți
+
+### Tab Pipeline (Kanban):
+- Coloane pentru toate stadiile (excl. pierdut/inactiv)
+- Card compact cu titlu, client, valoare, data acțiunii (roșu dacă depășit)
+- Buton "Lead nou" în fiecare coloană cu stadiu pre-setat
+- Scroll orizontal coloane + scroll vertical per coloană
+
+### Tab Listă:
+- Search text + filtre Stadiu + Sursă
+- Card cu chip stadiu colorat, butoane WhatsApp / Sună / Editează / Mută stadiu
+- RefreshIndicator
+
+### Tab Statistici:
+- KPI cards: Total, Câștigate, Pierdute, Rată conversie, Pipeline, Total câștigat
+- Bar chart distribuție per stadiu
+- Top surse lead-uri
+
+---
+
 ## 🔴 PROBLEME CUNOSCUTE
 
 - reclamatii: repair_reports și warranty_reports fără offline queue (de implementat)
 - field_sales: fără queue propriu (de implementat)
+
+---
+
+## 📡 LISTENER REAL-TIME FIRESTORE — SYNC CROSS-DEVICE (iun 2026)
+
+### Unde e implementat:
+- `programari_page.dart` → `_maybeStartRealtimeListener()` + `_appointmentsRealtimeSubscription`
+
+### Pattern obligatoriu pentru module cu date partajate cross-device:
+```dart
+// În State class:
+StreamSubscription<QuerySnapshot>? _realtimeSub;
+Timer? _realtimeDebounce;
+bool _isOnlineCached = false;
+
+// initState:
+_isOnlineCached = FirebaseBootstrap.isOnline;
+Future.microtask(_maybeStartRealtimeListener);
+FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+
+// dispose():
+_realtimeDebounce?.cancel();
+_realtimeSub?.cancel();
+
+// Metoda listener:
+void _maybeStartRealtimeListener() {
+  if (!FirebaseBootstrap.isInitialized || !FirebaseBootstrap.isOnline) return;
+  if (_realtimeSub != null) return; // deja pornit
+  _realtimeSub = FirebaseFirestore.instance
+      .collection('colectie')
+      .where('data_field', isGreaterThanOrEqualTo: windowStart)
+      .snapshots()
+      .listen((snapshot) {
+        if (!mounted || snapshot.docChanges.isEmpty) return;
+        _realtimeDebounce?.cancel();
+        _realtimeDebounce = Timer(const Duration(seconds: 3), () {
+          if (mounted && !_loading) _load();
+        });
+      }, onError: (e) { _realtimeSub?.cancel(); _realtimeSub = null; });
+}
+
+// _onOnlineChanged() actualizat:
+void _onOnlineChanged() {
+  final nowOnline = FirebaseBootstrap.isOnline;
+  final wasOnline = _isOnlineCached;
+  _isOnlineCached = nowOnline;
+  if (mounted) setState(() {});
+  if (nowOnline) {
+    _maybeStartRealtimeListener();
+    if (!wasOnline || _items.isEmpty) _load();
+  } else {
+    _realtimeSub?.cancel(); _realtimeSub = null;
+  }
+}
+```
+
+### Reguli critice:
+- **NU înlocui `_load()` cu parse direct din snapshot** — logica de merge (BUG 7, tombstones, offline queue) e în repository, nu în listener
+- **Debounce 3 secunde** — evită multiple `_load()` pentru save-uri batch
+- **Listener pornit NUMAI când online** — se oprește automat când merge offline
+- **Cancelat în `dispose()`** — OBLIGATORIU, fără excepții
+- **`.where()` fără `.orderBy()`** — evită index compus Firestore → sortare în Dart
+- **Iconița status în AppBar**: `cloud_done_outlined` (verde) = listener activ, `cloud_off_outlined` (portocaliu) = offline
+
+## 📋 MODUL AGFR/F-GAS — DATE STATICE ȘI AUTOMATIZĂRI
+
+### Fișier: `lib/features/agfr/agfr_refrigerant_data.dart`
+- `AgfrRefrigerantData.specs` — hartă statică cu 25+ agenți frigorifici (GWP, tip, culoare cilindru, note)
+- `AgfrRefrigerantData.gwpFor(name)` — GWP conform Reg. UE 517/2014
+- `AgfrRefrigerantData.calculeazaToneCO2(kg, refrigerant)` — tone CO₂ echivalent
+- `AgfrRefrigerantData.intervalVerificareScurgeri(toneCO2)` — interval scurgeri conform UE
+
+### Automatizări în `agfr_page.dart`:
+- **Formular echipament**: la selecție tip refrigerant → GWP se completează automat (readonly dacă e din baza de date)
+- **Banner avertizare**: apare automat la refrigeranți A2L/A3/interzis (R32, R290, R22 etc.)
+- **CO₂ echivalent**: calculat live în ambele formulare (echipament + intervenție)
+- **Interval verificare scurgeri**: afișat automat sub 5t/50t/500t CO₂e
+- **Tehnician**: auto-completat din `FirebaseAuth.instance.currentUser?.displayName`
+
+### Reguli:
+- NU modifica valorile GWP — sunt constante legale europene
+- La adăugarea unui tip nou de refrigerant → adaugă în `AgfrRefrigerantData.specs`
+- GWP readonly când există în baza de date; editabil manual pentru tipuri personalizate
+
+## 🔄 FLUX OFERTĂ → LUCRARE (iun 2026)
+
+### Câmpuri noi în OfferRecord (backward compatible):
+- `tipOferta` — `'oferta_lucrari'` | `'deviz_tehnic'` | `'mini_oferta'` | `'deviz_filtre'`
+- `sursa` — `'direct'` | `'reclamatie'` | `'programare'` | `'agfr'`
+- `sursaId`, `sursaNumar` — referință la documentul sursă
+- `tipOfertaLabel` getter — label UI pentru badge
+
+### Câmpuri noi în JobRecord (backward compatible):
+- `liniiPlanificate: List<JobLine>` — linii copiate din ofertă la conversie
+- `totalOferta: double` — totalul ofertei fără TVA (planificat)
+- `totalReal` getter — suma realizată actuală din linii
+- `diferenta` getter — `totalReal - totalOferta`
+
+### Clasa JobLine (job_models.dart):
+- `id`, `ofertaLineId`, `denumire`, `um`, `cantitateOferta`, `cantitateReala`, `pretUnitarOferta`, `pretUnitarReal`, `categorie`
+- Getteri: `totalOferta`, `totalReal`, `diferenta`
+- `JobLine.fromOfertaLine()` factory static
+- `copyWith()` pentru editare cantitateReala/pretUnitarReal
+
+### Conversie ofertă → lucrare (`_convertOfferToJob()` în oferte_page.dart):
+- Se populează `liniiPlanificate` din `offer.lines` (excluzând linii tip text)
+- Se setează `totalOferta` = totalul ofertei
+- Implementare existentă (`convertedToJobId`, `sourceOfferId`) rămâne neschimbată
+
+### Filtre și badges în OfertePage:
+- Dropdown filtru `Tip document` (deasupra filtrului status)
+- Badge colorat în card pentru `tipOferta ≠ 'oferta_lucrari'`
+- Reset filtre include `_tipOfertaFilter`
+
+### Tab Situație în LucrareDetaliiPage:
+- Tab 5 (TabController length 4→5), isScrollable: true
+- Afișează: header comparativ (ofertă vs realizat vs diferență)
+- Lista articole cu detalii cantitate/preț ofertă vs realizat
+- Dacă `liniiPlanificate.isEmpty`: mesaj informativ
+
+### Mini ofertă reclamație → OfertaRecord:
+- `ComplaintQuickOfferTab._saveDraft()` creează OfferRecord cu `tipOferta='mini_oferta'`, `sursa='reclamatie'`
+- Salvează în `LocalOferteRepository` (apare în modulul Oferte)
+- `_existingOfertaId` / `_existingOfertaNumar` — evită duplicate la re-save
+
+---
+
+## 📊 FLUX COMPLET: Lead → Ofertă → Lucrare → Factură (iun 2026)
+
+### DevizLucrarePdfService (`lib/features/jobs/deviz_lucrare_pdf_service.dart`):
+- `generateDevizPlanificat(job, branding)` — PDF A4 portrait: articole grupate pe categorie (MATERIALE/MANOPERĂ/TRANSPORT/ALTELE), total per categorie, note+condiții, semnături
+- `generateSituatieLucrari(job, branding)` — PDF A4: tabel comparativ planificat vs realizat, diferențe colorate (verde=economie, portocaliu=depășire), sumar %
+- Integrate în tab Situație din `lucrare_detalii_page.dart` → butoane "Deviz planificat" + "Situație reală"
+
+### offer_pdf_service.dart — titlu adaptat după `tipOferta`:
+- `mini_oferta` → 'OFERTĂ RAPIDĂ'
+- `deviz_tehnic` → 'DEVIZ TEHNIC'
+- `deviz_filtre` → 'DEVIZ FILTRE CTA'
+- `sursa == 'reclamatie'` → metadata 'Ref. reclamatie: [sursaNumar]'
+
+### SmartBillService extins (singleton `instance`):
+- `genereazaFacturadinLucrare({settings, clientName, jobCode, linii})` — factură din linii REALE (cantitateReala × pretUnitarReal), NU planificate
+- `genereazaProformadinOferta({settings, clientName, ofertaNumar, linii})` — tip 'proformaInvoice'
+- `existaFacturaForJob(settings, jobCode)` — verifică duplicate
+- Buton "Emite factură SmartBill" în tab Economic (vizibil dacă `status == finalizata` și `smartbillFacturaNumar.isEmpty`)
+
+### JobRecord câmpuri noi SmartBill (backward compatible):
+- `smartbillFacturaNumar` — nr. facturii emise
+- `smartbillFacturaSerie` — seria facturii emise
+
+### PipelineDashboardPage (`lib/features/dashboard/pipeline_dashboard_page.dart`):
+- Funnel vizual: Lead → Oferte trimise → Lucrări active → Facturate
+- 4 KPI cards: Oferte trimise, Rată conversie, Valoare lucrări, De facturat
+- Oferte expirate (> 30 zile fără răspuns)
+- Lucrări care necesită acțiune (finalizate neracturate, vechi)
+- Timeline activitate recentă (luna curentă)
+- Navigație: FINANCIAR → Pipeline Vânzări (admin+birou)
+
+### StatusChangeNotifier (`lib/core/integrations/status_change_notifier.dart`):
+- `onOfertaStatusChanged(oferta)` — notificări la acceptat/respins
+- `onJobStatusChanged(job)` — notificare la finalizată neracturată
+- `checkOfertaExpirate()` — apelat la startup (main.dart)
+- Folosește `NotificationRuntimeService.instance.showLocalNotification()`
+
+### LocalOferteRepository.listExpirate():
+- Returnează oferte cu `status == sent`, `updatedAt < cutoff`, `!isConverted`
+- Parametru `dupaZile` (default usage: 30)
+
+### Ștergere ofertă cu protecție (oferte_page.dart):
+- Blochează dacă `offer.isConverted` — afișează SnackBar roșu cu jobCode
+- Dialog confirmare cu "Șterge definitiv" roșu
+- Optimistic UI: scoate din listă imediat, rollback la eroare
+
+### Ce NU s-a implementat (scope redus):
+- DevizTehnic sync → OfertaRecord (prea invaziv)
+- Editare inline `cantitateReala`/`pretUnitarReal` în tab Situație
+- PDF Deviz planificat + Situație reală
+- Noi valori OfferStatus (lucrare_creata, finalizata) — redundant cu `isConverted`
+
+---
 
 ## 🚀 CE VREAU SĂ IMPLEMENTEZ ÎN VIITOR
 

@@ -252,6 +252,11 @@ class JobRecord {
     this.createdByUserEmail = '',
     this.timeEntries = const <Map<String, dynamic>>[],
     this.profitSharingPercent = 100.0,
+    this.partnerId = '',
+    this.partnerName = '',
+    this.partnerProfitPercent = 0.0,
+    this.partnerResources = 0.0,
+    this.profitTaxPercent = 16.0,
   });
 
   final String id;
@@ -309,6 +314,21 @@ class JobRecord {
   /// Default 100 means all profit stays with the company.
   final double profitSharingPercent;
 
+  /// ID partener principal selectat pentru împărțire profit
+  final String partnerId;
+
+  /// Nume partener (denormalizat pentru afișare rapidă)
+  final String partnerName;
+
+  /// Procent din profit net care revine partenerului (0–100). Default 0.
+  final double partnerProfitPercent;
+
+  /// Resurse/costuri contribuite de partener în RON. Default 0.
+  final double partnerResources;
+
+  /// Rata impozit profit aplicată acestei lucrări (%). Default 16.
+  final double profitTaxPercent;
+
   JobRecord copyWith({
     String? id,
     String? jobCode,
@@ -358,6 +378,11 @@ class JobRecord {
     String? createdByUserEmail,
     List<Map<String, dynamic>>? timeEntries,
     double? profitSharingPercent,
+    String? partnerId,
+    String? partnerName,
+    double? partnerProfitPercent,
+    double? partnerResources,
+    double? profitTaxPercent,
   }) {
     return JobRecord(
       id: id ?? this.id,
@@ -411,6 +436,11 @@ class JobRecord {
       createdByUserEmail: createdByUserEmail ?? this.createdByUserEmail,
       timeEntries: timeEntries ?? this.timeEntries,
       profitSharingPercent: profitSharingPercent ?? this.profitSharingPercent,
+      partnerId: partnerId ?? this.partnerId,
+      partnerName: partnerName ?? this.partnerName,
+      partnerProfitPercent: partnerProfitPercent ?? this.partnerProfitPercent,
+      partnerResources: partnerResources ?? this.partnerResources,
+      profitTaxPercent: profitTaxPercent ?? this.profitTaxPercent,
     );
   }
 
@@ -468,6 +498,11 @@ class JobRecord {
       'created_by_user_email': createdByUserEmail,
       'time_entries': timeEntries,
       'profit_sharing_percent': profitSharingPercent,
+      'partner_id': partnerId,
+      'partner_name': partnerName,
+      'partner_profit_percent': partnerProfitPercent,
+      'partner_resources': partnerResources,
+      'profit_tax_percent': profitTaxPercent,
     };
   }
 
@@ -617,6 +652,19 @@ class JobRecord {
       profitSharingPercent: parseDouble(
               map['profit_sharing_percent'] ?? map['profitSharingPercent']) ??
           100.0,
+      partnerId:
+          (map['partner_id'] ?? map['partnerId'] ?? '').toString().trim(),
+      partnerName:
+          (map['partner_name'] ?? map['partnerName'] ?? '').toString().trim(),
+      partnerProfitPercent: parseDouble(
+              map['partner_profit_percent'] ?? map['partnerProfitPercent']) ??
+          0.0,
+      partnerResources:
+          parseDouble(map['partner_resources'] ?? map['partnerResources']) ??
+              0.0,
+      profitTaxPercent:
+          parseDouble(map['profit_tax_percent'] ?? map['profitTaxPercent']) ??
+              16.0,
     );
   }
 }

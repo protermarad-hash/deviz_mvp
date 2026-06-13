@@ -826,43 +826,53 @@ class _ProgramariConsumMaterialePageState
     List<Appointment> cuMat,
   ) {
     final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: _SumarCard(
-              label: 'Cost total',
-              value: '${_totalCostMateriale.toStringAsFixed(2)} RON',
-              icon: Icons.payments_outlined,
-              color: Colors.orange.shade700,
-              sub: '${_filtratePerioada.length} progr.',
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isMobile = constraints.maxWidth < 700;
+        final c1 = _SumarCard(
+          label: 'Cost total',
+          value: '${_totalCostMateriale.toStringAsFixed(2)} RON',
+          icon: Icons.payments_outlined,
+          color: Colors.orange.shade700,
+          sub: '${_filtratePerioada.length} progr.',
+        );
+        final c2 = _SumarCard(
+          label: 'Materiale distincte',
+          value: '${agregate.length}',
+          icon: Icons.inventory_2_outlined,
+          color: colorScheme.primary,
+          sub: '${cuMat.length} cu mat.',
+        );
+        final c3 = _SumarCard(
+          label: 'Cost mediu',
+          value: cuMat.isEmpty
+              ? '— RON'
+              : '${(_totalCostMateriale / cuMat.length).toStringAsFixed(2)} RON',
+          icon: Icons.calculate_outlined,
+          color: colorScheme.secondary,
+          sub: '/ programare',
+        );
+        if (isMobile) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: Column(
+              children: [c1, const SizedBox(height: 8), c2, const SizedBox(height: 8), c3],
             ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Row(
+            children: [
+              Expanded(child: c1),
+              const SizedBox(width: 8),
+              Expanded(child: c2),
+              const SizedBox(width: 8),
+              Expanded(child: c3),
+            ],
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _SumarCard(
-              label: 'Materiale distincte',
-              value: '${agregate.length}',
-              icon: Icons.inventory_2_outlined,
-              color: colorScheme.primary,
-              sub: '${cuMat.length} cu mat.',
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _SumarCard(
-              label: 'Cost mediu',
-              value: cuMat.isEmpty
-                  ? '— RON'
-                  : '${(_totalCostMateriale / cuMat.length).toStringAsFixed(2)} RON',
-              icon: Icons.calculate_outlined,
-              color: colorScheme.secondary,
-              sub: '/ programare',
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 

@@ -447,6 +447,7 @@ class HrPayrollInputCatalogService {
               .where((item) => item.isNotEmpty)
               .join('\n')
           : notes.trim(),
+      nrPersoaneIntretinere: profile.nrPersoaneIntretinere,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     );

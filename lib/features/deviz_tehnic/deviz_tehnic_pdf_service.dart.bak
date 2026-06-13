@@ -130,7 +130,7 @@ class DevizTehnicPdfService {
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
-                pw.Text('DEVIZ TEHNIC',
+                pw.Text(deviz.tipDocument.pdfTitle,
                     style: tsBold(size: 16, color: headerBg)),
                 pw.SizedBox(height: 2),
                 pw.Text('Nr. ${deviz.numar}',
@@ -360,17 +360,19 @@ class DevizTehnicPdfService {
             cellRight('', style: ts(size: 8)),
             cellRight(fmt.format(deviz.profit), style: ts(size: 8)),
           ]),
-          pw.TableRow(
-            decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFE3F2FD)),
-            children: [
-              cell('Total deviz fără TVA', style: tsBold(size: 9)),
-              cellRight('', style: ts(size: 8)),
-              cellRight('', style: ts(size: 8)),
-              cellRight('', style: ts(size: 8)),
-              cellRight('', style: ts(size: 8)),
-              cellRight(fmt.format(deviz.totalFaraTva), style: tsBold(size: 9)),
-            ],
-          ),
+          // Rândul "Total fără TVA" — vizibil când priceDisplay = faraTva sau ambele
+          if (deviz.priceDisplay.showFaraTva)
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFE3F2FD)),
+              children: [
+                cell('Total deviz fără TVA', style: tsBold(size: 9)),
+                cellRight('', style: ts(size: 8)),
+                cellRight('', style: ts(size: 8)),
+                cellRight('', style: ts(size: 8)),
+                cellRight('', style: ts(size: 8)),
+                cellRight(fmt.format(deviz.totalFaraTva), style: tsBold(size: 9)),
+              ],
+            ),
           pw.TableRow(children: [
             cell('TVA (${_fmtNum(deviz.tvaPercent)}%)', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
@@ -379,18 +381,20 @@ class DevizTehnicPdfService {
             cellRight('', style: ts(size: 8)),
             cellRight(fmt.format(deviz.tva), style: ts(size: 8)),
           ]),
-          pw.TableRow(
-            decoration: const pw.BoxDecoration(color: totalBg),
-            children: [
-              cell('TOTAL CU TVA', style: tsBold(size: 10, color: white)),
-              cellRight('', style: tsBold(size: 8, color: white)),
-              cellRight('', style: tsBold(size: 8, color: white)),
-              cellRight('', style: tsBold(size: 8, color: white)),
-              cellRight('', style: tsBold(size: 8, color: white)),
-              cellRight(fmt.format(deviz.totalCuTva),
-                  style: tsBold(size: 11, color: white)),
-            ],
-          ),
+          // Rândul "TOTAL CU TVA" — vizibil când priceDisplay = cuTva sau ambele
+          if (deviz.priceDisplay.showCuTva)
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(color: totalBg),
+              children: [
+                cell('TOTAL CU TVA', style: tsBold(size: 10, color: white)),
+                cellRight('', style: tsBold(size: 8, color: white)),
+                cellRight('', style: tsBold(size: 8, color: white)),
+                cellRight('', style: tsBold(size: 8, color: white)),
+                cellRight('', style: tsBold(size: 8, color: white)),
+                cellRight(fmt.format(deviz.totalCuTva),
+                    style: tsBold(size: 11, color: white)),
+              ],
+            ),
         ],
       );
 

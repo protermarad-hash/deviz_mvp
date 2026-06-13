@@ -716,26 +716,57 @@ class HrPayrollRunCatalogService {
       return payslips.fold<double>(0, (sum, row) => sum + selector(row));
     }
 
+    double breakdown(HrPayslip item, String section, String key) {
+      final sec = item.breakdown[section];
+      if (sec is Map) {
+        final v = sec[key];
+        if (v is num) return v.toDouble();
+      }
+      return 0.0;
+    }
+
     final lineItems = payslips.map((item) {
       final profile = profileByEmployeeId[item.employeeId.trim()];
+      final contractMap = item.breakdown['contract'];
+      final jobTitle = contractMap is Map
+          ? (contractMap['job_title'] ?? '').toString()
+          : '';
       return <String, dynamic>{
         'employee_id': item.employeeId,
         'employee_name': profile?.fullName.trim().isNotEmpty == true
             ? profile!.fullName.trim()
             : item.employeeId,
+        'job_title': jobTitle,
+        'worked_hours': breakdown(item, 'attendance_leave_inputs', 'worked_hours'),
         'gross_total': item.grossTotal,
         'cas_amount': item.casAmount,
         'cass_amount': item.cassAmount,
+        'venit_net': breakdown(item, 'salary_tax_percentages', 'venit_net'),
+        'personal_deduction_amount':
+            breakdown(item, 'salary_tax_percentages', 'personal_deduction_amount'),
+        'taxable_base_for_income_tax':
+            breakdown(item, 'salary_tax_percentages', 'taxable_base_for_income_tax'),
         'income_tax_amount': item.incomeTaxAmount,
+        'net_without_tm':
+            breakdown(item, 'salary_tax_percentages', 'net_without_tm'),
+        'meal_ticket_total':
+            breakdown(item, 'salary_tax_percentages', 'meal_ticket_total'),
+        'net_final': item.netFinal,
         'deduction_total': item.deductionTotal,
         'advance_recovery_total': item.advanceRecoveryTotal,
         'garnishment_reserved_total': item.garnishmentReservedTotal,
-        'net_final': item.netFinal,
+        'status': item.status,
       };
     }).toList(growable: false)
       ..sort((a, b) => (a['employee_name'] ?? '')
           .toString()
           .compareTo((b['employee_name'] ?? '').toString()));
+
+    double sumLineItems(String key) =>
+        lineItems.fold<double>(0, (s, row) {
+          final v = row[key];
+          return s + (v is num ? v.toDouble() : 0.0);
+        });
 
     final totals = <String, dynamic>{
       'gross_total': sumBy((row) => row.grossTotal),
@@ -747,6 +778,11 @@ class HrPayrollRunCatalogService {
       'garnishment_reserved_total':
           sumBy((row) => row.garnishmentReservedTotal),
       'net_final': sumBy((row) => row.netFinal),
+      'venit_net': sumLineItems('venit_net'),
+      'personal_deduction_amount': sumLineItems('personal_deduction_amount'),
+      'taxable_base_for_income_tax': sumLineItems('taxable_base_for_income_tax'),
+      'net_without_tm': sumLineItems('net_without_tm'),
+      'meal_ticket_total': sumLineItems('meal_ticket_total'),
     };
 
     final report = HrPayrollAccountingReport(

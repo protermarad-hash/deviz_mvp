@@ -72,6 +72,31 @@ class RepairReportRecord {
     this.outdoorUnitSerial = '',
     this.indoorUnitSerials = '',
     this.equipmentDetails = '',
+    this.interventionNumber = 1,
+    this.previousReportId = '',
+    this.previousReportNumber = '',
+    this.previousInterventionSummary = '',
+    this.isFollowUp = false,
+    this.photoUrls = const <String>[],
+    this.photoBase64List = const <String>[],
+    this.photoCategories = const <String>[],
+    this.photoCaptions = const <String>[],
+    // Câmpuri noi template PV Constatare Tehnică (adiționale, backward compatible)
+    this.agentFrigorific = '',
+    this.cantitateRecuperata = '',
+    this.coduriEroare = '',
+    this.stareTest = '',
+    this.reprezentantBeneficiar = '',
+    this.motivulInterventiei = '',
+    this.constatariLocFinding = '',
+    this.lucrariEfectuateDetailed = '',
+    this.observatiiTehnice = '',
+    this.concluzie = '',
+    this.recomandari = '',
+    this.mentiuni = '',
+    this.materialeDetailed = '',
+    this.traseulPieselorDefecte = '',
+    this.pvType = 'constatare',
   });
 
   final String id;
@@ -105,6 +130,31 @@ class RepairReportRecord {
   final RepairReportResolutionStatus resolutionStatus;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final int interventionNumber;
+  final String previousReportId;
+  final String previousReportNumber;
+  final String previousInterventionSummary;
+  final bool isFollowUp;
+  final List<String> photoUrls;
+  final List<String> photoBase64List;
+  final List<String> photoCategories;
+  final List<String> photoCaptions;
+  // Câmpuri template PV Constatare Tehnică
+  final String agentFrigorific;
+  final String cantitateRecuperata;
+  final String coduriEroare;
+  final String stareTest;
+  final String reprezentantBeneficiar;
+  final String motivulInterventiei;
+  final String constatariLocFinding;
+  final String lucrariEfectuateDetailed;
+  final String observatiiTehnice;
+  final String concluzie;
+  final String recomandari;
+  final String mentiuni;
+  final String materialeDetailed;
+  final String traseulPieselorDefecte;
+  final String pvType;
 
   RepairReportRecord copyWith({
     String? id,
@@ -138,6 +188,30 @@ class RepairReportRecord {
     RepairReportResolutionStatus? resolutionStatus,
     DateTime? createdAt,
     DateTime? updatedAt,
+    int? interventionNumber,
+    String? previousReportId,
+    String? previousReportNumber,
+    String? previousInterventionSummary,
+    bool? isFollowUp,
+    List<String>? photoUrls,
+    List<String>? photoBase64List,
+    List<String>? photoCategories,
+    List<String>? photoCaptions,
+    String? agentFrigorific,
+    String? cantitateRecuperata,
+    String? coduriEroare,
+    String? stareTest,
+    String? reprezentantBeneficiar,
+    String? motivulInterventiei,
+    String? constatariLocFinding,
+    String? lucrariEfectuateDetailed,
+    String? observatiiTehnice,
+    String? concluzie,
+    String? recomandari,
+    String? mentiuni,
+    String? materialeDetailed,
+    String? traseulPieselorDefecte,
+    String? pvType,
   }) {
     return RepairReportRecord(
       id: id ?? this.id,
@@ -173,6 +247,30 @@ class RepairReportRecord {
       resolutionStatus: resolutionStatus ?? this.resolutionStatus,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      interventionNumber: interventionNumber ?? this.interventionNumber,
+      previousReportId: previousReportId ?? this.previousReportId,
+      previousReportNumber: previousReportNumber ?? this.previousReportNumber,
+      previousInterventionSummary: previousInterventionSummary ?? this.previousInterventionSummary,
+      isFollowUp: isFollowUp ?? this.isFollowUp,
+      photoUrls: photoUrls ?? this.photoUrls,
+      photoBase64List: photoBase64List ?? this.photoBase64List,
+      photoCategories: photoCategories ?? this.photoCategories,
+      photoCaptions: photoCaptions ?? this.photoCaptions,
+      agentFrigorific: agentFrigorific ?? this.agentFrigorific,
+      cantitateRecuperata: cantitateRecuperata ?? this.cantitateRecuperata,
+      coduriEroare: coduriEroare ?? this.coduriEroare,
+      stareTest: stareTest ?? this.stareTest,
+      reprezentantBeneficiar: reprezentantBeneficiar ?? this.reprezentantBeneficiar,
+      motivulInterventiei: motivulInterventiei ?? this.motivulInterventiei,
+      constatariLocFinding: constatariLocFinding ?? this.constatariLocFinding,
+      lucrariEfectuateDetailed: lucrariEfectuateDetailed ?? this.lucrariEfectuateDetailed,
+      observatiiTehnice: observatiiTehnice ?? this.observatiiTehnice,
+      concluzie: concluzie ?? this.concluzie,
+      recomandari: recomandari ?? this.recomandari,
+      mentiuni: mentiuni ?? this.mentiuni,
+      materialeDetailed: materialeDetailed ?? this.materialeDetailed,
+      traseulPieselorDefecte: traseulPieselorDefecte ?? this.traseulPieselorDefecte,
+      pvType: pvType ?? this.pvType,
     );
   }
 
@@ -209,6 +307,30 @@ class RepairReportRecord {
       'resolution_status': resolutionStatus.value,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'intervention_number': interventionNumber,
+      'previous_report_id': previousReportId,
+      'previous_report_number': previousReportNumber,
+      'previous_intervention_summary': previousInterventionSummary,
+      'is_follow_up': isFollowUp,
+      'photo_urls': photoUrls,
+      'photo_base64_list': photoBase64List,
+      'photo_categories': photoCategories,
+      'photo_captions': photoCaptions,
+      'agent_frigorific': agentFrigorific,
+      'cantitate_recuperata': cantitateRecuperata,
+      'coduri_eroare': coduriEroare,
+      'stare_test': stareTest,
+      'reprezentant_beneficiar': reprezentantBeneficiar,
+      'motivul_interventiei': motivulInterventiei,
+      'constatari_loc_finding': constatariLocFinding,
+      'lucrari_efectuate_detailed': lucrariEfectuateDetailed,
+      'observatii_tehnice': observatiiTehnice,
+      'concluzie': concluzie,
+      'recomandari': recomandari,
+      'mentiuni': mentiuni,
+      'materiale_detailed': materialeDetailed,
+      'traseul_pieselor_defecte': traseulPieselorDefecte,
+      'pv_type': pvType,
     };
   }
 
@@ -283,6 +405,30 @@ class RepairReportRecord {
       ),
       createdAt: parseDate('created_at', now),
       updatedAt: parseDate('updated_at', now),
+      interventionNumber: (map['intervention_number'] ?? map['interventionNumber'] ?? 1) as int,
+      previousReportId: pick(const <String>['previous_report_id', 'previousReportId']),
+      previousReportNumber: pick(const <String>['previous_report_number', 'previousReportNumber']),
+      previousInterventionSummary: pick(const <String>['previous_intervention_summary', 'previousInterventionSummary']),
+      isFollowUp: (map['is_follow_up'] ?? map['isFollowUp'] ?? false) as bool,
+      photoUrls: List<String>.from((map['photo_urls'] ?? map['photoUrls'] ?? const <String>[]) as List),
+      photoBase64List: List<String>.from((map['photo_base64_list'] ?? map['photoBase64List'] ?? const <String>[]) as List),
+      photoCategories: List<String>.from((map['photo_categories'] ?? map['photoCategories'] ?? const <String>[]) as List),
+      photoCaptions: List<String>.from((map['photo_captions'] ?? map['photoCaptions'] ?? const <String>[]) as List),
+      agentFrigorific: pick(const <String>['agent_frigorific']),
+      cantitateRecuperata: pick(const <String>['cantitate_recuperata']),
+      coduriEroare: pick(const <String>['coduri_eroare']),
+      stareTest: pick(const <String>['stare_test']),
+      reprezentantBeneficiar: pick(const <String>['reprezentant_beneficiar']),
+      motivulInterventiei: pick(const <String>['motivul_interventiei']),
+      constatariLocFinding: pick(const <String>['constatari_loc_finding']),
+      lucrariEfectuateDetailed: pick(const <String>['lucrari_efectuate_detailed']),
+      observatiiTehnice: pick(const <String>['observatii_tehnice']),
+      concluzie: pick(const <String>['concluzie']),
+      recomandari: pick(const <String>['recomandari']),
+      mentiuni: pick(const <String>['mentiuni']),
+      materialeDetailed: pick(const <String>['materiale_detailed']),
+      traseulPieselorDefecte: pick(const <String>['traseul_pieselor_defecte']),
+      pvType: pick(const <String>['pv_type']).isEmpty ? 'constatare' : pick(const <String>['pv_type']),
     );
   }
 }

@@ -98,10 +98,12 @@ class _ChartBucket {
 
 class ProgramariProfitabilitatePage extends StatefulWidget {
   final List<Appointment> appointments;
+  final Future<void> Function(Appointment updated)? onAppointmentSaved;
 
   const ProgramariProfitabilitatePage({
     super.key,
     required this.appointments,
+    this.onAppointmentSaved,
   });
 
   @override
@@ -114,11 +116,22 @@ class _ProgramariProfitabilitatePageState
   _Perioada _perioada = _Perioada.lunaCurenta;
   AppointmentFinancialStatus? _filtruStatus;
   bool _exportingPdf = false;
+  bool _selectMode = false;
+  final Set<String> _selectate = {};
+
+  // Programări locale (pot fi actualizate după încasări în bulk)
+  late List<Appointment> _localAppointments;
+
+  @override
+  void initState() {
+    super.initState();
+    _localAppointments = List.from(widget.appointments);
+  }
 
   // Toate programările din perioadă (fără filtru status — pentru grafic și totale)
   List<Appointment> get _filtratePerioada {
     final interval = _perioada.interval;
-    return widget.appointments.where((a) {
+    return _localAppointments.where((a) {
       final dt = a.effectiveStartDateTime;
       return !dt.isBefore(interval.start) && !dt.isAfter(interval.end);
     }).toList()
@@ -133,6 +146,178 @@ class _ProgramariProfitabilitatePageState
     final list = _filtratePerioada;
     if (_filtruStatus == null) return list;
     return list.where((a) => a.adminFinancialStatus == _filtruStatus).toList();
+  }
+
+  // Suma totală selectată (folosind interventionPrice dacă nu există adminCollectedAmount)
+  double get _totalSelectat {
+    return _selectate.fold(0.0, (sum, id) {
+      final a = _localAppointments.firstWhere(
+        (x) => x.id == id,
+        orElse: () => throw StateError(''),
+      );
+      if (a.interventionPrice > 0) return sum + a.interventionPrice;
+      return sum + a.adminCollectedAmount;
+    });
+  }
+
+  Future<void> _saveUpdated(Appointment updated) async {
+    setState(() {
+      final idx = _localAppointments.indexWhere((a) => a.id == updated.id);
+      if (idx >= 0) _localAppointments[idx] = updated;
+    });
+    await widget.onAppointmentSaved?.call(updated);
+  }
+
+  Future<void> _showBulkCollectionDialog() async {
+    if (_selectate.isEmpty || !mounted) return;
+    final selected = _localAppointments
+        .where((a) => _selectate.contains(a.id))
+        .toList();
+    var method = 'Cash';
+    var status = AppointmentFinancialStatus.incasata;
+    var date = DateTime.now();
+
+    final totalDeIncasat = selected.fold<double>(
+      0,
+      (s, a) => s + (a.interventionPrice > 0 ? a.interventionPrice : a.adminCollectedAmount),
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (_, setS) => AlertDialog(
+          title: Text('Încasare în bloc — ${selected.length} programări'),
+          content: SizedBox(
+            width: 500,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Sumar selecție
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.green.shade200),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Total de înregistrat: ${totalDeIncasat.toStringAsFixed(2)} RON',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                        ),
+                        const SizedBox(height: 8),
+                        const Divider(height: 1),
+                        const SizedBox(height: 8),
+                        ...selected.map((a) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${a.clientName.isNotEmpty ? a.clientName : a.title} — ${DateFormat('dd.MM').format(a.effectiveStartDateTime)}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                              Text(
+                                a.interventionPrice > 0
+                                    ? '${a.interventionPrice.toStringAsFixed(2)} RON'
+                                    : '—',
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        )),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    initialValue: method,
+                    decoration: const InputDecoration(labelText: 'Modalitate încasare'),
+                    items: const [
+                      DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                      DropdownMenuItem(value: 'Card', child: Text('Card')),
+                      DropdownMenuItem(value: 'Transfer', child: Text('Transfer bancar')),
+                    ],
+                    onChanged: (v) => setS(() => method = v ?? 'Cash'),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<AppointmentFinancialStatus>(
+                    initialValue: status,
+                    decoration: const InputDecoration(labelText: 'Status de aplicat pe toate'),
+                    items: AppointmentFinancialStatus.values
+                        .map((s) => DropdownMenuItem(value: s, child: Text(s.label)))
+                        .toList(),
+                    onChanged: (v) => setS(() => status = v ?? AppointmentFinancialStatus.incasata),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    initialValue: DateFormat('dd.MM.yyyy').format(date),
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Data încasării',
+                      suffixIcon: Icon(Icons.calendar_today_outlined),
+                    ),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: date,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                      );
+                      if (picked != null) setS(() => date = picked);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Anulează'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text('Salvează ${selected.length} programări'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    for (final a in selected) {
+      final amount = a.interventionPrice > 0 ? a.interventionPrice : a.adminCollectedAmount;
+      final updated = a.copyWith(
+        adminCollectedAmount: amount,
+        adminCollectedCurrency: a.adminCollectedCurrency.isNotEmpty ? a.adminCollectedCurrency : 'RON',
+        adminFinancialStatus: status,
+        adminDueDate: date,
+      );
+      await _saveUpdated(updated);
+    }
+
+    setState(() {
+      _selectate.clear();
+      _selectMode = false;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Încasat în bloc: ${selected.length} programări — ${totalDeIncasat.toStringAsFixed(2)} RON',
+          ),
+        ),
+      );
+    }
   }
 
   double get _totalIncasat =>
@@ -456,11 +641,22 @@ class _ProgramariProfitabilitatePageState
     final filtrate = _filtrate;
     final fmt = DateFormat('dd.MM.yyyy');
     final buckets = _computeBuckets();
+    final canSave = widget.onAppointmentSaved != null;
+    final hasSelection = _selectate.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profitabilitate programări'),
         actions: [
+          if (canSave)
+            IconButton(
+              tooltip: _selectMode ? 'Ieși din selecție' : 'Selectează pentru încasare în bloc',
+              onPressed: () => setState(() {
+                _selectMode = !_selectMode;
+                _selectate.clear();
+              }),
+              icon: Icon(_selectMode ? Icons.close : Icons.checklist_outlined),
+            ),
           if (_exportingPdf)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
@@ -482,6 +678,40 @@ class _ProgramariProfitabilitatePageState
       ),
       body: Column(
         children: [
+          // Banner selecție activă
+          if (_selectMode)
+            Material(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        hasSelection
+                            ? '${_selectate.length} selectate — ${_totalSelectat.toStringAsFixed(2)} RON'
+                            : 'Bifează programările de încasat în bloc',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onPrimaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (hasSelection) ...[
+                      TextButton(
+                        onPressed: () => setState(() => _selectate.clear()),
+                        child: const Text('Deselectează'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: _showBulkCollectionDialog,
+                        icon: const Icon(Icons.payments_outlined, size: 18),
+                        label: Text('Încasează (${_selectate.length})'),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
           _buildPerioadaSelector(),
           _buildSumarCards(),
           _buildGrafic(buckets),
@@ -637,87 +867,257 @@ class _ProgramariProfitabilitatePageState
             : profit < 0
                 ? Colors.red
                 : Colors.grey;
+    final isSelected = _selectate.contains(item.id);
+    final canSave = widget.onAppointmentSaved != null;
+    final neincasata = item.adminFinancialStatus == AppointmentFinancialStatus.neincasata ||
+        item.adminFinancialStatus == AppointmentFinancialStatus.partial;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.title.isNotEmpty ? item.title : '(fără titlu)',
-                        style: Theme.of(context).textTheme.titleSmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (item.clientName.isNotEmpty)
+      color: isSelected
+          ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3)
+          : null,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _selectMode
+            ? () => setState(() {
+                  if (isSelected) {
+                    _selectate.remove(item.id);
+                  } else {
+                    _selectate.add(item.id);
+                  }
+                })
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_selectMode)
+                    Checkbox(
+                      value: isSelected,
+                      onChanged: (_) => setState(() {
+                        if (isSelected) {
+                          _selectate.remove(item.id);
+                        } else {
+                          _selectate.add(item.id);
+                        }
+                      }),
+                    ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
                         Text(
-                          item.clientName,
-                          style: Theme.of(context).textTheme.bodySmall,
+                          item.title.isNotEmpty ? item.title : '(fără titlu)',
+                          style: Theme.of(context).textTheme.titleSmall,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (item.clientName.isNotEmpty)
+                          Text(
+                            item.clientName,
+                            style: Theme.of(context).textTheme.bodySmall,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    fmt.format(item.effectiveStartDateTime),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _StatChip(
+                    label: 'Încasat',
+                    value: hasIncome
+                        ? '${item.adminCollectedAmount.toStringAsFixed(2)} ${item.adminCollectedCurrency}'
+                        : '—',
+                    color: hasIncome ? Colors.blue.shade700 : Colors.grey,
+                  ),
+                  const SizedBox(width: 6),
+                  _StatChip(
+                    label: 'Materiale',
+                    value: item.estimatedMaterialsCost > 0
+                        ? '${item.estimatedMaterialsCost.toStringAsFixed(2)} RON'
+                        : '—',
+                    color: Colors.orange.shade700,
+                  ),
+                  const SizedBox(width: 6),
+                  _StatChip(
+                    label: 'Profit',
+                    value: hasIncome
+                        ? '${profit.toStringAsFixed(2)} ${item.adminCollectedCurrency}'
+                        : '—',
+                    color: profitColor,
+                  ),
+                  const Spacer(),
+                  _StatusBadge(status: item.adminFinancialStatus),
+                ],
+              ),
+              if (item.interventionPrice > 0) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Text(
+                      'De încasat: ${item.interventionPrice.toStringAsFixed(2)} ${item.interventionPriceCurrency}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: neincasata
+                                ? Colors.orange.shade700
+                                : Theme.of(context).colorScheme.outline,
+                            fontWeight: neincasata ? FontWeight.w600 : null,
+                          ),
+                    ),
+                    if (hasIncome && item.interventionPrice > item.adminCollectedAmount) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        'Rest: ${(item.interventionPrice - item.adminCollectedAmount).toStringAsFixed(2)} RON',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.red.shade700,
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
                     ],
+                  ],
+                ),
+              ],
+              // Buton rapid încasare (când nu ești în mod selecție)
+              if (!_selectMode && canSave && neincasata) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.tonalIcon(
+                    onPressed: () => _showSingleCollectionDialog(item),
+                    icon: const Icon(Icons.payments_outlined, size: 16),
+                    label: const Text('Înregistrează încasare'),
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                    ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  fmt.format(item.effectiveStartDateTime),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
               ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                _StatChip(
-                  label: 'Încasat',
-                  value: hasIncome
-                      ? '${item.adminCollectedAmount.toStringAsFixed(2)} ${item.adminCollectedCurrency}'
-                      : '—',
-                  color: hasIncome ? Colors.blue.shade700 : Colors.grey,
-                ),
-                const SizedBox(width: 6),
-                _StatChip(
-                  label: 'Materiale',
-                  value: item.estimatedMaterialsCost > 0
-                      ? '${item.estimatedMaterialsCost.toStringAsFixed(2)} RON'
-                      : '—',
-                  color: Colors.orange.shade700,
-                ),
-                const SizedBox(width: 6),
-                _StatChip(
-                  label: 'Profit',
-                  value: hasIncome
-                      ? '${profit.toStringAsFixed(2)} ${item.adminCollectedCurrency}'
-                      : '—',
-                  color: profitColor,
-                ),
-                const Spacer(),
-                _StatusBadge(status: item.adminFinancialStatus),
-              ],
-            ),
-            if (item.interventionPrice > 0) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Preț intervenție: ${item.interventionPrice.toStringAsFixed(2)} ${item.interventionPriceCurrency}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-              ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSingleCollectionDialog(Appointment item) async {
+    var method = 'Cash';
+    var status = AppointmentFinancialStatus.incasata;
+    var date = DateTime.now();
+    final amountCtrl = TextEditingController(
+      text: item.interventionPrice > 0
+          ? item.interventionPrice.toStringAsFixed(2)
+          : item.adminCollectedAmount > 0
+              ? item.adminCollectedAmount.toStringAsFixed(2)
+              : '',
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (_, setS) => AlertDialog(
+          title: Text(
+            item.clientName.isNotEmpty ? 'Încasare — ${item.clientName}' : 'Înregistrare încasare',
+          ),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (item.interventionPrice > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'Preț intervenție: ${item.interventionPrice.toStringAsFixed(2)} ${item.interventionPriceCurrency}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Sumă încasată',
+                      suffixText: 'RON',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: method,
+                    decoration: const InputDecoration(labelText: 'Modalitate'),
+                    items: const [
+                      DropdownMenuItem(value: 'Cash', child: Text('Cash')),
+                      DropdownMenuItem(value: 'Card', child: Text('Card')),
+                      DropdownMenuItem(value: 'Transfer', child: Text('Transfer bancar')),
+                    ],
+                    onChanged: (v) => setS(() => method = v ?? 'Cash'),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<AppointmentFinancialStatus>(
+                    initialValue: status,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: AppointmentFinancialStatus.values
+                        .map((s) => DropdownMenuItem(value: s, child: Text(s.label)))
+                        .toList(),
+                    onChanged: (v) => setS(() => status = v ?? AppointmentFinancialStatus.incasata),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    initialValue: DateFormat('dd.MM.yyyy').format(date),
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Data încasării',
+                      suffixIcon: Icon(Icons.calendar_today_outlined),
+                    ),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: date,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2030),
+                      );
+                      if (picked != null) setS(() => date = picked);
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Anulează')),
+            FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Salvează')),
           ],
         ),
       ),
     );
+
+    amountCtrl.dispose();
+    if (confirmed != true || !mounted) return;
+    final amount = double.tryParse(amountCtrl.text.trim().replaceAll(',', '.')) ?? item.interventionPrice;
+    final updated = item.copyWith(
+      adminCollectedAmount: amount,
+      adminFinancialStatus: status,
+      adminDueDate: date,
+      adminCollectedCurrency: 'RON',
+    );
+    await _saveUpdated(updated);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Înregistrat: ${amount.toStringAsFixed(2)} RON — $method')),
+      );
+    }
   }
 }
 

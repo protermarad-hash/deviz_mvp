@@ -1,14 +1,18 @@
 import 'package:flutter/material.dart';
 
-import '../master/master_local_store.dart';
-import '../materials/materials_catalog_service.dart';
-import 'programare_kit_catalog_service.dart';
-import 'programare_kit_models.dart';
+import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/help_button.dart';
 import '../../core/help_content.dart';
+import '../master/master_local_store.dart';
+import '../materials/materials_catalog_service.dart';
+import 'kit_propagation_service.dart';
+import 'programare_kit_catalog_service.dart';
+import 'programare_kit_models.dart';
 
 class ProgramareKituriPage extends StatefulWidget {
-  const ProgramareKituriPage({super.key});
+  const ProgramareKituriPage({super.key, this.repository});
+
+  final AppDataRepository? repository;
 
   @override
   State<ProgramareKituriPage> createState() => _ProgramareKituriPageState();
@@ -280,7 +284,96 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
     defaultMlCtrl.dispose();
 
     if (saved == null) return;
+
+    final repo = widget.repository;
+
+    // Verifică câte programări sunt afectate ÎNAINTE de salvare
+    final affectedCount = repo != null
+        ? await KitPropagationService.instance
+            .countAffectedAppointments(saved.id)
+        : 0;
+
+    if (!mounted) return;
+
+    // Dialog confirmare dacă există programări afectate
+    if (affectedCount > 0) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (dialogCtx) => AlertDialog(
+          title: const Text('Actualizează programările?'),
+          content: Text(
+            'Rețeta "${saved.name}" este folosită în $affectedCount programări existente.\n\n'
+            'Componentele și prețurile vor fi actualizate automat.\n'
+            'Cantitățile măsurate (ml folosiți) rămân neschimbate.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx, false),
+              child: const Text('Doar salvează rețeta'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogCtx, true),
+              child: const Text('Salvează și actualizează toate'),
+            ),
+          ],
+        ),
+      );
+
+      if (!mounted) return;
+
+      if (confirm != true) {
+        // Salvează doar rețeta, fără propagare
+        await _service.upsertTemplate(saved);
+        await _load();
+        return;
+      }
+    }
+
+    // Salvează rețeta
     await _service.upsertTemplate(saved);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Rețetă salvată. Se actualizează programările...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+
+    // Propagare în fundal — fire-and-forget
+    if (repo != null && affectedCount > 0) {
+      KitPropagationService.instance
+          .propagateKitChanges(saved, repo)
+          .then((result) {
+        if (!mounted) return;
+        if (result.updatedCount > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Rețeta actualizată în ${result.updatedCount} programări.'
+                '${result.skippedCount > 0 ? " (${result.skippedCount} erori ignorate)" : ""}',
+              ),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }).catchError((e) {
+        debugPrint('[KitPropagation] Eroare propagare: $e');
+      });
+    } else if (repo != null && affectedCount == 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Rețetă salvată. Nicio programare anterioară cu această rețetă.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+
     await _load();
   }
 

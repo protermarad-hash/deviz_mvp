@@ -1,0 +1,4373 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:firebase_storage/firebase_storage.dart';
+import '../notifications/send_document_dialog.dart';
+import '../notifications/document_email_templates.dart';
+
+import '../../core/auth/app_role_policy.dart';
+import '../../core/auth_models.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/document_file_service.dart';
+import '../../core/pdf_actions_helper.dart';
+import '../../core/pdf_document_branding.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/widgets/client_autocomplete_field.dart';
+import '../ai_assistant/ai_assistant_action_catalog.dart';
+import '../ai_assistant/ai_assistant_models.dart';
+import '../ai_assistant/ai_assistant_service.dart';
+import '../ai_assistant/ai_assistant_sheet.dart';
+import '../clients/client_models.dart';
+import '../notifications/notification_models.dart';
+import '../notifications/notification_service.dart';
+import '../oferte/firebase_oferte_repository.dart';
+import '../oferte/local_oferte_repository.dart';
+import '../oferte/offer_models.dart';
+import '../oferte/offer_standard_catalog_models.dart';
+import '../oferte/offer_standard_catalog_service.dart';
+import '../oferte/oferte_page.dart';
+import '../product_catalog/product_catalog_models.dart';
+import '../product_catalog/product_catalog_page.dart';
+import '../product_catalog/product_sales_models.dart';
+import '../product_catalog/product_catalog_service.dart';
+import '../programari/appointment_models.dart';
+import '../programari/programari_page.dart';
+import '../registratura/registry_models.dart';
+import 'field_sales_models.dart';
+import 'field_sales_service.dart';
+import 'field_sales_quote_pdf_service.dart';
+
+class FieldSalesPage extends StatefulWidget {
+  const FieldSalesPage({
+    super.key,
+    required this.repository,
+    this.fieldAuthRoleKey,
+    this.fieldAuthUserId,
+    this.fieldAuthUserEmail,
+    this.fieldAuthTeamId,
+  });
+
+  final AppDataRepository repository;
+  final String? fieldAuthRoleKey;
+  final String? fieldAuthUserId;
+  final String? fieldAuthUserEmail;
+  final String? fieldAuthTeamId;
+
+  @override
+  State<FieldSalesPage> createState() => _FieldSalesPageState();
+}
+
+class _FieldSalesPageState extends State<FieldSalesPage> {
+  static const double _maxDirectDiscountPercent = 12;
+  static const int _maxInlineAttachmentBytes = 550 * 1024;
+  static const String _prefKeyPriceList = 'field_sales_price_list_v1';
+  static const String _prefKeyLeadId = 'field_sales_lead_id_v1';
+  AiAssistantService get _aiAssistantService =>
+      AiAssistantService(repository: widget.repository);
+  final FieldSalesService _service = FieldSalesService();
+  final ProductCatalogService _productCatalogService = ProductCatalogService();
+  final NotificationCenterService _notificationService =
+      NotificationCenterService();
+  final LocalOferteRepository _localOferteRepository = LocalOferteRepository();
+  final FirebaseOferteRepository? _cloudOferteRepository =
+      FirebaseBootstrap.isInitialized ? FirebaseOferteRepository() : null;
+  final TextEditingController _catalogSearchController =
+      TextEditingController();
+  final TextEditingController _leadSearchController = TextEditingController();
+
+  bool _loading = true;
+  Timer? _clientsReloadDebounce;
+  bool _clientsReloading = false;
+  String? _message;
+  AppUser? _currentUser;
+  List<ClientRecord> _clients = const <ClientRecord>[];
+  List<PriceListRecord> _priceLists = const <PriceListRecord>[];
+  List<FieldCommercialProductView> _catalogItems =
+      const <FieldCommercialProductView>[];
+  List<FieldLeadRecord> _leads = const <FieldLeadRecord>[];
+  List<FieldSalesRequestRecord> _requests = const <FieldSalesRequestRecord>[];
+  String _selectedPriceListId = '';
+  FieldLeadRecord? _selectedLead;
+  String _savedLeadId = '';
+
+  String get _currentUserId => (widget.fieldAuthUserId ?? '').trim();
+  String get _currentUserEmail => (widget.fieldAuthUserEmail ?? '').trim();
+  String get _currentTeamId => (widget.fieldAuthTeamId ?? '').trim();
+  UserRole? get _resolvedRole => AppRolePolicy.resolve(
+        roleKey: widget.fieldAuthRoleKey,
+      );
+  bool get _canSeeAll =>
+      _resolvedRole == null ||
+      _resolvedRole == UserRole.admin ||
+      _resolvedRole == UserRole.birou ||
+      _resolvedRole == UserRole.sefEchipa;
+  bool get _restrictToStandardPriceList => !_canSeeAll;
+
+  List<PriceListRecord> get _availableFieldPriceLists {
+    if (!_restrictToStandardPriceList) {
+      return _priceLists;
+    }
+    final standardPriceList = _service.resolveStandardPriceList(_priceLists);
+    return standardPriceList == null
+        ? const <PriceListRecord>[]
+        : <PriceListRecord>[standardPriceList];
+  }
+
+  String get _normalizedSelectedPriceListId =>
+      _service.normalizeRequestedPriceListId(
+        _selectedPriceListId,
+        _priceLists,
+        restrictToStandardOnly: _restrictToStandardPriceList,
+      );
+
+  PriceListRecord? get _selectedFieldPriceList {
+    final priceListId = _normalizedSelectedPriceListId;
+    if (priceListId.isEmpty) return null;
+    for (final item in _availableFieldPriceLists) {
+      if (item.id == priceListId) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _catalogSearchController.addListener(() => setState(() {}));
+    _leadSearchController.addListener(() => setState(() {}));
+    LocalAppDataRepository.clientsChangeCount.addListener(_handleClientsChanged);
+    _initAsync();
+  }
+
+  Future<void> _initAsync() async {
+    await _loadSavedPreferences();
+    _load();
+  }
+
+  Future<void> _loadSavedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final priceListId = prefs.getString(_prefKeyPriceList) ?? '';
+    final leadId = prefs.getString(_prefKeyLeadId) ?? '';
+    setState(() {
+      if (priceListId.isNotEmpty) {
+        _selectedPriceListId = priceListId;
+      }
+      // _selectedLeadId va fi rezolvat în _load() după ce leads sunt încărcate
+      _savedLeadId = leadId;
+    });
+  }
+
+  Future<void> _persistSavedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait([
+      prefs.setString(_prefKeyPriceList, _selectedPriceListId),
+      prefs.setString(_prefKeyLeadId, _selectedLead?.id ?? ''),
+    ]);
+  }
+
+  @override
+  void dispose() {
+    LocalAppDataRepository.clientsChangeCount.removeListener(_handleClientsChanged);
+    _clientsReloadDebounce?.cancel();
+    _catalogSearchController.dispose();
+    _leadSearchController.dispose();
+    super.dispose();
+  }
+
+  void _handleClientsChanged() {
+    if (_loading) {
+      return;
+    }
+    _clientsReloadDebounce?.cancel();
+    _clientsReloadDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      _reloadClientsOnly();
+    });
+  }
+
+  Future<void> _reloadClientsOnly() async {
+    if (_loading || _clientsReloading) {
+      return;
+    }
+    _clientsReloading = true;
+    try {
+      final clients = await widget.repository.listClients();
+      if (!mounted) return;
+      setState(() => _clients = clients
+          .where((c) => c.isActive)
+          .toList(growable: false));
+    } finally {
+      _clientsReloading = false;
+    }
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
+    try {
+      final results = await Future.wait<dynamic>([
+        widget.repository.loadCurrentUser(),
+        widget.repository.listClients(),
+        _productCatalogService.listPriceLists(),
+        _service.listLeads(),
+        _service.listRequests(),
+      ]);
+      _currentUser = results[0] as AppUser?;
+      _clients = (results[1] as List<ClientRecord>)
+          .where((item) => item.isActive)
+          .toList(growable: false)
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      _priceLists = (results[2] as List<PriceListRecord>)
+          .where((item) => item.isActive)
+          .toList(growable: false);
+      _leads = results[3] as List<FieldLeadRecord>;
+      _requests = results[4] as List<FieldSalesRequestRecord>;
+      _selectedPriceListId = _service.normalizeRequestedPriceListId(
+        _selectedPriceListId,
+        _priceLists,
+        restrictToStandardOnly: _restrictToStandardPriceList,
+      );
+      _catalogItems = await _service.buildCommercialCatalog(
+        priceListId: _selectedPriceListId,
+        restrictToStandardOnly: _restrictToStandardPriceList,
+      );
+      // Restaurează lead selectat: actualizează din lista nouă sau restaurează din ID salvat
+      if (_selectedLead != null) {
+        FieldLeadRecord? updated;
+        for (final lead in _leads) {
+          if (lead.id == _selectedLead!.id) {
+            updated = lead;
+            break;
+          }
+        }
+        _selectedLead = updated; // null dacă lead-ul a fost șters
+      } else if (_savedLeadId.isNotEmpty) {
+        for (final lead in _leads) {
+          if (lead.id == _savedLeadId) {
+            _selectedLead = lead;
+            break;
+          }
+        }
+        _savedLeadId = ''; // curățăm după prima restaurare
+      }
+    } catch (error) {
+      _message = 'Nu am putut incarca modulul de teren: $error';
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  List<FieldCommercialProductView> get _filteredCatalogItems {
+    final query = _catalogSearchController.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _catalogItems;
+    }
+    return _catalogItems.where((item) {
+      final product = item.product;
+      return product.name.toLowerCase().contains(query) ||
+          product.brand.toLowerCase().contains(query) ||
+          product.model.toLowerCase().contains(query) ||
+          product.category.toLowerCase().contains(query) ||
+          product.sku.toLowerCase().contains(query) ||
+          product.commercialDescription.toLowerCase().contains(query);
+    }).toList(growable: false);
+  }
+
+  List<FieldLeadRecord> get _visibleLeads {
+    final rows = _canSeeAll
+        ? _leads
+        : _leads.where((item) {
+            return item.createdByUserId.trim() == _currentUserId ||
+                item.assignedUserId.trim() == _currentUserId;
+          }).toList(growable: false);
+    final query = _leadSearchController.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return rows;
+    }
+    return rows.where((item) {
+      return item.clientName.toLowerCase().contains(query) ||
+          item.contactName.toLowerCase().contains(query) ||
+          item.phone.toLowerCase().contains(query) ||
+          item.email.toLowerCase().contains(query) ||
+          item.notes.toLowerCase().contains(query);
+    }).toList(growable: false);
+  }
+
+  List<FieldSalesRequestRecord> get _visibleRequests {
+    return _canSeeAll
+        ? _requests
+        : _requests
+            .where((item) => item.requestedByUserId.trim() == _currentUserId)
+            .toList(growable: false);
+  }
+
+  String _formatDateTime(DateTime value) {
+    final date =
+        '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year.toString().padLeft(4, '0')}';
+    final time =
+        '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+    return '$date $time';
+  }
+
+  String _money(double value, String currency) =>
+      '${value.toStringAsFixed(2)} $currency';
+
+  String _stockSummary(FieldCommercialProductView item) {
+    return 'Stoc: ${item.availableStockQuantity.toStringAsFixed(2)} ${item.product.unit}';
+  }
+
+  FieldLeadRecord? _findLeadById(String leadId) {
+    final id = leadId.trim();
+    if (id.isEmpty) return null;
+    for (final item in _leads) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  AiAssistantRuntimeContext _buildFieldSalesModuleAiContext() {
+    final lead = _selectedLead;
+    final catalogSlice = _filteredCatalogItems.take(8).map((item) {
+      return <String, dynamic>{
+        ...item.product.toMap(),
+        'sale_price': item.salePrice,
+        'currency': item.currency,
+        'available_stock_quantity': item.availableStockQuantity,
+      };
+    }).toList(growable: false);
+    return AiAssistantRuntimeContext(
+      contextType: AiAssistantContextType.fieldSales,
+      module: 'field_sales',
+      entityId: lead?.id ?? 'field-sales-module',
+      entityLabel: lead?.clientName.trim().isNotEmpty == true
+          ? lead!.clientName.trim()
+          : 'Agent teren',
+      userId: _currentUserId,
+      contextLabel: lead == null
+          ? 'Agent teren / context comercial curent'
+          : 'Agent teren / lead ${lead.clientName.trim().isEmpty ? lead.contactName : lead.clientName}',
+      primaryData: <String, dynamic>{
+        'type': 'field_sales_request',
+        'selected_price_list_id': _normalizedSelectedPriceListId,
+        'selected_price_list': _availableFieldPriceLists
+            .where((item) => item.id == _normalizedSelectedPriceListId)
+            .map((item) => item.toMap())
+            .cast<Map<String, dynamic>?>()
+            .firstWhere((item) => item != null, orElse: () => null),
+        'lead': lead?.toMap() ?? <String, dynamic>{},
+        'requests_count': _visibleRequests.length,
+      },
+      relatedData: <String, dynamic>{
+        'field_sales_request': <String, dynamic>{
+          'lead_id': lead?.id ?? '',
+          'client_name': lead?.clientName ?? '',
+          'notes': lead?.notes ?? '',
+          'selected_price_list_id': _normalizedSelectedPriceListId,
+        },
+        'lead': lead?.toMap() ?? <String, dynamic>{},
+        'client': <String, dynamic>{
+          'client_name': lead?.clientName ?? '',
+          'contact_name': lead?.contactName ?? '',
+          'phone': lead?.phone ?? '',
+          'email': lead?.email ?? '',
+        },
+        'products': catalogSlice,
+      },
+    );
+  }
+
+  Future<void> _openFieldSalesAiAssistant() async {
+    await AiAssistantSheet.show(
+      context: context,
+      title: 'Asistent AI agent teren',
+      service: _aiAssistantService,
+      runtimeContext: _buildFieldSalesModuleAiContext(),
+      actions: AiAssistantActionCatalog.actionsFor(
+        AiAssistantContextType.fieldSales,
+      ),
+    );
+  }
+
+  String _resolveClientLabel(FieldSalesRequestRecord request) {
+    final lead = _findLeadById(request.leadId);
+    final values = <String>[
+      request.clientName.trim(),
+      lead?.clientName.trim() ?? '',
+      lead?.contactName.trim() ?? '',
+    ];
+    for (final value in values) {
+      if (value.isNotEmpty) return value;
+    }
+    return request.requestType.label;
+  }
+
+  String _fileNameFromPath(String path) {
+    final normalized = path.replaceAll('\\', '/').trim();
+    if (normalized.isEmpty) return '';
+    final parts = normalized.split('/');
+    return parts.isEmpty ? normalized : parts.last.trim();
+  }
+
+  List<FieldSalesQuotePdfProductRow> _buildRequestPdfProducts(
+    FieldSalesRequestRecord request,
+  ) {
+    final selections = request.requestedProducts.isNotEmpty
+        ? request.requestedProducts
+        : request.requestedProductIds
+            .map((productId) {
+              final item = _catalogItemByProductId(productId, request);
+              if (item == null) return null;
+              return FieldSalesProductSelection(
+                productId: item.product.id,
+                productName: item.product.name,
+                quantity: 1,
+                unitPrice: item.salePrice,
+                currency: item.currency,
+              );
+            })
+            .whereType<FieldSalesProductSelection>()
+            .toList(growable: false);
+    return selections.map((selection) {
+      final item = _catalogItemByProductId(selection.productId, request);
+      final product = item?.product;
+      final details = <String>[
+        if ((product?.brand.trim() ?? '').isNotEmpty) product!.brand.trim(),
+        if ((product?.model.trim() ?? '').isNotEmpty) product!.model.trim(),
+        if ((product?.sku.trim() ?? '').isNotEmpty)
+          'SKU ${product!.sku.trim()}',
+      ].join(' | ');
+      return FieldSalesQuotePdfProductRow(
+        name: selection.productName.trim().isEmpty
+            ? (product?.name.trim().isEmpty == false
+                ? product!.name.trim()
+                : 'Produs')
+            : selection.productName.trim(),
+        details: details,
+        quantity: selection.quantity,
+        unit: (product?.unit.trim().isNotEmpty == true)
+            ? product!.unit.trim()
+            : 'buc',
+        unitPrice: selection.unitPrice,
+        lineTotal: selection.lineTotal,
+        currency: selection.currency.trim().isEmpty
+            ? request.currency
+            : selection.currency,
+        stockStatus: product?.stockStatus ?? ProductStockStatus.inStock,
+        deliveryLeadTimeText: product?.deliveryLeadTimeText ?? '',
+      );
+    }).toList(growable: false);
+  }
+
+  Future<void> _generateRequestPdf(
+    FieldSalesRequestRecord request, {
+    bool saveAs = false,
+    bool share = false,
+  }) async {
+    try {
+      final companyProfile = await widget.repository.loadCompanyProfile();
+      final branding = DocumentBrandingData.fromCompanyProfile(companyProfile);
+      final lead = _findLeadById(request.leadId);
+      final filePath = await FieldSalesQuotePdfService.export(
+        repository: widget.repository,
+        request: request,
+        branding: branding,
+        template: companyProfile.pdfExportSettings.visualTemplate,
+        agentLabel: request.requestedByName.trim().isEmpty
+            ? (_currentUser?.displayName.trim().isEmpty == false
+                ? _currentUser!.displayName.trim()
+                : _currentUserEmail)
+            : request.requestedByName.trim(),
+        lead: lead,
+        productRows: _buildRequestPdfProducts(request),
+        saveAs: saveAs,
+      );
+      final persisted = request.copyWith(
+        generatedDocumentPath: filePath,
+        generatedDocumentFileName: _fileNameFromPath(filePath),
+        generatedAt: DateTime.now(),
+        generatedDocumentType: 'field_sales_quote_pdf',
+      );
+      await _service.saveRequest(persisted);
+      try {
+        await widget.repository.registerGeneratedDocument(
+          registryType: RegistryType.iesire,
+          documentCategory: 'Agent teren',
+          documentTitle: 'Oferta rapida ${_resolveClientLabel(request)}',
+          documentNumber: persisted.id.trim().isEmpty
+              ? 'FSQ-${persisted.createdAt.millisecondsSinceEpoch}'
+              : persisted.id.trim(),
+          documentDate: persisted.generatedAt,
+          issuerName: companyProfile.companyName,
+          recipientName: _resolveClientLabel(request),
+          clientId: persisted.clientId.trim(),
+          filePath: filePath,
+          fileName: persisted.generatedDocumentFileName,
+          notes:
+              'Mini-oferta PDF generata din Agent teren pentru cererea ${persisted.id}.',
+          status: 'emis',
+        );
+      } catch (_) {}
+      if (!mounted) return;
+      if (share) {
+        ClientRecord? client;
+        for (final c in _clients) {
+          if (c.id == persisted.clientId) {
+            client = c;
+            break;
+          }
+        }
+        final defaultTo = client?.email.trim() ?? '';
+        final subject = 'Mini-oferta ${_resolveClientLabel(request)}';
+        final body =
+            'Buna ziua,\n\nVa trimitem mini-oferta atasata.\n\nCu stima,';
+        final result = await showDialog<Map<String, String>?>(
+          context: context,
+          builder: (_) => SendDocumentDialog(
+            to: defaultTo,
+            subject: subject,
+            body: body,
+          ),
+        );
+        if (result == null) return;
+        final action = result['action'] ?? 'cancel';
+        if (action == 'cancel') return;
+        if (action == 'mailto') {
+          await DocumentFileService.shareFile(
+            filePath,
+            subject: result['subject'] ?? subject,
+            text: result['body'] ?? body,
+          );
+          if (!mounted) return;
+          await _load();
+          return;
+        }
+
+        if (action == 'queue') {
+          try {
+            final inlineAssets = <Map<String, dynamic>>[];
+            if (companyProfile.logoBase64.trim().isNotEmpty) {
+              inlineAssets.add({
+                'cid': 'companylogo',
+                'filename': 'logo.png',
+                'base64': companyProfile.logoBase64.trim(),
+                'contentType': 'image/png',
+              });
+            }
+            final notif = NotificationCenterService();
+            final attachments = [
+              await _buildQueueAttachmentFromFile(
+                filePath: filePath,
+                fileName: '${request.id}.pdf',
+                sourceModule: 'field_sales',
+                sourceEntityId: request.id,
+              ),
+            ];
+            final queueItem = await notif.sendEmailNotification(
+              recipientEmail: result['to'] ?? defaultTo,
+              recipientName: _resolveClientLabel(request),
+              subject: result['subject'] ?? subject,
+              bodyText: result['body'] ?? body,
+              bodyHtml: miniOfferHtml(
+                recipientName: result['to'] ?? _resolveClientLabel(request),
+                companyName: companyProfile.companyName,
+                agentName: persisted.requestedByName.isNotEmpty
+                    ? persisted.requestedByName
+                    : _currentUser?.displayName ?? '',
+                message: result['body'] ?? body,
+              ),
+              attachments: attachments,
+              inlineAssets: inlineAssets,
+              sourceModule: 'field_sales',
+              sourceEntityId: request.id,
+              eventType: NotificationEventType.documentGenerated,
+              metadata: {'request_id': request.id},
+            );
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Email pus in coada: ${queueItem.id}. Statusul final se vede in Notificari / Email log.',
+                ),
+              ),
+            );
+            await _load();
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Eroare la punerea in coada: $e')),
+            );
+          }
+        }
+        return;
+      }
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('PDF mini-ofertă generat.')),
+      );
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: filePath,
+        title: 'Mini-ofertă PDF generată',
+        shareSubject: 'Ofertă ${request.id}',
+        shareText: 'PDF mini-ofertă generat din aplicație.',
+      );
+    } on PdfSaveCanceledException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Salvarea PDF-ului a fost anulata.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message = 'Nu am putut genera PDF-ul mini-ofertei: $error';
+      });
+    }
+  }
+
+  Future<Map<String, dynamic>> _buildQueueAttachmentFromFile({
+    required String filePath,
+    required String fileName,
+    required String sourceModule,
+    required String sourceEntityId,
+  }) async {
+    final file = File(filePath.trim());
+    if (!file.existsSync()) {
+      throw StateError('Fisierul atasat nu exista: $filePath');
+    }
+    final bytes = await file.readAsBytes();
+    final normalizedName = _sanitizeAttachmentFileName(fileName);
+    if (bytes.length <= _maxInlineAttachmentBytes) {
+      return <String, dynamic>{
+        'filename': normalizedName,
+        'base64': base64Encode(bytes),
+        'content_type': 'application/pdf',
+        'size_bytes': bytes.length,
+      };
+    }
+
+    final safeEntity = sourceEntityId.trim().isEmpty
+        ? 'unknown'
+        : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+    final storagePath =
+        'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    final ref = FirebaseStorage.instance.ref().child(storagePath);
+    await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'application/pdf'),
+    );
+    return <String, dynamic>{
+      'filename': normalizedName,
+      'storage_path': ref.fullPath,
+      'storage_bucket': ref.bucket,
+      'content_type': 'application/pdf',
+      'size_bytes': bytes.length,
+      'encoding': 'firebase_storage',
+    };
+  }
+
+  String _sanitizeAttachmentFileName(String fileName) {
+    final trimmed = fileName.trim();
+    if (trimmed.isEmpty) return 'document.pdf';
+    return trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+  }
+
+  FieldLeadRecord _buildLeadSeedFromRequest(FieldSalesRequestRecord request) {
+    final existingLead = _findLeadById(request.leadId);
+    if (existingLead != null) {
+      return existingLead;
+    }
+    final now = DateTime.now();
+    return FieldLeadRecord(
+      id: request.leadId.trim().isEmpty
+          ? 'field-lead-seed-${request.id}'
+          : request.leadId.trim(),
+      clientId: request.clientId.trim(),
+      clientName: request.clientName.trim(),
+      contactName: request.clientName.trim(),
+      phone: '',
+      email: '',
+      address: '',
+      sourceModule: 'field_sales',
+      sourceEntityId: request.id,
+      sourceLabel: request.requestType.label,
+      interestedInType: switch (request.requestType) {
+        FieldSalesRequestType.vanzareProdus => FieldLeadInterestType.produs,
+        FieldSalesRequestType.serviciu => FieldLeadInterestType.serviciu,
+        FieldSalesRequestType.programare => FieldLeadInterestType.programare,
+        FieldSalesRequestType.oferta => FieldLeadInterestType.oferta,
+      },
+      interestedProductIds: request.requestedProductIds,
+      notes: request.notes,
+      status: FieldLeadStatus.contactat,
+      assignedUserId: request.requestedByUserId.trim(),
+      createdByUserId: request.requestedByUserId.trim(),
+      createdAt: request.createdAt,
+      updatedAt: now,
+    );
+  }
+
+  Future<List<OfferRecord>> _listOffersResolved() async {
+    final cloud = _cloudOferteRepository;
+    if (cloud == null) {
+      return _localOferteRepository.listOffers();
+    }
+    try {
+      final cloudItems = await cloud.listOffers();
+      await _localOferteRepository.replaceOffers(cloudItems);
+      return cloudItems;
+    } catch (_) {
+      return _localOferteRepository.listOffers();
+    }
+  }
+
+  Future<void> _saveOfferResolved(OfferRecord item) async {
+    final cloud = _cloudOferteRepository;
+    var queuedOffline = false;
+    if (cloud != null) {
+      try {
+        await cloud.upsertOffer(item);
+      } catch (_) {
+        queuedOffline = true;
+      }
+    } else {
+      queuedOffline = true;
+    }
+    await _localOferteRepository.upsertOffer(item);
+    if (queuedOffline) {
+      await OfflineSyncRuntime.instance.queueOffer(item);
+    }
+  }
+
+  FieldCommercialProductView? _catalogItemByProductId(
+    String productId,
+    FieldSalesRequestRecord request,
+  ) {
+    final id = productId.trim();
+    if (id.isEmpty) return null;
+    for (final item in _catalogItems) {
+      if (item.product.id == id) {
+        final priceListId = _service.normalizeRequestedPriceListId(
+          request.requestedPriceListId,
+          _priceLists,
+          restrictToStandardOnly: _restrictToStandardPriceList,
+        );
+        if (priceListId.isEmpty || item.priceList?.id == priceListId) {
+          return item;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _markLeadConverted({
+    required FieldSalesRequestRecord request,
+    required String entityType,
+    required String entityId,
+    required String entityLabel,
+  }) async {
+    final lead = _findLeadById(request.leadId);
+    if (lead == null) return;
+    await _service.saveLead(
+      lead.copyWith(
+        status: FieldLeadStatus.convertit,
+        convertedAt: DateTime.now(),
+        convertedByUserId: _currentUserId,
+        convertedEntityType: entityType,
+        convertedEntityId: entityId,
+        convertedEntityLabel: entityLabel,
+      ),
+    );
+  }
+
+  Future<void> _dispatchConversionNotification({
+    required FieldSalesRequestRecord request,
+    required String entityType,
+    required String entityId,
+    required String entityLabel,
+    required String module,
+    required String title,
+    required String message,
+  }) async {
+    await _notificationService.dispatchEvent(
+      NotificationDispatchRequest(
+        eventType: NotificationEventType.requestConverted,
+        title: title,
+        message: message,
+        sourceModule: module,
+        sourceEntityId: entityId,
+        sourceLabel: entityLabel,
+        recipientRoleKeys: const <String>['admin', 'office'],
+        recipientUserIds: request.requestedByUserId.trim().isEmpty
+            ? const <String>[]
+            : <String>[request.requestedByUserId.trim()],
+        metadata: <String, dynamic>{
+          'request_id': request.id,
+          'lead_id': request.leadId,
+          'converted_entity_type': entityType,
+          'converted_entity_id': entityId,
+        },
+      ),
+    );
+  }
+
+  Future<void> _openConvertedSource(FieldSalesRequestRecord request) async {
+    if (!request.isConverted || request.convertedEntityId.trim().isEmpty) {
+      setState(() {
+        _message = 'Cererea nu are inca o conversie activa.';
+      });
+      return;
+    }
+    Widget? page;
+    final entityType = request.convertedEntityType.trim().toLowerCase();
+    if (entityType == 'appointment') {
+      page = ProgramariPage(
+        repository: widget.repository,
+        fieldAuthRoleKey: widget.fieldAuthRoleKey,
+        fieldAuthUserEmail: widget.fieldAuthUserEmail,
+        fieldAuthUserId: widget.fieldAuthUserId,
+        fieldAuthTeamId: widget.fieldAuthTeamId,
+        initialFocusAppointmentId: request.convertedEntityId.trim(),
+      );
+    } else if (entityType == 'offer') {
+      page = OfertePage(
+        repository: widget.repository,
+        currentUserId: _currentUserId,
+        currentUserEmail: _currentUserEmail,
+        initialFocusOfferId: request.convertedEntityId.trim(),
+      );
+    } else if (entityType == 'product_sale' ||
+        entityType == 'product_sale_batch') {
+      page = ProductCatalogPage(repository: widget.repository);
+    }
+    if (!mounted || page == null) {
+      if (mounted) {
+        setState(() {
+          _message = 'Sursa conversiei nu are încă deschidere directă.';
+        });
+      }
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => page!),
+    );
+  }
+
+  Future<bool> _confirmConversion(
+    String title,
+    String message,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Renunță'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Confirma'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _convertRequestToAppointment(
+    FieldSalesRequestRecord request,
+  ) async {
+    if (request.approvalStatus != FieldSalesRequestApprovalStatus.aprobata) {
+      setState(() {
+        _message = 'Doar cererile aprobate pot fi convertite.';
+      });
+      return;
+    }
+    if (request.isConverted) {
+      await _openConvertedSource(request);
+      return;
+    }
+    final confirmed = await _confirmConversion(
+      'Converteste in programare',
+      'Cererea aprobata va crea o programare reala in modulul Programari.',
+    );
+    if (!confirmed || !mounted) return;
+    final leadSeed = _buildLeadSeedFromRequest(request);
+    final appointment = await showDialog<Appointment>(
+      context: context,
+      builder: (context) => _FieldAppointmentDialog(
+        lead: leadSeed,
+        currentUserId: _currentUserId,
+        currentUserEmail: _currentUserEmail,
+        currentTeamId: _currentTeamId,
+      ),
+    );
+    if (appointment == null) return;
+    await widget.repository.saveAppointment(appointment);
+    final updatedRequest = request.copyWith(
+      isConverted: true,
+      convertedAt: DateTime.now(),
+      convertedByUserId: _currentUserId,
+      convertedEntityType: 'appointment',
+      convertedEntityId: appointment.id,
+      convertedEntityLabel: appointment.title.trim().isEmpty
+          ? _resolveClientLabel(request)
+          : appointment.title.trim(),
+    );
+    await _service.saveRequest(updatedRequest);
+    await _markLeadConverted(
+      request: request,
+      entityType: 'appointment',
+      entityId: appointment.id,
+      entityLabel: updatedRequest.convertedEntityLabel,
+    );
+    await _notificationService.dispatchEvent(
+      NotificationDispatchRequest(
+        eventType: NotificationEventType.appointmentCreated,
+        title: 'Programare generata din cerere aprobata',
+        message:
+            '${appointment.title} | ${_formatDateTime(appointment.startDateTime ?? appointment.scheduledDate)} | Client: ${_resolveClientLabel(request)}',
+        sourceModule: 'programari',
+        sourceEntityId: appointment.id,
+        sourceLabel: appointment.title,
+        recipientRoleKeys: const <String>['admin', 'office'],
+        recipientUserIds: request.requestedByUserId.trim().isEmpty
+            ? const <String>[]
+            : <String>[request.requestedByUserId.trim()],
+        recipientEmails: appointment.assignedUserEmail.trim().isEmpty
+            ? const <String>[]
+            : <String>[appointment.assignedUserEmail.trim()],
+        recipientTeamIds: appointment.assignedTeamIds,
+        metadata: <String, dynamic>{
+          'created_from': 'field_sales_request',
+          'request_id': request.id,
+          'lead_id': request.leadId,
+        },
+      ),
+    );
+    await _dispatchConversionNotification(
+      request: request,
+      entityType: 'appointment',
+      entityId: appointment.id,
+      entityLabel: updatedRequest.convertedEntityLabel,
+      module: 'programari',
+      title: 'Cerere convertita in programare',
+      message:
+          '${_resolveClientLabel(request)} | Programare confirmata: ${updatedRequest.convertedEntityLabel}',
+    );
+    await _load();
+  }
+
+  Future<void> _convertRequestToOffer(
+    FieldSalesRequestRecord request,
+  ) async {
+    if (request.approvalStatus != FieldSalesRequestApprovalStatus.aprobata) {
+      setState(() {
+        _message = 'Doar cererile aprobate pot fi convertite.';
+      });
+      return;
+    }
+    if (request.isConverted) {
+      await _openConvertedSource(request);
+      return;
+    }
+    final confirmed = await _confirmConversion(
+      'Converteste in oferta',
+      'Cererea aprobata va genera o oferta simpla draft in modulul Oferte.',
+    );
+    if (!confirmed) return;
+    final now = DateTime.now();
+    await _listOffersResolved();
+    final nextOfferNumber = await widget.repository.nextOfferNumber();
+    final lines = <OfferLineItem>[];
+    final discountFactor =
+        (1 - (request.requestedDiscountPercent / 100)).clamp(0, 1).toDouble();
+    var sortOrder = 0;
+    final requestProducts = request.requestedProducts.isNotEmpty
+        ? request.requestedProducts
+        : request.requestedProductIds
+            .map((productId) {
+              final item = _catalogItemByProductId(productId, request);
+              if (item == null) return null;
+              return FieldSalesProductSelection(
+                productId: item.product.id,
+                productName: item.product.name,
+                quantity: 1,
+                unitPrice: item.salePrice,
+                currency: item.currency,
+              );
+            })
+            .whereType<FieldSalesProductSelection>()
+            .toList(growable: false);
+    for (final product in requestProducts) {
+      final item = _catalogItemByProductId(product.productId, request);
+      sortOrder += 1;
+      final name =
+          product.productName.trim().isEmpty ? 'Produs' : product.productName;
+      final description = [
+        item?.product.brand.trim() ?? '',
+        item?.product.model.trim() ?? '',
+        item?.product.commercialDescription.trim() ?? '',
+        if (product.notes.trim().isNotEmpty) product.notes.trim(),
+      ].where((value) => value.isNotEmpty).join(' | ');
+      lines.add(
+        OfferLineItem(
+          id: 'offer-line-${now.microsecondsSinceEpoch}-$sortOrder',
+          name: name,
+          description: description,
+          unit: item?.product.unit.trim().isNotEmpty == true
+              ? item!.product.unit.trim()
+              : 'buc',
+          quantity: product.quantity <= 0 ? 1 : product.quantity,
+          unitPrice: product.unitPrice * discountFactor,
+          lineTotal: (product.quantity <= 0 ? 1 : product.quantity) *
+              (product.unitPrice * discountFactor),
+          sortOrder: sortOrder,
+          lineType: OfferLineType.material,
+          materialId: product.productId,
+        ),
+      );
+    }
+    for (final service in request.requestedServicePresets) {
+      sortOrder += 1;
+      final serviceDetails = <String>[
+        if (service.includedServices.trim().isNotEmpty)
+          'Inclus: ${service.includedServices.trim()}',
+        if (service.notes.trim().isNotEmpty)
+          'Conditii comerciale: ${service.notes.trim()}',
+      ].join('\n');
+      lines.add(
+        OfferLineItem(
+          id: 'offer-line-${now.microsecondsSinceEpoch}-$sortOrder',
+          name:
+              service.label.trim().isEmpty ? 'Serviciu' : service.label.trim(),
+          description: serviceDetails,
+          unit: service.unit.trim().isEmpty ? 'serv' : service.unit.trim(),
+          quantity: service.quantity <= 0 ? 1 : service.quantity,
+          unitPrice: service.unitPrice * discountFactor,
+          lineTotal: (service.quantity <= 0 ? 1 : service.quantity) *
+              (service.unitPrice * discountFactor),
+          sortOrder: sortOrder,
+          lineType: OfferLineType.manopera,
+          laborSourceMode: OfferLaborSourceMode.standard,
+          laborTemplateId: service.laborTemplateId.trim(),
+        ),
+      );
+    }
+    if (lines.isEmpty) {
+      final fallbackValue =
+          request.requestedTotalValue > 0 ? request.requestedTotalValue : 0.0;
+      lines.add(
+        OfferLineItem(
+          id: 'offer-line-${now.microsecondsSinceEpoch}-1',
+          name: request.requestedServiceLabel.trim().isEmpty
+              ? 'Oferta simpla din teren'
+              : request.requestedServiceLabel.trim(),
+          description: request.notes.trim(),
+          unit: 'serv',
+          quantity: 1,
+          unitPrice: fallbackValue,
+          lineTotal: fallbackValue,
+          sortOrder: 1,
+          lineType: OfferLineType.text,
+        ),
+      );
+    }
+    final totals = OfferRecord.computeTotals(
+      lines: lines,
+      vatPercent: 0,
+      regiePercent: 0,
+      profitPercent: 0,
+    );
+    final offer = OfferRecord(
+      id: 'field-offer-${now.microsecondsSinceEpoch}',
+      offerNumber: nextOfferNumber,
+      title: 'Oferta teren - ${_resolveClientLabel(request)}',
+      clientId: request.clientId.trim(),
+      clientName: _resolveClientLabel(request),
+      jobId: '',
+      jobCode: '',
+      jobTitle: '',
+      status: OfferStatus.draft,
+      issueDate: now,
+      validUntil: now.add(const Duration(days: 30)),
+      currency: request.currency.trim().isEmpty ? 'RON' : request.currency,
+      exchangeRateSource: OfferExchangeRateSource.manual,
+      bnrRate: 1,
+      manualRate: 1,
+      exchangeCommissionPercent: 0,
+      effectiveExchangeRate: 1,
+      notes: [
+        'Generata din cerere teren ${request.id}.',
+        if (request.requestedPriceListId.trim().isNotEmpty)
+          'Lista comerciala: ${request.requestedPriceListId.trim()}',
+        if (request.requestedDiscountPercent > 0)
+          'Discount direct teren: ${request.requestedDiscountPercent.toStringAsFixed(2)}%',
+        if (request.notes.trim().isNotEmpty) request.notes.trim(),
+      ].join('\n'),
+      materialSubtotal: totals.materialSubtotal,
+      laborSubtotal: totals.laborSubtotal,
+      subtotalDirect: totals.subtotalDirect,
+      regiePercent: totals.regiePercent,
+      regieValue: totals.regieValue,
+      profitPercent: totals.profitPercent,
+      profitValue: totals.profitValue,
+      subtotalComercial: totals.subtotalComercial,
+      subtotal: totals.subtotalComercial,
+      vatPercent: totals.vatPercent,
+      vatValue: totals.vatValue,
+      totalValue: totals.totalValue,
+      lines: lines,
+      createdAt: now,
+      updatedAt: now,
+      createdByUserId: _currentUserId,
+      createdByUserEmail: _currentUserEmail,
+    );
+    await _saveOfferResolved(offer);
+    final updatedRequest = request.copyWith(
+      isConverted: true,
+      convertedAt: now,
+      convertedByUserId: _currentUserId,
+      convertedEntityType: 'offer',
+      convertedEntityId: offer.id,
+      convertedEntityLabel: offer.offerNumber.trim(),
+    );
+    await _service.saveRequest(updatedRequest);
+    await _markLeadConverted(
+      request: request,
+      entityType: 'offer',
+      entityId: offer.id,
+      entityLabel: offer.offerNumber.trim(),
+    );
+    await _dispatchConversionNotification(
+      request: request,
+      entityType: 'offer',
+      entityId: offer.id,
+      entityLabel: offer.offerNumber.trim(),
+      module: 'oferte',
+      title: 'Oferta generata din teren',
+      message:
+          '${_resolveClientLabel(request)} | Oferta draft ${offer.offerNumber} a fost generata.',
+    );
+    await _load();
+  }
+
+  Future<void> _convertRequestToSale(
+    FieldSalesRequestRecord request,
+  ) async {
+    if (request.approvalStatus != FieldSalesRequestApprovalStatus.aprobata) {
+      setState(() {
+        _message = 'Doar cererile aprobate pot fi convertite.';
+      });
+      return;
+    }
+    if (request.isConverted) {
+      await _openConvertedSource(request);
+      return;
+    }
+    final requestProducts = request.requestedProducts.isNotEmpty
+        ? request.requestedProducts
+        : request.requestedProductIds
+            .map((productId) {
+              final item = _catalogItemByProductId(productId, request);
+              if (item == null) return null;
+              return FieldSalesProductSelection(
+                productId: item.product.id,
+                productName: item.product.name,
+                quantity: 1,
+                unitPrice: item.salePrice,
+                currency: item.currency,
+              );
+            })
+            .whereType<FieldSalesProductSelection>()
+            .toList(growable: false);
+    if (requestProducts.isEmpty) {
+      setState(() {
+        _message =
+            'Cererea nu are produse selectate, deci nu poate genera rezervare.';
+      });
+      return;
+    }
+    final confirmed = await _confirmConversion(
+      'Converteste in vanzare / rezervare',
+      'Cererea aprobata va genera rezervari reale in Catalog produse.',
+    );
+    if (!confirmed) return;
+    final now = DateTime.now();
+    final sales = <ProductSaleRecord>[];
+    for (final product in requestProducts) {
+      final catalogItem = _catalogItemByProductId(product.productId, request);
+      if (catalogItem == null) continue;
+      final sale = ProductSaleRecord(
+        id: 'field-sale-${now.microsecondsSinceEpoch}-${sales.length + 1}',
+        productId: catalogItem.product.id,
+        productName: product.productName.trim().isEmpty
+            ? catalogItem.product.name
+            : product.productName.trim(),
+        clientId: request.clientId.trim(),
+        clientName: _resolveClientLabel(request),
+        saleStatus: ProductSaleStatus.rezervat,
+        saleDate: now,
+        notes: [
+          'Rezervare generata din cerere teren ${request.id}.',
+          if (request.requestedPriceListId.trim().isNotEmpty)
+            'Lista comerciala: ${request.requestedPriceListId.trim()}',
+          if (request.requestedDiscountPercent > 0)
+            'Discount direct teren: ${request.requestedDiscountPercent.toStringAsFixed(2)}%',
+          'Pret propus: ${_money(product.unitPrice, product.currency)} x ${(product.quantity <= 0 ? 1 : product.quantity).toStringAsFixed(2)}',
+          if (request.notes.trim().isNotEmpty) request.notes.trim(),
+        ].join('\n'),
+        createdAt: now,
+        updatedAt: now,
+      );
+      await _productCatalogService.saveSale(sale);
+      sales.add(sale);
+    }
+    if (sales.isEmpty) {
+      setState(() {
+        _message =
+            'Nu am gasit produse comerciale valide pentru a genera rezervarea.';
+      });
+      return;
+    }
+    final entityType =
+        sales.length == 1 ? 'product_sale' : 'product_sale_batch';
+    final entityLabel = sales.length == 1
+        ? sales.first.productName.trim()
+        : '${sales.length} rezervari produse';
+    final updatedRequest = request.copyWith(
+      isConverted: true,
+      convertedAt: now,
+      convertedByUserId: _currentUserId,
+      convertedEntityType: entityType,
+      convertedEntityId: sales.first.id,
+      convertedEntityLabel: entityLabel,
+    );
+    await _service.saveRequest(updatedRequest);
+    await _markLeadConverted(
+      request: request,
+      entityType: entityType,
+      entityId: sales.first.id,
+      entityLabel: entityLabel,
+    );
+    await _dispatchConversionNotification(
+      request: request,
+      entityType: entityType,
+      entityId: sales.first.id,
+      entityLabel: entityLabel,
+      module: 'product_catalog',
+      title: 'Rezervare produs generata din teren',
+      message:
+          '${_resolveClientLabel(request)} | ${sales.length} produs(e) rezervate din cerere aprobata.',
+    );
+    await _load();
+  }
+
+  Future<void> _refreshCatalog() async {
+    final items = await _service.buildCommercialCatalog(
+      priceListId: _normalizedSelectedPriceListId,
+      restrictToStandardOnly: _restrictToStandardPriceList,
+    );
+    if (!mounted) return;
+    setState(() {
+      _selectedPriceListId = _normalizedSelectedPriceListId;
+      _catalogItems = items;
+    });
+  }
+
+  Future<void> _createLead() async {
+    await _refreshCatalog();
+    if (!mounted) return;
+    final lead = await showDialog<FieldLeadRecord>(
+      context: context,
+      builder: (context) => _FieldLeadDialog(
+        clients: _clients,
+        catalogItems: _catalogItems,
+        currentUserId: _currentUserId,
+        initialSourceModule: 'field_sales',
+      ),
+    );
+    if (lead == null) return;
+    await _service.saveLead(lead);
+    await _notificationService.dispatchEvent(
+      NotificationDispatchRequest(
+        eventType: NotificationEventType.fieldLeadCreated,
+        title: 'Lead nou din teren',
+        message:
+            '${lead.clientName.trim().isEmpty ? lead.contactName : lead.clientName} | Interes: ${lead.interestedInType.label} | Contact: ${lead.contactName.trim().isEmpty ? '-' : lead.contactName.trim()}',
+        sourceModule: 'field_sales',
+        sourceEntityId: lead.id,
+        sourceLabel: lead.clientName.trim().isEmpty
+            ? lead.contactName.trim()
+            : lead.clientName.trim(),
+        recipientRoleKeys: const <String>['admin', 'office'],
+        recipientUserIds: lead.assignedUserId.trim().isEmpty
+            ? const <String>[]
+            : <String>[lead.assignedUserId.trim()],
+        metadata: <String, dynamic>{
+          'lead_status': lead.status.value,
+          'interest_type': lead.interestedInType.value,
+        },
+      ),
+    );
+    await _load();
+    if (!mounted) return;
+    setState(() {
+      _selectedLead = lead;
+    });
+  }
+
+  Future<void> _createQuickClient() async {
+    final seed = _selectedLead;
+    final client = await showDialog<ClientRecord>(
+      context: context,
+      builder: (context) => _QuickClientDialog(
+        repository: widget.repository,
+        existingLead: seed,
+      ),
+    );
+    if (client == null) return;
+    await widget.repository.saveClient(client);
+    if (seed != null) {
+      await _service.saveLead(
+        seed.copyWith(
+          clientId: client.id,
+          clientName: client.name,
+          contactName: client.contactPerson.trim().isEmpty
+              ? seed.contactName
+              : client.contactPerson,
+          phone: client.phone.trim().isEmpty ? seed.phone : client.phone,
+          email: client.email.trim().isEmpty ? seed.email : client.email,
+          address:
+              client.address.trim().isEmpty ? seed.address : client.address,
+        ),
+      );
+    }
+    await _load();
+  }
+
+  Future<void> _createAppointmentFromLead() async {
+    final lead = _selectedLead;
+    if (lead == null) {
+      setState(() {
+        _message = 'Selecteaza mai intai un lead pentru programare.';
+      });
+      return;
+    }
+    final appointment = await showDialog<Appointment>(
+      context: context,
+      builder: (context) => _FieldAppointmentDialog(
+        lead: lead,
+        currentUserId: _currentUserId,
+        currentUserEmail: _currentUserEmail,
+        currentTeamId: _currentTeamId,
+      ),
+    );
+    if (appointment == null) return;
+    await widget.repository.saveAppointment(appointment);
+    await _service.saveLead(
+      lead.copyWith(
+        status: FieldLeadStatus.programat,
+        assignedUserId: lead.assignedUserId.trim().isEmpty
+            ? _currentUserId
+            : lead.assignedUserId,
+      ),
+    );
+    await _notificationService.dispatchEvent(
+      NotificationDispatchRequest(
+        eventType: NotificationEventType.appointmentCreated,
+        title: 'Programare creata din teren',
+        message:
+            '${appointment.title} | ${_formatDateTime(appointment.startDateTime ?? appointment.scheduledDate)} | Contact: ${appointment.contactPerson.trim().isEmpty ? '-' : appointment.contactPerson.trim()}',
+        sourceModule: 'programari',
+        sourceEntityId: appointment.id,
+        sourceLabel: appointment.title,
+        recipientRoleKeys: const <String>['admin', 'office'],
+        recipientUserIds: appointment.assignedUserId.trim().isEmpty
+            ? const <String>[]
+            : <String>[appointment.assignedUserId.trim()],
+        recipientEmails: appointment.assignedUserEmail.trim().isEmpty
+            ? const <String>[]
+            : <String>[appointment.assignedUserEmail.trim()],
+        recipientTeamIds: appointment.assignedTeamIds,
+        metadata: <String, dynamic>{
+          'created_from': 'field_sales',
+          'lead_id': lead.id,
+        },
+      ),
+    );
+    await _load();
+  }
+
+  Future<void> _createSalesRequest() async {
+    final request = await showDialog<FieldSalesRequestRecord>(
+      context: context,
+      builder: (context) => _FieldSalesRequestDialog(
+        repository: widget.repository,
+        fieldSalesService: _service,
+        lead: _selectedLead,
+        catalogItems: _catalogItems,
+        priceLists: _availableFieldPriceLists,
+        initialPriceListId: _normalizedSelectedPriceListId,
+        restrictToStandardOnly: _restrictToStandardPriceList,
+        currentUserId: _currentUserId,
+        currentUserName: _currentUser?.displayName.trim().isNotEmpty == true
+            ? _currentUser!.displayName.trim()
+            : _currentUserEmail,
+      ),
+    );
+    if (request == null) return;
+    await _service.saveRequest(request);
+    if (request.approvalStatus == FieldSalesRequestApprovalStatus.trimisa) {
+      await _dispatchApprovalRequestNotification(request);
+    }
+    await _load();
+  }
+
+  Future<void> _dispatchApprovalRequestNotification(
+    FieldSalesRequestRecord request,
+  ) async {
+    await _notificationService.dispatchEvent(
+      NotificationDispatchRequest(
+        eventType: NotificationEventType.approvalRequested,
+        title: 'Cerere aprobare discount si vanzare din teren',
+        message:
+            '${request.clientName.trim().isEmpty ? '-' : request.clientName.trim()} | Tip: ${request.requestType.label} | Discount: ${request.requestedDiscountPercent.toStringAsFixed(2)}% | Valoare: ${_money(request.requestedTotalValue, request.currency)}',
+        sourceModule: 'field_sales',
+        sourceEntityId: request.id,
+        sourceLabel: request.clientName.trim().isEmpty
+            ? request.requestType.label
+            : request.clientName.trim(),
+        recipientRoleKeys: const <String>['admin', 'office'],
+        recipientUserIds: request.requestedByUserId.trim().isEmpty
+            ? const <String>[]
+            : <String>[request.requestedByUserId.trim()],
+        metadata: <String, dynamic>{
+          'approval_status': request.approvalStatus.value,
+          'lead_id': request.leadId,
+          'discount_percent': request.requestedDiscountPercent,
+          'requested_products_count': request.requestedProducts.length,
+          'requested_services_count': request.requestedServicePresets.length,
+        },
+      ),
+    );
+  }
+
+  Future<void> _submitRequestForApproval(FieldSalesRequestRecord item) async {
+    if (item.approvalStatus != FieldSalesRequestApprovalStatus.draft) return;
+    final updated = item.copyWith(
+      approvalStatus: FieldSalesRequestApprovalStatus.trimisa,
+      updatedAt: DateTime.now(),
+    );
+    await _service.saveRequest(updated);
+    await _dispatchApprovalRequestNotification(updated);
+    await _load();
+  }
+
+  Future<void> _updateRequestStatus(
+    FieldSalesRequestRecord item,
+    FieldSalesRequestApprovalStatus status,
+  ) async {
+    final updated = item.copyWith(
+      approvalStatus: status,
+      approvedByUserId: _currentUserId,
+      approvedAt: DateTime.now(),
+    );
+    await _service.saveRequest(updated);
+    await _notificationService.dispatchEvent(
+      NotificationDispatchRequest(
+        eventType: status == FieldSalesRequestApprovalStatus.aprobata
+            ? NotificationEventType.approvalApproved
+            : NotificationEventType.approvalRejected,
+        title: status == FieldSalesRequestApprovalStatus.aprobata
+            ? 'Cerere aprobata'
+            : 'Cerere respinsa',
+        message:
+            '${updated.clientName.trim().isEmpty ? '-' : updated.clientName.trim()} | Tip: ${updated.requestType.label} | Status: ${updated.approvalStatus.label}',
+        sourceModule: 'field_sales',
+        sourceEntityId: updated.id,
+        sourceLabel: updated.clientName.trim().isEmpty
+            ? updated.requestType.label
+            : updated.clientName.trim(),
+        recipientUserIds: updated.requestedByUserId.trim().isEmpty
+            ? const <String>[]
+            : <String>[updated.requestedByUserId.trim()],
+        metadata: <String, dynamic>{
+          'approval_status': updated.approvalStatus.value,
+          'approved_by_user_id': _currentUserId,
+        },
+      ),
+    );
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Agent teren / Vanzari'),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: 'Catalog'),
+              Tab(text: 'Lead-uri'),
+              Tab(text: 'Cereri'),
+            ],
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: _loading ? null : _openFieldSalesAiAssistant,
+              icon: const Icon(Icons.auto_awesome_outlined),
+              label: const Text('Asistent AI'),
+            ),
+            IconButton(
+              tooltip: 'Client rapid',
+              onPressed: _loading ? null : _createQuickClient,
+              icon: const Icon(Icons.person_add_alt_1_outlined),
+            ),
+            IconButton(
+              tooltip: 'Lead nou',
+              onPressed: _loading ? null : _createLead,
+              icon: const Icon(Icons.add_business_outlined),
+            ),
+            IconButton(
+              tooltip: 'Reincarca',
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : Column(
+                children: [
+                  if (_message != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                      child: Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(_message!),
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        _buildCatalogTab(context),
+                        _buildLeadsTab(context),
+                        _buildRequestsTab(context),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildCatalogTab(BuildContext context) {
+    final selectedPriceList = _selectedFieldPriceList;
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWide = constraints.maxWidth >= 600;
+              return Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              textCapitalization: TextCapitalization.sentences,
+                              controller: _catalogSearchController,
+                              decoration: const InputDecoration(
+                                labelText: 'Caută produse',
+                                prefixIcon: Icon(Icons.search),
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          if (isWide && !_restrictToStandardPriceList) ...[
+                            const SizedBox(width: 12),
+                            SizedBox(
+                              width: 280,
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _normalizedSelectedPriceListId.isEmpty
+                                    ? (_availableFieldPriceLists.isEmpty
+                                        ? null
+                                        : _availableFieldPriceLists.first.id)
+                                    : _normalizedSelectedPriceListId,
+                                decoration: const InputDecoration(
+                                  labelText: 'Listă comercială',
+                                  isDense: true,
+                                ),
+                                items: _availableFieldPriceLists
+                                    .map(
+                                      (item) => DropdownMenuItem<String>(
+                                        value: item.id,
+                                        child: Text(item.name),
+                                      ),
+                                    )
+                                    .toList(growable: false),
+                                onChanged: (value) async {
+                                  if (value == null) return;
+                                  setState(() {
+                                    _selectedPriceListId = value;
+                                  });
+                                  _persistSavedPreferences();
+                                  await _refreshCatalog();
+                                },
+                              ),
+                            ),
+                          ] else if (isWide && _restrictToStandardPriceList)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 12),
+                              child: Chip(
+                                label: Text(
+                                  selectedPriceList == null
+                                      ? 'Listă standard indisponibilă'
+                                      : 'Listă standard: ${selectedPriceList.name}',
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      if (!isWide && !_restrictToStandardPriceList) ...[
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          initialValue: _normalizedSelectedPriceListId.isEmpty
+                              ? (_availableFieldPriceLists.isEmpty
+                                  ? null
+                                  : _availableFieldPriceLists.first.id)
+                              : _normalizedSelectedPriceListId,
+                          decoration: const InputDecoration(
+                            labelText: 'Listă comercială',
+                            isDense: true,
+                          ),
+                          items: _availableFieldPriceLists
+                              .map(
+                                (item) => DropdownMenuItem<String>(
+                                  value: item.id,
+                                  child: Text(item.name),
+                                ),
+                              )
+                              .toList(growable: false),
+                          onChanged: (value) async {
+                            if (value == null) return;
+                            setState(() {
+                              _selectedPriceListId = value;
+                            });
+                            _persistSavedPreferences();
+                            await _refreshCatalog();
+                          },
+                        ),
+                      ] else if (!isWide && _restrictToStandardPriceList) ...[
+                        const SizedBox(height: 8),
+                        Chip(
+                          label: Text(
+                            selectedPriceList == null
+                                ? 'Listă standard indisponibilă'
+                                : 'Listă standard: ${selectedPriceList.name}',
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            Chip(
+                              label: Text(
+                                _availableFieldPriceLists.isEmpty
+                                    ? 'Fără listă comercială activă'
+                                    : 'Listă activă: ${selectedPriceList?.name ?? _availableFieldPriceLists.first.name}',
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Chip(
+                              label: Text('Afișare comercială — fără costuri interne'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: ListView.separated(
+              itemCount: _filteredCatalogItems.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final item = _filteredCatalogItems[index];
+                final product = item.product;
+                return Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          product.name,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '${product.category.trim().isEmpty ? '-' : product.category} | ${product.brand.trim().isEmpty ? '-' : product.brand} | ${product.model.trim().isEmpty ? '-' : product.model}',
+                        ),
+                        if (product.commercialDescription
+                            .trim()
+                            .isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(product.commercialDescription.trim()),
+                        ],
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            Chip(
+                              label: Text(
+                                'Pret: ${item.salePrice > 0 ? _money(item.salePrice, item.currency) : 'Pret indisponibil'}',
+                              ),
+                            ),
+                            Chip(
+                              label: Text(
+                                item.priceList == null
+                                    ? 'Fara lista activa'
+                                    : item.hasPriceEntry
+                                        ? 'Baza pret: ${item.priceList!.name}'
+                                        : 'Fara pret in lista activa',
+                              ),
+                            ),
+                            Chip(
+                              label: Text(_stockSummary(item)),
+                            ),
+                            Chip(
+                              label: Text(
+                                'Status: ${product.stockStatus.label}',
+                              ),
+                            ),
+                            Chip(
+                              label: Text(
+                                'Livrare: ${product.deliveryLeadTimeText.trim().isEmpty ? '-' : product.deliveryLeadTimeText.trim()}',
+                              ),
+                            ),
+                            Chip(
+                              label: Text(
+                                'Imagini ${product.imagePaths.length} | PDF ${product.pdfPaths.length}',
+                              ),
+                            ),
+                            if (product.sku.trim().isNotEmpty)
+                              Chip(label: Text('SKU ${product.sku.trim()}')),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeadsTab(BuildContext context) {
+    final leads = _visibleLeads;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 700;
+        final leadList = Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _leadSearchController,
+                    decoration: const InputDecoration(
+                      labelText: 'Cauta lead-uri',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                FilledButton.icon(
+                  onPressed: _createLead,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Lead nou'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: leads.isEmpty
+                  ? const Center(child: Text('Nu exista lead-uri relevante.'))
+                  : ListView.separated(
+                      itemCount: leads.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final item = leads[index];
+                        final selected = _selectedLead?.id == item.id;
+                        return Card(
+                          color: selected
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : null,
+                          child: ListTile(
+                            onTap: () {
+                              setState(() => _selectedLead = item);
+                              _persistSavedPreferences();
+                            },
+                            title: Text(
+                              item.clientName.trim().isEmpty
+                                  ? item.contactName
+                                  : item.clientName,
+                            ),
+                            subtitle: Text(
+                              '${item.interestedInType.label} | ${item.status.label}\n${item.phone.trim().isEmpty ? '-' : item.phone}',
+                            ),
+                            isThreeLine: true,
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+        final detailPanel = Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _selectedLead == null
+                ? const Center(child: Text('Selecteaza un lead pentru actiuni rapide.'))
+                : _buildLeadDetails(context, _selectedLead!),
+          ),
+        );
+        if (isWide) {
+          return Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(flex: 2, child: leadList),
+                const SizedBox(width: 16),
+                Expanded(flex: 3, child: detailPanel),
+              ],
+            ),
+          );
+        }
+        // Mobile: list on top, details below (only when a lead is selected)
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Expanded(flex: 2, child: leadList),
+              if (_selectedLead != null) ...[
+                const SizedBox(height: 12),
+                Expanded(flex: 3, child: detailPanel),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLeadDetails(BuildContext context, FieldLeadRecord lead) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          lead.clientName.trim().isEmpty ? lead.contactName : lead.clientName,
+          style: Theme.of(context)
+              .textTheme
+              .titleLarge
+              ?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Interes: ${lead.interestedInType.label} | Status: ${lead.status.label}',
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Contact: ${lead.contactName.trim().isEmpty ? '-' : lead.contactName} | Tel: ${lead.phone.trim().isEmpty ? '-' : lead.phone} | Email: ${lead.email.trim().isEmpty ? '-' : lead.email}',
+        ),
+        const SizedBox(height: 6),
+        Text('Adresa: ${lead.address.trim().isEmpty ? '-' : lead.address}'),
+        const SizedBox(height: 6),
+        Text('Observatii: ${lead.notes.trim().isEmpty ? '-' : lead.notes}'),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _createQuickClient,
+              icon: const Icon(Icons.person_add_alt_1_outlined),
+              label: const Text('Client rapid'),
+            ),
+            FilledButton.icon(
+              onPressed: _createAppointmentFromLead,
+              icon: const Icon(Icons.event_available_outlined),
+              label: const Text('Programare'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: _createSalesRequest,
+              icon: const Icon(Icons.approval_outlined),
+              label: const Text('Mini-oferta / cerere'),
+            ),
+          ],
+        ),
+        if (lead.interestedProductIds.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Text(
+            'Produse de interes: ${lead.interestedProductIds.length}',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildRequestsTab(BuildContext context) {
+    final rows = _visibleRequests;
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              FilledButton.icon(
+                onPressed: _createSalesRequest,
+                icon: const Icon(Icons.add_task_outlined),
+                label: const Text('Mini-oferta noua'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: rows.isEmpty
+                ? const Center(child: Text('Nu exista cereri inregistrate.'))
+                : ListView.separated(
+                    itemCount: rows.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final item = rows[index];
+                      final canDecide = _canSeeAll &&
+                          item.approvalStatus ==
+                              FieldSalesRequestApprovalStatus.trimisa;
+                      final canConvert = item.approvalStatus ==
+                              FieldSalesRequestApprovalStatus.aprobata &&
+                          !item.isConverted;
+                      return Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.clientName.trim().isEmpty
+                                    ? item.requestType.label
+                                    : item.clientName,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '${item.requestType.label} | ${item.approvalStatus.label} | ${_money(item.requestedTotalValue, item.currency)}',
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  if (item.isConverted)
+                                    Chip(
+                                      label: Text(
+                                        'Convertita: ${item.convertedEntityLabel.trim().isEmpty ? item.convertedEntityType : item.convertedEntityLabel}',
+                                      ),
+                                    )
+                                  else
+                                    const Chip(label: Text('Neconvertita')),
+                                  if (item.requestedPriceListId
+                                      .trim()
+                                      .isNotEmpty)
+                                    Chip(
+                                      label: Text(
+                                        'Lista: ${item.requestedPriceListId.trim()}',
+                                      ),
+                                    ),
+                                  if (item.requestedProductIds.isNotEmpty)
+                                    Chip(
+                                      label: Text(
+                                        'Produse: ${item.requestedProductIds.length}',
+                                      ),
+                                    ),
+                                  if (item.requestedServicePresets.isNotEmpty)
+                                    Chip(
+                                      label: Text(
+                                        'Servicii: ${item.requestedServicePresets.length}',
+                                      ),
+                                    ),
+                                  if (item.requestedDiscountPercent > 0)
+                                    Chip(
+                                      label: Text(
+                                        'Discount: ${item.requestedDiscountPercent.toStringAsFixed(2)}%',
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Ceruta de: ${item.requestedByName.trim().isEmpty ? '-' : item.requestedByName} | ${_formatDateTime(item.createdAt)}',
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  FilledButton.tonalIcon(
+                                    onPressed: () => _generateRequestPdf(item),
+                                    icon: const Icon(
+                                      Icons.picture_as_pdf_outlined,
+                                    ),
+                                    label: const Text('Genereaza PDF'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _generateRequestPdf(
+                                      item,
+                                      saveAs: true,
+                                    ),
+                                    icon: const Icon(Icons.save_alt_outlined),
+                                    label: const Text('Save As'),
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: () => _generateRequestPdf(
+                                      item,
+                                      share: true,
+                                    ),
+                                    icon: const Icon(Icons.share_outlined),
+                                    label: const Text('Share'),
+                                  ),
+                                  if (item.generatedDocumentFileName
+                                      .trim()
+                                      .isNotEmpty)
+                                    Chip(
+                                      label: Text(
+                                        'PDF: ${item.generatedDocumentFileName.trim()}',
+                                      ),
+                                    ),
+                                ],
+                              ),
+                              if (item.notes.trim().isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text(item.notes.trim()),
+                              ],
+                              if (item.approvalStatus ==
+                                  FieldSalesRequestApprovalStatus.draft) ...[
+                                const SizedBox(height: 10),
+                                FilledButton.icon(
+                                  onPressed: () =>
+                                      _submitRequestForApproval(item),
+                                  icon: const Icon(Icons.approval_outlined),
+                                  label: const Text('Trimite spre aprobare'),
+                                ),
+                              ],
+                              if (canDecide) ...[
+                                const SizedBox(height: 10),
+                                Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    FilledButton.tonal(
+                                      onPressed: () => _updateRequestStatus(
+                                        item,
+                                        FieldSalesRequestApprovalStatus
+                                            .aprobata,
+                                      ),
+                                      child: const Text('Aproba'),
+                                    ),
+                                    OutlinedButton(
+                                      onPressed: () => _updateRequestStatus(
+                                        item,
+                                        FieldSalesRequestApprovalStatus
+                                            .respinsa,
+                                      ),
+                                      child: const Text('Respinge'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                              if (canConvert) ...[
+                                const SizedBox(height: 10),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    if (item.requestType ==
+                                            FieldSalesRequestType.programare ||
+                                        item.requestType ==
+                                            FieldSalesRequestType.serviciu)
+                                      FilledButton.icon(
+                                        onPressed: () =>
+                                            _convertRequestToAppointment(item),
+                                        icon: const Icon(
+                                          Icons.event_available_outlined,
+                                        ),
+                                        label: const Text(
+                                          'Converteste in programare',
+                                        ),
+                                      ),
+                                    if (item.requestType ==
+                                            FieldSalesRequestType.oferta ||
+                                        item.requestType ==
+                                            FieldSalesRequestType.vanzareProdus)
+                                      FilledButton.tonalIcon(
+                                        onPressed: () =>
+                                            _convertRequestToOffer(item),
+                                        icon: const Icon(
+                                          Icons.request_quote_outlined,
+                                        ),
+                                        label:
+                                            const Text('Converteste in oferta'),
+                                      ),
+                                    if (item.requestType ==
+                                        FieldSalesRequestType.vanzareProdus)
+                                      OutlinedButton.icon(
+                                        onPressed: () =>
+                                            _convertRequestToSale(item),
+                                        icon: const Icon(
+                                          Icons.point_of_sale_outlined,
+                                        ),
+                                        label: const Text(
+                                          'Converteste in vanzare / rezervare',
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                              if (item.isConverted) ...[
+                                const SizedBox(height: 10),
+                                Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    OutlinedButton.icon(
+                                      onPressed: () =>
+                                          _openConvertedSource(item),
+                                      icon: const Icon(Icons.open_in_new),
+                                      label: const Text('Deschide sursa'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FieldLeadDialog extends StatefulWidget {
+  const _FieldLeadDialog({
+    required this.clients,
+    required this.catalogItems,
+    required this.currentUserId,
+    required this.initialSourceModule,
+  });
+
+  final List<ClientRecord> clients;
+  final List<FieldCommercialProductView> catalogItems;
+  final String currentUserId;
+  final String initialSourceModule;
+
+  @override
+  State<_FieldLeadDialog> createState() => _FieldLeadDialogState();
+}
+
+class _FieldLeadDialogState extends State<_FieldLeadDialog> {
+  final _clientNameController = TextEditingController();
+  final _contactNameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _notesController = TextEditingController();
+  String? _clientId;
+  FieldLeadInterestType _interestType = FieldLeadInterestType.produs;
+  final Set<String> _selectedProductIds = <String>{};
+
+  @override
+  void dispose() {
+    _clientNameController.dispose();
+    _contactNameController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _addressController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Lead / oportunitate noua'),
+      content: SizedBox(
+        width: 720,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClientAutocompleteField(
+                clients: widget.clients,
+                initialClient: widget.clients.where(
+                  (c) => c.id == _clientId,
+                ).firstOrNull,
+                labelText: 'Caută client existent',
+                helperText: 'Tastează pentru a căuta în baza de date',
+                onClientSelected: (client) {
+                  setState(() {
+                    _clientId = client?.id;
+                    if (client != null) {
+                      _clientNameController.text = client.name;
+                      _contactNameController.text = client.contactPerson;
+                      _phoneController.text = client.phone;
+                      _emailController.text = client.email;
+                      _addressController.text = client.address;
+                    }
+                  });
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _clientNameController,
+                decoration:
+                    const InputDecoration(labelText: 'Client / companie'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _contactNameController,
+                decoration:
+                    const InputDecoration(labelText: 'Persoana contact'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _phoneController,
+                decoration: const InputDecoration(labelText: 'Telefon'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: 'Email'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _addressController,
+                decoration: const InputDecoration(labelText: 'Adresa'),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<FieldLeadInterestType>(
+                initialValue: _interestType,
+                decoration: const InputDecoration(labelText: 'Interes'),
+                items: FieldLeadInterestType.values
+                    .map(
+                      (item) => DropdownMenuItem<FieldLeadInterestType>(
+                        value: item,
+                        child: Text(item.label),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() {
+                    _interestType = value;
+                  });
+                },
+              ),
+              if (_interestType == FieldLeadInterestType.produs) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Produse de interes',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Column(
+                  children: widget.catalogItems
+                      .take(20)
+                      .map(
+                        (item) => CheckboxListTile(
+                          value: _selectedProductIds.contains(item.product.id),
+                          title: Text(
+                            item.product.name,
+                            softWrap: true,
+                          ),
+                          onChanged: (selected) {
+                            setState(() {
+                              if (selected == true) {
+                                _selectedProductIds.add(item.product.id);
+                              } else {
+                                _selectedProductIds.remove(item.product.id);
+                              }
+                            });
+                          },
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
+                        ),
+                      )
+                      .toList(growable: false),
+                ),
+              ],
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _notesController,
+                minLines: 3,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Observatii'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final now = DateTime.now();
+            Navigator.of(context).pop(
+              FieldLeadRecord(
+                id: 'field-lead-${now.microsecondsSinceEpoch}',
+                clientId: (_clientId ?? '').trim(),
+                clientName: _clientNameController.text.trim(),
+                contactName: _contactNameController.text.trim(),
+                phone: _phoneController.text.trim(),
+                email: _emailController.text.trim(),
+                address: _addressController.text.trim(),
+                sourceModule: widget.initialSourceModule,
+                sourceEntityId: '',
+                sourceLabel: 'Lead teren',
+                interestedInType: _interestType,
+                interestedProductIds:
+                    _selectedProductIds.toList(growable: false),
+                notes: _notesController.text.trim(),
+                status: FieldLeadStatus.nou,
+                assignedUserId: widget.currentUserId.trim(),
+                createdByUserId: widget.currentUserId.trim(),
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+          },
+          child: const Text('Salveaza lead'),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuickClientDialog extends StatefulWidget {
+  const _QuickClientDialog({
+    required this.repository,
+    this.existingLead,
+  });
+
+  final AppDataRepository repository;
+  final FieldLeadRecord? existingLead;
+
+  @override
+  State<_QuickClientDialog> createState() => _QuickClientDialogState();
+}
+
+class _QuickClientDialogState extends State<_QuickClientDialog> {
+  late final TextEditingController _nameController = TextEditingController(
+    text: widget.existingLead?.clientName ?? '',
+  );
+  late final TextEditingController _contactController = TextEditingController(
+    text: widget.existingLead?.contactName ?? '',
+  );
+  late final TextEditingController _phoneController = TextEditingController(
+    text: widget.existingLead?.phone ?? '',
+  );
+  late final TextEditingController _emailController = TextEditingController(
+    text: widget.existingLead?.email ?? '',
+  );
+  late final TextEditingController _addressController = TextEditingController(
+    text: widget.existingLead?.address ?? '',
+  );
+  final TextEditingController _cityController = TextEditingController();
+  final TextEditingController _countyController = TextEditingController();
+  late final TextEditingController _notesController = TextEditingController(
+    text: widget.existingLead?.notes ?? '',
+  );
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _contactController.dispose();
+    _phoneController.dispose();
+    _emailController.dispose();
+    _addressController.dispose();
+    _cityController.dispose();
+    _countyController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Client rapid'),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _nameController,
+                decoration: const InputDecoration(labelText: 'Nume client'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _contactController,
+                decoration:
+                    const InputDecoration(labelText: 'Persoana contact'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _phoneController,
+                decoration: const InputDecoration(labelText: 'Telefon'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: 'Email'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _addressController,
+                decoration: const InputDecoration(labelText: 'Adresa'),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _cityController,
+                      decoration: const InputDecoration(labelText: 'Oras'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _countyController,
+                      decoration: const InputDecoration(labelText: 'Judet'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _notesController,
+                minLines: 2,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: 'Observatii'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () async {
+            final code = await widget.repository.nextClientCode();
+            final now = DateTime.now();
+            if (!context.mounted) return;
+            Navigator.of(context).pop(
+              ClientRecord(
+                id: 'field-client-${now.microsecondsSinceEpoch}',
+                clientCode: code,
+                type: ClientType.persoanaFizica,
+                name: _nameController.text.trim(),
+                contactPerson: _contactController.text.trim(),
+                phone: _phoneController.text.trim(),
+                email: _emailController.text.trim(),
+                address: _addressController.text.trim(),
+                city: _cityController.text.trim(),
+                county: _countyController.text.trim(),
+                notes: _notesController.text.trim(),
+                isActive: true,
+                createdAt: now,
+                updatedAt: now,
+              ),
+            );
+          },
+          child: const Text('Salveaza client'),
+        ),
+      ],
+    );
+  }
+}
+
+class _FieldAppointmentDialog extends StatefulWidget {
+  const _FieldAppointmentDialog({
+    required this.lead,
+    required this.currentUserId,
+    required this.currentUserEmail,
+    required this.currentTeamId,
+  });
+
+  final FieldLeadRecord lead;
+  final String currentUserId;
+  final String currentUserEmail;
+  final String currentTeamId;
+
+  @override
+  State<_FieldAppointmentDialog> createState() =>
+      _FieldAppointmentDialogState();
+}
+
+class _FieldAppointmentDialogState extends State<_FieldAppointmentDialog> {
+  late DateTime _start = DateTime.now().add(const Duration(days: 1));
+  late DateTime _end = _start.add(const Duration(hours: 1));
+  late final TextEditingController _titleController = TextEditingController(
+    text: widget.lead.interestedInType == FieldLeadInterestType.programare
+        ? 'Programare teren'
+        : 'Vizita comerciala',
+  );
+  late final TextEditingController _notesController = TextEditingController(
+    text: widget.lead.notes,
+  );
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  String _timeLabel(DateTime value) =>
+      '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Programare din teren'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              textCapitalization: TextCapitalization.sentences,
+              controller: _titleController,
+              decoration: const InputDecoration(labelText: 'Motiv / scop'),
+            ),
+            const SizedBox(height: 12),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Data si ora start'),
+              subtitle: Text(_start.toString()),
+              trailing: const Icon(Icons.event_outlined),
+              onTap: () async {
+                final pickedDate = await showDatePicker(
+                  context: context,
+                  initialDate: _start,
+                  firstDate: DateTime.now().subtract(const Duration(days: 1)),
+                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                );
+                if (pickedDate == null || !context.mounted) return;
+                final pickedTime = await showTimePicker(
+                  context: context,
+                  initialTime: TimeOfDay.fromDateTime(_start),
+                );
+                if (pickedTime == null) return;
+                setState(() {
+                  _start = DateTime(
+                    pickedDate.year,
+                    pickedDate.month,
+                    pickedDate.day,
+                    pickedTime.hour,
+                    pickedTime.minute,
+                  );
+                  if (!_end.isAfter(_start)) {
+                    _end = _start.add(const Duration(hours: 1));
+                  }
+                });
+              },
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Data si ora final'),
+              subtitle: Text(_end.toString()),
+              trailing: const Icon(Icons.schedule_outlined),
+              onTap: () async {
+                final pickedDate = await showDatePicker(
+                  context: context,
+                  initialDate: _end,
+                  firstDate: _start,
+                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                );
+                if (pickedDate == null || !context.mounted) return;
+                final pickedTime = await showTimePicker(
+                  context: context,
+                  initialTime: TimeOfDay.fromDateTime(_end),
+                );
+                if (pickedTime == null) return;
+                setState(() {
+                  _end = DateTime(
+                    pickedDate.year,
+                    pickedDate.month,
+                    pickedDate.day,
+                    pickedTime.hour,
+                    pickedTime.minute,
+                  );
+                });
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              textCapitalization: TextCapitalization.sentences,
+              controller: _notesController,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(labelText: 'Observatii'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final lead = widget.lead;
+            final clientId = lead.clientId.trim();
+            Navigator.of(context).pop(
+              Appointment(
+                id: 'field-appointment-${DateTime.now().microsecondsSinceEpoch}',
+                clientId: clientId,
+                clientName: lead.clientName.trim(),
+                contactPerson: lead.contactName.trim(),
+                contactPhone: lead.phone.trim(),
+                contactEmail: lead.email.trim(),
+                title: _titleController.text.trim(),
+                location: lead.address.trim(),
+                scheduledDate: DateTime(_start.year, _start.month, _start.day),
+                startTime: _timeLabel(_start),
+                endTime: _timeLabel(_end),
+                startDateTime: _start,
+                endDateTime: _end,
+                type: 'field_sales',
+                priority: 'normala',
+                status: 'planificata',
+                teamId: widget.currentTeamId.trim(),
+                assignedTeamIds: widget.currentTeamId.trim().isEmpty
+                    ? const <String>[]
+                    : <String>[widget.currentTeamId.trim()],
+                assignedUserId: widget.currentUserId.trim(),
+                assignedUserEmail: widget.currentUserEmail.trim(),
+                notes: _notesController.text.trim(),
+              ),
+            );
+          },
+          child: const Text('Creeaza programarea'),
+        ),
+      ],
+    );
+  }
+}
+
+class _FieldSalesRequestDialog extends StatefulWidget {
+  const _FieldSalesRequestDialog({
+    required this.repository,
+    required this.fieldSalesService,
+    required this.lead,
+    required this.catalogItems,
+    required this.priceLists,
+    required this.initialPriceListId,
+    required this.restrictToStandardOnly,
+    required this.currentUserId,
+    required this.currentUserName,
+  });
+
+  final AppDataRepository repository;
+  final FieldSalesService fieldSalesService;
+  final FieldLeadRecord? lead;
+  final List<FieldCommercialProductView> catalogItems;
+  final List<PriceListRecord> priceLists;
+  final String initialPriceListId;
+  final bool restrictToStandardOnly;
+  final String currentUserId;
+  final String currentUserName;
+
+  @override
+  State<_FieldSalesRequestDialog> createState() =>
+      _FieldSalesRequestDialogState();
+}
+
+class _FieldSalesRequestDialogState extends State<_FieldSalesRequestDialog> {
+  AiAssistantService get _aiAssistantService =>
+      AiAssistantService(repository: widget.repository);
+  final OfferStandardCatalogService _laborTemplateService =
+      OfferStandardCatalogService();
+  final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _notesController = TextEditingController();
+  String? _selectedPriceListId;
+  List<FieldCommercialProductView> _catalogItems =
+      const <FieldCommercialProductView>[];
+  List<OfferLaborTemplate> _laborTemplates = const <OfferLaborTemplate>[];
+  final List<FieldSalesProductSelection> _selectedProducts =
+      <FieldSalesProductSelection>[];
+  final List<FieldSalesServicePresetSelection> _selectedServices =
+      <FieldSalesServicePresetSelection>[];
+  double _discountPercent = 0;
+  bool _catalogLoading = false;
+  bool _laborTemplatesLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _catalogItems = widget.catalogItems;
+    if (widget.initialPriceListId.trim().isNotEmpty) {
+      _selectedPriceListId = widget.initialPriceListId.trim();
+    } else if (widget.priceLists.isNotEmpty) {
+      _selectedPriceListId = widget.priceLists.first.id;
+    }
+    final normalizedPriceListId =
+        widget.fieldSalesService.normalizeRequestedPriceListId(
+      _selectedPriceListId ?? '',
+      widget.priceLists,
+      restrictToStandardOnly: widget.restrictToStandardOnly,
+    );
+    _selectedPriceListId = normalizedPriceListId.isEmpty
+        ? (widget.priceLists.isEmpty ? null : widget.priceLists.first.id)
+        : normalizedPriceListId;
+    _loadLaborTemplates();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  List<FieldCommercialProductView> get _filteredCatalogItems {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _catalogItems;
+    }
+    return _catalogItems.where((item) {
+      final product = item.product;
+      return product.name.toLowerCase().contains(query) ||
+          product.brand.toLowerCase().contains(query) ||
+          product.model.toLowerCase().contains(query) ||
+          product.sku.toLowerCase().contains(query) ||
+          product.category.toLowerCase().contains(query);
+    }).toList(growable: false);
+  }
+
+  List<OfferLaborTemplate> get _activeLaborTemplates {
+    final items = _laborTemplates.where((item) => item.isActive).toList();
+    items.sort((a, b) {
+      final categoryCompare = a.category.toLowerCase().compareTo(
+            b.category.toLowerCase(),
+          );
+      if (categoryCompare != 0) return categoryCompare;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return items;
+  }
+
+  List<OfferLaborTemplate> get _visibleLaborTemplates {
+    final active = _activeLaborTemplates;
+    if (active.isNotEmpty) {
+      return active;
+    }
+    final fallback = _laborTemplateService
+        .recommendedLaborTemplates()
+        .where((item) => item.isActive)
+        .toList(growable: false);
+    return [...fallback]..sort((a, b) {
+        final categoryCompare = a.category.toLowerCase().compareTo(
+              b.category.toLowerCase(),
+            );
+        if (categoryCompare != 0) return categoryCompare;
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
+  }
+
+  List<String> get _serviceCategories {
+    final values = <String>{
+      'montaj',
+      'traseu_frigorific',
+      'pif',
+      'servicii_baza',
+    };
+    for (final item in _visibleLaborTemplates) {
+      final category = item.category.trim();
+      if (category.isNotEmpty) {
+        values.add(category);
+      }
+    }
+    return values.toList(growable: false)..sort();
+  }
+
+  String _serviceCategoryLabel(String raw) {
+    switch (raw.trim().toLowerCase()) {
+      case 'montaj':
+        return 'Montaj';
+      case 'traseu_frigorific':
+        return 'Traseu frigorific';
+      case 'pif':
+      case 'punere_in_functiune':
+        return 'PIF';
+      case 'servicii_baza':
+        return 'Alte servicii de baza';
+      default:
+        return raw.trim().isEmpty ? 'Altele' : raw.trim();
+    }
+  }
+
+  List<String> _suggestionTokens(String raw) {
+    return raw
+        .split(RegExp(r'[;,\n]+'))
+        .map((item) => item.trim().toLowerCase())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  String get _selectedProductsSuggestionText {
+    final parts = <String>[];
+    for (final selection in _selectedProducts) {
+      parts.add(selection.productName.toLowerCase());
+      final row = _catalogItems
+          .where((item) => item.product.id == selection.productId)
+          .cast<FieldCommercialProductView?>()
+          .firstWhere((_) => true, orElse: () => null);
+      if (row == null) continue;
+      parts.add(row.product.brand.toLowerCase());
+      parts.add(row.product.model.toLowerCase());
+      parts.add(row.product.category.toLowerCase());
+      parts.add(row.product.commercialDescription.toLowerCase());
+      parts.add(row.product.description.toLowerCase());
+    }
+    return parts.where((item) => item.trim().isNotEmpty).join(' ');
+  }
+
+  bool _isTemplateSuggested(OfferLaborTemplate template) {
+    final tokens = _suggestionTokens(template.suggestedProductKeywords);
+    if (tokens.isEmpty) return false;
+    final haystack = _selectedProductsSuggestionText;
+    if (haystack.trim().isEmpty) return false;
+    return tokens.any(haystack.contains);
+  }
+
+  List<OfferLaborTemplate> get _suggestedTemplates {
+    final items = _visibleLaborTemplates
+        .where(_isTemplateSuggested)
+        .toList(growable: false);
+    return items;
+  }
+
+  List<OfferLaborTemplate> _templatesForCategory(String category) {
+    final normalized = category.trim().toLowerCase();
+    return _visibleLaborTemplates.where((item) {
+      return item.category.trim().toLowerCase() == normalized;
+    }).toList(growable: false);
+  }
+
+  Future<void> _loadLaborTemplates() async {
+    setState(() => _laborTemplatesLoading = true);
+    final items = await _laborTemplateService.listLaborTemplates();
+    if (!mounted) return;
+    setState(() {
+      _laborTemplates = items;
+      _laborTemplatesLoading = false;
+    });
+  }
+
+  Future<void> _openLaborTemplatesManager() async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _FieldSalesLaborTemplatesDialog(
+        items: _laborTemplates,
+        onSave: (item) => _laborTemplateService.upsertLaborTemplate(item),
+        onImportRecommended: () =>
+            _laborTemplateService.mergeRecommendedLaborTemplates(),
+      ),
+    );
+    if (saved != true) {
+      return;
+    }
+    await _loadLaborTemplates();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Catalogul de manopera standard a fost actualizat.'),
+      ),
+    );
+  }
+
+  double get _productsSubtotal =>
+      _selectedProducts.fold<double>(0, (sum, item) => sum + item.lineTotal);
+
+  double get _servicesSubtotal =>
+      _selectedServices.fold<double>(0, (sum, item) => sum + item.lineTotal);
+
+  double get _subtotal => _productsSubtotal + _servicesSubtotal;
+
+  double get _discountValue => _subtotal * (_discountPercent / 100);
+
+  double get _total => _subtotal - _discountValue;
+
+  PriceListRecord? get _selectedPriceListRecord {
+    final id = widget.fieldSalesService.normalizeRequestedPriceListId(
+      (_selectedPriceListId ?? '').trim(),
+      widget.priceLists,
+      restrictToStandardOnly: widget.restrictToStandardOnly,
+    );
+    if (id.isEmpty) return null;
+    for (final item in widget.priceLists) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  Future<void> _refreshDialogCatalog() async {
+    setState(() => _catalogLoading = true);
+    final items = await widget.fieldSalesService.buildCommercialCatalog(
+      priceListId: widget.fieldSalesService.normalizeRequestedPriceListId(
+        (_selectedPriceListId ?? '').trim(),
+        widget.priceLists,
+        restrictToStandardOnly: widget.restrictToStandardOnly,
+      ),
+      restrictToStandardOnly: widget.restrictToStandardOnly,
+    );
+    if (!mounted) return;
+    final indexed = <String, FieldCommercialProductView>{
+      for (final item in items) item.product.id: item,
+    };
+    setState(() {
+      _selectedPriceListId =
+          widget.fieldSalesService.normalizeRequestedPriceListId(
+        (_selectedPriceListId ?? '').trim(),
+        widget.priceLists,
+        restrictToStandardOnly: widget.restrictToStandardOnly,
+      );
+      _catalogItems = items;
+      for (var index = 0; index < _selectedProducts.length; index++) {
+        final current = indexed[_selectedProducts[index].productId];
+        if (current == null) continue;
+        _selectedProducts[index] = _selectedProducts[index].copyWith(
+          productName: current.product.name,
+          unitPrice: current.salePrice,
+          currency: current.currency,
+        );
+      }
+      _catalogLoading = false;
+    });
+  }
+
+  AiAssistantRuntimeContext _buildFieldSalesAiContext() {
+    final lead = widget.lead;
+    final selectedCatalogRows = _catalogItems.where((item) {
+      return _selectedProducts.any((row) => row.productId == item.product.id);
+    }).toList(growable: false);
+    final productsPayload = (selectedCatalogRows.isEmpty
+            ? _catalogItems.take(6).toList(growable: false)
+            : selectedCatalogRows)
+        .map(
+          (item) => <String, dynamic>{
+            ...item.product.toMap(),
+            'sale_price': item.salePrice,
+            'currency': item.currency,
+            'available_stock_quantity': item.availableStockQuantity,
+            'price_list_name': item.priceList?.name ?? '',
+            'has_price_entry': item.hasPriceEntry,
+          },
+        )
+        .toList(growable: false);
+    return AiAssistantRuntimeContext(
+      contextType: AiAssistantContextType.fieldSales,
+      module: 'field_sales',
+      entityId: lead?.id ?? 'field-sales-request-draft',
+      entityLabel: lead?.clientName.trim().isNotEmpty == true
+          ? lead!.clientName.trim()
+          : 'Mini-oferta rapida',
+      userId: widget.currentUserId,
+      contextLabel: lead == null
+          ? 'Agent teren / cerere rapida'
+          : 'Agent teren / lead ${lead.clientName.trim().isEmpty ? lead.contactName : lead.clientName}',
+      primaryData: <String, dynamic>{
+        'type': 'field_sales_request',
+        'lead_id': lead?.id ?? '',
+        'client_name': lead?.clientName ?? '',
+        'contact_name': lead?.contactName ?? '',
+        'phone': lead?.phone ?? '',
+        'email': lead?.email ?? '',
+        'address': lead?.address ?? '',
+        'notes': _notesController.text.trim(),
+        'selected_price_list_id':
+            widget.fieldSalesService.normalizeRequestedPriceListId(
+          (_selectedPriceListId ?? '').trim(),
+          widget.priceLists,
+          restrictToStandardOnly: widget.restrictToStandardOnly,
+        ),
+        'selected_price_list_name': _selectedPriceListRecord?.name ?? '',
+        'requested_products': _selectedProducts
+            .map((item) => item.toMap())
+            .toList(growable: false),
+        'requested_services': _selectedServices
+            .map((item) => item.toMap())
+            .toList(growable: false),
+        'requested_subtotal_value': _subtotal,
+        'requested_discount_percent': _discountPercent,
+        'requested_discount_value': _discountValue,
+        'requested_total_value': _total,
+        'currency': _requestCurrency,
+      },
+      relatedData: <String, dynamic>{
+        'field_sales_request': <String, dynamic>{
+          'lead_id': lead?.id ?? '',
+          'client_name': lead?.clientName ?? '',
+          'requested_products': _selectedProducts
+              .map((item) => item.toMap())
+              .toList(growable: false),
+          'requested_services': _selectedServices
+              .map((item) => item.toMap())
+              .toList(growable: false),
+          'requested_total_value': _total,
+          'currency': _requestCurrency,
+        },
+        'lead': lead?.toMap() ?? <String, dynamic>{},
+        'client': <String, dynamic>{
+          'client_name': lead?.clientName ?? '',
+          'contact_name': lead?.contactName ?? '',
+          'phone': lead?.phone ?? '',
+          'email': lead?.email ?? '',
+        },
+        'products': productsPayload,
+      },
+      insertionTargets: const <AiAssistantInsertionTarget>[
+        AiAssistantInsertionTarget(
+          key: 'field_sales_request_notes',
+          label: 'Observatii cerere',
+          description: 'Insereaza draftul in observatiile mini-ofertei.',
+          insertMode: AiAssistantInsertMode.replace,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openFieldSalesAiAssistant() async {
+    await AiAssistantSheet.show(
+      context: context,
+      title: 'Asistent AI agent teren',
+      service: _aiAssistantService,
+      runtimeContext: _buildFieldSalesAiContext(),
+      actions: AiAssistantActionCatalog.actionsFor(
+        AiAssistantContextType.fieldSales,
+      ),
+      onInsertDraft: _applyFieldSalesAiDraft,
+    );
+  }
+
+  Future<bool> _applyFieldSalesAiDraft(String targetKey, String content) async {
+    if (targetKey != 'field_sales_request_notes') return false;
+    setState(() {
+      _notesController.text = content.trim();
+    });
+    return true;
+  }
+
+  String get _requestCurrency {
+    final values = _selectedProducts
+        .map((item) => item.currency.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet();
+    if (values.length == 1) return values.first;
+    return 'RON';
+  }
+
+  FieldSalesRequestType get _resolvedRequestType {
+    if (_selectedProducts.isNotEmpty) {
+      return FieldSalesRequestType.vanzareProdus;
+    }
+    return FieldSalesRequestType.oferta;
+  }
+
+  void _toggleProduct(FieldCommercialProductView item, bool selected) {
+    setState(() {
+      _selectedProducts.removeWhere((row) => row.productId == item.product.id);
+      if (selected) {
+        _selectedProducts.add(
+          FieldSalesProductSelection(
+            productId: item.product.id,
+            productName: item.product.name,
+            quantity: 1,
+            unitPrice: item.salePrice,
+            currency: item.currency,
+          ),
+        );
+      }
+    });
+  }
+
+  void _toggleServicePreset(
+    OfferLaborTemplate preset,
+    bool selected,
+  ) {
+    setState(() {
+      final selectionCode = preset.id.trim().isEmpty
+          ? preset.name.trim().toLowerCase()
+          : preset.id.trim();
+      _selectedServices.removeWhere((row) => row.code == selectionCode);
+      if (selected) {
+        _selectedServices.add(
+          FieldSalesServicePresetSelection(
+            code: selectionCode,
+            label: preset.name.trim().isEmpty ? 'Serviciu' : preset.name.trim(),
+            category: preset.category.trim(),
+            laborTemplateId: preset.id.trim(),
+            unit: preset.unit.trim().isEmpty ? 'serv' : preset.unit.trim(),
+            quantity: preset.defaultQuantity <= 0 ? 1 : preset.defaultQuantity,
+            unitPrice:
+                preset.defaultUnitPrice < 0 ? 0 : preset.defaultUnitPrice,
+            currency: 'RON',
+            notes: preset.notes.trim(),
+            includedServices: preset.includedServices.trim(),
+          ),
+        );
+      }
+    });
+  }
+
+  Future<void> _editProductSelection(
+      FieldSalesProductSelection selection) async {
+    final quantityController = TextEditingController(
+      text: selection.quantity.toStringAsFixed(2),
+    );
+    try {
+      final saved = await showDialog<FieldSalesProductSelection>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(selection.productName),
+          content: SizedBox(
+            width: 420,
+            child: TextField(
+              controller: quantityController,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Cantitate'),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final quantity = double.tryParse(
+                      quantityController.text.trim().replaceAll(',', '.'),
+                    ) ??
+                    selection.quantity;
+                Navigator.of(context).pop(
+                  selection.copyWith(quantity: quantity <= 0 ? 1 : quantity),
+                );
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      );
+      if (saved == null) return;
+      setState(() {
+        final index = _selectedProducts.indexWhere(
+          (item) => item.productId == saved.productId,
+        );
+        if (index >= 0) {
+          _selectedProducts[index] = saved;
+        }
+      });
+    } finally {
+      quantityController.dispose();
+    }
+  }
+
+  Future<void> _editServiceSelection(
+    FieldSalesServicePresetSelection selection,
+  ) async {
+    final isManualService = selection.laborTemplateId.trim().isEmpty;
+    final labelController = TextEditingController(text: selection.label);
+    final unitController = TextEditingController(text: selection.unit);
+    final quantityController = TextEditingController(
+      text: selection.quantity.toStringAsFixed(2),
+    );
+    final unitPriceController = TextEditingController(
+      text: selection.unitPrice.toStringAsFixed(2),
+    );
+    final notesController = TextEditingController(text: selection.notes);
+    try {
+      final saved = await showDialog<FieldSalesServicePresetSelection>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(
+            isManualService ? 'Serviciu prestat' : selection.label,
+          ),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isManualService) ...[
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: labelController,
+                    decoration: const InputDecoration(
+                      labelText: 'Denumire serviciu',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: unitController,
+                    decoration: const InputDecoration(
+                      labelText: 'UM',
+                      helperText: 'Ex: serv, ora, buc',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (selection.category.trim().isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Categorie: ${_serviceCategoryLabel(selection.category)}',
+                      ),
+                    ),
+                  ),
+                if (selection.includedServices.trim().isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Inclus: ${selection.includedServices.trim()}',
+                      ),
+                    ),
+                  ),
+                if (selection.notes.trim().isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Conditii comerciale: ${selection.notes.trim()}',
+                      ),
+                    ),
+                  ),
+                TextField(
+                  controller: quantityController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Cantitate'),
+                ),
+                const SizedBox(height: 12),
+                if (isManualService)
+                  TextField(
+                    controller: unitPriceController,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Pret unitar',
+                    ),
+                  )
+                else
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: TextEditingController(
+                      text:
+                          '${selection.unitPrice.toStringAsFixed(2)} ${selection.currency}',
+                    ),
+                    enabled: false,
+                    decoration: const InputDecoration(
+                      labelText: 'Pret unitar presetat',
+                    ),
+                  ),
+                if (isManualService) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: notesController,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Detalii serviciu',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final label = labelController.text.trim();
+                final quantity = double.tryParse(
+                      quantityController.text.trim().replaceAll(',', '.'),
+                    ) ??
+                    selection.quantity;
+                final unitPrice = double.tryParse(
+                      unitPriceController.text.trim().replaceAll(',', '.'),
+                    ) ??
+                    selection.unitPrice;
+                Navigator.of(context).pop(
+                  selection.copyWith(
+                    label: isManualService && label.isNotEmpty
+                        ? label
+                        : selection.label,
+                    unit:
+                        isManualService && unitController.text.trim().isNotEmpty
+                            ? unitController.text.trim()
+                            : selection.unit,
+                    quantity: quantity <= 0 ? 1 : quantity,
+                    unitPrice: isManualService && unitPrice >= 0
+                        ? unitPrice
+                        : selection.unitPrice,
+                    notes: isManualService
+                        ? notesController.text.trim()
+                        : selection.notes,
+                  ),
+                );
+              },
+              child: const Text('Salveaza'),
+            ),
+          ],
+        ),
+      );
+      if (saved == null) return;
+      setState(() {
+        final index = _selectedServices.indexWhere(
+          (item) => item.code == saved.code,
+        );
+        if (index >= 0) {
+          _selectedServices[index] = saved;
+        }
+      });
+    } finally {
+      labelController.dispose();
+      unitController.dispose();
+      quantityController.dispose();
+      unitPriceController.dispose();
+      notesController.dispose();
+    }
+  }
+
+  void _upsertServiceSelection(FieldSalesServicePresetSelection selection) {
+    setState(() {
+      final index = _selectedServices.indexWhere(
+        (item) => item.code == selection.code,
+      );
+      if (index >= 0) {
+        _selectedServices[index] = selection;
+      } else {
+        _selectedServices.add(selection);
+      }
+    });
+  }
+
+  Future<void> _openManualServiceEditor() async {
+    final now = DateTime.now();
+    final draft = FieldSalesServicePresetSelection(
+      code: 'manual-service-${now.microsecondsSinceEpoch}',
+      label: 'Serviciu prestat',
+      category: 'manual',
+      unit: 'serv',
+      quantity: 1,
+      unitPrice: 0,
+      currency: _requestCurrency,
+    );
+    final labelController = TextEditingController(text: draft.label);
+    final unitController = TextEditingController(text: draft.unit);
+    final quantityController = TextEditingController(
+      text: draft.quantity.toStringAsFixed(2),
+    );
+    final unitPriceController = TextEditingController(
+      text: draft.unitPrice.toStringAsFixed(2),
+    );
+    final notesController = TextEditingController();
+    try {
+      final saved = await showDialog<FieldSalesServicePresetSelection>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Adauga serviciu prestat'),
+          content: SizedBox(
+            width: 480,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: labelController,
+                  decoration: const InputDecoration(
+                    labelText: 'Denumire serviciu',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: unitController,
+                  decoration: const InputDecoration(
+                    labelText: 'UM',
+                    helperText: 'Ex: serv, ora, buc',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: quantityController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Cantitate'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: unitPriceController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Pret unitar'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: notesController,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Detalii serviciu',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final label = labelController.text.trim();
+                if (label.isEmpty) {
+                  return;
+                }
+                final quantity = double.tryParse(
+                      quantityController.text.trim().replaceAll(',', '.'),
+                    ) ??
+                    1;
+                final unitPrice = double.tryParse(
+                      unitPriceController.text.trim().replaceAll(',', '.'),
+                    ) ??
+                    0;
+                Navigator.of(context).pop(
+                  draft.copyWith(
+                    label: label,
+                    unit: unitController.text.trim().isEmpty
+                        ? 'serv'
+                        : unitController.text.trim(),
+                    quantity: quantity <= 0 ? 1 : quantity,
+                    unitPrice: unitPrice < 0 ? 0 : unitPrice,
+                    notes: notesController.text.trim(),
+                  ),
+                );
+              },
+              child: const Text('Adauga'),
+            ),
+          ],
+        ),
+      );
+      if (saved == null) {
+        return;
+      }
+      _upsertServiceSelection(saved);
+    } finally {
+      labelController.dispose();
+      unitController.dispose();
+      quantityController.dispose();
+      unitPriceController.dispose();
+      notesController.dispose();
+    }
+  }
+
+  void _removeServiceSelection(String code) {
+    setState(() {
+      _selectedServices.removeWhere((item) => item.code == code);
+    });
+  }
+
+  Widget _buildServiceTemplateChip(OfferLaborTemplate template) {
+    final selectionCode = template.id.trim().isEmpty
+        ? template.name.trim().toLowerCase()
+        : template.id.trim();
+    final selected =
+        _selectedServices.any((item) => item.code == selectionCode);
+    final priceLabel =
+        '${template.defaultUnitPrice.toStringAsFixed(2)} RON/${template.unit.trim().isEmpty ? 'serv' : template.unit.trim()}';
+    return FilterChip(
+      selected: selected,
+      label: Text('${template.name} • $priceLabel'),
+      tooltip: [
+        if (template.description.trim().isNotEmpty) template.description.trim(),
+        if (template.includedServices.trim().isNotEmpty)
+          'Inclus: ${template.includedServices.trim()}',
+        if (template.notes.trim().isNotEmpty)
+          'Conditii: ${template.notes.trim()}',
+      ].join('\n'),
+      onSelected: (value) {
+        _toggleServicePreset(template, value);
+        if (value) {
+          final current = _selectedServices.firstWhere(
+            (item) => item.code == selectionCode,
+          );
+          _editServiceSelection(current);
+        }
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lead = widget.lead;
+    final viewportSize = MediaQuery.sizeOf(context);
+    final dialogContentHeight = math.min(viewportSize.height * 0.78, 760.0);
+    final dialogContentWidth = math.min(viewportSize.width * 0.96, 920.0);
+    final productListHeight = math.max(
+      180.0,
+      math.min(dialogContentHeight * 0.34, 320.0),
+    );
+    final priceListControl = widget.priceLists.isEmpty
+        ? Card(
+            margin: EdgeInsets.zero,
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text(
+                'Nu exista lista comerciala activa. Fluxul nu este blocat, dar produsele fara pret configurat vor aparea explicit ca Pret indisponibil.',
+              ),
+            ),
+          )
+        : widget.restrictToStandardOnly
+            ? Align(
+                alignment: Alignment.centerLeft,
+                child: Chip(
+                  label: Text(
+                    _selectedPriceListRecord == null
+                        ? 'Lista standard indisponibila'
+                        : 'Lista standard: ${_selectedPriceListRecord!.name}',
+                  ),
+                ),
+              )
+            : DropdownButtonFormField<String>(
+                initialValue: _selectedPriceListId,
+                decoration:
+                    const InputDecoration(labelText: 'Lista comerciala'),
+                items: widget.priceLists
+                    .map(
+                      (item) => DropdownMenuItem<String>(
+                        value: item.id,
+                        child: Text(item.name),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (value) async {
+                  if (value == null) return;
+                  setState(() => _selectedPriceListId = value);
+                  await _refreshDialogCatalog();
+                },
+              );
+    return AlertDialog(
+      title: const Text('Mini-oferta rapida / aprobare finala'),
+      content: SizedBox(
+        width: dialogContentWidth,
+        height: dialogContentHeight,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                lead == null
+                    ? 'Cererea nu este legata de un lead selectat.'
+                    : 'Lead: ${lead.clientName.trim().isEmpty ? lead.contactName : lead.clientName}',
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Pretul comercial, stocul si mini-oferta se pot folosi local. Aprobarea se cere doar la trimiterea finala.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: _openFieldSalesAiAssistant,
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                  label: const Text('Asistent AI'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              priceListControl,
+              const SizedBox(height: 12),
+              if (_selectedPriceListRecord != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Chip(
+                    label: Text(
+                      'Lista activa: ${_selectedPriceListRecord!.name} (${_selectedPriceListRecord!.currency})',
+                    ),
+                  ),
+                ),
+              if (_catalogLoading) ...[
+                const SizedBox(height: 8),
+                const LinearProgressIndicator(),
+              ],
+              const SizedBox(height: 8),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _searchController,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Cauta produs pentru mini-oferta',
+                  prefixIcon: Icon(Icons.search),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Produse',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: productListHeight),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _filteredCatalogItems.take(40).map((item) {
+                    final selected = _selectedProducts.any(
+                      (row) => row.productId == item.product.id,
+                    );
+                    return CheckboxListTile(
+                      value: selected,
+                      onChanged: (value) => _toggleProduct(item, value == true),
+                      title: Text(item.product.name),
+                      subtitle: Text(
+                        'Pret: ${item.salePrice > 0 ? '${item.salePrice.toStringAsFixed(2)} ${item.currency}' : 'Pret indisponibil'}'
+                        ' | ${item.priceList == null ? 'Fara lista activa' : (item.hasPriceEntry ? 'Lista: ${item.priceList!.name}' : 'Fara pret in lista activa')}'
+                        ' | Stoc: ${item.availableStockQuantity.toStringAsFixed(2)} ${item.product.unit}'
+                        ' | ${item.product.stockStatus.label}'
+                        ' | Livrare: ${item.product.deliveryLeadTimeText.trim().isEmpty ? '-' : item.product.deliveryLeadTimeText.trim()}',
+                      ),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                      secondary: selected
+                          ? IconButton(
+                              onPressed: () {
+                                final current = _selectedProducts.firstWhere(
+                                  (row) => row.productId == item.product.id,
+                                );
+                                _editProductSelection(current);
+                              },
+                              icon: const Icon(Icons.edit_outlined),
+                            )
+                          : null,
+                    );
+                  }).toList(growable: false),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Servicii presetate',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _openLaborTemplatesManager,
+                      icon: const Icon(Icons.playlist_add_check_outlined),
+                      label: const Text('Catalog manopera standard'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _openManualServiceEditor,
+                      icon: const Icon(Icons.add_task_outlined),
+                      label: const Text('Adauga serviciu prestat'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (_laborTemplatesLoading)
+                const LinearProgressIndicator()
+              else if (_activeLaborTemplates.isEmpty)
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      'Nu exista inca sabloane salvate de tine. Se afiseaza lista presetata standard pana configurezi preturile si serviciile tale din modulul Oferte.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                )
+              else
+                const SizedBox.shrink(),
+              if (!_laborTemplatesLoading &&
+                  _visibleLaborTemplates.isNotEmpty) ...[
+                if (_suggestedTemplates.isNotEmpty) ...[
+                  Text(
+                    'Sugestii dupa produsele selectate',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _suggestedTemplates
+                        .map(_buildServiceTemplateChip)
+                        .toList(growable: false),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                ..._serviceCategories.map((category) {
+                  final templates = _templatesForCategory(category);
+                  if (templates.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _serviceCategoryLabel(category),
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: templates
+                              .map(_buildServiceTemplateChip)
+                              .toList(growable: false),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+              if (_selectedProducts.isNotEmpty ||
+                  _selectedServices.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'Mini-oferta',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                const SizedBox(height: 8),
+                ..._selectedProducts.map(
+                  (item) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(item.productName),
+                    subtitle: Text(
+                      '${item.quantity.toStringAsFixed(2)} x ${item.unitPrice.toStringAsFixed(2)} ${item.currency} = ${item.lineTotal.toStringAsFixed(2)} ${item.currency}',
+                    ),
+                    trailing: IconButton(
+                      onPressed: () => _editProductSelection(item),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                  ),
+                ),
+                ..._selectedServices.map(
+                  (item) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(item.label),
+                    subtitle: Text(
+                      [
+                        '${item.quantity.toStringAsFixed(2)} x ${item.unitPrice.toStringAsFixed(2)} ${item.currency} = ${item.lineTotal.toStringAsFixed(2)} ${item.currency}',
+                        if (item.includedServices.trim().isNotEmpty)
+                          'Inclus: ${item.includedServices.trim()}',
+                        if (item.notes.trim().isNotEmpty)
+                          'Conditii: ${item.notes.trim()}',
+                      ].join('\n'),
+                    ),
+                    trailing: Wrap(
+                      spacing: 4,
+                      children: [
+                        IconButton(
+                          onPressed: () => _editServiceSelection(item),
+                          icon: const Icon(Icons.edit_outlined),
+                        ),
+                        IconButton(
+                          onPressed: () => _removeServiceSelection(item.code),
+                          icon: const Icon(Icons.delete_outline),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Slider(
+                value: _discountPercent,
+                min: 0,
+                max: _FieldSalesPageState._maxDirectDiscountPercent,
+                divisions: 24,
+                label: '${_discountPercent.toStringAsFixed(1)}%',
+                onChanged: (value) {
+                  setState(() => _discountPercent = value);
+                },
+              ),
+              Text(
+                'Discount direct permis fara aprobare separata: 0% - ${_FieldSalesPageState._maxDirectDiscountPercent.toStringAsFixed(0)}%',
+              ),
+              const SizedBox(height: 8),
+              Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                          'Subtotal: ${_subtotal.toStringAsFixed(2)} $_requestCurrency'),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Discount ${_discountPercent.toStringAsFixed(2)}%: ${_discountValue.toStringAsFixed(2)} $_requestCurrency',
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Total propus: ${_total.toStringAsFixed(2)} $_requestCurrency',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _notesController,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Observatii'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        OutlinedButton(
+          onPressed: () =>
+              _submitRequest(FieldSalesRequestApprovalStatus.draft),
+          child: const Text('Salveaza mini-oferta'),
+        ),
+        FilledButton(
+          onPressed: () =>
+              _submitRequest(FieldSalesRequestApprovalStatus.trimisa),
+          child: const Text('Trimite cerere aprobare discount si vanzare'),
+        ),
+      ],
+    );
+  }
+
+  void _submitRequest(FieldSalesRequestApprovalStatus status) {
+    if (_selectedProducts.isEmpty && _selectedServices.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Adauga cel putin un produs sau un serviciu presetat.',
+          ),
+        ),
+      );
+      return;
+    }
+    final lead = widget.lead;
+    final now = DateTime.now();
+    Navigator.of(context).pop(
+      FieldSalesRequestRecord(
+        id: 'field-request-${now.microsecondsSinceEpoch}',
+        leadId: lead?.id ?? '',
+        clientId: lead?.clientId ?? '',
+        clientName: lead?.clientName.trim().isNotEmpty == true
+            ? lead!.clientName.trim()
+            : (lead?.contactName.trim() ?? ''),
+        requestType: _resolvedRequestType,
+        requestedProductIds: _selectedProducts
+            .map((item) => item.productId)
+            .toList(growable: false),
+        requestedProducts: _selectedProducts.toList(growable: false),
+        requestedServicePresets: _selectedServices.toList(growable: false),
+        requestedServiceLabel: _selectedServices
+            .map((item) => item.label.trim())
+            .where((item) => item.isNotEmpty)
+            .join(', '),
+        requestedPriceListId:
+            widget.fieldSalesService.normalizeRequestedPriceListId(
+          (_selectedPriceListId ?? '').trim(),
+          widget.priceLists,
+          restrictToStandardOnly: widget.restrictToStandardOnly,
+        ),
+        requestedSubtotalValue: _subtotal,
+        requestedDiscountPercent: _discountPercent,
+        requestedDiscountValue: _discountValue,
+        requestedTotalValue: _total,
+        currency: _requestCurrency,
+        requestedByUserId: widget.currentUserId.trim(),
+        requestedByName: widget.currentUserName.trim(),
+        approvalStatus: status,
+        notes: _notesController.text.trim(),
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+  }
+}
+
+class _FieldSalesLaborTemplatesDialog extends StatefulWidget {
+  const _FieldSalesLaborTemplatesDialog({
+    required this.items,
+    required this.onSave,
+    required this.onImportRecommended,
+  });
+
+  final List<OfferLaborTemplate> items;
+  final Future<void> Function(OfferLaborTemplate item) onSave;
+  final Future<int> Function() onImportRecommended;
+
+  @override
+  State<_FieldSalesLaborTemplatesDialog> createState() =>
+      _FieldSalesLaborTemplatesDialogState();
+}
+
+class _FieldSalesLaborTemplatesDialogState
+    extends State<_FieldSalesLaborTemplatesDialog> {
+  bool _saving = false;
+
+  Future<void> _editTemplate([OfferLaborTemplate? existing]) async {
+    final saved = await showDialog<OfferLaborTemplate>(
+      context: context,
+      builder: (context) =>
+          _FieldSalesLaborTemplateEditorDialog(existing: existing),
+    );
+    if (saved == null || _saving) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(saved);
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<void> _importRecommended() async {
+    if (_saving) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.onImportRecommended();
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(true);
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = [...widget.items]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return AlertDialog(
+      title: const Text('Catalog manopera standard'),
+      content: SizedBox(
+        width: 760,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _importRecommended,
+                    icon: const Icon(Icons.playlist_add_check_outlined),
+                    label: const Text('Importa set recomandat'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : () => _editTemplate(),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Adauga'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: items.isEmpty
+                  ? const Center(
+                      child: Text('Nu exista sabloane de manopera standard.'),
+                    )
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                          title: Text(item.name),
+                          subtitle: Text(
+                            'Categorie: ${item.category.trim().isEmpty ? '-' : item.category.trim()}\n'
+                            '${item.description.trim().isEmpty ? '-' : item.description.trim()}\n'
+                            'UM: ${item.unit} • Cantitate implicita: ${item.defaultQuantity.toStringAsFixed(2)} • Pret unitar: ${item.defaultUnitPrice.toStringAsFixed(2)}\n'
+                            'Incluse: ${item.includedServices.trim().isEmpty ? '-' : item.includedServices.trim()}\n'
+                            'Sugestii produse: ${item.suggestedProductKeywords.trim().isEmpty ? '-' : item.suggestedProductKeywords.trim()}\n'
+                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
+                          ),
+                          trailing: IconButton(
+                            tooltip: 'Editeaza',
+                            onPressed:
+                                _saving ? null : () => _editTemplate(item),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Inchide'),
+        ),
+      ],
+    );
+  }
+}
+
+class _FieldSalesLaborTemplateEditorDialog extends StatefulWidget {
+  const _FieldSalesLaborTemplateEditorDialog({this.existing});
+
+  final OfferLaborTemplate? existing;
+
+  @override
+  State<_FieldSalesLaborTemplateEditorDialog> createState() =>
+      _FieldSalesLaborTemplateEditorDialogState();
+}
+
+class _FieldSalesLaborTemplateEditorDialogState
+    extends State<_FieldSalesLaborTemplateEditorDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _categoryController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _unitController = TextEditingController();
+  final _quantityController = TextEditingController();
+  final _unitPriceController = TextEditingController();
+  final _includedServicesController = TextEditingController();
+  final _suggestedProductKeywordsController = TextEditingController();
+  final _notesController = TextEditingController();
+  bool _isActive = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.existing;
+    if (existing != null) {
+      _nameController.text = existing.name;
+      _categoryController.text = existing.category;
+      _descriptionController.text = existing.description;
+      _unitController.text = existing.unit;
+      _quantityController.text = existing.defaultQuantity.toStringAsFixed(2);
+      _unitPriceController.text = existing.defaultUnitPrice.toStringAsFixed(2);
+      _includedServicesController.text = existing.includedServices;
+      _suggestedProductKeywordsController.text =
+          existing.suggestedProductKeywords;
+      _notesController.text = existing.notes;
+      _isActive = existing.isActive;
+    } else {
+      _categoryController.text = 'servicii_baza';
+      _unitController.text = 'ore';
+      _quantityController.text = '1';
+      _unitPriceController.text = '0';
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _categoryController.dispose();
+    _descriptionController.dispose();
+    _unitController.dispose();
+    _quantityController.dispose();
+    _unitPriceController.dispose();
+    _includedServicesController.dispose();
+    _suggestedProductKeywordsController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.existing == null
+            ? 'Adauga sablon manopera'
+            : 'Editeaza sablon manopera',
+      ),
+      content: SizedBox(
+        width: 640,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'Denumire'),
+                  validator: (value) {
+                    if ((value ?? '').trim().isEmpty) {
+                      return 'Completeaza denumirea.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _categoryController,
+                  decoration: const InputDecoration(
+                    labelText: 'Categorie serviciu',
+                    helperText:
+                        'Exemple: montaj, traseu_frigorific, pif, servicii_baza',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _descriptionController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Descriere'),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        textCapitalization: TextCapitalization.sentences,
+                        controller: _unitController,
+                        decoration: const InputDecoration(labelText: 'UM'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _quantityController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Cantitate implicita',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _unitPriceController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Pret unitar implicit',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _includedServicesController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Servicii incluse implicite',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _suggestedProductKeywordsController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Cuvinte-cheie sugestie produse',
+                    helperText:
+                        'Separate prin virgula: ex. aer conditionat, 12000 btu, inverter',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextFormField(
+                  textCapitalization: TextCapitalization.sentences,
+                  controller: _notesController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Conditii comerciale / note',
+                  ),
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _isActive,
+                  onChanged: (value) => setState(() => _isActive = value),
+                  title: const Text('Activ'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunta'),
+        ),
+        FilledButton(
+          onPressed: () {
+            if (!_formKey.currentState!.validate()) {
+              return;
+            }
+            final now = DateTime.now();
+            Navigator.of(context).pop(
+              OfferLaborTemplate(
+                id: widget.existing?.id ??
+                    'labor-template-${now.microsecondsSinceEpoch}',
+                name: _nameController.text.trim(),
+                category: _categoryController.text.trim(),
+                description: _descriptionController.text.trim(),
+                unit: _unitController.text.trim().isEmpty
+                    ? 'ore'
+                    : _unitController.text.trim(),
+                defaultQuantity: _asDouble(_quantityController.text, 1),
+                defaultUnitPrice: _asDouble(_unitPriceController.text, 0),
+                isActive: _isActive,
+                notes: _notesController.text.trim(),
+                includedServices: _includedServicesController.text.trim(),
+                suggestedProductKeywords:
+                    _suggestedProductKeywordsController.text.trim(),
+                createdAt: widget.existing?.createdAt ?? now,
+                updatedAt: now,
+              ),
+            );
+          },
+          child: const Text('Salveaza'),
+        ),
+      ],
+    );
+  }
+}

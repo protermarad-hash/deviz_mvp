@@ -185,32 +185,42 @@ class _AppTaskPageState extends State<AppTaskPage> {
       ),
     );
     if (result == null || !mounted) return;
-    final saved = await _repo.saveTask(result);
+    // Optimistic UI — actualizează lista imediat, fără await
     setState(() {
-      final idx = _allTasks.indexWhere((t) => t.id == saved.id);
+      final idx = _allTasks.indexWhere((t) => t.id == result.id);
       final updated = List<AppTask>.from(_allTasks);
       if (idx >= 0) {
-        updated[idx] = saved;
+        updated[idx] = result;
       } else {
-        updated.add(saved);
+        updated.add(result);
       }
       _allTasks = updated;
+    });
+    // Save în background — nu blochează UI
+    _repo.saveTask(result).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la salvare: $e')),
+        );
+        _load();
+      }
+      return result;
     });
   }
 
   Future<void> _confirmDelete(AppTask task) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Șterge task'),
         content: Text('Ștergi "${task.titlu}"?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
             child: const Text('Anulează'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
             style:
                 FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
             child: const Text('Șterge'),

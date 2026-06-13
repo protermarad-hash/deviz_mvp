@@ -1,0 +1,1092 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/material.dart';
+import 'dart:io';
+
+import '../notifications/send_document_dialog.dart';
+import '../notifications/document_email_templates.dart';
+import '../notifications/notification_service.dart';
+import '../notifications/notification_models.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../core/document_file_service.dart';
+import '../../core/pdf_actions_helper.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../field_photos/field_photos_page.dart';
+import '../registratura/registry_models.dart';
+import '../product_catalog/product_sales_models.dart';
+import '../programari/appointment_models.dart';
+import 'complaint_models.dart';
+import 'signature_capture_page.dart';
+import 'warranty_intervention_report_models.dart';
+import 'warranty_intervention_report_pdf_service.dart';
+
+class WarrantyInterventionReportEditorPage extends StatefulWidget {
+  const WarrantyInterventionReportEditorPage({
+    super.key,
+    required this.repository,
+    required this.complaint,
+    required this.jobTitle,
+    this.certificate,
+    this.appointment,
+    this.currentReport,
+    this.existingTicket,
+    this.resolvedBeneficiaryName = '',
+    this.resolvedContractorName = '',
+    this.resolvedTechnicianName = '',
+    this.resolvedTeamName = '',
+    this.resolvedAgfrEquipmentLabel = '',
+    this.resolvedAgfrInterventionLabel = '',
+    this.resolvedAgfrReportLabel = '',
+    this.resolvedOfferLabel = '',
+  });
+
+  final AppDataRepository repository;
+  final ComplaintRecord complaint;
+  final String jobTitle;
+  final WarrantyCertificateRecord? certificate;
+  final Appointment? appointment;
+  final WarrantyInterventionReportRecord? currentReport;
+  final WarrantyServiceTicketRecord? existingTicket;
+  final String resolvedBeneficiaryName;
+  final String resolvedContractorName;
+  final String resolvedTechnicianName;
+  final String resolvedTeamName;
+  final String resolvedAgfrEquipmentLabel;
+  final String resolvedAgfrInterventionLabel;
+  final String resolvedAgfrReportLabel;
+  final String resolvedOfferLabel;
+
+  @override
+  State<WarrantyInterventionReportEditorPage> createState() =>
+      _WarrantyInterventionReportEditorPageState();
+}
+
+class _WarrantyInterventionReportEditorPageState
+    extends State<WarrantyInterventionReportEditorPage> {
+  static const int _maxInlineAttachmentBytes = 550 * 1024;
+  final Uuid _uuid = const Uuid();
+  late final TextEditingController _documentNumberController;
+  late final TextEditingController _clientNameController;
+  late final TextEditingController _beneficiaryRepresentativeController;
+  late final TextEditingController _equipmentLabelController;
+  late final TextEditingController _brandController;
+  late final TextEditingController _modelController;
+  late final TextEditingController _serialIndoorController;
+  late final TextEditingController _serialOutdoorController;
+  late final TextEditingController _technicianController;
+  late final TextEditingController _teamController;
+  late final TextEditingController _findingsController;
+  late final TextEditingController _workPerformedController;
+  late final TextEditingController _materialsUsedController;
+  late final TextEditingController _partsReplacedController;
+  late final TextEditingController _recommendationsController;
+  late String _reportId;
+  late DateTime _createdAt;
+  late DateTime _documentDate;
+  late WarrantyCoverageStatus _coverageStatus;
+  late String _resultStatus;
+  String _clientSignatureBase64 = '';
+  String _technicianSignatureBase64 = '';
+  String _generatedDocumentPath = '';
+  String _generatedDocumentFileName = '';
+  String _registryEntryId = '';
+  String _warrantyServiceTicketId = '';
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final seed = widget.currentReport ?? _seedFromContext();
+    _reportId = seed.id;
+    _createdAt = seed.createdAt;
+    _documentDate = seed.documentDate ?? DateTime.now();
+    _coverageStatus = seed.warrantyCoverageStatus;
+    _resultStatus = seed.resultStatus;
+    _clientSignatureBase64 = seed.clientSignatureBase64;
+    _technicianSignatureBase64 = seed.technicianSignatureBase64;
+    _generatedDocumentPath = seed.generatedDocumentPath;
+    _generatedDocumentFileName = seed.generatedDocumentFileName;
+    _registryEntryId = seed.registryEntryId;
+    _warrantyServiceTicketId = seed.warrantyServiceTicketId;
+    _documentNumberController =
+        TextEditingController(text: seed.documentNumber);
+    _clientNameController = TextEditingController(text: seed.clientName);
+    _beneficiaryRepresentativeController =
+        TextEditingController(text: seed.beneficiaryRepresentative);
+    _equipmentLabelController =
+        TextEditingController(text: seed.equipmentLabel);
+    _brandController = TextEditingController(text: seed.brand);
+    _modelController = TextEditingController(text: seed.model);
+    _serialIndoorController =
+        TextEditingController(text: seed.serialNumberIndoor);
+    _serialOutdoorController =
+        TextEditingController(text: seed.serialNumberOutdoor);
+    _technicianController = TextEditingController(text: seed.technicianName);
+    _teamController = TextEditingController(text: seed.teamName);
+    _findingsController = TextEditingController(text: seed.findings);
+    _workPerformedController = TextEditingController(text: seed.workPerformed);
+    _materialsUsedController =
+        TextEditingController(text: seed.materialsUsedText);
+    _partsReplacedController =
+        TextEditingController(text: seed.partsReplacedText);
+    _recommendationsController =
+        TextEditingController(text: seed.recommendations);
+    _hydrateReadableDefaults();
+    if (widget.currentReport == null && seed.documentNumber.trim().isEmpty) {
+      _assignAutomaticNumber();
+    }
+  }
+
+  void _hydrateReadableDefaults() {
+    _technicianController.text = _preferReadableValue(
+      currentValue: _technicianController.text,
+      preferredValue: _resolvedTechnicianName(),
+      rawValues: <String>[
+        widget.complaint.fieldTechnicianId,
+        widget.complaint.assignedEmployeeId,
+        widget.appointment?.assignedUserEmail ?? '',
+        if (widget.appointment?.assignedEmployeeIds.isNotEmpty ?? false)
+          widget.appointment!.assignedEmployeeIds.first,
+      ],
+    );
+    _teamController.text = _preferReadableValue(
+      currentValue: _teamController.text,
+      preferredValue: _resolvedTeamName(),
+      rawValues: <String>[
+        widget.complaint.fieldTeamId,
+        widget.complaint.assignedTeamId,
+        widget.appointment?.teamId ?? '',
+        if (widget.appointment?.assignedTeamIds.isNotEmpty ?? false)
+          widget.appointment!.assignedTeamIds.first,
+      ],
+    );
+    if (widget.currentReport == null) {
+      _clientNameController.text = _preferReadableValue(
+        currentValue: _clientNameController.text,
+        preferredValue: _resolvedBeneficiaryName(),
+        rawValues: const <String>[],
+      );
+    }
+  }
+
+  Future<void> _assignAutomaticNumber() async {
+    final next = await widget.repository.nextWarrantyInterventionReportNumber();
+    if (!mounted || _documentNumberController.text.trim().isNotEmpty) {
+      return;
+    }
+    setState(() {
+      _documentNumberController.text = next;
+    });
+  }
+
+  @override
+  void dispose() {
+    _documentNumberController.dispose();
+    _clientNameController.dispose();
+    _beneficiaryRepresentativeController.dispose();
+    _equipmentLabelController.dispose();
+    _brandController.dispose();
+    _modelController.dispose();
+    _serialIndoorController.dispose();
+    _serialOutdoorController.dispose();
+    _technicianController.dispose();
+    _teamController.dispose();
+    _findingsController.dispose();
+    _workPerformedController.dispose();
+    _materialsUsedController.dispose();
+    _partsReplacedController.dispose();
+    _recommendationsController.dispose();
+    super.dispose();
+  }
+
+  String _appointmentMaterialUsageText(Appointment? appointment) {
+    final usage = appointment?.materialUsage;
+    if (usage == null) {
+      return '';
+    }
+    final parts = <String>[];
+    if (usage.kitTemplateName.trim().isNotEmpty) {
+      parts.add('Kit: ${usage.kitTemplateName.trim()}');
+    }
+    if (usage.linearMetersUsed > 0) {
+      parts.add(
+        'Cantitate folosita: ${usage.linearMetersUsed.toStringAsFixed(usage.linearMetersUsed == usage.linearMetersUsed.roundToDouble() ? 0 : 2)} ml',
+      );
+    }
+    if (usage.lines.isNotEmpty) {
+      parts.add(
+        usage.lines
+            .map(
+              (line) =>
+                  '${line.name} - ${line.quantity.toStringAsFixed(line.quantity == line.quantity.roundToDouble() ? 0 : 2)} ${line.unit}',
+            )
+            .join(', '),
+      );
+    }
+    if (usage.notes.trim().isNotEmpty) {
+      parts.add('Observatii materiale: ${usage.notes.trim()}');
+    }
+    return parts.join('\n');
+  }
+
+  String _mergeMultilineValues(String first, String second) {
+    final left = first.trim();
+    final right = second.trim();
+    if (left.isEmpty) {
+      return right;
+    }
+    if (right.isEmpty) {
+      return left;
+    }
+    if (left == right) {
+      return left;
+    }
+    return '$left\n\n$right';
+  }
+
+  String _preferReadableValue({
+    required String currentValue,
+    required String preferredValue,
+    required Iterable<String> rawValues,
+  }) {
+    final current = currentValue.trim();
+    final preferred = preferredValue.trim();
+    final raw = rawValues
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toSet();
+    if (current.isEmpty) {
+      return preferred;
+    }
+    // Dacă current este un ID raw (din rawValues), preferăm numele rezolvat,
+    // chiar dacă preferred este gol — mai bine câmp gol decât ID brut în PDF.
+    if (raw.contains(current)) {
+      return preferred;
+    }
+    if (preferred.isEmpty) {
+      return current;
+    }
+    return current;
+  }
+
+  String _resolvedBeneficiaryName() {
+    if (widget.resolvedBeneficiaryName.trim().isNotEmpty) {
+      return widget.resolvedBeneficiaryName.trim();
+    }
+    final fallback = widget.complaint.beneficiaryName.trim();
+    if (fallback.isNotEmpty) {
+      return fallback;
+    }
+    return widget.appointment?.clientName.trim() ?? '';
+  }
+
+  String _resolvedContractorName() {
+    if (widget.resolvedContractorName.trim().isNotEmpty) {
+      return widget.resolvedContractorName.trim();
+    }
+    return widget.complaint.contractorName.trim();
+  }
+
+  String _resolvedTechnicianName() {
+    if (widget.resolvedTechnicianName.trim().isNotEmpty &&
+        widget.resolvedTechnicianName.trim() != '-') {
+      return widget.resolvedTechnicianName.trim();
+    }
+    // Nu întoarcem ID-uri brute (Firebase UID / email) — returnăm gol dacă nu
+    // putem rezolva un nume lizibil. PDF-ul va afișa '-' în loc de ID.
+    return '';
+  }
+
+  String _resolvedTeamName() {
+    if (widget.resolvedTeamName.trim().isNotEmpty &&
+        widget.resolvedTeamName.trim() != '-') {
+      return widget.resolvedTeamName.trim();
+    }
+    // Nu întoarcem ID-uri brute de echipă — returnăm gol dacă nu știm numele.
+    return '';
+  }
+
+  WarrantyInterventionReportRecord _seedFromContext() {
+    final complaint = widget.complaint;
+    final certificate = widget.certificate;
+    final appointment = widget.appointment;
+    final existingTicket = widget.existingTicket;
+    final appointmentMaterials = _appointmentMaterialUsageText(appointment);
+    final equipmentLabel = [
+      complaint.equipmentType?.label ?? '',
+      complaint.equipmentBrand.trim(),
+      complaint.equipmentModel.trim(),
+      complaint.outdoorUnitSerial.trim(),
+    ].where((entry) => entry.isNotEmpty).join(' | ');
+    return WarrantyInterventionReportRecord(
+      id: 'warranty-report-${_uuid.v4()}',
+      complaintId: complaint.id,
+      warrantyCertificateId: certificate?.id ?? complaint.warrantyCertificateId,
+      warrantyServiceTicketId: existingTicket?.id ?? '',
+      clientId: complaint.beneficiaryClientId.trim(),
+      clientName: _resolvedBeneficiaryName().isNotEmpty
+          ? _resolvedBeneficiaryName()
+          : (appointment?.clientName.trim().isNotEmpty ?? false)
+              ? appointment!.clientName.trim()
+              : complaint.contactPerson.trim(),
+      jobId: complaint.jobId.trim(),
+      jobTitle: widget.jobTitle.trim(),
+      documentNumber: '',
+      documentDate: complaint.fieldInterventionDate ?? complaint.complaintDate,
+      warrantyCoverageStatus: complaint.warrantyCoverageStatus,
+      equipmentLabel: equipmentLabel,
+      brand: complaint.equipmentBrand.trim().isNotEmpty
+          ? complaint.equipmentBrand.trim()
+          : (certificate?.brand.trim() ?? ''),
+      model: complaint.equipmentModel.trim().isNotEmpty
+          ? complaint.equipmentModel.trim()
+          : (certificate?.model.trim() ?? ''),
+      serialNumberIndoor: complaint.indoorUnitSerials.trim().isNotEmpty
+          ? complaint.indoorUnitSerials.trim()
+          : (certificate?.serialNumberIndoor.trim() ?? ''),
+      serialNumberOutdoor: complaint.outdoorUnitSerial.trim().isNotEmpty
+          ? complaint.outdoorUnitSerial.trim()
+          : (certificate?.serialNumberOutdoor.trim() ?? ''),
+      beneficiaryRepresentative: complaint.contactPerson.trim().isNotEmpty
+          ? complaint.contactPerson.trim()
+          : (appointment?.contactPerson.trim() ?? ''),
+      technicianName: _resolvedTechnicianName(),
+      teamName: _resolvedTeamName(),
+      findings: complaint.fieldFinding.trim().isNotEmpty
+          ? complaint.fieldFinding.trim()
+          : complaint.problemDescription.trim(),
+      workPerformed: complaint.fieldWorkPerformed.trim(),
+      materialsUsedText: _mergeMultilineValues(
+        complaint.fieldMaterialsUsed.trim(),
+        appointmentMaterials,
+      ),
+      partsReplacedText: complaint.fieldPartsChanged.trim(),
+      recommendations: complaint.fieldTechnicianNotes.trim().isNotEmpty
+          ? complaint.fieldTechnicianNotes.trim()
+          : complaint.internalNotes.trim(),
+      resultStatus: complaint.fieldInterventionOutcome?.value ?? '',
+      agfrEquipmentId: complaint.agfrEquipmentId.trim(),
+      agfrInterventionId: complaint.agfrInterventionId.trim(),
+      agfrReportId: complaint.agfrReportId.trim(),
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  WarrantyInterventionReportRecord _buildDraft() {
+    return WarrantyInterventionReportRecord(
+      id: _reportId,
+      complaintId: widget.complaint.id,
+      warrantyCertificateId: widget.certificate?.id ??
+          widget.complaint.warrantyCertificateId.trim(),
+      warrantyServiceTicketId: _warrantyServiceTicketId.trim(),
+      clientId: widget.complaint.beneficiaryClientId.trim(),
+      clientName: _clientNameController.text.trim(),
+      jobId: widget.complaint.jobId.trim(),
+      jobTitle: widget.jobTitle.trim(),
+      documentNumber: _documentNumberController.text.trim(),
+      documentDate: _documentDate,
+      warrantyCoverageStatus: _coverageStatus,
+      equipmentLabel: _equipmentLabelController.text.trim(),
+      brand: _brandController.text.trim(),
+      model: _modelController.text.trim(),
+      serialNumberIndoor: _serialIndoorController.text.trim(),
+      serialNumberOutdoor: _serialOutdoorController.text.trim(),
+      beneficiaryRepresentative:
+          _beneficiaryRepresentativeController.text.trim(),
+      technicianName: _technicianController.text.trim(),
+      teamName: _teamController.text.trim(),
+      findings: _findingsController.text.trim(),
+      workPerformed: _workPerformedController.text.trim(),
+      materialsUsedText: _materialsUsedController.text.trim(),
+      partsReplacedText: _partsReplacedController.text.trim(),
+      recommendations: _recommendationsController.text.trim(),
+      resultStatus: _resultStatus.trim(),
+      clientSignatureBase64: _clientSignatureBase64,
+      technicianSignatureBase64: _technicianSignatureBase64,
+      registryEntryId: _registryEntryId,
+      generatedDocumentPath: _generatedDocumentPath,
+      generatedDocumentFileName: _generatedDocumentFileName,
+      agfrEquipmentId: widget.complaint.agfrEquipmentId.trim(),
+      agfrInterventionId: widget.complaint.agfrInterventionId.trim(),
+      agfrReportId: widget.complaint.agfrReportId.trim(),
+      createdAt: _createdAt,
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  Future<WarrantyInterventionReportRecord> _persistDraft() async {
+    var report = _buildDraft();
+    if (report.documentNumber.trim().isEmpty) {
+      final next =
+          await widget.repository.nextWarrantyInterventionReportNumber();
+      _documentNumberController.text = next;
+      report = report.copyWith(documentNumber: next);
+    }
+    await widget.repository.saveWarrantyInterventionReport(report);
+    _reportId = report.id;
+    _createdAt = report.createdAt;
+    return report;
+  }
+
+  Future<void> _saveOnly() async {
+    setState(() => _saving = true);
+    final report = await _persistDraft();
+    if (!mounted) {
+      return;
+    }
+    Navigator.of(context).pop(report);
+  }
+
+  Future<void> _generatePdf({
+    required bool share,
+    bool saveAs = false,
+  }) async {
+    setState(() => _saving = true);
+    try {
+      var report = await _persistDraft();
+      final company = await widget.repository.loadCompanyProfile();
+      final filePath = await WarrantyInterventionReportPdfService.export(
+        repository: widget.repository,
+        company: company,
+        report: report,
+        complaint: widget.complaint,
+        appointment: widget.appointment,
+        certificate: widget.certificate,
+        resolvedBeneficiaryName: _resolvedBeneficiaryName(),
+        resolvedContractorName: _resolvedContractorName(),
+        resolvedTechnicianName: _preferReadableValue(
+          currentValue: report.technicianName,
+          preferredValue: _resolvedTechnicianName(),
+          rawValues: <String>[
+            widget.complaint.fieldTechnicianId,
+            widget.complaint.assignedEmployeeId,
+          ],
+        ),
+        resolvedTeamName: _preferReadableValue(
+          currentValue: report.teamName,
+          preferredValue: _resolvedTeamName(),
+          rawValues: <String>[
+            widget.complaint.fieldTeamId,
+            widget.complaint.assignedTeamId,
+          ],
+        ),
+        resolvedAgfrEquipmentLabel: widget.resolvedAgfrEquipmentLabel,
+        resolvedAgfrInterventionLabel: widget.resolvedAgfrInterventionLabel,
+        resolvedAgfrReportLabel: widget.resolvedAgfrReportLabel,
+        resolvedOfferLabel: widget.resolvedOfferLabel,
+        saveAs: saveAs,
+      );
+      report = report.copyWith(
+        generatedDocumentPath: filePath,
+        generatedDocumentFileName: _fileNameFromPath(filePath),
+        updatedAt: DateTime.now(),
+      );
+      if (report.registryEntryId.trim().isEmpty) {
+        final registryEntry = await widget.repository.registerGeneratedDocument(
+          registryType: RegistryType.iesire,
+          documentCategory: 'PV interventie garantie',
+          documentTitle:
+              'Proces-verbal interventie garantie ${report.documentNumber.trim().isEmpty ? report.id : report.documentNumber.trim()}',
+          documentNumber: report.documentNumber.trim().isEmpty
+              ? report.id
+              : report.documentNumber.trim(),
+          documentDate: report.documentDate,
+          issuerName: company.companyName.trim(),
+          recipientName: report.clientName.trim(),
+          clientId: report.clientId.trim(),
+          jobId: report.jobId.trim(),
+          ticketId: report.warrantyServiceTicketId.trim(),
+          filePath: filePath,
+          fileName: report.generatedDocumentFileName,
+          notes: 'Generat din modulul Reclamatii / Garantie.',
+          status: 'emis',
+        );
+        report = report.copyWith(registryEntryId: registryEntry.id);
+      }
+      await widget.repository.saveWarrantyInterventionReport(report);
+      _generatedDocumentPath = report.generatedDocumentPath;
+      _generatedDocumentFileName = report.generatedDocumentFileName;
+      _registryEntryId = report.registryEntryId;
+      if (!mounted) {
+        return;
+      }
+      if (share) {
+        final company = await widget.repository.loadCompanyProfile();
+        if (!mounted) return;
+        final defaultTo = widget.complaint.email.trim();
+        final subject =
+            'PV interventie garantie ${report.documentNumber.trim().isEmpty ? report.id : report.documentNumber.trim()}';
+        final body =
+            'Buna ziua,\n\nAtasat gasiti proces-verbalul de interventie in garantie.\n\nCu stima,';
+        final result = await showDialog<Map<String, String>?>(
+          context: context,
+          builder: (_) => SendDocumentDialog(
+            to: defaultTo,
+            subject: subject,
+            body: body,
+          ),
+        );
+        if (result == null) return;
+        final action = result['action'] ?? 'cancel';
+        if (action == 'cancel') return;
+        if (action == 'mailto') {
+          await DocumentFileService.shareFile(
+            filePath,
+            subject: result['subject'] ?? subject,
+            text: result['body'] ?? body,
+          );
+          return;
+        }
+        if (action == 'queue') {
+          try {
+            final inlineAssets = <Map<String, dynamic>>[];
+            if (company.logoBase64.trim().isNotEmpty) {
+              inlineAssets.add({
+                'cid': 'companylogo',
+                'filename': 'logo.png',
+                'base64': company.logoBase64.trim(),
+                'contentType': 'image/png',
+              });
+            }
+            final notif = NotificationCenterService();
+            final attachments = [
+              await _buildQueueAttachmentFromFile(
+                filePath: filePath,
+                fileName: report.generatedDocumentFileName,
+                sourceModule: 'reclamatii',
+                sourceEntityId: report.id,
+              ),
+            ];
+            final queueItem = await notif.sendEmailNotification(
+              recipientEmail: result['to'] ?? defaultTo,
+              recipientName: report.clientName,
+              subject: result['subject'] ?? subject,
+              bodyText: result['body'] ?? body,
+              bodyHtml: warrantyInterventionHtml(
+                recipientName: result['to'] ?? report.clientName,
+                companyName: company.companyName,
+                reportNumber: report.documentNumber,
+                message: result['body'] ?? body,
+              ),
+              attachments: attachments,
+              inlineAssets: inlineAssets,
+              sourceModule: 'reclamatii',
+              sourceEntityId: report.id,
+              eventType: NotificationEventType.documentGenerated,
+              metadata: {'report_id': report.id},
+            );
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Email pus in coada: ${queueItem.id}. Statusul final se vede in Notificari / Email log.',
+                ),
+              ),
+            );
+          } catch (e) {
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Eroare la punerea in coada: $e')),
+            );
+          }
+        }
+        return;
+      } else {
+        if (!mounted) return;
+        await PdfActionsHelper.showPdfActions(
+          context,
+          filePath: filePath,
+          title: 'PV intervenție garanție generat',
+          shareSubject:
+              'PV intervenție garanție ${report.documentNumber.trim().isEmpty ? report.id : report.documentNumber.trim()}',
+          shareText: 'Proces-verbal intervenție garanție generat din aplicație.',
+        );
+      }
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).pop(report);
+    } on PdfSaveCanceledException {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Salvarea documentului a fost anulata.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nu am putut genera PV-ul de garantie: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<Map<String, dynamic>> _buildQueueAttachmentFromFile({
+    required String filePath,
+    required String fileName,
+    required String sourceModule,
+    required String sourceEntityId,
+  }) async {
+    final file = File(filePath.trim());
+    if (!file.existsSync()) {
+      throw StateError('Fisierul atasat nu exista: $filePath');
+    }
+    final bytes = await file.readAsBytes();
+    final normalizedName = _sanitizeAttachmentFileName(fileName);
+    if (bytes.length <= _maxInlineAttachmentBytes) {
+      return <String, dynamic>{
+        'filename': normalizedName,
+        'base64': base64Encode(bytes),
+        'content_type': 'application/pdf',
+        'size_bytes': bytes.length,
+      };
+    }
+
+    final safeEntity = sourceEntityId.trim().isEmpty
+        ? 'unknown'
+        : sourceEntityId.trim().replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+    final storagePath =
+        'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
+    await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    final ref = FirebaseStorage.instance.ref().child(storagePath);
+    await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'application/pdf'),
+    );
+    return <String, dynamic>{
+      'filename': normalizedName,
+      'storage_path': ref.fullPath,
+      'storage_bucket': ref.bucket,
+      'content_type': 'application/pdf',
+      'size_bytes': bytes.length,
+      'encoding': 'firebase_storage',
+    };
+  }
+
+  String _sanitizeAttachmentFileName(String fileName) {
+    final trimmed = fileName.trim();
+    if (trimmed.isEmpty) return 'document.pdf';
+    return trimmed.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+  }
+
+  Future<void> _captureSignature({required bool forClient}) async {
+    final bytes =
+        await Navigator.of(context, rootNavigator: true).push<Uint8List>(
+      MaterialPageRoute<Uint8List>(
+        fullscreenDialog: true,
+        builder: (_) => SignatureCapturePage(
+          title: forClient ? 'Semnatura beneficiar' : 'Semnatura tehnician',
+        ),
+      ),
+    );
+    if (bytes == null || !mounted) {
+      return;
+    }
+    final encoded = base64Encode(bytes);
+    setState(() {
+      if (forClient) {
+        _clientSignatureBase64 = encoded;
+      } else {
+        _technicianSignatureBase64 = encoded;
+      }
+    });
+  }
+
+  Future<void> _openFieldPhotos() async {
+    final report = await _persistDraft();
+    if (!mounted) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => FieldPhotosPage(
+          repository: widget.repository,
+          sourceModule: 'warranty_intervention_report',
+          sourceEntityId: widget.complaint.id,
+          documentId: report.id,
+          title: 'Poze teren garantie',
+        ),
+      ),
+    );
+  }
+
+  Uint8List? _decodeSignature(String raw) {
+    if (raw.trim().isEmpty) {
+      return null;
+    }
+    try {
+      return base64Decode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Widget _signatureCard({
+    required String title,
+    required String signatureBase64,
+    required VoidCallback onSign,
+    required VoidCallback onClear,
+  }) {
+    final bytes = _decodeSignature(signatureBase64);
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 10),
+            Container(
+              height: 110,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade400),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              alignment: Alignment.center,
+              child: bytes == null
+                  ? const Text('Fara semnatura')
+                  : Image.memory(bytes, fit: BoxFit.contain),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: onSign,
+                  icon: const Icon(Icons.draw_outlined),
+                  label: const Text('Semneaza'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: bytes == null ? null : onClear,
+                  icon: const Icon(Icons.restart_alt_outlined),
+                  label: const Text('Reseteaza'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDocumentDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _documentDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() => _documentDate = picked);
+  }
+
+  String _coverageText() => _coverageStatus.label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Proces-verbal interventie garantie'),
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _documentNumberController,
+                decoration: const InputDecoration(
+                  labelText: 'Număr document',
+                  helperText:
+                      'Se completeaza automat la salvare daca ramane gol.',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _pickDocumentDate,
+                    icon: const Icon(Icons.event_outlined),
+                    label: Text('Data document: ${_date(_documentDate)}'),
+                  ),
+                  Chip(
+                    avatar: const Icon(Icons.verified_user_outlined),
+                    label: Text('Garantie: ${_coverageText()}'),
+                  ),
+                  if (_registryEntryId.trim().isNotEmpty)
+                    Chip(
+                      avatar: const Icon(Icons.local_post_office_outlined),
+                      label: Text('Registratura: $_registryEntryId'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _clientNameController,
+                decoration:
+                    const InputDecoration(labelText: 'Client / beneficiar'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _beneficiaryRepresentativeController,
+                decoration: const InputDecoration(
+                  labelText: 'Reprezentant beneficiar',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _equipmentLabelController,
+                decoration: const InputDecoration(labelText: 'Echipament'),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  SizedBox(
+                    width: 220,
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _brandController,
+                      decoration: const InputDecoration(labelText: 'Brand'),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 220,
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _modelController,
+                      decoration: const InputDecoration(labelText: 'Model'),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 220,
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _serialOutdoorController,
+                      decoration: const InputDecoration(
+                        labelText: 'Serie unitate exterioara',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _serialIndoorController,
+                decoration: const InputDecoration(
+                  labelText: 'Serie unitate interioara',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  SizedBox(
+                    width: 260,
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _technicianController,
+                      decoration: const InputDecoration(labelText: 'Tehnician'),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 260,
+                    child: TextField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _teamController,
+                      decoration: const InputDecoration(labelText: 'Echipa'),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 260,
+                    child: DropdownButtonFormField<String>(
+                      initialValue:
+                          _resultStatus.trim().isEmpty ? null : _resultStatus,
+                      decoration: const InputDecoration(
+                        labelText: 'Rezultat interventie',
+                      ),
+                      items: [
+                        const DropdownMenuItem<String>(
+                          value: 'rezolvata',
+                          child: Text('Rezolvata'),
+                        ),
+                        const DropdownMenuItem<String>(
+                          value: 'necesita_revenire',
+                          child: Text('Necesita revenire'),
+                        ),
+                        const DropdownMenuItem<String>(
+                          value: 'necesita_piese',
+                          child: Text('Necesita piese'),
+                        ),
+                        const DropdownMenuItem<String>(
+                          value: 'monitorizare',
+                          child: Text('Monitorizare'),
+                        ),
+                        const DropdownMenuItem<String>(
+                          value: 'client_indisponibil',
+                          child: Text('Client indisponibil'),
+                        ),
+                        const DropdownMenuItem<String>(
+                          value: 'fara_defect_constatat',
+                          child: Text('Fara defect constatat'),
+                        ),
+                      ],
+                      onChanged: (value) =>
+                          setState(() => _resultStatus = value ?? ''),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _findingsController,
+                decoration: const InputDecoration(labelText: 'Constatare'),
+                maxLines: 4,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _workPerformedController,
+                decoration:
+                    const InputDecoration(labelText: 'Lucrari efectuate'),
+                maxLines: 4,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _materialsUsedController,
+                decoration:
+                    const InputDecoration(labelText: 'Materiale folosite'),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _partsReplacedController,
+                decoration: const InputDecoration(labelText: 'Piese inlocuite'),
+                maxLines: 3,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                textCapitalization: TextCapitalization.sentences,
+                controller: _recommendationsController,
+                decoration:
+                    const InputDecoration(labelText: 'Concluzii / recomandari'),
+                maxLines: 4,
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  SizedBox(
+                    width: 320,
+                    child: _signatureCard(
+                      title: 'Semnatura beneficiar',
+                      signatureBase64: _clientSignatureBase64,
+                      onSign: () => _captureSignature(forClient: true),
+                      onClear: () =>
+                          setState(() => _clientSignatureBase64 = ''),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 320,
+                    child: _signatureCard(
+                      title: 'Semnatura tehnician',
+                      signatureBase64: _technicianSignatureBase64,
+                      onSign: () => _captureSignature(forClient: false),
+                      onClear: () =>
+                          setState(() => _technicianSignatureBase64 = ''),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            alignment: WrapAlignment.end,
+            children: [
+              OutlinedButton(
+                onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                child: const Text('Închide'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _saveOnly,
+                icon: const Icon(Icons.save_outlined),
+                label: const Text('Salveaza'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving ? null : _openFieldPhotos,
+                icon: const Icon(Icons.photo_camera_outlined),
+                label: const Text('Poze teren'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _saving ? null : () => _generatePdf(share: false),
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: const Text('Genereaza PDF'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _saving
+                    ? null
+                    : () => _generatePdf(share: false, saveAs: true),
+                icon: const Icon(Icons.save_as_outlined),
+                label: const Text('Save As'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _saving ? null : () => _generatePdf(share: true),
+                icon: const Icon(Icons.share_outlined),
+                label: const Text('Share'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _fileNameFromPath(String path) {
+    if (path.trim().isEmpty) {
+      return '';
+    }
+    final normalized = path.replaceAll('\\', '/');
+    final index = normalized.lastIndexOf('/');
+    return index == -1 ? normalized : normalized.substring(index + 1);
+  }
+
+  String _date(DateTime value) {
+    return '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year}';
+  }
+}

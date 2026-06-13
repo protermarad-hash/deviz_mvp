@@ -36,7 +36,7 @@ import '../features/deviz_tehnic/oferte_devize_modul_page.dart';
 import '../features/placeholders/placeholder_page.dart';
 import '../features/programari/programari_page.dart';
 import '../features/programari/programare_kituri_page.dart';
-import '../features/reclamatii/reclamatii_page.dart';
+import '../features/reclamatii/reclamatii_list_page.dart';
 import '../features/refrigerant_reporting/refrigerant_reporting_page.dart';
 import '../features/registratura/registratura_page.dart';
 import '../features/ai_assistant/ai_assistant_page.dart';
@@ -45,11 +45,21 @@ import '../features/admin/local_backup_restore_page.dart';
 import '../features/admin/module_settings_page.dart';
 import '../features/admin/roles_overview_page.dart';
 import '../features/admin/template_settings_page.dart';
+import '../core/help/help_admin_page.dart';
 import '../features/tool_packages/pachete_scule_page.dart';
 import '../features/tools/scule_page.dart';
 import '../features/tasks/app_task_page.dart';
 import '../features/users/local_users_admin_page.dart';
 import '../features/vehicles/vehicles_page.dart';
+import '../features/hr/employee_financial_page.dart';
+import '../features/dashboard/financial_dashboard_page.dart';
+import '../features/dashboard/pipeline_dashboard_page.dart';
+import '../features/stoc/stoc_page.dart';
+import '../features/echipamente/echipamente_page.dart';
+import '../features/crm/crm_page.dart';
+import '../features/crm/crm_repository.dart';
+import '../features/obiective/obiective_page.dart';
+import '../features/analiza/analiza_page.dart';
 
 typedef ShellPageBuilder = Widget Function(BuildContext context);
 
@@ -91,10 +101,16 @@ const List<_ShellSectionDef> _kShellSections = [
     itemIds: ['taskuri'],
   ),
   _ShellSectionDef(
+    id: 'financiar',
+    label: 'FINANCIAR',
+    icon: Icons.bar_chart_outlined,
+    itemIds: ['dashboard_financiar', 'pipeline_dashboard', 'obiective', 'analiza'],
+  ),
+  _ShellSectionDef(
     id: 'comercial',
     label: 'COMERCIAL',
     icon: Icons.storefront_outlined,
-    itemIds: ['oferte', 'clienti', 'parteneri', 'financiar_parteneri', 'agent_teren'],
+    itemIds: ['crm', 'oferte', 'clienti', 'parteneri', 'financiar_parteneri', 'agent_teren'],
   ),
   _ShellSectionDef(
     id: 'operational',
@@ -119,6 +135,8 @@ const List<_ShellSectionDef> _kShellSections = [
     icon: Icons.category_outlined,
     itemIds: [
       'catalog_produse',
+      'stoc_materiale',
+      'echipamente_instalate',
       'taloane_garantie',
       'materiale',
       'retete_kit_programari',
@@ -128,7 +146,7 @@ const List<_ShellSectionDef> _kShellSections = [
     id: 'hr',
     label: 'HR',
     icon: Icons.people_outline,
-    itemIds: ['angajati', 'echipe', 'hr', 'hr_deplasari'],
+    itemIds: ['angajati', 'echipe', 'hr', 'hr_deplasari', 'financiar_angajati'],
   ),
   _ShellSectionDef(
     id: 'ai',
@@ -145,6 +163,7 @@ const List<_ShellSectionDef> _kShellSections = [
       'setari_email',
       'module_settings',
       'sabloane',
+      'help_admin',
       'roluri',
       'utilizatori',
       'backup_restore',
@@ -193,6 +212,7 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
   final Set<String> _visitedPageIds = {};
   final Map<String, bool> _expandedSections = {
     'taskuri': true,
+    'financiar': true,
     'comercial': true,
     'operational': true,
     'catalog': true,
@@ -335,7 +355,7 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
           UserRole.sefEchipa,
           UserRole.tehnician,
         },
-        builder: (_) => ReclamatiiPage(
+        builder: (_) => ReclamatiiListPage(
           repository: widget.appDataRepository,
           fieldAuthRoleKey: widget.fieldAuthRoleKey,
           fieldAuthUserId: widget.fieldAuthUserId,
@@ -369,7 +389,8 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         label: 'Financiar parteneri',
         icon: Icons.account_balance_wallet_outlined,
         allowedRoles: {UserRole.admin, UserRole.birou},
-        builder: (_) => const PartnerFinancialDashboardPage(),
+        builder: (_) => PartnerFinancialDashboardPage(
+              appRepository: widget.appDataRepository),
       ),
       ShellDestination(
         id: 'catalog_produse',
@@ -378,6 +399,20 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         allowedRoles: {UserRole.admin, UserRole.birou, UserRole.sefEchipa},
         builder: (_) =>
             ProductCatalogPage(repository: widget.appDataRepository),
+      ),
+      ShellDestination(
+        id: 'stoc_materiale',
+        label: 'Stoc materiale',
+        icon: Icons.warehouse_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const StocPage(),
+      ),
+      ShellDestination(
+        id: 'echipamente_instalate',
+        label: 'Echipamente instalate',
+        icon: Icons.hvac_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const EchipamentePage(),
       ),
       ShellDestination(
         id: 'taloane_garantie',
@@ -396,7 +431,8 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
       ),
       ShellDestination(
         id: 'retete_kit_programari',
-        builder: (_) => const ProgramareKituriPage(),
+        builder: (_) =>
+            ProgramareKituriPage(repository: widget.appDataRepository),
         label: 'Retete kit programari',
         icon: Icons.playlist_add_check_circle_outlined,
         allowedRoles: {UserRole.admin},
@@ -458,6 +494,48 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         ),
       ),
       ShellDestination(
+        id: 'financiar_angajati',
+        label: 'Financiar angajați',
+        icon: Icons.account_balance_wallet_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const EmployeeFinancialPage(),
+      ),
+      ShellDestination(
+        id: 'dashboard_financiar',
+        label: 'Dashboard Financiar',
+        icon: Icons.bar_chart_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const FinancialDashboardPage(),
+      ),
+      ShellDestination(
+        id: 'pipeline_dashboard',
+        label: 'Pipeline Vânzări',
+        icon: Icons.account_tree_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const PipelineDashboardPage(),
+      ),
+      ShellDestination(
+        id: 'obiective',
+        label: 'Obiective lunare',
+        icon: Icons.flag_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const ObiectivePage(),
+      ),
+      ShellDestination(
+        id: 'analiza',
+        label: 'Analiza profitabilitate',
+        icon: Icons.analytics_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const AnalizaPage(),
+      ),
+      ShellDestination(
+        id: 'crm',
+        label: 'CRM Vanzari',
+        icon: Icons.people_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => CrmPage(repository: widget.appDataRepository),
+      ),
+      ShellDestination(
         id: 'setari_firma',
         label: 'Setări firmă',
         icon: Icons.apartment_outlined,
@@ -486,6 +564,13 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         icon: Icons.description_outlined,
         allowedRoles: {UserRole.admin},
         builder: (_) => const TemplateSettingsPage(),
+      ),
+      ShellDestination(
+        id: 'help_admin',
+        label: 'Conținut Help',
+        icon: Icons.help_center_outlined,
+        allowedRoles: {UserRole.admin},
+        builder: (_) => const HelpAdminPage(),
       ),
       ShellDestination(
         id: 'ai_assistant',
@@ -666,6 +751,40 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
     }
+
+    // Badge CRM: leaduri cu actiuni depășite
+    try {
+      final crmPending =
+          await CrmRepository.instance.listNecesitaActiune();
+      if (mounted && crmPending.isNotEmpty) {
+        setState(() {
+          _sectionBadges['comercial'] = crmPending.length;
+        });
+        // Alertă locală o singură dată per sesiune (folosim un flag de sesiune)
+        _showCrmAlertIfNeeded(crmPending.length);
+      }
+    } catch (_) {}
+  }
+
+  static bool _crmAlertShownThisSession = false;
+
+  void _showCrmAlertIfNeeded(int count) {
+    if (_crmAlertShownThisSession) return;
+    _crmAlertShownThisSession = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              '\u{1F4CB} $count lead-uri necesita actiune in CRM'),
+          action: SnackBarAction(
+            label: 'Deschide CRM',
+            onPressed: () => _navigateToModuleId('crm'),
+          ),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    });
   }
 
   void _scheduleSectionBadgesLoad({bool force = false}) {
@@ -781,12 +900,13 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         initialFocusAppointmentId: sourceEntityId,
       );
     } else if (module == 'reclamatii') {
-      page = ReclamatiiPage(
+      page = ReclamatiiListPage(
         repository: widget.appDataRepository,
         fieldAuthRoleKey: widget.fieldAuthRoleKey,
         fieldAuthUserId: widget.fieldAuthUserId,
         fieldAuthUserLabel: widget.fieldAuthUserLabel,
         fieldAuthTeamId: widget.fieldAuthTeamId,
+        initialFocusComplaintId: sourceEntityId,
       );
     } else if (module == 'tools') {
       page = SculePage(

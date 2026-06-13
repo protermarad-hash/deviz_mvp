@@ -1,15 +1,18 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/document_file_service.dart';
 import '../../core/repositories/app_data_repository.dart';
+import '../agfr/agfr_models.dart';
+import '../clients/client_models.dart';
+import '../jobs/job_site_document_models.dart';
 import '../product_catalog/product_catalog_service.dart';
+import '../product_catalog/product_sales_models.dart';
 import '../programari/appointment_models.dart';
 import '../reclamatii/repair_report_models.dart';
 import '../reclamatii/warranty_intervention_report_models.dart';
-import '../agfr/agfr_models.dart';
-import '../clients/client_models.dart';
-import '../product_catalog/product_sales_models.dart';
 import '../registratura/registry_models.dart';
 import '../../core/widgets/help_button.dart';
 import '../../core/help_content.dart';
@@ -66,6 +69,7 @@ class _DocumentePageState extends State<DocumentePage> {
         widget.repository.listAgfrReports(),
         widget.repository.listClients(),
         _productCatalogService.listWarrantyCertificates(),
+        _loadJobSiteDocuments(),
       ]);
 
       final registryEntries = results[0] as List<RegistryEntry>;
@@ -76,6 +80,7 @@ class _DocumentePageState extends State<DocumentePage> {
       final agfrReports = results[4] as List<AgfrReportRecord>;
       final clients = results[5] as List<ClientRecord>;
       final warrantyCertificates = results[6] as List<WarrantyCertificateRecord>;
+      final jobSiteDocs = results[7] as List<JobSiteDocumentRecord>;
 
       final clientNameById = <String, String>{
         for (final client in clients)
@@ -90,6 +95,7 @@ class _DocumentePageState extends State<DocumentePage> {
         ..._fromWarrantyReports(warrantyReports, clientNameById),
         ..._fromAgfrReports(agfrReports, clientNameById),
         ..._fromWarrantyCertificates(warrantyCertificates, clientNameById),
+        ..._fromJobSiteDocuments(jobSiteDocs),
       ];
 
       final deduped = <String, _DocumentHubItem>{};
@@ -109,6 +115,50 @@ class _DocumentePageState extends State<DocumentePage> {
       if (!mounted) return;
       setState(() => _loading = false);
     }
+  }
+
+  Future<List<JobSiteDocumentRecord>> _loadJobSiteDocuments() async {
+    if (!FirebaseBootstrap.isOnline) return const [];
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('job_site_documents')
+          .get();
+      return snap.docs
+          .map((d) => JobSiteDocumentRecord.fromMap(d.data()))
+          .where((d) => d.generatedDocumentPath.trim().isNotEmpty)
+          .toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  List<_DocumentHubItem> _fromJobSiteDocuments(
+    List<JobSiteDocumentRecord> docs,
+  ) {
+    return docs.map((doc) {
+      return _DocumentHubItem(
+        id: 'job-site-doc-${doc.id}',
+        sourceId: doc.id,
+        sourceModule: 'lucrari',
+        sourceLabel: 'PV / PIF',
+        documentType: doc.documentType.label,
+        documentNumber: doc.documentNumber.trim(),
+        title: doc.documentNumber.trim().isNotEmpty
+            ? '${doc.documentType.shortCode} ${doc.documentNumber}'
+            : doc.documentType.label,
+        clientId: '',
+        clientName: doc.beneficiaryRepresentative.trim(),
+        contractingClientName: doc.projectName.trim(),
+        relatedJobId: doc.jobId.trim(),
+        relatedAppointmentId: '',
+        issuedAt: doc.documentDate,
+        filePath: doc.generatedDocumentPath.trim(),
+        fileName: doc.generatedDocumentFileName.trim(),
+        notes: doc.observations.trim().isNotEmpty
+            ? doc.observations.trim()
+            : doc.location.trim(),
+      );
+    }).toList(growable: false);
   }
 
   List<_DocumentHubItem> _fromRegistryEntries(

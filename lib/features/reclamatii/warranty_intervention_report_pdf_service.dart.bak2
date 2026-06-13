@@ -1,0 +1,464 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../../core/company_profile.dart';
+import '../../core/pdf_document_branding.dart';
+import '../../core/pdf_export_settings.dart';
+import '../../core/pdf_font_bundle.dart';
+import '../../core/pdf_save_service.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../product_catalog/product_sales_models.dart';
+import '../programari/appointment_models.dart';
+import 'complaint_models.dart';
+import 'warranty_intervention_report_models.dart';
+
+class WarrantyInterventionReportPdfService {
+  const WarrantyInterventionReportPdfService._();
+
+  static Future<Uint8List> buildPdfBytes({
+    required CompanyProfile company,
+    required WarrantyInterventionReportRecord report,
+    required ComplaintRecord complaint,
+    Appointment? appointment,
+    WarrantyCertificateRecord? certificate,
+    String resolvedBeneficiaryName = '',
+    String resolvedContractorName = '',
+    String resolvedTechnicianName = '',
+    String resolvedTeamName = '',
+    String resolvedAgfrEquipmentLabel = '',
+    String resolvedAgfrInterventionLabel = '',
+    String resolvedAgfrReportLabel = '',
+    String resolvedOfferLabel = '',
+  }) async {
+    final pdfFonts = await PdfFontBundle.load();
+    final doc = pw.Document(theme: pdfFonts.theme);
+    final branding = DocumentBrandingData.fromCompanyProfile(company);
+    final template = company.pdfExportSettings.visualTemplate;
+    final palette = resolvePdfTemplatePalette(template);
+    final beneficiaryLabel = _pickPreferred(
+      report.clientName,
+      resolvedBeneficiaryName,
+      complaint.beneficiaryName,
+      appointment?.clientName ?? '',
+    );
+    final contractorLabel =
+        _pickPreferred(resolvedContractorName, complaint.contractorName);
+    final technicianLabel = _pickReadable(
+      currentValue: report.technicianName,
+      preferredValue: resolvedTechnicianName,
+      rawValues: <String>[
+        complaint.fieldTechnicianId,
+        complaint.assignedEmployeeId,
+      ],
+    );
+    final teamLabel = _pickReadable(
+      currentValue: report.teamName,
+      preferredValue: resolvedTeamName,
+      rawValues: <String>[
+        complaint.fieldTeamId,
+        complaint.assignedTeamId,
+      ],
+    );
+    final complaintNumber = complaint.complaintNumber.trim().isEmpty
+        ? complaint.id
+        : complaint.complaintNumber.trim();
+    final complaintInfoRows = _buildInfoRows(<List<String>>[
+      <String>['Numar reclamatie', complaintNumber],
+      <String>['Data reclamatie', _date(complaint.complaintDate)],
+      <String>['Status reclamatie', complaint.status.label],
+      <String>['Tip reclamatie', complaint.type.label],
+      <String>['Sursa', complaint.source.label],
+      <String>['Client / beneficiar', beneficiaryLabel],
+      <String>['Contractant / colaborator', contractorLabel],
+      <String>['Persoana contact', complaint.contactPerson],
+      <String>['Telefon', complaint.phone],
+      <String>['Email', complaint.email],
+      <String>['Locatie / adresa', complaint.location],
+      <String>['Lucrare', _pickPreferred(report.jobTitle, report.jobId)],
+    ]);
+    final warrantyRows = _buildInfoRows(<List<String>>[
+      <String>['Status garantie', report.warrantyCoverageStatus.label],
+      <String>[
+        'Certificat garantie',
+        certificate == null
+            ? report.warrantyCertificateId
+            : certificate.fullCertificateNumber,
+      ],
+      <String>[
+        'Perioada garantie',
+        certificate == null ? '' : _warrantyPeriod(certificate),
+      ],
+      <String>['Talon / istoric service', report.warrantyServiceTicketId],
+      <String>['Programare asociata', appointment?.title ?? appointment?.id ?? ''],
+      <String>['Deviz / oferta', resolvedOfferLabel],
+    ]);
+    final equipmentRows = _buildInfoRows(<List<String>>[
+      <String>['Echipament / utilaj', report.equipmentLabel],
+      <String>['Tip echipament', complaint.equipmentType?.label ?? ''],
+      <String>['Brand', _pickPreferred(report.brand, complaint.equipmentBrand)],
+      <String>['Model', _pickPreferred(report.model, complaint.equipmentModel)],
+      <String>[
+        'Serie unitate exterioara',
+        _pickPreferred(report.serialNumberOutdoor, complaint.outdoorUnitSerial),
+      ],
+      <String>[
+        'Serii unitati interioare',
+        _pickPreferred(report.serialNumberIndoor, complaint.indoorUnitSerials),
+      ],
+      <String>['Detalii tehnice', complaint.equipmentDetails],
+    ]);
+    final interventionRows = _buildInfoRows(<List<String>>[
+      <String>[
+        'Data interventiei',
+        _date(
+          report.documentDate ??
+              complaint.fieldInterventionDate ??
+              complaint.updatedAt,
+        ),
+      ],
+      <String>['Echipa teren', teamLabel],
+      <String>['Tehnician', technicianLabel],
+      <String>['Rezultat interventie', _resultLabel(report.resultStatus)],
+    ]);
+    final interventionParagraphs = _buildParagraphs(<List<String>>[
+      <String>['Problema reclamata', complaint.problemDescription],
+      <String>['Constatare in teren', _pickPreferred(report.findings, complaint.fieldFinding)],
+      <String>[
+        'Lucrari efectuate',
+        _pickPreferred(report.workPerformed, complaint.fieldWorkPerformed),
+      ],
+      <String>[
+        'Materiale folosite',
+        _pickPreferred(report.materialsUsedText, complaint.fieldMaterialsUsed),
+      ],
+      <String>[
+        'Piese schimbate',
+        _pickPreferred(report.partsReplacedText, complaint.fieldPartsChanged),
+      ],
+      <String>[
+        'Observatii tehnician',
+        _pickPreferred(report.recommendations, complaint.fieldTechnicianNotes),
+      ],
+      <String>['Observatii interne', complaint.internalNotes],
+    ]);
+    final agfrRows = _buildInfoRows(<List<String>>[
+      <String>['Echipament AGFR', resolvedAgfrEquipmentLabel],
+      <String>['Interventie AGFR', resolvedAgfrInterventionLabel],
+      <String>['Raport AGFR', resolvedAgfrReportLabel],
+    ]);
+    doc.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(28),
+        build: (context) => [
+          buildClassicDocumentHeader(
+            branding: branding,
+            documentTitle: 'PROCES-VERBAL INTERVENTIE IN GARANTIE',
+            template: template,
+            metadata: <MapEntry<String, String>>[
+              MapEntry(
+                'Numar',
+                report.documentNumber.trim().isEmpty
+                    ? report.id
+                    : report.documentNumber.trim(),
+              ),
+              MapEntry('Data', _date(report.documentDate ?? report.updatedAt)),
+              MapEntry('Tehnician', technicianLabel),
+              MapEntry('Client', beneficiaryLabel),
+            ],
+          ),
+          pw.SizedBox(height: 16),
+          _section('Date reclamatie', complaintInfoRows, palette: palette),
+          pw.SizedBox(height: 12),
+          _section('Garantie si documente legate', warrantyRows, palette: palette),
+          pw.SizedBox(height: 12),
+          _section('Echipament', equipmentRows, palette: palette),
+          pw.SizedBox(height: 12),
+          _section(
+            'Interventie service',
+            [
+              ...interventionRows,
+              if (interventionParagraphs.isNotEmpty) pw.SizedBox(height: 4),
+              ...interventionParagraphs,
+            ],
+            palette: palette,
+          ),
+          if (agfrRows.isNotEmpty) ...[
+            pw.SizedBox(height: 12),
+            _section('Legaturi AGFR', agfrRows, palette: palette),
+          ],
+          pw.SizedBox(height: 18),
+          _signatureSection(
+            clientSignature: _tryDecodeBase64(report.clientSignatureBase64),
+            technicianSignature:
+                _tryDecodeBase64(report.technicianSignatureBase64),
+          ),
+        ],
+      ),
+    );
+    return doc.save();
+  }
+
+  static Future<String> export({
+    required AppDataRepository repository,
+    required CompanyProfile company,
+    required WarrantyInterventionReportRecord report,
+    required ComplaintRecord complaint,
+    Appointment? appointment,
+    WarrantyCertificateRecord? certificate,
+    String resolvedBeneficiaryName = '',
+    String resolvedContractorName = '',
+    String resolvedTechnicianName = '',
+    String resolvedTeamName = '',
+    String resolvedAgfrEquipmentLabel = '',
+    String resolvedAgfrInterventionLabel = '',
+    String resolvedAgfrReportLabel = '',
+    String resolvedOfferLabel = '',
+    String outputDirectory = '',
+    bool saveAs = false,
+  }) async {
+    final bytes = await buildPdfBytes(
+      company: company,
+      report: report,
+      complaint: complaint,
+      appointment: appointment,
+      certificate: certificate,
+      resolvedBeneficiaryName: resolvedBeneficiaryName,
+      resolvedContractorName: resolvedContractorName,
+      resolvedTechnicianName: resolvedTechnicianName,
+      resolvedTeamName: resolvedTeamName,
+      resolvedAgfrEquipmentLabel: resolvedAgfrEquipmentLabel,
+      resolvedAgfrInterventionLabel: resolvedAgfrInterventionLabel,
+      resolvedAgfrReportLabel: resolvedAgfrReportLabel,
+      resolvedOfferLabel: resolvedOfferLabel,
+    );
+    return PdfSaveService.savePdf(
+      repository: repository,
+      bytes: bytes,
+      fileName: _fileName(report),
+      category: PdfDocumentCategory.other,
+      outputDirectory: outputDirectory,
+      forceSaveAs: saveAs,
+    );
+  }
+
+  static String _fileName(WarrantyInterventionReportRecord report) {
+    final number = report.documentNumber.trim().isEmpty
+        ? report.id
+        : report.documentNumber.trim();
+    final safe = number.replaceAll(RegExp(r'[^A-Za-z0-9_\\-]+'), '_');
+    return 'pv_garantie_$safe.pdf';
+  }
+
+  static List<pw.Widget> _buildInfoRows(List<List<String>> rows) {
+    return rows
+        .where((entry) => entry.length >= 2 && entry[1].trim().isNotEmpty)
+        .map((entry) => _row(entry[0], entry[1]))
+        .toList(growable: false);
+  }
+
+  static List<pw.Widget> _buildParagraphs(List<List<String>> rows) {
+    return rows
+        .where((entry) => entry.length >= 2 && entry[1].trim().isNotEmpty)
+        .map((entry) => _paragraph(entry[0], entry[1]))
+        .toList(growable: false);
+  }
+
+  static String _pickPreferred(String first, [String second = '', String third = '', String fourth = '']) {
+    for (final value in <String>[first, second, third, fourth]) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty && trimmed != '-') {
+        return trimmed;
+      }
+    }
+    return '';
+  }
+
+  static String _pickReadable({
+    required String currentValue,
+    required String preferredValue,
+    required Iterable<String> rawValues,
+  }) {
+    final current = currentValue.trim();
+    final preferred = preferredValue.trim();
+    final raw = rawValues
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toSet();
+    if (current.isEmpty || raw.contains(current)) {
+      return preferred;
+    }
+    return current;
+  }
+
+  static pw.Widget _section(
+    String title,
+    List<pw.Widget> children, {
+    required PdfTemplatePalette palette,
+  }) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        color: palette.surfaceAlt,
+        border: pw.Border.all(color: palette.border),
+        borderRadius: pw.BorderRadius.circular(6),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            title,
+            style: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 11,
+              color: palette.primary,
+            ),
+          ),
+          pw.SizedBox(height: 6),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _row(String label, String value) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 4),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.SizedBox(
+            width: 170,
+            child: pw.Text(
+              label,
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+            ),
+          ),
+          pw.Expanded(
+              child: pw.Text(value.trim().isEmpty ? '-' : value.trim())),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _paragraph(String label, String value) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 10),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            label,
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(value.trim().isEmpty ? '-' : value.trim()),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _signatureSection({
+    required pw.MemoryImage? clientSignature,
+    required pw.MemoryImage? technicianSignature,
+  }) {
+    pw.Widget signatureBox(String label, pw.MemoryImage? image) {
+      return pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            label,
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 8),
+          pw.Container(
+            height: 90,
+            decoration: pw.BoxDecoration(
+              border: pw.Border.all(color: PdfColors.grey500),
+              borderRadius: pw.BorderRadius.circular(6),
+            ),
+            alignment: pw.Alignment.center,
+            child: image == null
+                ? pw.Text('Fara semnatura')
+                : pw.Padding(
+                    padding: const pw.EdgeInsets.all(8),
+                    child: pw.Image(image, fit: pw.BoxFit.contain),
+                  ),
+          ),
+        ],
+      );
+    }
+
+    return pw.Row(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Expanded(
+            child: signatureBox('Semnătură beneficiar', clientSignature)),
+        pw.SizedBox(width: 20),
+        pw.Expanded(
+          child: signatureBox('Semnătură tehnician', technicianSignature),
+        ),
+      ],
+    );
+  }
+
+  static String _date(DateTime value) {
+    return '${value.day.toString().padLeft(2, '0')}.${value.month.toString().padLeft(2, '0')}.${value.year}';
+  }
+
+  static String _warrantyPeriod(WarrantyCertificateRecord certificate) {
+    final start = certificate.warrantyStartDate;
+    final end = certificate.warrantyEndDate;
+    if (start == null && end == null) {
+      return certificate.warrantyMonths <= 0
+          ? '-'
+          : '${certificate.warrantyMonths} luni';
+    }
+    final startText = start == null ? '-' : _date(start);
+    final endText = end == null ? '-' : _date(end);
+    return '$startText - $endText';
+  }
+
+  static String _resultLabel(String raw) {
+    final mapped = raw.trim();
+    if (mapped.isEmpty) {
+      return '-';
+    }
+    switch (mapped) {
+      case 'rezolvata':
+        return 'Rezolvata';
+      case 'necesita_revenire':
+        return 'Necesita revenire';
+      case 'necesita_piese':
+        return 'Necesita piese';
+      case 'monitorizare':
+        return 'Monitorizare';
+      case 'client_indisponibil':
+        return 'Client indisponibil';
+      case 'fara_defect_constatat':
+        return 'Fara defect constatat';
+      default:
+        return mapped;
+    }
+  }
+
+  static pw.MemoryImage? _tryDecodeBase64(String value) {
+    if (value.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final bytes = UriData.parse(value).contentAsBytes();
+      return pw.MemoryImage(bytes);
+    } catch (_) {
+      try {
+        final bytes = Uint8List.fromList(const Base64Decoder().convert(value));
+        return pw.MemoryImage(bytes);
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+}

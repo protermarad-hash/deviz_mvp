@@ -1,0 +1,704 @@
+import 'dart:typed_data';
+
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+
+import '../pdf_document_branding.dart';
+import 'pdf_font_helper.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Template unificat PRO TERM SRL — folosit de toate documentele PDF din aplicație
+// Culori: roșu principal #C62828, griuri, alb/negru
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ProTermPdfTemplate {
+  const ProTermPdfTemplate._();
+
+  // ── Culori brand (#C62828, #FFEBEE, #212121, #616161, #F5F5F5, #E0E0E0, #FAFAFA)
+  static const primaryRed = PdfColor(0.7765, 0.1569, 0.1569);
+  static const lightRed = PdfColor(1.0, 0.9216, 0.9333);
+  static const darkText = PdfColor(0.1294, 0.1294, 0.1294);
+  static const mediumText = PdfColor(0.3804, 0.3804, 0.3804);
+  static const lightGray = PdfColor(0.9608, 0.9608, 0.9608);
+  static const borderGray = PdfColor(0.8784, 0.8784, 0.8784);
+  static const altRow = PdfColor(0.9804, 0.9804, 0.9804);
+  static const headerText = PdfColors.white;
+
+  static final _moneyFmt = NumberFormat('#,##0.00', 'ro_RO');
+  static String _fmt(double v) => _moneyFmt.format(v);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ANTET DOCUMENT
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildHeader({
+    required DocumentBrandingData branding,
+    required String documentTitle,
+    required String documentNumber,
+    required String documentDate,
+    String? documentSubtitle,
+  }) {
+    final companyLines = <String>[
+      if (branding.fullAddress.isNotEmpty) branding.fullAddress,
+      if (branding.phone.isNotEmpty) 'Tel: ${branding.phone}',
+      if (branding.email.isNotEmpty) 'Email: ${branding.email}',
+      if (branding.cui.isNotEmpty) 'CUI: ${branding.cui}',
+      if (branding.tradeRegister.isNotEmpty) 'RC: ${branding.tradeRegister}',
+    ];
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border(bottom: pw.BorderSide(color: primaryRed, width: 2)),
+      ),
+      padding: const pw.EdgeInsets.only(bottom: 8),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          // ── Logo + info firmă ─────────────────────────
+          pw.Expanded(
+            flex: 3,
+            child: pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                if (branding.logoBytes != null) ...[
+                  pw.Container(
+                    width: 56,
+                    height: 56,
+                    child: pw.Image(
+                      pw.MemoryImage(branding.logoBytes!),
+                      fit: pw.BoxFit.contain,
+                    ),
+                  ),
+                  pw.SizedBox(width: 8),
+                ],
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(
+                        branding.companyName.isEmpty ? 'PRO TERM SRL' : branding.companyName,
+                        style: pw.TextStyle(
+                          fontWeight: pw.FontWeight.bold,
+                          fontSize: 13,
+                          color: primaryRed,
+                        ),
+                      ),
+                      ...companyLines.map(
+                        (line) => pw.Text(
+                          line,
+                          style: const pw.TextStyle(fontSize: 8, color: mediumText),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          pw.SizedBox(width: 12),
+          // ── Titlu + număr document ─────────────────────
+          pw.Expanded(
+            flex: 2,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: [
+                pw.Container(
+                  padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: pw.BoxDecoration(
+                    color: primaryRed,
+                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+                  ),
+                  child: pw.Text(
+                    documentTitle.toUpperCase(),
+                    style: pw.TextStyle(
+                      color: headerText,
+                      fontWeight: pw.FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                    textAlign: pw.TextAlign.right,
+                  ),
+                ),
+                if (documentSubtitle != null && documentSubtitle.trim().isNotEmpty)
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(top: 2),
+                    child: pw.Text(
+                      documentSubtitle,
+                      style: const pw.TextStyle(fontSize: 9, color: mediumText),
+                      textAlign: pw.TextAlign.right,
+                    ),
+                  ),
+                pw.SizedBox(height: 4),
+                if (documentNumber.isNotEmpty)
+                  pw.Text(
+                    'Nr: $documentNumber',
+                    style: pw.TextStyle(
+                      fontWeight: pw.FontWeight.bold,
+                      fontSize: 10,
+                      color: darkText,
+                    ),
+                  ),
+                pw.Text(
+                  'Data: $documentDate',
+                  style: const pw.TextStyle(fontSize: 9, color: mediumText),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BLOC PĂRȚI CONTRACTANTE
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildPartiesSection({
+    required DocumentBrandingData branding,
+    required String clientName,
+    String? clientAddress,
+    String? clientCui,
+    String? clientPhone,
+  }) {
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: borderGray),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+      ),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          // Executant
+          pw.Expanded(
+            child: pw.Container(
+              padding: const pw.EdgeInsets.all(8),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  _partyHeader('EXECUTANT'),
+                  _partyLine(branding.companyName.isEmpty ? 'PRO TERM SRL' : branding.companyName),
+                  if (branding.cui.isNotEmpty) _partyLine('CUI: ${branding.cui}'),
+                  if (branding.tradeRegister.isNotEmpty) _partyLine('RC: ${branding.tradeRegister}'),
+                  if (branding.fullAddress.isNotEmpty) _partyLine('Adresă: ${branding.fullAddress}'),
+                  if (branding.phone.isNotEmpty) _partyLine('Tel: ${branding.phone}'),
+                  if (branding.email.isNotEmpty) _partyLine('Email: ${branding.email}'),
+                  if (branding.iban.isNotEmpty) _partyLine('IBAN: ${branding.iban}'),
+                ],
+              ),
+            ),
+          ),
+          pw.Container(width: 1, color: borderGray),
+          // Beneficiar
+          pw.Expanded(
+            child: pw.Container(
+              padding: const pw.EdgeInsets.all(8),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  _partyHeader('BENEFICIAR'),
+                  _partyLine(clientName.trim().isEmpty ? '—' : clientName),
+                  if (clientCui != null && clientCui.trim().isNotEmpty)
+                    _partyLine('CUI/CNP: $clientCui'),
+                  if (clientAddress != null && clientAddress.trim().isNotEmpty)
+                    _partyLine('Adresă: $clientAddress'),
+                  if (clientPhone != null && clientPhone.trim().isNotEmpty)
+                    _partyLine('Tel: $clientPhone'),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static pw.Widget _partyHeader(String text) {
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 4),
+      padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: pw.BoxDecoration(color: lightGray),
+      child: pw.Text(
+        text,
+        style: pw.TextStyle(
+          fontWeight: pw.FontWeight.bold,
+          fontSize: 9,
+          color: primaryRed,
+        ),
+      ),
+    );
+  }
+
+  static pw.Widget _partyLine(String text) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 1),
+      child: pw.Text(text, style: const pw.TextStyle(fontSize: 9, color: darkText)),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECȚIUNE INFORMAȚII LUCRARE
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildJobInfoSection({
+    required String jobCode,
+    required String jobTitle,
+    required String location,
+    String? teamName,
+    String? technicians,
+    String? startDate,
+    String? endDate,
+  }) {
+    final items = <_InfoItem>[
+      if (jobCode.trim().isNotEmpty) _InfoItem('Cod lucrare', jobCode),
+      if (jobTitle.trim().isNotEmpty) _InfoItem('Descriere lucrare', jobTitle),
+      if (location.trim().isNotEmpty) _InfoItem('Locație', location),
+      if (teamName != null && teamName.trim().isNotEmpty) _InfoItem('Echipă', teamName),
+      if (technicians != null && technicians.trim().isNotEmpty) _InfoItem('Tehnicieni', technicians),
+      if (startDate != null && startDate.trim().isNotEmpty) _InfoItem('Data început', startDate),
+      if (endDate != null && endDate.trim().isNotEmpty) _InfoItem('Data finalizare', endDate),
+    ];
+
+    if (items.isEmpty) return pw.SizedBox.shrink();
+
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(8),
+      decoration: pw.BoxDecoration(
+        color: lightGray,
+        border: pw.Border.all(color: borderGray),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+      ),
+      child: pw.Wrap(
+        spacing: 12,
+        runSpacing: 4,
+        children: items.map((item) => pw.Row(
+          mainAxisSize: pw.MainAxisSize.min,
+          children: [
+            pw.Text(
+              '${item.label}: ',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9, color: primaryRed),
+            ),
+            pw.Text(item.value, style: const pw.TextStyle(fontSize: 9, color: darkText)),
+          ],
+        )).toList(),
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TABEL STANDARD
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildTable({
+    required List<String> headers,
+    required List<List<String>> rows,
+    List<double>? columnWidths,
+    bool showTotal = false,
+    String? totalLabel,
+    String? totalValue,
+  }) {
+    if (headers.isEmpty) return pw.SizedBox.shrink();
+
+    // Compute flex widths — equal if not specified
+    final flexes = columnWidths ??
+        List<double>.filled(headers.length, 1.0 / headers.length);
+    final total = flexes.fold<double>(0, (s, v) => s + v);
+    final normalized = flexes.map((v) => v / total).toList();
+
+    pw.Widget buildRow(List<String> cells, {bool isHeader = false, bool isAlt = false}) {
+      return pw.Container(
+        color: isHeader ? primaryRed : (isAlt ? altRow : PdfColors.white),
+        child: pw.Row(
+          children: List.generate(cells.length, (i) {
+            final flex = i < normalized.length ? normalized[i] : normalized.last;
+            return pw.Expanded(
+              flex: (flex * 100).round(),
+              child: pw.Container(
+                padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border(
+                    right: i < cells.length - 1
+                        ? pw.BorderSide(color: isHeader ? lightRed : borderGray, width: 0.5)
+                        : pw.BorderSide.none,
+                  ),
+                ),
+                child: pw.Text(
+                  cells[i],
+                  style: pw.TextStyle(
+                    fontSize: 9,
+                    fontWeight: isHeader ? pw.FontWeight.bold : null,
+                    color: isHeader ? headerText : darkText,
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+      );
+    }
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: borderGray),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+      ),
+      child: pw.Column(
+        children: [
+          buildRow(headers, isHeader: true),
+          ...rows.asMap().entries.map((e) => buildRow(e.value, isAlt: e.key.isOdd)),
+          if (showTotal && totalLabel != null && totalValue != null)
+            pw.Container(
+              decoration: pw.BoxDecoration(
+                color: lightRed,
+                border: pw.Border(top: pw.BorderSide(color: primaryRed, width: 1)),
+              ),
+              child: pw.Row(
+                children: [
+                  pw.Expanded(
+                    child: pw.Padding(
+                      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+                      child: pw.Text(
+                        totalLabel,
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10, color: primaryRed),
+                        textAlign: pw.TextAlign.right,
+                      ),
+                    ),
+                  ),
+                  pw.Container(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+                    child: pw.Text(
+                      totalValue,
+                      style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10, color: primaryRed),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SECȚIUNE STANDARD (text cu titlu)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildSection(String title, List<pw.Widget> children) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(8),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: borderGray),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            title,
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10, color: primaryRed),
+          ),
+          pw.Divider(height: 6, color: borderGray),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BLOC SEMNĂTURI
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildSignatureSection({
+    required String executantName,
+    String? clientName,
+    String? date,
+    Uint8List? electronicSignatureBytes,
+    String? technicianName,
+  }) {
+    pw.Widget? sigImage;
+    if (electronicSignatureBytes != null) {
+      try {
+        sigImage = pw.Image(
+          pw.MemoryImage(electronicSignatureBytes),
+          width: 130,
+          height: 55,
+          fit: pw.BoxFit.contain,
+        );
+      } catch (_) {
+        sigImage = null;
+      }
+    }
+
+    pw.Widget signatureLine(String? name) {
+      return pw.Container(
+        height: 55,
+        decoration: pw.BoxDecoration(
+          border: pw.Border(bottom: pw.BorderSide(color: mediumText, width: 0.5)),
+        ),
+        child: name != null
+            ? pw.Center(child: pw.Text(name, style: const pw.TextStyle(fontSize: 8, color: mediumText)))
+            : pw.SizedBox.shrink(),
+      );
+    }
+
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: borderGray),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+      ),
+      child: pw.Column(
+        children: [
+          if (date != null && date.isNotEmpty)
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(bottom: 10),
+              child: pw.Text('Data: $date', style: const pw.TextStyle(fontSize: 9, color: mediumText)),
+            ),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              // Executant
+              pw.Expanded(
+                child: pw.Column(
+                  children: [
+                    pw.Text('EXECUTANT',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9, color: primaryRed)),
+                    pw.SizedBox(height: 4),
+                    pw.Text(executantName.trim().isEmpty ? 'PRO TERM SRL' : executantName,
+                        style: const pw.TextStyle(fontSize: 9)),
+                    pw.SizedBox(height: 6),
+                    signatureLine(technicianName),
+                    pw.SizedBox(height: 4),
+                    pw.Text('Semnătură și ștampilă',
+                        style: const pw.TextStyle(fontSize: 8, color: mediumText)),
+                  ],
+                ),
+              ),
+              pw.SizedBox(width: 20),
+              // Beneficiar
+              pw.Expanded(
+                child: pw.Column(
+                  children: [
+                    pw.Text('BENEFICIAR',
+                        style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9, color: primaryRed)),
+                    pw.SizedBox(height: 4),
+                    pw.Text(clientName?.trim().isNotEmpty == true ? clientName! : '—',
+                        style: const pw.TextStyle(fontSize: 9)),
+                    pw.SizedBox(height: 6),
+                    sigImage ?? signatureLine(null),
+                    pw.SizedBox(height: 4),
+                    pw.Text('Semnătură și ștampilă',
+                        style: const pw.TextStyle(fontSize: 8, color: mediumText)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FOOTER PAGINĂ
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildPageFooter({
+    required String documentTitle,
+    required int pageNumber,
+    required int totalPages,
+    required String date,
+  }) {
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border(top: pw.BorderSide(color: borderGray, width: 0.5)),
+      ),
+      padding: const pw.EdgeInsets.only(top: 4),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(documentTitle, style: const pw.TextStyle(fontSize: 7, color: mediumText)),
+          pw.Text('Pagina $pageNumber din $totalPages',
+              style: const pw.TextStyle(fontSize: 7, color: mediumText)),
+          pw.Text(date, style: const pw.TextStyle(fontSize: 7, color: mediumText)),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // METODĂ PRINCIPALĂ — generează PDF complet
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static Future<Uint8List> generateDocument({
+    required DocumentBrandingData branding,
+    required String documentTitle,
+    required String documentNumber,
+    required String documentDate,
+    required List<pw.Widget> contentWidgets,
+    String? documentSubtitle,
+    String? clientName,
+    String? clientAddress,
+    String? clientCui,
+    String? clientPhone,
+    String? jobCode,
+    String? jobTitle,
+    String? location,
+    String? teamName,
+    String? technicians,
+    String? startDate,
+    String? endDate,
+    bool includePartiesSection = true,
+    bool includeJobInfoSection = false,
+    bool includeSignatureSection = true,
+    Uint8List? electronicSignatureBytes,
+    PdfPageFormat pageFormat = PdfPageFormat.a4,
+  }) async {
+    await PdfFontHelper.initialize();
+    final pdfDoc = pw.Document(theme: PdfFontHelper.theme);
+
+    pdfDoc.addPage(
+      pw.MultiPage(
+        pageFormat: pageFormat,
+        margin: const pw.EdgeInsets.symmetric(horizontal: 28, vertical: 22),
+        header: (_) => pw.Column(children: [
+          buildHeader(
+            branding: branding,
+            documentTitle: documentTitle,
+            documentNumber: documentNumber,
+            documentDate: documentDate,
+            documentSubtitle: documentSubtitle,
+          ),
+          pw.SizedBox(height: 8),
+        ]),
+        footer: (ctx) => buildPageFooter(
+          documentTitle: documentTitle,
+          pageNumber: ctx.pageNumber,
+          totalPages: ctx.pagesCount,
+          date: documentDate,
+        ),
+        build: (_) => [
+          if (includePartiesSection && clientName != null) ...[
+            buildPartiesSection(
+              branding: branding,
+              clientName: clientName,
+              clientAddress: clientAddress,
+              clientCui: clientCui,
+              clientPhone: clientPhone,
+            ),
+            pw.SizedBox(height: 8),
+          ],
+          if (includeJobInfoSection &&
+              (jobCode?.isNotEmpty == true ||
+                  jobTitle?.isNotEmpty == true ||
+                  location?.isNotEmpty == true)) ...[
+            buildJobInfoSection(
+              jobCode: jobCode ?? '',
+              jobTitle: jobTitle ?? '',
+              location: location ?? '',
+              teamName: teamName,
+              technicians: technicians,
+              startDate: startDate,
+              endDate: endDate,
+            ),
+            pw.SizedBox(height: 8),
+          ],
+          ...contentWidgets,
+          if (includeSignatureSection) ...[
+            pw.SizedBox(height: 16),
+            buildSignatureSection(
+              executantName: branding.companyName.isEmpty ? 'PRO TERM SRL' : branding.companyName,
+              clientName: clientName,
+              date: documentDate,
+              electronicSignatureBytes: electronicSignatureBytes,
+            ),
+          ],
+        ],
+      ),
+    );
+
+    return pdfDoc.save();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Helper: linie informație (label + value)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildInfoRow(String label, String value) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 2),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.SizedBox(
+            width: 160,
+            child: pw.Text(label,
+                style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9, color: mediumText)),
+          ),
+          pw.Expanded(
+              child: pw.Text(value, style: const pw.TextStyle(fontSize: 9, color: darkText))),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Helper: total financiar
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static pw.Widget buildFinancialTotals({
+    required double subtotal,
+    required double vatPercent,
+    required double vatAmount,
+    required double totalWithVat,
+    String currency = 'RON',
+  }) {
+    return pw.Container(
+      alignment: pw.Alignment.centerRight,
+      child: pw.Container(
+        width: 260,
+        decoration: pw.BoxDecoration(
+          border: pw.Border.all(color: borderGray),
+          borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+        ),
+        child: pw.Column(
+          children: [
+            _totalRow('Subtotal', '${_fmt(subtotal)} $currency', isAlt: false),
+            _totalRow('TVA (${vatPercent.toStringAsFixed(0)}%)', '${_fmt(vatAmount)} $currency', isAlt: true),
+            _totalRow('TOTAL CU TVA', '${_fmt(totalWithVat)} $currency', isAlt: false, isBold: true, color: primaryRed),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static pw.Widget _totalRow(String label, String value,
+      {bool isAlt = false, bool isBold = false, PdfColor? color}) {
+    return pw.Container(
+      color: isAlt ? altRow : PdfColors.white,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(label,
+              style: pw.TextStyle(
+                  fontWeight: isBold ? pw.FontWeight.bold : null,
+                  fontSize: 9,
+                  color: color ?? darkText)),
+          pw.Text(value,
+              style: pw.TextStyle(
+                  fontWeight: isBold ? pw.FontWeight.bold : null,
+                  fontSize: 9,
+                  color: color ?? darkText)),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoItem {
+  const _InfoItem(this.label, this.value);
+  final String label;
+  final String value;
+}

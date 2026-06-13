@@ -54,6 +54,27 @@ class CloudSyncBridge {
     );
   }
 
+  Future<void> queueAppointmentMaterialKitUpsert(
+    Map<String, dynamic> template,
+  ) async {
+    final id = (template['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.appointmentMaterialKitTemplates,
+      entityId: id,
+      payload: template,
+    );
+  }
+
+  Future<void> queueAppointmentMaterialKitDelete(String templateId) async {
+    final id = templateId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.appointmentMaterialKitTemplates,
+      entityId: id,
+    );
+  }
+
   Future<void> queueClient(Map<String, dynamic> client) async {
     final id = (client['id'] ?? '').toString();
     if (id.isEmpty) return;
@@ -327,6 +348,228 @@ class CloudSyncBridge {
     if (id.isEmpty) return;
     await _service.queueDelete(
       entityType: CloudEntityType.registryEntries,
+      entityId: id,
+    );
+  }
+
+  Future<void> queuePartnerTransactionUpsert(
+    Map<String, dynamic> transaction,
+  ) async {
+    final id = (transaction['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.partnerTransactions,
+      entityId: id,
+      payload: transaction,
+    );
+  }
+
+  Future<void> queuePartnerTransactionDelete(String transactionId) async {
+    final id = transactionId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.partnerTransactions,
+      entityId: id,
+    );
+  }
+
+  Future<void> queuePartnerFinancialSummaryUpsert(
+    Map<String, dynamic> summary,
+  ) async {
+    final id = (summary['partner_id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.partnerFinancialSummary,
+      entityId: id,
+      payload: summary,
+    );
+  }
+
+  Future<void> queueDevizArticolTemplateUpsert(
+    Map<String, dynamic> template,
+  ) async {
+    final id = (template['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.devizArticoleTemplate,
+      entityId: id,
+      payload: template,
+    );
+  }
+
+  Future<void> queueDevizArticolTemplateDelete(String templateId) async {
+    final id = templateId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.devizArticoleTemplate,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueFieldPhotoUpsert(Map<String, dynamic> photo) async {
+    final id = (photo['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.fieldPhotos,
+      entityId: id,
+      payload: photo,
+    );
+  }
+
+  Future<void> queueFieldPhotoDelete(String photoId) async {
+    final id = photoId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.fieldPhotos,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueDevizTehnicUpsert(Map<String, dynamic> deviz) async {
+    final id = (deviz['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.devizeTehnice,
+      entityId: id,
+      payload: deviz,
+    );
+  }
+
+  Future<void> queueDevizTehnicDelete(String devizId) async {
+    final id = devizId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.devizeTehnice,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueFiltreCtaUpsert(Map<String, dynamic> deviz) async {
+    final id = (deviz['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.devizeFiltreCta,
+      entityId: id,
+      payload: deviz,
+    );
+  }
+
+  Future<void> queueFiltreCtaDelete(String devizId) async {
+    final id = devizId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.devizeFiltreCta,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueAppTaskUpsert(Map<String, dynamic> task) async {
+    final id = (task['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.appTasks,
+      entityId: id,
+      payload: task,
+    );
+  }
+
+  Future<void> queueAppTaskDelete(String taskId) async {
+    final id = taskId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.appTasks,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueEmployeePayEntryUpsert(Map<String, dynamic> entry) async {
+    final id = (entry['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.employeePayEntries,
+      entityId: id,
+      payload: entry,
+    );
+  }
+
+  Future<void> queueEmployeePayEntryDelete(String entryId) async {
+    final id = entryId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.employeePayEntries,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueEmployeePaymentUpsert(Map<String, dynamic> payment) async {
+    final id = (payment['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.employeePayments,
+      entityId: id,
+      payload: payment,
+    );
+  }
+
+  Future<void> queueEmployeePaymentDelete(String paymentId) async {
+    final id = paymentId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.employeePayments,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueEmployeeFinancialSummaryUpsert(
+    Map<String, dynamic> summary,
+  ) async {
+    final id = (summary['employee_id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.employeeFinancialSummary,
+      entityId: id,
+      payload: summary,
+    );
+  }
+
+  Future<void> queueEmployeeSettingsUpsert(
+    Map<String, dynamic> settings,
+  ) async {
+    final id = (settings['employee_id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.employeeSettings,
+      entityId: id,
+      payload: settings,
+    );
+  }
+
+  Future<void> queueEmployeeSettingsDelete(String employeeId) async {
+    final id = employeeId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.employeeSettings,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueHrPayrollPaymentUpsert(
+    Map<String, dynamic> payment,
+  ) async {
+    final id = (payment['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.hrPayrollPayments,
+      entityId: id,
+      payload: payment,
+    );
+  }
+
+  Future<void> queueHrPayrollPaymentDelete(String paymentId) async {
+    final id = paymentId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.hrPayrollPayments,
       entityId: id,
     );
   }

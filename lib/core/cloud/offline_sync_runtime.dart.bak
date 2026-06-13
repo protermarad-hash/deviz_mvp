@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../app_models.dart';
 import '../../features/clients/client_models.dart';
@@ -45,6 +46,20 @@ class OfflineSyncRuntime {
 
   bool _isSyncing = false;
   static const int _maxRetryAttempts = 10;
+  static const Duration _minSyncGap = Duration(seconds: 5);
+  DateTime? _lastSyncStartedAt;
+  DateTime? _lastSyncFinishedAt;
+  DateTime? _lastSyncSkipLoggedAt;
+
+  bool get isSyncing => _isSyncing;
+
+  Future<int> pendingItemsCount() async {
+    try {
+      return (await _queueRepository.listPendingItems()).length;
+    } catch (_) {
+      return -1;
+    }
+  }
 
   /// Returnează ID-urile entităților cu operații de upsert în așteptare (nesincronizate).
   /// Folosit de repository-uri pentru a prefera versiunea locală față de cea din cloud
@@ -67,6 +82,28 @@ class OfflineSyncRuntime {
 
   Future<void> queueAppointment(Appointment appointment) async {
     await _bridge.queueAppointment(appointment.toMap());
+  }
+
+  /// Batch queue pentru o listă de programări — O(1) I/O SharedPreferences
+  /// în loc de O(n). Folosit la re-queue local-only items la listare.
+  Future<void> queueAppointmentsBatch(List<Appointment> appointments) async {
+    if (appointments.isEmpty) return;
+    final now = DateTime.now();
+    final items = appointments.map((a) {
+      final id = a.id;
+      final entityId = id.trim().isEmpty ? null : id;
+      if (entityId == null) return null;
+      return CloudSyncItem(
+        id: 'appointments_${entityId}_${now.millisecondsSinceEpoch}',
+        entityType: CloudEntityType.appointments,
+        entityId: entityId,
+        payload: a.toMap(),
+        updatedAt: now,
+      );
+    }).whereType<CloudSyncItem>().toList(growable: false);
+    if (items.isNotEmpty) {
+      await _queueRepository.upsertBatch(items);
+    }
   }
 
   Future<void> queueAppointmentDelete(String appointmentId) async {
@@ -253,21 +290,92 @@ class OfflineSyncRuntime {
     await _bridge.queueFiltreCtaDelete(devizId);
   }
 
+  Future<void> queueAppTaskUpsert(Map<String, dynamic> task) async {
+    await _bridge.queueAppTaskUpsert(task);
+  }
+
+  Future<void> queueAppTaskDelete(String taskId) async {
+    await _bridge.queueAppTaskDelete(taskId);
+  }
+
+  Future<void> queueEmployeePayEntryUpsert(Map<String, dynamic> entry) async {
+    await _bridge.queueEmployeePayEntryUpsert(entry);
+  }
+
+  Future<void> queueEmployeePayEntryDelete(String entryId) async {
+    await _bridge.queueEmployeePayEntryDelete(entryId);
+  }
+
+  Future<void> queueEmployeePaymentUpsert(Map<String, dynamic> payment) async {
+    await _bridge.queueEmployeePaymentUpsert(payment);
+  }
+
+  Future<void> queueEmployeePaymentDelete(String paymentId) async {
+    await _bridge.queueEmployeePaymentDelete(paymentId);
+  }
+
+  Future<void> queueEmployeeFinancialSummaryUpsert(
+    Map<String, dynamic> summary,
+  ) async {
+    await _bridge.queueEmployeeFinancialSummaryUpsert(summary);
+  }
+
+  /// Curăță imediat coada: elimină itemele deja sincronizate și cele moarte.
+  /// Se apelează la startup pentru a elibera rapid JSON-ul acumulat.
+  Future<void> cleanupQueue() async {
+    await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+  }
+
   Future<bool> syncPending() async {
+    final now = DateTime.now();
     if (_isSyncing) {
+      if (_lastSyncSkipLoggedAt == null ||
+          now.difference(_lastSyncSkipLoggedAt!) >
+              const Duration(seconds: 2)) {
+        debugPrint('[Programari] cloud sync skip reason=already_syncing');
+        _lastSyncSkipLoggedAt = now;
+      }
       return false;
     }
+    final lastSyncActivityAt = _lastSyncFinishedAt != null &&
+            (_lastSyncStartedAt == null ||
+                _lastSyncFinishedAt!.isAfter(_lastSyncStartedAt!))
+        ? _lastSyncFinishedAt
+        : _lastSyncStartedAt;
+    if (lastSyncActivityAt != null &&
+        now.difference(lastSyncActivityAt) < _minSyncGap) {
+      if (_lastSyncSkipLoggedAt == null ||
+          now.difference(_lastSyncSkipLoggedAt!) >
+              const Duration(seconds: 2)) {
+        debugPrint('[Programari] cloud sync skip reason=cooldown');
+        _lastSyncSkipLoggedAt = now;
+      }
+      return false;
+    }
+    final stopwatch = Stopwatch()..start();
     _isSyncing = true;
+    _lastSyncStartedAt = now;
+    debugPrint('[Programari] cloud sync start');
     try {
       if (!FirebaseBootstrap.isInitialized) {
         await FirebaseBootstrap.initializeSafe();
       }
       if (!FirebaseBootstrap.isInitialized) {
+        debugPrint(
+          '[Programari] cloud sync end duration_ms=${stopwatch.elapsedMilliseconds} result=false firebase_initialized=false',
+        );
         return false;
       }
 
+      // Curăță backlog-ul: elimină itemele deja sincronizate (rămase din versiuni
+      // anterioare) și cele cu prea multe retry-uri (moarte). O singură citire+scriere.
+      await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+
       final pending = await _queueRepository.listPendingItems();
       if (pending.isEmpty) {
+        debugPrint(
+          '[Programari] cloud sync end duration_ms=${stopwatch.elapsedMilliseconds} pending=0 result=true',
+        );
         return true;
       }
 
@@ -554,6 +662,61 @@ class OfflineSyncRuntime {
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
+            case CloudEntityType.appTasks:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.appTasks)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.appTasks)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.employeePayEntries:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayEntries)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayEntries)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.employeePayments:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayments)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.employeePayments)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.employeeFinancialSummary:
+              if (!item.deleted) {
+                final empId =
+                    (item.payload['employee_id'] ?? item.entityId).toString();
+                if (empId.isNotEmpty) {
+                  await FirebaseFirestore.instance
+                      .collection(FirebaseCollections.employeeFinancialSummary)
+                      .doc(empId)
+                      .set(item.payload, SetOptions(merge: true));
+                }
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
             case CloudEntityType.unknown:
               // Tip necunoscut (din versiune mai nouă) — scoatem din queue
               await _queueRepository.markItemSynced(item.id, DateTime.now());
@@ -585,9 +748,18 @@ class OfflineSyncRuntime {
           );
         }
       }
+      debugPrint(
+        '[Programari] cloud sync end duration_ms=${stopwatch.elapsedMilliseconds} pending=${pending.length} result=true',
+      );
       return true;
+    } catch (error) {
+      debugPrint(
+        '[Programari] cloud sync end duration_ms=${stopwatch.elapsedMilliseconds} result=false error=$error',
+      );
+      rethrow;
     } finally {
       _isSyncing = false;
+      _lastSyncFinishedAt = DateTime.now();
     }
   }
 

@@ -1,0 +1,7 @@
+## TEMPLATE key.properties — COPIAZA in android/key.properties si completeaza cu valorile reale
+## ATENTIE: key.properties este in .gitignore — NU il commite niciodata!
+
+storePassword=PAROLA_KEYSTORE
+keyPassword=PAROLA_CHEIE
+keyAlias=proventaris
+storeFile=../proventaris-release.jks

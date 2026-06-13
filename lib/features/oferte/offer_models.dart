@@ -671,6 +671,10 @@ class OfferRecord {
     required this.title,
     required this.clientId,
     required this.clientName,
+    this.clientCui = '',
+    this.clientAddress = '',
+    this.clientPhone = '',
+    this.clientEmail = '',
     this.departmentId = '',
     this.departmentName = '',
     this.contactPersonId = '',
@@ -746,6 +750,11 @@ class OfferRecord {
     this.acceptanceFormSignedAt,
     this.tipDocument = TipDocumentDeviz.devizLucrari,
     this.hasAcceptancePage = false,
+    // Tip ofertă și sursă (iun 2026) — backward compatible
+    this.tipOferta = 'oferta_lucrari',
+    this.sursa = 'direct',
+    this.sursaId = '',
+    this.sursaNumar = '',
   });
 
   final String id;
@@ -753,6 +762,11 @@ class OfferRecord {
   final String title;
   final String clientId;
   final String clientName;
+  /// Date de identificare client (auto-completate din ClientRecord la selectare)
+  final String clientCui;
+  final String clientAddress;
+  final String clientPhone;
+  final String clientEmail;
   final String departmentId;
   final String departmentName;
   final String contactPersonId;
@@ -825,12 +839,29 @@ class OfferRecord {
   final TipDocumentDeviz tipDocument;
   /// Indică dacă PDF-ul ofertei conține pagina de acceptare (adăugată automat la ultimul export).
   final bool hasAcceptancePage;
+  // Tip ofertă și sursă (iun 2026)
+  /// 'oferta_lucrari' | 'deviz_tehnic' | 'mini_oferta' | 'deviz_filtre'
+  final String tipOferta;
+  /// 'direct' | 'reclamatie' | 'programare' | 'agfr'
+  final String sursa;
+  final String sursaId;
+  final String sursaNumar;
 
   bool get isAcceptanceSigned => acceptanceFormSignedAt != null && acceptanceFormSignatureBase64.isNotEmpty;
 
   bool get isConverted => convertedToJobId.trim().isNotEmpty;
 
   String get lifecycleLabel => isConverted ? 'Convertita' : status.label;
+
+  /// Eticheta afișată pentru tipul ofertei în UI
+  String get tipOfertaLabel {
+    switch (tipOferta) {
+      case 'deviz_tehnic':   return 'Deviz tehnic';
+      case 'mini_oferta':    return 'Mini ofertă';
+      case 'deviz_filtre':   return 'Filtre CTA';
+      default:               return 'Ofertă';
+    }
+  }
 
   static OfferTotals computeTotals({
     required List<OfferLineItem> lines,
@@ -884,6 +915,10 @@ class OfferRecord {
     String? title,
     String? clientId,
     String? clientName,
+    String? clientCui,
+    String? clientAddress,
+    String? clientPhone,
+    String? clientEmail,
     String? departmentId,
     String? departmentName,
     String? contactPersonId,
@@ -960,6 +995,10 @@ class OfferRecord {
     bool clearAcceptanceFormSignedAt = false,
     TipDocumentDeviz? tipDocument,
     bool? hasAcceptancePage,
+    String? tipOferta,
+    String? sursa,
+    String? sursaId,
+    String? sursaNumar,
   }) {
     final nextLines = lines ?? this.lines;
     final nextRegiePercent = regiePercent ?? this.regiePercent;
@@ -977,6 +1016,10 @@ class OfferRecord {
       title: title ?? this.title,
       clientId: clientId ?? this.clientId,
       clientName: clientName ?? this.clientName,
+      clientCui: clientCui ?? this.clientCui,
+      clientAddress: clientAddress ?? this.clientAddress,
+      clientPhone: clientPhone ?? this.clientPhone,
+      clientEmail: clientEmail ?? this.clientEmail,
       departmentId: departmentId ?? this.departmentId,
       departmentName: departmentName ?? this.departmentName,
       contactPersonId: contactPersonId ?? this.contactPersonId,
@@ -1060,6 +1103,10 @@ class OfferRecord {
           : (acceptanceFormSignedAt ?? this.acceptanceFormSignedAt),
       tipDocument: tipDocument ?? this.tipDocument,
       hasAcceptancePage: hasAcceptancePage ?? this.hasAcceptancePage,
+      tipOferta: tipOferta ?? this.tipOferta,
+      sursa: sursa ?? this.sursa,
+      sursaId: sursaId ?? this.sursaId,
+      sursaNumar: sursaNumar ?? this.sursaNumar,
     );
   }
 
@@ -1070,6 +1117,10 @@ class OfferRecord {
       'title': title,
       'client_id': clientId,
       'client_name': clientName,
+      'client_cui': clientCui,
+      'client_address': clientAddress,
+      'client_phone': clientPhone,
+      'client_email': clientEmail,
       'department_id': departmentId,
       'department_name': departmentName,
       'contact_person_id': contactPersonId,
@@ -1145,6 +1196,10 @@ class OfferRecord {
       'acceptance_form_signed_at': acceptanceFormSignedAt?.toIso8601String(),
       'tip_document': tipDocument.value,
       'has_acceptance_page': hasAcceptancePage,
+      'tip_oferta': tipOferta,
+      'sursa': sursa,
+      'sursa_id': sursaId,
+      'sursa_numar': sursaNumar,
     };
   }
 
@@ -1288,6 +1343,10 @@ class OfferRecord {
       title: pick(const <String>['title', 'offer_title']),
       clientId: pick(const <String>['client_id']),
       clientName: pick(const <String>['client_name']),
+      clientCui: pick(const <String>['client_cui']),
+      clientAddress: pick(const <String>['client_address']),
+      clientPhone: pick(const <String>['client_phone']),
+      clientEmail: pick(const <String>['client_email']),
       departmentId: pick(const <String>['department_id']),
       departmentName: pick(const <String>['department_name']),
       contactPersonId: pick(const <String>['contact_person_id']),
@@ -1431,6 +1490,10 @@ class OfferRecord {
         (map['tip_document'] ?? map['tipDocument'])?.toString(),
       ),
       hasAcceptancePage: (map['has_acceptance_page'] ?? map['hasAcceptancePage']) == true,
+      tipOferta: (map['tip_oferta'] ?? map['tipOferta'] ?? 'oferta_lucrari').toString(),
+      sursa: (map['sursa'] ?? 'direct').toString(),
+      sursaId: (map['sursa_id'] ?? map['sursaId'] ?? '').toString(),
+      sursaNumar: (map['sursa_numar'] ?? map['sursaNumar'] ?? '').toString(),
     );
   }
 }

@@ -134,7 +134,7 @@ class _AppTaskFormDialogState extends State<AppTaskFormDialog> {
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<TaskCategorie>(
-                        value: _categorie,
+                        initialValue: _categorie,
                         decoration: const InputDecoration(
                           labelText: 'Categorie',
                           border: OutlineInputBorder(),
@@ -157,7 +157,7 @@ class _AppTaskFormDialogState extends State<AppTaskFormDialog> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: DropdownButtonFormField<TaskPrioritate>(
-                        value: _prioritate,
+                        initialValue: _prioritate,
                         decoration: const InputDecoration(
                           labelText: 'Prioritate',
                           border: OutlineInputBorder(),

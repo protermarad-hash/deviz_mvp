@@ -1,0 +1,1062 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
+
+import '../hr_core/hr_employee_models.dart';
+import '../hr_variable_payroll/hr_variable_payroll_catalog_service.dart';
+import '../hr_variable_payroll/hr_variable_payroll_models.dart';
+import 'hr_payroll_payment_models.dart';
+import 'hr_payroll_payment_repository.dart';
+
+// ---------------------------------------------------------------------------
+// Calculul salarial standalone (mirorează logica din HrPayrollCalculator)
+// Regulile fiscale: CAS 25%, CASS 10%, impozit 10%, CAM angajator 2.25%
+// Deducere personală OUG 89/2025: 600 RON bază (0 dependenți), prag 4050 RON, plafon 7000 RON
+// Tichete masă: net_direct (fiscal_treatment='net_direct') → CASS și impozit NU se aplică pe TM
+// Popriri: plafonate CPC art.729 (1/3 general, 1/2 pensie/întreținere, 1/2 combinat)
+// ---------------------------------------------------------------------------
+
+class _SalaryCalcResult {
+  const _SalaryCalcResult({
+    required this.grossBase,
+    required this.nightSupplement,
+    required this.overtimeSupplement,
+    required this.grossTotal,
+    required this.cas,
+    required this.cass,
+    required this.personalDeduction,
+    required this.taxableBase,
+    required this.incomeTax,
+    required this.mealTicketTotal,
+    required this.mealTicketCass,
+    required this.mealTicketIncomeTax,
+    required this.garnishments,
+    required this.netBeforeDeductions,
+    required this.netFinal,
+    required this.employerCam,
+    required this.costTotal,
+  });
+
+  final double grossBase;
+  final double nightSupplement;
+  final double overtimeSupplement;
+  final double grossTotal;
+  final double cas;
+  final double cass;
+  final double personalDeduction;
+  final double taxableBase;
+  final double incomeTax;
+  final double mealTicketTotal;
+  final double mealTicketCass;
+  final double mealTicketIncomeTax;
+  final double garnishments;
+  final double netBeforeDeductions;
+  final double netFinal;
+  final double employerCam;
+  final double costTotal;
+}
+
+double _personalDeductionRo(double grossTotal) {
+  // OUG 89/2025: baza 600 RON (0 dependenți), prag 4050 RON, plafon 7000 RON
+  // Linear descrescătoare între prag și plafon; zero deasupra plafonului.
+  const base = 600.0;
+  const threshold = 4050.0;
+  const upperLimit = 7000.0;
+  if (grossTotal <= threshold) return base;
+  if (grossTotal >= upperLimit) return 0.0;
+  return base * (upperLimit - grossTotal) / (upperLimit - threshold);
+}
+
+double _garnishmentCapRo({
+  required List<HrGarnishment> garnishments,
+  required double netBase,
+}) {
+  if (garnishments.isEmpty || netBase <= 0) return 0.0;
+  final absoluteMax = netBase / 2.0;
+  double remaining = absoluteMax;
+  double total = 0.0;
+  final sorted = [...garnishments]..sort((a, b) => a.legalPriority - b.legalPriority);
+  for (final g in sorted) {
+    if (remaining <= 0) break;
+    final isHalf = g.legalCapMode.toLowerCase() == 'one_half';
+    final individualMax = isHalf ? netBase / 2.0 : netBase / 3.0;
+    final requested = g.amountType.toLowerCase() == 'percent_net'
+        ? netBase * g.amountValue / 100.0
+        : g.amountValue;
+    final applied = requested.clamp(0.0, individualMax.clamp(0.0, remaining));
+    total += applied;
+    remaining -= applied;
+  }
+  return total;
+}
+
+_SalaryCalcResult _calcSalary({
+  required double grossBase,
+  required double mealTicketValuePerDay,
+  required double mealTicketEligibleDays,
+  required double nightHours,
+  required double overtimeHours,
+  required List<HrGarnishment> garnishments,
+}) {
+  const hourlyNorm = 165.334;
+  const casRate = 0.25;
+  const cassRate = 0.10;
+  const taxRate = 0.10;
+  const camRate = 0.0225;
+
+  final hourlyRate = grossBase > 0 ? grossBase / hourlyNorm : 0.0;
+  final nightSup = nightHours * hourlyRate * 0.25;
+  final overtimeSup = overtimeHours * hourlyRate * 0.75;
+  final grossTotal = grossBase + nightSup + overtimeSup;
+
+  final mealTotal = mealTicketValuePerDay * mealTicketEligibleDays;
+
+  // TM suma neta directa (net_direct): CAS/CASS/impozit NU se aplica pe TM
+  final casAmount = grossTotal * casRate;
+  final cassAmount = grossTotal * cassRate;  // doar pe salariu
+  final camAmount = grossTotal * camRate;
+
+  final deduction = _personalDeductionRo(grossTotal);  // prag fara TM
+  final venitNet = grossTotal - casAmount - cassAmount;
+  final taxableBase = (venitNet - deduction).clamp(0.0, double.infinity);
+  final taxAmount = taxableBase * taxRate;
+
+  // net_direct: fara taxe pe TM
+  const mealCass = 0.0;
+  const mealTax = 0.0;
+
+  final netBefore = venitNet - taxAmount;
+  final garnishmentsTotal = _garnishmentCapRo(garnishments: garnishments, netBase: netBefore);
+
+  // TM adaugat direct la net (suma neta)
+  final netFinal = netBefore + mealTotal - garnishmentsTotal;
+
+  return _SalaryCalcResult(
+    grossBase: grossBase,
+    nightSupplement: nightSup,
+    overtimeSupplement: overtimeSup,
+    grossTotal: grossTotal,
+    cas: casAmount,
+    cass: cassAmount,
+    personalDeduction: deduction,
+    taxableBase: taxableBase,
+    incomeTax: taxAmount,
+    mealTicketTotal: mealTotal,
+    mealTicketCass: mealCass,
+    mealTicketIncomeTax: mealTax,
+    garnishments: garnishmentsTotal,
+    netBeforeDeductions: netBefore,
+    netFinal: netFinal,
+    employerCam: camAmount,
+    costTotal: grossTotal + camAmount,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HrEmployeeDetailPage
+// ---------------------------------------------------------------------------
+
+class HrEmployeeDetailPage extends StatefulWidget {
+  const HrEmployeeDetailPage({
+    super.key,
+    required this.profile,
+    required this.contract,
+    required this.garnishments,
+    required this.variablePayrollService,
+  });
+
+  final HrEmployeeProfile profile;
+  final HrContract? contract;
+  final List<HrGarnishment> garnishments;
+  final HrVariablePayrollCatalogService variablePayrollService;
+
+  @override
+  State<HrEmployeeDetailPage> createState() => _HrEmployeeDetailPageState();
+}
+
+class _HrEmployeeDetailPageState extends State<HrEmployeeDetailPage>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabs;
+  final _fmt = NumberFormat('#,##0.00', 'ro_RO');
+
+  // Calculator state
+  late final TextEditingController _brutCtrl;
+  final TextEditingController _ticketZiCtrl = TextEditingController(text: '40.96');
+  final TextEditingController _ticketZileCtrl = TextEditingController(text: '0');
+  final TextEditingController _noapteCtrl = TextEditingController(text: '0');
+  final TextEditingController _suplCtrl = TextEditingController(text: '0');
+  Timer? _debounce;
+  _SalaryCalcResult? _calcResult;
+
+  // Popriri state
+  late List<HrGarnishment> _garnishments;
+  bool _savingGarnishment = false;
+
+  // Plăți salariu
+  List<HrPayrollPayment> _payments = const [];
+  bool _loadingPayments = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 4, vsync: this);
+    _brutCtrl = TextEditingController(
+      text: (widget.contract?.baseSalaryGross ?? 0).toStringAsFixed(2),
+    );
+    _garnishments = List.from(widget.garnishments
+        .where((g) => g.employeeId == widget.profile.employeeId)
+        .toList());
+    _recalculate();
+    _brutCtrl.addListener(_onChanged);
+    _ticketZiCtrl.addListener(_onChanged);
+    _ticketZileCtrl.addListener(_onChanged);
+    _noapteCtrl.addListener(_onChanged);
+    _suplCtrl.addListener(_onChanged);
+    Future.microtask(_loadPayments);
+  }
+
+  Future<void> _loadPayments() async {
+    if (_loadingPayments) return;
+    setState(() => _loadingPayments = true);
+    try {
+      final payments = await HrPayrollPaymentRepository.instance
+          .listPaymentsForEmployee(widget.profile.employeeId);
+      if (mounted) setState(() => _payments = payments);
+    } catch (_) {} finally {
+      if (mounted) setState(() => _loadingPayments = false);
+    }
+  }
+
+  Future<void> _deletePayment(HrPayrollPayment payment) async {
+    // Optimistic UI
+    setState(() => _payments =
+        _payments.where((p) => p.id != payment.id).toList());
+    HrPayrollPaymentRepository.instance
+        .deletePayment(payment.id)
+        .catchError((_) {
+      if (mounted) _loadPayments();
+    });
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _tabs.dispose();
+    _brutCtrl.dispose();
+    _ticketZiCtrl.dispose();
+    _ticketZileCtrl.dispose();
+    _noapteCtrl.dispose();
+    _suplCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), _recalculate);
+  }
+
+  double _parseCtrl(TextEditingController c) =>
+      double.tryParse(c.text.replaceAll(',', '.')) ?? 0;
+
+  void _recalculate() {
+    final result = _calcSalary(
+      grossBase: _parseCtrl(_brutCtrl),
+      mealTicketValuePerDay: _parseCtrl(_ticketZiCtrl),
+      mealTicketEligibleDays: _parseCtrl(_ticketZileCtrl),
+      nightHours: _parseCtrl(_noapteCtrl),
+      overtimeHours: _parseCtrl(_suplCtrl),
+      garnishments: _garnishments,
+    );
+    if (mounted) setState(() => _calcResult = result);
+  }
+
+  String _fmtRon(double v) => '${_fmt.format(v)} RON';
+
+  Widget _buildDataTab() {
+    final c = widget.contract;
+    final p = widget.profile;
+    Widget row(String label, String value) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 160,
+                child: Text(label,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w500, fontSize: 13)),
+              ),
+              Expanded(
+                child: Text(value.isEmpty ? '-' : value,
+                    style: const TextStyle(fontSize: 13)),
+              ),
+            ],
+          ),
+        );
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Date personale',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          )),
+                  const Divider(height: 16),
+                  row('Nume complet', p.fullName),
+                  row('CNP', p.personalNumericCode),
+                  row('Cont bancar', p.bankAccount),
+                  row('Rezidență fiscală', p.taxResidenceCountry),
+                  row('Pers. în întreținere',
+                      '${p.nrPersoaneIntretinere} (deducere personală)'),
+                  if (p.notes.isNotEmpty) row('Note', p.notes),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (c != null)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Contract de muncă',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            )),
+                    const Divider(height: 16),
+                    row('Tip contract', c.contractType),
+                    row('Funcție', c.jobTitle),
+                    row('Salariu brut', _fmtRon(c.baseSalaryGross)),
+                    row('Normă ore/zi', c.employmentNormHoursPerDay.toString()),
+                    row('Data angajare',
+                        DateFormat('dd.MM.yyyy').format(c.startDate)),
+                    row('Status', c.status),
+                  ],
+                ),
+              ),
+            )
+          else
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Nu există contract activ pentru acest angajat.'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCalculatorTab() {
+    final r = _calcResult;
+    final netColor = (r?.netFinal ?? 0) > 0 ? Colors.green.shade700 : Colors.red.shade700;
+
+    Widget field(TextEditingController ctrl, String label) => Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: TextField(
+            controller: ctrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: label,
+              isDense: true,
+              border: const OutlineInputBorder(),
+              suffixText: 'RON',
+            ),
+          ),
+        );
+
+    Widget row2(String label, String value, {Color? color, bool bold = false}) =>
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 3),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(label,
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: bold ? FontWeight.bold : FontWeight.normal)),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+                    color: color),
+              ),
+            ],
+          ),
+        );
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Salariu brut',
+                      style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _brutCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    style: const TextStyle(
+                        fontSize: 20, fontWeight: FontWeight.bold),
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      suffixText: 'RON',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Rețineri angajat',
+                      style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  if (r != null) ...[
+                    row2('Brut total (cu sporuri):', _fmtRon(r.grossTotal)),
+                    if (r.nightSupplement > 0)
+                      row2('  Spor noapte 25%:', '+ ${_fmtRon(r.nightSupplement)}',
+                          color: Colors.blue.shade700),
+                    if (r.overtimeSupplement > 0)
+                      row2('  Spor ore suplimentare 75%:',
+                          '+ ${_fmtRon(r.overtimeSupplement)}',
+                          color: Colors.blue.shade700),
+                    const Divider(height: 12),
+                    row2('CAS 25%:', '- ${_fmtRon(r.cas)}',
+                        color: Colors.red.shade700),
+                    row2('CASS 10%:', '- ${_fmtRon(r.cass)}',
+                        color: Colors.red.shade700),
+                    if (r.personalDeduction > 0)
+                      row2('Deducere personală (OUG 89/2025):',
+                          '+ ${_fmtRon(r.personalDeduction)}',
+                          color: Colors.green.shade700),
+                    row2('Impozit venit 10%:', '- ${_fmtRon(r.incomeTax)}',
+                        color: Colors.red.shade700),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Tichete de masă',
+                      style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(child: field(_ticketZileCtrl, 'Zile eligibile')),
+                      const SizedBox(width: 8),
+                      Expanded(child: field(_ticketZiCtrl, 'Valoare/zi')),
+                    ],
+                  ),
+                  if (r != null && r.mealTicketTotal > 0) ...[
+                    const SizedBox(height: 4),
+                    row2('Total tichete:', _fmtRon(r.mealTicketTotal)),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        'Sumă netă directă — fără taxe suplimentare',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.green.shade700,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Sporuri ore',
+                      style: Theme.of(context).textTheme.labelLarge),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(child: field(_noapteCtrl, 'Ore noapte')),
+                      const SizedBox(width: 8),
+                      Expanded(child: field(_suplCtrl, 'Ore suplimentare')),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (r != null && r.garnishments > 0) ...[
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: row2(
+                  'Popriri (CPC art.729):',
+                  '- ${_fmtRon(r.garnishments)}',
+                  color: Colors.red.shade700,
+                  bold: true,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          if (r != null)
+            Card(
+              color: Colors.green.shade50,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: Colors.green.shade300)),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Text('NET DE PLATĂ',
+                        style: TextStyle(
+                            fontSize: 13,
+                            color: netColor,
+                            fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    Text(
+                      _fmtRon(r.netFinal),
+                      style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: netColor),
+                    ),
+                    const Divider(height: 20),
+                    row2('Cost angajator (CAM 2.25%):',
+                        _fmtRon(r.employerCam)),
+                    row2('Cost total firmă:', _fmtRon(r.costTotal),
+                        bold: true),
+                  ],
+                ),
+              ),
+            ),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGarnishmentsTab() {
+    final r = _calcResult;
+    final net = r?.netBeforeDeductions ?? 0;
+    final maxGeneral = net / 3.0;
+    final maxCombined = net / 2.0;
+    final totalDatorii =
+        _garnishments.fold<double>(0, (s, g) => s + g.amountValue);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Card(
+            color: Colors.orange.shade50,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Popriri salariale — CPC art.729',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange.shade800)),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Plafon legal: 1/3 net pentru creditori generali, 1/2 net pentru pensie/întreținere, maxim 1/2 net combinat.',
+                    style:
+                        TextStyle(fontSize: 12, color: Colors.orange.shade900),
+                  ),
+                  if (net > 0) ...[
+                    const SizedBox(height: 8),
+                    Text('Net lunar: ${_fmtRon(net)}',
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600)),
+                    Text(
+                        'Max general (1/3): ${_fmtRon(maxGeneral)} | Max combinat (1/2): ${_fmtRon(maxCombined)}',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.orange.shade800)),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (_garnishments.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Nu există popriri active pentru acest angajat.'),
+              ),
+            )
+          else
+            ..._garnishments.map(_buildGarnishmentCard),
+          const SizedBox(height: 12),
+          if (totalDatorii > 0 && _garnishments.length > 1)
+            _buildDistribuireBtn(totalDatorii, net),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _savingGarnishment ? null : _addGarnishment,
+            icon: const Icon(Icons.add),
+            label: const Text('Adaugă executor'),
+          ),
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGarnishmentCard(HrGarnishment g) {
+    final isHalf = g.legalCapMode.toLowerCase() == 'one_half';
+    final net = _calcResult?.netBeforeDeductions ?? 0;
+    final maxFrac = isHalf ? net / 2.0 : net / 3.0;
+    final retinere = g.amountType.toLowerCase() == 'percent_net'
+        ? net * g.amountValue / 100.0
+        : g.amountValue;
+    final efectiv = retinere.clamp(0.0, maxFrac);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.gavel_outlined, size: 18),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    g.sourceDoc.isEmpty ? 'Executor nedefinit' : g.sourceDoc,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => _editGarnishment(g),
+                ),
+                IconButton(
+                  icon: Icon(Icons.delete_outline,
+                      size: 18, color: Colors.red.shade400),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => _deleteGarnishment(g),
+                ),
+              ],
+            ),
+            if (g.notes.isNotEmpty)
+              Text('Dosar: ${g.notes}',
+                  style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                _badge(
+                    isHalf ? 'Pensie/Întreținere' : 'Creditor general',
+                    isHalf ? Colors.red : Colors.orange),
+                const SizedBox(width: 8),
+                _badge('Prioritate ${g.legalPriority}', Colors.blue),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text('Datorie totală: ${_fmtRon(g.amountValue)}',
+                style: const TextStyle(fontSize: 12)),
+            Text(
+              'Reținut luna aceasta: ${_fmtRon(efectiv)}',
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.red.shade700),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _badge(String text, MaterialColor color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.shade200),
+        ),
+        child: Text(text,
+            style: TextStyle(fontSize: 10, color: color.shade800)),
+      );
+
+  Widget _buildDistribuireBtn(double totalDatorii, double net) {
+    return OutlinedButton.icon(
+      onPressed: () => _distribuieProportional(totalDatorii, net),
+      icon: const Icon(Icons.balance_outlined, size: 18),
+      label: const Text('Aplică distribuirea automată proporțională'),
+    );
+  }
+
+  void _distribuieProportional(double totalDatorii, double net) {
+    if (totalDatorii <= 0 || net <= 0) return;
+    final maxCombined = net / 2.0;
+    final updated = _garnishments.map((g) {
+      final parte = (g.amountValue / totalDatorii) * maxCombined;
+      return HrGarnishment(
+        id: g.id,
+        employeeId: g.employeeId,
+        hrEmployeeProfileId: g.hrEmployeeProfileId,
+        garnishmentType: g.garnishmentType,
+        legalPriority: g.legalPriority,
+        amountType: 'fixed_ron',
+        amountValue: double.parse(parte.toStringAsFixed(2)),
+        currency: g.currency,
+        legalCapMode: g.legalCapMode,
+        sourceDoc: g.sourceDoc,
+        effectiveFrom: g.effectiveFrom,
+        effectiveTo: g.effectiveTo,
+        status: g.status,
+        notes: g.notes,
+        createdAt: g.createdAt,
+        updatedAt: DateTime.now(),
+      );
+    }).toList();
+    setState(() => _garnishments = updated);
+    _recalculate();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Distribuire proporțională aplicată în memorie. Apasă Editează per executor pentru a salva.')),
+    );
+  }
+
+  Future<void> _addGarnishment() => _editGarnishment(null);
+
+  Future<void> _editGarnishment(HrGarnishment? existing) async {
+    final sourceCtrl = TextEditingController(text: existing?.sourceDoc ?? '');
+    final dosarCtrl = TextEditingController(text: existing?.notes ?? '');
+    final sumCtrl = TextEditingController(
+        text: existing != null
+            ? existing.amountValue.toStringAsFixed(2)
+            : '');
+    var tipHalf = existing?.legalCapMode.toLowerCase() == 'one_half';
+    var prioritate = existing?.legalPriority ?? 1;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          title: Text(existing == null ? 'Adaugă executor' : 'Editează executor'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: sourceCtrl,
+                    textCapitalization: TextCapitalization.sentences,
+                    decoration: const InputDecoration(labelText: 'Executor judecătoresc'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: dosarCtrl,
+                    decoration: const InputDecoration(labelText: 'Dosar nr.'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: sumCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Datorie totală (RON)'),
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<bool>(
+                    initialValue: tipHalf,
+                    decoration: const InputDecoration(labelText: 'Tip creanță'),
+                    items: const [
+                      DropdownMenuItem(value: false, child: Text('Creditor general (max 1/3 net)')),
+                      DropdownMenuItem(value: true, child: Text('Pensie / Întreținere (max 1/2 net)')),
+                    ],
+                    onChanged: (v) { if (v != null) setD(() => tipHalf = v); },
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<int>(
+                    initialValue: prioritate,
+                    decoration: const InputDecoration(labelText: 'Prioritate legală'),
+                    items: List.generate(5, (i) => DropdownMenuItem(value: i + 1, child: Text('${i + 1}'))),
+                    onChanged: (v) { if (v != null) setD(() => prioritate = v); },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Renunță')),
+            FilledButton(
+              onPressed: () {
+                if (sourceCtrl.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('Introduceți numele executorului.')));
+                  return;
+                }
+                Navigator.of(ctx).pop(true);
+              },
+              child: const Text('Salvează'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved != true || !mounted) return;
+
+    setState(() => _savingGarnishment = true);
+
+    final suma = double.tryParse(sumCtrl.text.replaceAll(',', '.')) ?? 0;
+    final now = DateTime.now();
+    final g = HrGarnishment(
+      id: existing?.id ?? const Uuid().v4(),
+      employeeId: widget.profile.employeeId,
+      hrEmployeeProfileId: widget.profile.id,
+      garnishmentType: tipHalf ? 'maintenance' : 'general_creditor',
+      legalPriority: prioritate,
+      amountType: 'fixed_ron',
+      amountValue: suma,
+      currency: 'RON',
+      legalCapMode: tipHalf ? 'one_half' : 'one_third',
+      sourceDoc: sourceCtrl.text.trim(),
+      effectiveFrom: existing?.effectiveFrom ?? now,
+      effectiveTo: null,
+      status: 'active',
+      notes: dosarCtrl.text.trim(),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    );
+
+    try {
+      await widget.variablePayrollService.upsertGarnishment(g);
+      final idx = _garnishments.indexWhere((x) => x.id == g.id);
+      setState(() {
+        if (idx >= 0) {
+          _garnishments[idx] = g;
+        } else {
+          _garnishments.add(g);
+        }
+        _savingGarnishment = false;
+      });
+      _recalculate();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _savingGarnishment = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare: $e')));
+      }
+    }
+  }
+
+  Future<void> _deleteGarnishment(HrGarnishment g) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Șterge poprirea?'),
+        content: Text('Se va șterge poprirea de la "${g.sourceDoc}".'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Renunță')),
+          FilledButton.tonal(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Șterge')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() {
+      _garnishments.removeWhere((x) => x.id == g.id);
+    });
+    _recalculate();
+
+    final closed = HrGarnishment(
+      id: g.id,
+      employeeId: g.employeeId,
+      hrEmployeeProfileId: g.hrEmployeeProfileId,
+      garnishmentType: g.garnishmentType,
+      legalPriority: g.legalPriority,
+      amountType: g.amountType,
+      amountValue: g.amountValue,
+      currency: g.currency,
+      legalCapMode: g.legalCapMode,
+      sourceDoc: g.sourceDoc,
+      effectiveFrom: g.effectiveFrom,
+      effectiveTo: DateTime.now(),
+      status: 'closed',
+      notes: g.notes,
+      createdAt: g.createdAt,
+      updatedAt: DateTime.now(),
+    );
+
+    widget.variablePayrollService.upsertGarnishment(closed).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la ștergere: $e')));
+        setState(() => _garnishments.add(g));
+        _recalculate();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.profile.fullName),
+        actions: [
+          Builder(builder: (ctx) => IconButton(
+            icon: const Icon(Icons.help_outline),
+            tooltip: 'Ajutor',
+            onPressed: () => showDialog<void>(
+              context: ctx,
+              builder: (_) => AlertDialog(
+                title: const Text('Detalii angajat'),
+                content: const Text(
+                  '• Date: informații personale și HR\n'
+                  '• Calculator: estimare salariu net (interactiv)\n'
+                  '  - CAS 25% pe salariu brut\n'
+                  '  - CASS 10% pe salariu brut (TM excluded)\n'
+                  '  - Deducere personală: 600 RON bază, prag 4050, plafon 7000 RON\n'
+                  '  - TM = sumă netă directă\n'
+                  '• Popriri: configurare rețineri CPC art.729\n'
+                  '• Plăți: istoricul plăților înregistrate',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            ),
+          )),
+        ],
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: const [
+            Tab(icon: Icon(Icons.person_outline), text: 'Date'),
+            Tab(icon: Icon(Icons.calculate_outlined), text: 'Calculator'),
+            Tab(icon: Icon(Icons.gavel_outlined), text: 'Popriri'),
+            Tab(icon: Icon(Icons.payments_outlined), text: 'Plăți'),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _tabs,
+        children: [
+          _buildDataTab(),
+          _buildCalculatorTab(),
+          _buildGarnishmentsTab(),
+          _buildPaymentsTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPaymentsTab() {
+    final fmt = DateFormat('dd.MM.yyyy', 'ro');
+    if (_loadingPayments) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return RefreshIndicator(
+      onRefresh: _loadPayments,
+      child: _payments.isEmpty
+          ? ListView(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('Nicio plată înregistrată.'),
+                ),
+              ],
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: _payments.length,
+              itemBuilder: (_, i) {
+                final p = _payments[i];
+                final typeLabel =
+                    p.paymentType == 'avans' ? 'Avans' : 'Salariu';
+                return Card(
+                  child: ListTile(
+                    leading: Icon(
+                      p.paymentType == 'avans'
+                          ? Icons.arrow_upward
+                          : Icons.check_circle_outline,
+                      color: p.paymentType == 'salariu'
+                          ? Colors.green
+                          : Colors.orange,
+                    ),
+                    title: Text(
+                        '$typeLabel ${p.amount.toStringAsFixed(2)} RON'),
+                    subtitle: Text(
+                      '${fmt.format(p.paymentDate)} · ${p.metodaPlata}'
+                      ' · Luna ${p.payrollMonth.month.toString().padLeft(2, '0')}.${p.payrollMonth.year}'
+                      '${p.note.isNotEmpty ? ' · ${p.note}' : ''}',
+                    ),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline,
+                          color: Colors.red),
+                      tooltip: 'Șterge plată',
+                      onPressed: () async {
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (_) => AlertDialog(
+                            title: const Text('Șterge plată?'),
+                            content: Text(
+                                '$typeLabel ${p.amount.toStringAsFixed(2)} RON din '
+                                '${fmt.format(p.paymentDate)}'),
+                            actions: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(false),
+                                child: const Text('Renunță'),
+                              ),
+                              FilledButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(true),
+                                child: const Text('Șterge'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (ok == true) _deletePayment(p);
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}

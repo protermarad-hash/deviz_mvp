@@ -660,7 +660,7 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                   Text(
                                     d.titlu.isNotEmpty
                                         ? d.titlu
-                                        : '(fără titlu)',
+                                        : d.tipDocument.label,
                                     style: const TextStyle(
                                       fontSize: 15,
                                       fontWeight: FontWeight.bold,

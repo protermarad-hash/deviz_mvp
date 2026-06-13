@@ -7,6 +7,7 @@ import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/help_content.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/help_button.dart';
+import '../tasks/task_dashboard_widget.dart';
 import '../clients/client_models.dart';
 import '../clients/clienti_cloud_repository.dart';
 import '../clients/firebase_clienti_repository.dart';
@@ -53,6 +54,7 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   bool _loading = true;
+  bool _loadScheduled = false;
   String _dataSourceLabel = 'local';
   String? _fallbackReason;
 
@@ -96,7 +98,11 @@ class _DashboardPageState extends State<DashboardPage> {
     } else {
       _fallbackReason = FirebaseBootstrap.lastErrorMessage;
     }
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _loadScheduled) return;
+      _loadScheduled = true;
+      _load();
+    });
   }
 
   String _shortError(Object error) {
@@ -1057,13 +1063,35 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  Widget _buildLoadingCard(String title, IconData icon) {
+    final scheme = Theme.of(context).colorScheme;
+    return _kpiCard(
+      title,
+      '...',
+      icon: icon,
+      subtitle: 'Se încarcă',
+      valueColor: scheme.primary,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final cards = _isAdminLike ? _buildAdminCards() : _buildEmployeeCards();
+    final cards = _loading
+        ? (_isAdminLike
+            ? <Widget>[
+                _buildLoadingCard('Programări azi', Icons.today),
+                _buildLoadingCard('Lucrări active', Icons.work),
+                _buildLoadingCard('Oferte active', Icons.request_quote_outlined),
+                _buildLoadingCard(
+                  'Reclamații deschise',
+                  Icons.report_problem_outlined,
+                ),
+              ]
+            : <Widget>[
+                _buildLoadingCard('Programări relevante', Icons.today),
+                _buildLoadingCard('Date utilizator', Icons.person_outline),
+              ])
+        : (_isAdminLike ? _buildAdminCards() : _buildEmployeeCards());
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1082,6 +1110,20 @@ class _DashboardPageState extends State<DashboardPage> {
           children: [
             _buildWelcomeHeader(),
             const SizedBox(height: 12),
+            // ── Widget Taskuri active (vizibil imediat pe Dashboard) ──────────
+            if (_loading) ...[
+              const LinearProgressIndicator(minHeight: 2),
+              const SizedBox(height: 12),
+            ],
+            TaskDashboardWidget(
+              currentUserId: widget.fieldAuthUserId,
+              currentUserName: widget.fieldAuthUserName,
+              isAdmin: _isAdminLike,
+              onNavigateToTasks: widget.onNavigateTo != null
+                  ? () => widget.onNavigateTo!.call('taskuri')
+                  : null,
+            ),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -1094,10 +1136,12 @@ class _DashboardPageState extends State<DashboardPage> {
                   )
                   .toList(growable: false),
             ),
-            const SizedBox(height: 12),
-            _buildSummarySection(),
-            const SizedBox(height: 12),
-            _isAdminLike ? _buildAdminSections() : _buildEmployeeSections(),
+            if (!_loading) ...[
+              const SizedBox(height: 12),
+              _buildSummarySection(),
+              const SizedBox(height: 12),
+              _isAdminLike ? _buildAdminSections() : _buildEmployeeSections(),
+            ],
           ],
         );
       },

@@ -8,6 +8,7 @@ import '../../core/auth/app_role_policy.dart';
 import '../../core/auth_models.dart';
 import '../../core/auth_session.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/help/help_module_button.dart';
 import '../../core/document_file_service.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/pdf_save_service.dart';
@@ -33,10 +34,13 @@ import 'hr_access_policy.dart';
 import 'hr_attendance_report_pdf_service.dart';
 import 'hr_leave_approved_monthly_report_pdf_service.dart';
 import 'hr_leave_request_pdf_service.dart';
+import 'hr_employee_detail_page.dart';
 import 'hr_payroll_accounting_report_models.dart';
 import 'hr_payroll_accounting_report_pdf_service.dart';
 import 'hr_payroll_monthly_statement_pdf_service.dart';
 import 'hr_payslip_pdf_service.dart';
+import 'hr_payroll_payment_models.dart';
+import 'hr_payroll_payment_repository.dart';
 import 'hr_payroll_run_catalog_service.dart';
 import 'hr_payroll_run_models.dart';
 
@@ -102,6 +106,9 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
   List<HrLeaveRequest> _leaveRequests = const <HrLeaveRequest>[];
   List<HrPayslip> _payslips = const <HrPayslip>[];
   List<HrPayslip> _allPayslips = const <HrPayslip>[];
+  // Plăți înregistrate per angajat pentru luna selectată
+  Map<String, List<HrPayrollPayment>> _paymentsByEmployee =
+      const <String, List<HrPayrollPayment>>{};
   List<HrPayrollAccountingReport> _accountingReports =
       const <HrPayrollAccountingReport>[];
   List<HrPayrollAccountingReport> _allAccountingReports =
@@ -268,6 +275,9 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
       final deductions = await _variablePayrollService.listDeductions();
       final advances = await _variablePayrollService.listAdvances();
       final garnishments = await _variablePayrollService.listGarnishments();
+      // Plăți salariu înregistrate pentru luna selectată
+      final paymentsLocal = await HrPayrollPaymentRepository.instance
+          .listPaymentsForMonth(month);
       if (!mounted) return;
       final defaultAttendanceEmployee =
           _attendanceEmployeeFilter.trim().isNotEmpty
@@ -301,6 +311,7 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
         _leaveRequests = leaveRequests;
         _allPayslips = allPayslips;
         _payslips = payslips;
+        _paymentsByEmployee = paymentsLocal;
         _allAccountingReports = allAccountingReports;
         _accountingReports = accountingReports;
         _bonuses = bonuses;
@@ -470,6 +481,7 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
       final path = await HrPayrollAccountingReportPdfService.export(
         repository: widget.repository,
         report: report,
+        paymentsByEmployee: _paymentsByEmployee,
       );
       if (!mounted) return;
       setState(() {
@@ -499,11 +511,23 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
       _message = null;
     });
     try {
+      final payslipPayments =
+          (_paymentsByEmployee[payslip.employeeId] ?? const [])
+              .where((p) =>
+                  p.payrollMonth.year == payslip.payrollMonth.year &&
+                  p.payrollMonth.month == payslip.payrollMonth.month)
+              .toList();
       final path = await HrPayslipPdfService.export(
         repository: widget.repository,
         payslip: payslip,
         employeeName: _employeeName(payslip.employeeId),
         saveAs: saveAs,
+        garnishments: _garnishments
+            .where((g) =>
+                g.employeeId == payslip.employeeId &&
+                g.appliesToMonth(_selectedMonth))
+            .toList(),
+        payments: payslipPayments,
       );
       if (share) {
         await DocumentFileService.shareFile(
@@ -2017,42 +2041,65 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
                     ),
                   ),
                 ]),
-                section('Retineri', [
-                  line(
-                    'Impozit tichete masa',
-                    money(
-                      _asDouble(
-                        (((item.breakdown['withholdings'] as Map?)
-                                    ?.cast<String, dynamic>() ??
-                                const <String, dynamic>{})[
-                            'meal_ticket_income_tax_amount']),
+                section('Retineri', () {
+                  final withholdings =
+                      (item.breakdown['withholdings'] as Map?)
+                              ?.cast<String, dynamic>() ??
+                          const <String, dynamic>{};
+                  final tmCass =
+                      _asDouble(withholdings['meal_ticket_cass_amount']);
+                  final tmTax =
+                      _asDouble(withholdings['meal_ticket_income_tax_amount']);
+                  final tmValue = _mealTicketTotalForPayslip(item);
+                  final rows = <Widget>[
+                    if (tmCass > 0 || tmTax > 0) ...[
+                      line(
+                        'CASS tichete masa (info)',
+                        '${money(tmCass)} — inclus in CASS total',
                       ),
-                    ),
-                  ),
-                  line(
-                    'CASS tichete masa',
-                    money(
-                      _asDouble(
-                        (((item.breakdown['withholdings'] as Map?)
-                                    ?.cast<String, dynamic>() ??
-                                const <String, dynamic>{})[
-                            'meal_ticket_cass_amount']),
+                      line(
+                        'Impozit tichete masa (info)',
+                        '${money(tmTax)} — inclus in impozit total',
                       ),
-                    ),
-                  ),
-                  line('Retineri', money(item.deductionTotal)),
-                  line(
-                    'Recuperari avans',
-                    money(item.advanceRecoveryTotal),
-                  ),
-                  line(
-                    'Popriri rezervate',
-                    money(item.garnishmentReservedTotal),
-                  ),
-                ]),
-                section('Net final', [
-                  line('Net final', money(item.netFinal), emphasized: true),
-                ]),
+                    ] else if (tmValue > 0)
+                      line(
+                        'Tichete masa (neta directa)',
+                        '${money(tmValue)} — fara taxe suplimentare',
+                      ),
+                    line('Retineri', money(item.deductionTotal)),
+                    line('Recuperari avans', money(item.advanceRecoveryTotal)),
+                    line('Popriri rezervate', money(item.garnishmentReservedTotal)),
+                  ];
+                  return rows;
+                }()),
+                section('Net final', () {
+                  final withholdings =
+                      (item.breakdown['withholdings'] as Map?)
+                              ?.cast<String, dynamic>() ??
+                          const <String, dynamic>{};
+                  final tmCass =
+                      _asDouble(withholdings['meal_ticket_cass_amount']);
+                  final tmTax =
+                      _asDouble(withholdings['meal_ticket_income_tax_amount']);
+                  final tmValue = _mealTicketTotalForPayslip(item);
+                  final rows = <Widget>[
+                    line('Net final', money(item.netFinal), emphasized: true),
+                  ];
+                  if (tmValue > 0) {
+                    if (tmCass > 0 || tmTax > 0) {
+                      rows.add(line(
+                        'TM ${money(tmValue)}: CASS ${money(tmCass)} + Impozit ${money(tmTax)} incluse',
+                        '(OUG 89/2025)',
+                      ));
+                    } else {
+                      rows.add(line(
+                        'Tichete ${money(tmValue)}',
+                        '— suma neta directa, fara taxe',
+                      ));
+                    }
+                  }
+                  return rows;
+                }()),
                 section('Breakdown / surse', [
                   SelectableText(
                     'Breakdown\n${_prettyMap(item.breakdown)}\n\nSource refs\n${_prettyMap(item.sourceRefs)}',
@@ -4016,6 +4063,9 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
     final bankController =
         TextEditingController(text: existing?.bankAccount ?? '');
     final notesController = TextEditingController(text: existing?.notes ?? '');
+    final nrDependentiController = TextEditingController(
+      text: (existing?.nrPersoaneIntretinere ?? 0).toString(),
+    );
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -4084,6 +4134,14 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
                     decoration: const InputDecoration(labelText: 'Cont bancar'),
                   ),
                   TextFormField(
+                    keyboardType: TextInputType.number,
+                    controller: nrDependentiController,
+                    decoration: const InputDecoration(
+                      labelText: 'Persoane în întreținere (deducere pers.)',
+                      hintText: '0',
+                    ),
+                  ),
+                  TextFormField(
                     textCapitalization: TextCapitalization.sentences,
                     controller: notesController,
                     decoration: const InputDecoration(labelText: 'Note'),
@@ -4145,6 +4203,8 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
           ? 'RO'
           : countryController.text.trim(),
       bankAccount: bankController.text.trim(),
+      nrPersoaneIntretinere:
+          int.tryParse(nrDependentiController.text.trim()) ?? 0,
       notes: notesController.text.trim(),
       createdAt: existing?.createdAt ?? seed.createdAt,
       updatedAt: now,
@@ -5620,109 +5680,752 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
         ));
   }
 
-  Widget _buildPayslips() {
-    return Container(
-        key: _payslipsSectionKey,
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Fluturasi de salariu generati',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 12),
-                if (_payslips.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                        'Nu exista fluturasi de salariu pentru luna selectata.'),
-                  )
-                else
-                  ..._payslips.map(
-                    (item) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(_employeeName(item.employeeId)),
-                      subtitle: Text(
-                        'Luna ${_formatMonth(item.payrollMonth)} | Net ${_formatMoney(item.netFinal)} | '
-                        'Tichete ${_formatMoney(_mealTicketTotalForPayslip(item))} | '
-                        'Status ${item.status}',
-                      ),
-                      trailing: PopupMenuButton<String>(
-                        icon: const Icon(Icons.more_vert),
-                        tooltip: 'Acțiuni',
-                        itemBuilder: (_) => [
-                          PopupMenuItem(
-                            enabled: false,
-                            child: Text(
-                              _formatDateTime(item.generatedAt),
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'sheet',
-                            child: ListTile(
-                              leading: Icon(Icons.badge_outlined),
-                              title: Text('Vezi fișa HR'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'pdf',
-                            child: ListTile(
-                              leading: Icon(Icons.picture_as_pdf_outlined),
-                              title: Text('Export PDF'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'save_as',
-                            child: ListTile(
-                              leading: Icon(Icons.save_as_outlined),
-                              title: Text('Salvează ca...'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'share',
-                            child: ListTile(
-                              leading: Icon(Icons.share_outlined),
-                              title: Text('Partajează'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          const PopupMenuItem(
-                            value: 'details',
-                            child: ListTile(
-                              leading: Icon(Icons.receipt_long_outlined),
-                              title: Text('Vezi detalii'),
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                        ],
-                        onSelected: (value) {
-                          switch (value) {
-                            case 'sheet':
-                              _showEmployeeHrSheet(item.employeeId);
-                            case 'pdf':
-                              _exportPayslipPdf(item);
-                            case 'save_as':
-                              _exportPayslipPdf(item, saveAs: true);
-                            case 'share':
-                              _exportPayslipPdf(item, share: true);
-                            case 'details':
-                              _showPayslipDetails(item);
+  Future<void> _showPaymentDialog(
+    String employeeId,
+    double netFinal, {
+    double totalPaid = 0,
+  }) async {
+    final rest = netFinal - totalPaid;
+    final employeeName = _employeeName(employeeId);
+    String paymentType = rest > 0.01 ? 'salariu' : 'avans';
+    String metodaPlata = 'numerar';
+    DateTime paymentDate = DateTime.now();
+    final amountController = TextEditingController(
+      text: rest > 0.01 ? rest.toStringAsFixed(2) : '',
+    );
+    final noteController = TextEditingController();
+    final userId =
+        _sessionControllerMaybe(context)?.currentUser?.id ?? '';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text('Plată salariu — $employeeName'),
+          content: SizedBox(
+            width: 400,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Net final: ${_formatMoney(netFinal)} RON | '
+                    'Plătit: ${_formatMoney(totalPaid)} RON | '
+                    'Rest: ${_formatMoney(rest)} RON',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: paymentType,
+                    decoration:
+                        const InputDecoration(labelText: 'Tip plată'),
+                    items: const [
+                      DropdownMenuItem(
+                          value: 'salariu', child: Text('Salariu')),
+                      DropdownMenuItem(
+                          value: 'avans', child: Text('Avans')),
+                    ],
+                    onChanged: (v) =>
+                        setLocal(() => paymentType = v ?? paymentType),
+                  ),
+                  TextFormField(
+                    controller: amountController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: const InputDecoration(
+                        labelText: 'Sumă (RON)', hintText: '0.00'),
+                  ),
+                  DropdownButtonFormField<String>(
+                    initialValue: metodaPlata,
+                    decoration:
+                        const InputDecoration(labelText: 'Metodă plată'),
+                    items: const [
+                      DropdownMenuItem(
+                          value: 'numerar', child: Text('Numerar')),
+                      DropdownMenuItem(
+                          value: 'virament', child: Text('Virament')),
+                      DropdownMenuItem(
+                          value: 'card', child: Text('Card')),
+                    ],
+                    onChanged: (v) =>
+                        setLocal(() => metodaPlata = v ?? metodaPlata),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Text('Data: '),
+                      TextButton(
+                        child: Text(
+                          '${paymentDate.day.toString().padLeft(2, '0')}.'
+                          '${paymentDate.month.toString().padLeft(2, '0')}.'
+                          '${paymentDate.year}',
+                        ),
+                        onPressed: () async {
+                          final picked = await showDatePicker(
+                            context: ctx,
+                            initialDate: paymentDate,
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime(2030),
+                          );
+                          if (picked != null) {
+                            setLocal(() => paymentDate = picked);
                           }
                         },
                       ),
+                    ],
+                  ),
+                  TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: noteController,
+                    decoration:
+                        const InputDecoration(labelText: 'Observații'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Înregistrează'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final amount =
+        double.tryParse(amountController.text.replaceAll(',', '.')) ?? 0.0;
+    if (amount <= 0) return;
+    final payment = HrPayrollPayment(
+      id: HrPayrollPayment.newId(),
+      employeeId: employeeId,
+      employeeName: employeeName,
+      payrollMonth: _selectedMonthStart,
+      paymentType: paymentType,
+      amount: amount,
+      paymentDate: paymentDate,
+      metodaPlata: metodaPlata,
+      note: noteController.text.trim(),
+      createdBy: userId,
+      createdAt: DateTime.now(),
+    );
+    // Optimistic UI
+    setState(() {
+      final updated = Map<String, List<HrPayrollPayment>>.from(
+          _paymentsByEmployee);
+      updated.putIfAbsent(employeeId, () => []).add(payment);
+      _paymentsByEmployee = updated;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Plată înregistrată.')),
+    );
+    HrPayrollPaymentRepository.instance.savePayment(payment).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la salvare plată: $e')),
+        );
+      }
+    });
+  }
+
+  // ── Dialog plată popriri ────────────────────────────────────────────────────
+  Future<void> _showGarnishmentPaymentDialog(
+    String employeeId,
+    double popririRetinute,
+    double popririPlatite,
+  ) async {
+    final employeeName = _employeeName(employeeId);
+    final rest = (popririRetinute - popririPlatite).clamp(0.0, double.infinity);
+    final empGarnishments = _garnishments
+        .where((g) =>
+            g.employeeId == employeeId &&
+            g.appliesToMonth(_selectedMonthStart))
+        .toList();
+
+    String metodaPlata = 'numerar';
+    DateTime paymentDate = DateTime.now();
+    final amountController =
+        TextEditingController(text: rest > 0.01 ? rest.toStringAsFixed(2) : '');
+    final noteController = TextEditingController();
+    final userId = _sessionControllerMaybe(context)?.currentUser?.id ?? '';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text('Plată popriri — $employeeName'),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Card(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Total popriri reținute: ${_formatMoney(popririRetinute)} RON',
+                          ),
+                          Text(
+                            'Deja plătit: ${_formatMoney(popririPlatite)} RON',
+                          ),
+                          Text(
+                            'Rest popriri: ${_formatMoney(rest)} RON',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: rest > 0.01 ? Colors.red.shade700 : Colors.green,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
+                  if (empGarnishments.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Divider(),
+                    const Text(
+                      'Executori:',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    ...empGarnishments.map((g) {
+                      final label = g.sourceDoc.isNotEmpty
+                          ? g.sourceDoc
+                          : g.garnishmentType;
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.gavel, size: 14, color: Colors.orange),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                '$label — ${_formatMoney(g.amountValue)} ${g.currency}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    const Divider(),
+                  ],
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: amountController,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Sumă de plătit (RON)',
+                      hintText: '0.00',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: metodaPlata,
+                    decoration: const InputDecoration(labelText: 'Metodă plată'),
+                    items: const [
+                      DropdownMenuItem(value: 'numerar', child: Text('Numerar')),
+                      DropdownMenuItem(value: 'virament', child: Text('Virament')),
+                      DropdownMenuItem(value: 'card', child: Text('Card')),
+                    ],
+                    onChanged: (v) =>
+                        setLocal(() => metodaPlata = v ?? metodaPlata),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Text('Data plății: '),
+                      TextButton(
+                        child: Text(
+                          '${paymentDate.day.toString().padLeft(2, '0')}.'
+                          '${paymentDate.month.toString().padLeft(2, '0')}.'
+                          '${paymentDate.year}',
+                        ),
+                        onPressed: () async {
+                          final picked = await showDatePicker(
+                            context: ctx,
+                            initialDate: paymentDate,
+                            firstDate: DateTime(2020),
+                            lastDate: DateTime(2030),
+                          );
+                          if (picked != null) setLocal(() => paymentDate = picked);
+                        },
+                      ),
+                    ],
+                  ),
+                  TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: noteController,
+                    decoration:
+                        const InputDecoration(labelText: 'Observații (opțional)'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Renunță'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Confirmă plata popriri'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final amount =
+        double.tryParse(amountController.text.replaceAll(',', '.')) ?? 0.0;
+    if (amount <= 0) return;
+    final payment = HrPayrollPayment(
+      id: HrPayrollPayment.newId(),
+      employeeId: employeeId,
+      employeeName: employeeName,
+      payrollMonth: _selectedMonthStart,
+      paymentType: 'poprire',
+      amount: amount,
+      paymentDate: paymentDate,
+      metodaPlata: metodaPlata,
+      note: noteController.text.trim(),
+      createdBy: userId,
+      createdAt: DateTime.now(),
+    );
+    setState(() {
+      final updated =
+          Map<String, List<HrPayrollPayment>>.from(_paymentsByEmployee);
+      updated.putIfAbsent(employeeId, () => []).add(payment);
+      _paymentsByEmployee = updated;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Popriri plătite: ${_formatMoney(amount)} RON')),
+    );
+    HrPayrollPaymentRepository.instance.savePayment(payment).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la salvare poprire: $e')),
+        );
+      }
+    });
+  }
+
+  // ── Stat de plată — tabel complet ───────────────────────────────────────────
+  Widget _buildPayslips() {
+    return Container(
+      key: _payslipsSectionKey,
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Stat de plată — Fluturași',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 12),
+              if (_payslips.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                      'Nu există fluturași de salariu pentru luna selectată.'),
+                )
+              else
+                _buildPayslipsTable(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<HrPayrollEmployeeFinancialSummary> _buildPayrollSummaries() {
+    return _payslips.map((payslip) {
+      final contractMap = payslip.breakdown['contract'];
+      final jobTitle = contractMap is Map
+          ? (contractMap['job_title'] ?? '').toString()
+          : '';
+      return HrPayrollEmployeeFinancialSummary.calculeaza(
+        payslip: payslip,
+        platiAngajat: _paymentsByEmployee[payslip.employeeId.trim()] ??
+            const <HrPayrollPayment>[],
+        functia: jobTitle,
+        employeeName: _employeeName(payslip.employeeId),
+      );
+    }).toList();
+  }
+
+  Widget _buildPayslipsTable() {
+    final summaries = _buildPayrollSummaries();
+    final cs = Theme.of(context).colorScheme;
+
+    // Totaluri
+    double tot(double Function(HrPayrollEmployeeFinancialSummary s) sel) =>
+        summaries.fold(0.0, (acc, s) => acc + sel(s));
+    final totalBrut = tot((s) => s.brutTotal);
+    final totalCas = tot((s) => s.cas);
+    final totalCass = tot((s) => s.cass);
+    final totalImpozit = tot((s) => s.impozit);
+    final totalTichete = tot((s) => s.ticheteValoare);
+    final totalNetTm = tot((s) => s.netFaraTichete);
+    final totalNet = tot((s) => s.netFinal);
+    final totalAvans = tot((s) => s.avansPlatit);
+    final totalSalariu = tot((s) => s.salariuPlatit);
+    final totalRest = tot((s) => s.restDePlata);
+    final totalPopRet = tot((s) => s.popririRetinute);
+    final totalPopPl = tot((s) => s.popririPlatite);
+
+    TextStyle hdr() => const TextStyle(fontSize: 11, fontWeight: FontWeight.bold);
+    TextStyle cell() => const TextStyle(fontSize: 11);
+    TextStyle mono() => const TextStyle(fontSize: 11, fontFamily: 'monospace');
+
+    DataColumn col(String label, {bool numeric = true}) => DataColumn(
+          label: Text(label, style: hdr()),
+          numeric: numeric,
+        );
+
+    DataCell moneyCell(double value, {Color? color}) => DataCell(
+          Text(
+            _formatMoney(value),
+            style: mono().copyWith(color: color),
+            textAlign: TextAlign.right,
+          ),
+        );
+
+    DataRow buildRow(HrPayrollEmployeeFinancialSummary s) {
+      final isAchitat = s.esteAchitatIntegral;
+      final hasLargeRest = s.restDePlata > s.netFinal * 0.5 && s.netFinal > 0;
+      final rowColor = isAchitat
+          ? WidgetStateProperty.all(Colors.green.withValues(alpha: 0.06))
+          : null;
+
+      final empGarn = _garnishments
+          .where((g) =>
+              g.employeeId == s.employeeId &&
+              g.appliesToMonth(_selectedMonthStart))
+          .toList();
+
+      final rowPayslip = _payslips.firstWhere(
+        (p) => p.employeeId == s.employeeId,
+        orElse: () => _payslips.first,
+      );
+      final rowTotalPaid = s.avansPlatit + s.salariuPlatit;
+
+      return DataRow(
+        color: rowColor,
+        cells: [
+          // Angajat
+          DataCell(
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isAchitat)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 4),
+                    child: Icon(Icons.check_circle, size: 14, color: Colors.green),
+                  )
+                else if (hasLargeRest)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 4),
+                    child: Icon(Icons.warning_amber_rounded,
+                        size: 14, color: Colors.orange),
+                  ),
+                Flexible(
+                  child: Text(s.employeeName,
+                      style: cell(), overflow: TextOverflow.ellipsis),
+                ),
               ],
             ),
           ),
-        ));
+          // Funcție
+          DataCell(Text(s.functia, style: cell(), overflow: TextOverflow.ellipsis)),
+          // Ore
+          DataCell(Text('${s.oreLucrate}', style: cell(), textAlign: TextAlign.right)),
+          moneyCell(s.brutTotal),
+          moneyCell(s.cas),
+          moneyCell(s.cass),
+          moneyCell(s.impozit),
+          moneyCell(s.deducerePersonala),
+          moneyCell(s.ticheteValoare),
+          moneyCell(s.netFaraTichete),
+          // NET FINAL — bold
+          DataCell(
+            Text(
+              _formatMoney(s.netFinal),
+              style: mono().copyWith(fontWeight: FontWeight.bold),
+              textAlign: TextAlign.right,
+            ),
+          ),
+          moneyCell(s.avansPlatit,
+              color: s.avansPlatit > 0 ? Colors.orange.shade700 : null),
+          moneyCell(s.salariuPlatit,
+              color: s.salariuPlatit > 0 ? Colors.green.shade700 : null),
+          // Rest — roșu dacă > 0
+          DataCell(
+            Text(
+              s.esteAchitatIntegral ? 'Achitat ✓' : _formatMoney(s.restDePlata),
+              style: mono().copyWith(
+                color: s.esteAchitatIntegral ? Colors.green : Colors.red.shade700,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.right,
+            ),
+          ),
+          moneyCell(
+            s.popririRetinute,
+            color: s.popririRetinute > 0 ? Colors.orange.shade700 : null,
+          ),
+          moneyCell(
+            s.popririPlatite,
+            color: s.popririPlatite > 0 ? cs.primary : null,
+          ),
+          // Acțiuni
+          DataCell(
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Tooltip(
+                  message: 'Înregistrează avans',
+                  child: IconButton(
+                    icon: const Icon(Icons.savings_outlined, size: 16),
+                    onPressed: () => _showPaymentDialog(
+                      s.employeeId,
+                      s.netFinal,
+                      totalPaid: rowTotalPaid,
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  ),
+                ),
+                Tooltip(
+                  message: s.esteAchitatIntegral
+                      ? 'Virat integral ✓'
+                      : 'Virează rest ${_formatMoney(s.restDePlata)} RON',
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.payment_outlined,
+                      size: 16,
+                      color: s.esteAchitatIntegral
+                          ? Colors.grey
+                          : cs.primary,
+                    ),
+                    onPressed: s.esteAchitatIntegral
+                        ? null
+                        : () {
+                            final totalPaid = rowTotalPaid;
+                            _showPaymentDialog(s.employeeId, s.netFinal,
+                                totalPaid: totalPaid);
+                          },
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  ),
+                ),
+                if (s.popririRestDePlata > 0.01 || empGarn.isNotEmpty)
+                  Tooltip(
+                    message:
+                        'Plată popriri: ${_formatMoney(s.popririRetinute)} RON reținut',
+                    child: IconButton(
+                      icon: const Icon(Icons.gavel, size: 16, color: Colors.orange),
+                      onPressed: () => _showGarnishmentPaymentDialog(
+                        s.employeeId,
+                        s.popririRetinute,
+                        s.popririPlatite,
+                      ),
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 28, minHeight: 28),
+                    ),
+                  ),
+                Tooltip(
+                  message: 'Mai multe acțiuni',
+                  child: PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert, size: 16),
+                    tooltip: '',
+                    padding: EdgeInsets.zero,
+                    iconSize: 16,
+                    itemBuilder: (_) {
+                      return [
+                        PopupMenuItem(
+                          value: 'pay',
+                          child: const ListTile(
+                            leading: Icon(Icons.payments_outlined),
+                            title: Text('Înregistrează plată'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'sheet',
+                          child: ListTile(
+                            leading: Icon(Icons.badge_outlined),
+                            title: Text('Vezi fișa HR'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'pdf',
+                          child: ListTile(
+                            leading: Icon(Icons.picture_as_pdf_outlined),
+                            title: Text('Export flutuaraș PDF'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'save_as',
+                          child: ListTile(
+                            leading: Icon(Icons.save_as_outlined),
+                            title: Text('Salvează ca...'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'share',
+                          child: ListTile(
+                            leading: Icon(Icons.share_outlined),
+                            title: Text('Partajează'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'details',
+                          child: ListTile(
+                            leading: Icon(Icons.receipt_long_outlined),
+                            title: Text('Vezi detalii'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      ];
+                    },
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'pay':
+                          _showPaymentDialog(s.employeeId, s.netFinal,
+                              totalPaid: rowTotalPaid);
+                        case 'sheet':
+                          _showEmployeeHrSheet(s.employeeId);
+                        case 'pdf':
+                          _exportPayslipPdf(rowPayslip);
+                        case 'save_as':
+                          _exportPayslipPdf(rowPayslip, saveAs: true);
+                        case 'share':
+                          _exportPayslipPdf(rowPayslip, share: true);
+                        case 'details':
+                          _showPayslipDetails(rowPayslip);
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    DataRow totalsRow() => DataRow(
+          color: WidgetStateProperty.all(cs.surfaceContainerHighest),
+          cells: [
+            DataCell(Text('TOTAL', style: hdr())),
+            const DataCell(Text('')),
+            const DataCell(Text('')),
+            DataCell(Text(_formatMoney(totalBrut), style: hdr())),
+            DataCell(Text(_formatMoney(totalCas), style: hdr())),
+            DataCell(Text(_formatMoney(totalCass), style: hdr())),
+            DataCell(Text(_formatMoney(totalImpozit), style: hdr())),
+            const DataCell(Text('')),
+            DataCell(Text(_formatMoney(totalTichete), style: hdr())),
+            DataCell(Text(_formatMoney(totalNetTm), style: hdr())),
+            DataCell(Text(_formatMoney(totalNet), style: hdr())),
+            DataCell(Text(_formatMoney(totalAvans), style: hdr())),
+            DataCell(Text(_formatMoney(totalSalariu), style: hdr())),
+            DataCell(Text(
+              _formatMoney(totalRest),
+              style: hdr().copyWith(
+                color: totalRest > 0.01 ? Colors.red.shade700 : Colors.green,
+              ),
+            )),
+            DataCell(Text(_formatMoney(totalPopRet), style: hdr())),
+            DataCell(Text(_formatMoney(totalPopPl), style: hdr())),
+            const DataCell(Text('')),
+          ],
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            columnSpacing: 8,
+            headingRowHeight: 38,
+            dataRowMinHeight: 44,
+            dataRowMaxHeight: 52,
+            columns: [
+              col('Angajat', numeric: false),
+              col('Funcție', numeric: false),
+              col('Ore'),
+              col('Brut'),
+              col('CAS'),
+              col('CASS'),
+              col('Impozit'),
+              col('Ded.pers.'),
+              col('Tichete'),
+              col('Net/TM'),
+              col('NET FINAL'),
+              col('Av.reținut'),
+              col('Virat'),
+              col('Rest'),
+              col('Pop.ret.'),
+              col('Pop.pl.'),
+              col('Acțiuni', numeric: false),
+            ],
+            rows: [
+              ...summaries.map(buildRow),
+              totalsRow(),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 16,
+          runSpacing: 4,
+          children: [
+            Text(
+              'Total avansuri reținute: ${_formatMoney(totalAvans)} RON',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Text(
+              'Total virate cont: ${_formatMoney(totalSalariu)} RON',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            Text(
+              'Total rest de virat: ${_formatMoney(totalRest)} RON',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: totalRest > 0.01 ? Colors.red.shade700 : Colors.green),
+            ),
+            Text(
+              'Total popriri reținute: ${_formatMoney(totalPopRet)} RON',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   Widget _buildAccountingReports() {
@@ -6877,80 +7580,391 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
         ));
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+  // ── Tab Angajați ─────────────────────────────────────────────────────────
+  Widget _buildEmployeesTab() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final active = [..._employees.where((e) => e.active)]
+      ..sort((a, b) => a.name.compareTo(b.name));
+
+    if (active.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            _buildHeader(),
-            if (_run != null) ...[
-              const SizedBox(height: 12),
-              _buildPayrollLockInfo(),
-            ],
-            if (_message != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(_message!),
-                ),
-              ),
-            ],
+            const Icon(Icons.people_outline, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text('Niciun angajat activ.', style: TextStyle(fontSize: 16)),
             const SizedBox(height: 12),
-            if (_loading)
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              )
-            else ...[
-              if (_canManageSensitiveHr) ...[
-                _buildHrAdmin(),
-                const SizedBox(height: 12),
-                _buildPayrollValidationDashboard(),
-                const SizedBox(height: 12),
-              ] else
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
+            FilledButton.icon(
+              onPressed: _reload,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reîncarcă'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _reload,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(12),
+        itemCount: active.length,
+        itemBuilder: (context, idx) {
+          final emp = active[idx];
+          final profile =
+              _profiles.where((p) => p.employeeId == emp.id).firstOrNull;
+          final contract = _contracts
+              .where((c) => c.employeeId == emp.id && c.status == 'active')
+              .firstOrNull;
+          final empGarnishments = _garnishments
+              .where((g) =>
+                  g.employeeId == emp.id && g.appliesToMonth(_selectedMonth))
+              .toList();
+          final result =
+              _results.where((r) => r.employeeId == emp.id).firstOrNull;
+          final hasGarnishments = empGarnishments.isNotEmpty;
+          final cs = Theme.of(context).colorScheme;
+
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    backgroundColor: cs.primaryContainer,
                     child: Text(
-                      !_canAccessHrModule
-                          ? 'Acces restrictionat: rolul curent nu poate folosi modulul HR.'
-                          : _canUseEmployeeSelfService
-                              ? 'Self-service HR este disponibil pentru utilizatorul curent.'
-                              : _canApproveOperationalHr
-                                  ? 'Acces limitat in HR: poti lucra operational pe pontaj si concedii, fara salarii si documente financiare.'
-                                  : _employeeHrSelfServiceEnabled
-                                      ? 'Self-service HR este pregatit, dar nu este disponibil pentru rolul curent.'
-                                      : 'Acces self-service HR pentru angajați este pregătit tehnic, dar rămâne dezactivat.',
+                      emp.name.isNotEmpty ? emp.name[0].toUpperCase() : '?',
+                      style: TextStyle(
+                          color: cs.onPrimaryContainer,
+                          fontWeight: FontWeight.bold),
                     ),
                   ),
-                ),
-              const SizedBox(height: 12),
-              _buildAttendance(),
-              const SizedBox(height: 12),
-              _buildLeaveRequests(),
-              const SizedBox(height: 12),
-              _buildLeaveAttendanceConflicts(),
-              if (_canViewFinancialHr) ...[
-                const SizedBox(height: 12),
-                _buildPayrollOverview(),
-                const SizedBox(height: 12),
-                _buildPayrollHistory(),
-                const SizedBox(height: 12),
-                _buildPayrollResults(),
-                const SizedBox(height: 12),
-                _buildPayslips(),
-                const SizedBox(height: 12),
-                _buildVariablePayroll(),
-                const SizedBox(height: 12),
-                _buildAccountingReports(),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                emp.name,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            if (hasGarnishments)
+                              Tooltip(
+                                message:
+                                    '${empGarnishments.length} popriri active',
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.shade100,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border:
+                                        Border.all(color: Colors.orange),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.gavel,
+                                          size: 12, color: Colors.orange),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        '${empGarnishments.length} popriri',
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.orange),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        if (contract != null)
+                          Text(
+                            contract.jobTitle.isNotEmpty
+                                ? contract.jobTitle
+                                : 'Contract activ',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: cs.onSurface.withValues(alpha: 0.6)),
+                          )
+                        else
+                          Text(
+                            'Fără contract activ',
+                            style: TextStyle(fontSize: 12, color: cs.error),
+                          ),
+                        if (contract != null || result != null) ...[
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: [
+                              if (contract != null)
+                                _infoChip(
+                                  context,
+                                  'Brut: ${contract.baseSalaryGross.toStringAsFixed(0)} RON',
+                                  Icons.account_balance_wallet_outlined,
+                                ),
+                              if (result != null)
+                                _infoChip(
+                                  context,
+                                  'Net: ${result.netFinal.toStringAsFixed(0)} RON',
+                                  Icons.payments_outlined,
+                                  highlight: true,
+                                ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  if (_canViewFinancialHr)
+                    FilledButton.tonal(
+                      onPressed: () => _openEmployeeDetail(
+                          emp, profile, contract, empGarnishments),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 32),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 0),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Calculator'),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _infoChip(BuildContext context, String label, IconData icon,
+      {bool highlight = false}) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color:
+            highlight ? cs.primaryContainer : cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon,
+              size: 11,
+              color: highlight ? cs.onPrimaryContainer : cs.onSurface),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+                fontSize: 11,
+                color: highlight ? cs.onPrimaryContainer : cs.onSurface),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openEmployeeDetail(
+    MasterEmployee emp,
+    HrEmployeeProfile? profile,
+    HrContract? contract,
+    List<HrGarnishment> empGarnishments,
+  ) async {
+    if (profile == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Angajatul nu are profil HR configurat.')),
+      );
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (ctx) => HrEmployeeDetailPage(
+          profile: profile,
+          contract: contract,
+          garnishments: empGarnishments,
+          variablePayrollService: _variablePayrollService,
+        ),
+      ),
+    );
+    if (mounted) _reload();
+  }
+
+  // ── Tab Pontaj ────────────────────────────────────────────────────────────
+  Widget _buildPontajTab() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return RefreshIndicator(
+      onRefresh: _reload,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildAttendance(),
+          const SizedBox(height: 12),
+          _buildLeaveRequests(),
+          const SizedBox(height: 12),
+          _buildLeaveAttendanceConflicts(),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: _loading ? null : _openMonthlyTimesheet,
+            icon: const Icon(Icons.table_chart_outlined),
+            label: const Text('Pontaj lunar tabelar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Tab Fluturași ─────────────────────────────────────────────────────────
+  Widget _buildFluturasTab() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_canViewFinancialHr) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            !_canAccessHrModule
+                ? 'Acces restricționat: rolul curent nu poate folosi modulul HR.'
+                : 'Acces HR limitat — secțiunea salarizare nu este disponibilă pentru rolul curent.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _reload,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildHeader(),
+          if (_run != null) ...[
+            const SizedBox(height: 12),
+            _buildPayrollLockInfo(),
+          ],
+          if (_message != null) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(_message!),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          _buildPayrollOverview(),
+          const SizedBox(height: 12),
+          _buildPayrollHistory(),
+          const SizedBox(height: 12),
+          _buildPayrollResults(),
+          const SizedBox(height: 12),
+          _buildPayslips(),
+          const SizedBox(height: 12),
+          _buildVariablePayroll(),
+          const SizedBox(height: 12),
+          _buildAccountingReports(),
+        ],
+      ),
+    );
+  }
+
+  // ── Tab Setări HR ─────────────────────────────────────────────────────────
+  Widget _buildSetariTab() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_canManageSensitiveHr) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            !_canAccessHrModule
+                ? 'Acces restricționat: rolul curent nu poate folosi modulul HR.'
+                : _canUseEmployeeSelfService
+                    ? 'Self-service HR este disponibil pentru utilizatorul curent.'
+                    : _canApproveOperationalHr
+                        ? 'Acces limitat în HR: poți lucra operațional pe pontaj și concedii, fără salarii și documente financiare.'
+                        : _employeeHrSelfServiceEnabled
+                            ? 'Self-service HR este pregătit, dar nu este disponibil pentru rolul curent.'
+                            : 'Acces self-service HR pentru angajați este pregătit tehnic, dar rămâne dezactivat.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _reload,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildHrAdmin(),
+          const SizedBox(height: 12),
+          _buildPayrollValidationDashboard(),
+        ],
+      ),
+    );
+  }
+
+  // ── build ─────────────────────────────────────────────────────────────────
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 4,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('HR & Salarizare'),
+          actions: [
+            IconButton(
+              icon: _loading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh_outlined),
+              tooltip: 'Reîncarcă',
+              onPressed: _loading ? null : _reload,
+            ),
+            const HelpModuleButton(moduleId: 'hr'),
+          ],
+          bottom: const TabBar(
+            tabs: [
+              Tab(icon: Icon(Icons.people_outline), text: 'Angajați'),
+              Tab(
+                  icon: Icon(Icons.access_time_outlined),
+                  text: 'Pontaj'),
+              Tab(
+                  icon: Icon(Icons.receipt_long_outlined),
+                  text: 'Fluturași'),
+              Tab(
+                  icon: Icon(Icons.settings_outlined),
+                  text: 'Setări HR'),
             ],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            _buildEmployeesTab(),
+            _buildPontajTab(),
+            _buildFluturasTab(),
+            _buildSetariTab(),
           ],
         ),
       ),

@@ -122,8 +122,11 @@ class AppTaskRepository {
         await OfflineSyncRuntime.instance.queueAppTaskUpsert(t.toMap());
       }
 
-      final merged = [...resolvedCloud, ...localOnly];
-      // Salvează merge-ul în cache local
+      // Deduplicare pe ID — evită duplicatele după forceSyncLocalToCloud
+      final seen = <String>{};
+      final merged = [...resolvedCloud, ...localOnly]
+          .where((t) => seen.add(t.id))
+          .toList();
       await _saveLocal(merged);
       return merged;
     } catch (e) {
@@ -224,11 +227,10 @@ class AppTaskRepository {
       final t = result[i];
       try {
         if (t.id.startsWith('local-') || t.id.isEmpty) {
+          // Folosim set() cu același ID — evită ID-uri duplicate după sync
           final map = t.toMap()..remove('id');
-          final ref = await _col.add(map);
-          result[i] = AppTask.fromMap({...t.toMap(), 'id': ref.id});
-          await OfflineSyncRuntime.instance
-              .queueAppTaskUpsert(result[i].toMap());
+          await _col.doc(t.id).set(map, SetOptions(merge: true));
+          await OfflineSyncRuntime.instance.queueAppTaskUpsert(t.toMap());
         } else {
           final map = t.toMap()..remove('id');
           await _col.doc(t.id).set(map, SetOptions(merge: true));

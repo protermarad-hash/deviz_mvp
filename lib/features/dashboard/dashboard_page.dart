@@ -9,6 +9,7 @@ import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/help_button.dart';
 import '../tasks/task_dashboard_widget.dart';
 import '../clients/client_models.dart';
+import '../clients/warranty_alert_service.dart';
 import '../clients/clienti_cloud_repository.dart';
 import '../clients/firebase_clienti_repository.dart';
 import '../employees/angajati_cloud_repository.dart';
@@ -23,8 +24,11 @@ import '../programari/appointment_models.dart';
 import '../programari/firebase_programari_repository.dart';
 import '../programari/programari_cloud_repository.dart';
 import '../reclamatii/complaint_models.dart';
+import '../hr_payroll_run/hr_payroll_payment_models.dart';
+import '../hr_payroll_run/hr_payroll_payment_repository.dart';
 import '../teams/echipe_cloud_repository.dart';
 import '../teams/firebase_echipe_repository.dart';
+import '../../core/services/daily_report_service.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({
@@ -69,6 +73,9 @@ class _DashboardPageState extends State<DashboardPage> {
   List<OfferRecord> _offers = const <OfferRecord>[];
   List<ComplaintRecord> _complaints = const <ComplaintRecord>[];
   int _registryCount = 0;
+  WarrantyAlertResult _warrantyAlerts = WarrantyAlertResult.empty;
+  Map<String, List<HrPayrollPayment>> _payrollPaymentsMonth =
+      const <String, List<HrPayrollPayment>>{};
   FieldAuthUser? _currentUser;
 
   ProgramariCloudRepository? _programariCloudRepository;
@@ -160,6 +167,18 @@ class _DashboardPageState extends State<DashboardPage> {
       _loading = false;
       _updateAppointmentCache();
     });
+    // Garanții — best-effort
+    WarrantyAlertService.instance.loadAlerts().then((result) {
+      if (mounted) setState(() => _warrantyAlerts = result);
+    }).catchError((_) {});
+    // Plăți salariale luna curentă — best-effort
+    if (_isAdminLike) {
+      HrPayrollPaymentRepository.instance
+          .listPaymentsForMonth(DateTime.now())
+          .then((result) {
+        if (mounted) setState(() => _payrollPaymentsMonth = result);
+      }).catchError((_) {});
+    }
   }
 
   Future<FieldAuthUser?> _loadCurrentUser() async {
@@ -685,6 +704,9 @@ class _DashboardPageState extends State<DashboardPage> {
 
     return Column(
       children: [
+        if (_warrantyAlerts.hasAlerts) _buildWarrantyAlertsCard(),
+        _buildDailyReportCard(),
+        _buildPayrollPaymentsSummaryCard(),
         if (overdueJobs.isNotEmpty)
           _section(
             title: '⚠ Lucrări neactualizate (14+ zile)',
@@ -736,6 +758,166 @@ class _DashboardPageState extends State<DashboardPage> {
                 }).toList(growable: false),
         ),
       ],
+    );
+  }
+
+  // ── Card sumar plăți salariale ───────────────────────────────────────────
+  Widget _buildPayrollPaymentsSummaryCard() {
+    final now = DateTime.now();
+    final monthLabel =
+        '${now.month.toString().padLeft(2, '0')}.${now.year}';
+    double totalAvansuri = 0.0;
+    double totalSalarii = 0.0;
+    int nrAngajati = 0;
+    for (final entry in _payrollPaymentsMonth.entries) {
+      final payments = entry.value;
+      if (payments.isEmpty) continue;
+      nrAngajati++;
+      for (final p in payments) {
+        if (p.paymentType == 'avans') {
+          totalAvansuri += p.amount;
+        } else {
+          totalSalarii += p.amount;
+        }
+      }
+    }
+    final totalGeneral = totalAvansuri + totalSalarii;
+    if (totalGeneral == 0.0) return const SizedBox.shrink();
+
+    return _section(
+      title: 'Plăți salariale — $monthLabel',
+      children: [
+        ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.payments_outlined,
+              color: Colors.teal, size: 20),
+          title: Text('$nrAngajati angajat${nrAngajati == 1 ? '' : 'i'} cu plăți înregistrate'),
+          subtitle: Text(
+            'Avansuri: ${totalAvansuri.toStringAsFixed(0)} RON'
+            '  |  Salarii: ${totalSalarii.toStringAsFixed(0)} RON'
+            '\nTotal achitat: ${totalGeneral.toStringAsFixed(0)} RON',
+          ),
+          isThreeLine: true,
+        ),
+        if (widget.onNavigateTo != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () => widget.onNavigateTo!('hr'),
+              icon: const Icon(Icons.arrow_forward, size: 16),
+              label: const Text('Vezi HR'),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // ── Card raport zilnic ───────────────────────────────────────────────────
+  Widget _buildDailyReportCard() {
+    final now = DateTime.now();
+    return _section(
+      title: 'Raport zilnic — ${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')}.${now.year}',
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.tonalIcon(
+                icon: const Icon(Icons.chat_outlined, size: 16),
+                label: const Text('Trimite pe WhatsApp'),
+                onPressed: () async {
+                  final report =
+                      await DailyReportService.instance.generateReport();
+                  final text =
+                      DailyReportService.instance.formatAsText(report);
+                  if (!mounted) return;
+                  await showDialog<void>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Raport zilnic'),
+                      content: SingleChildScrollView(
+                        child: SelectableText(text,
+                            style: const TextStyle(fontSize: 12)),
+                      ),
+                      actions: [
+                        TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('Inchide')),
+                        FilledButton.icon(
+                          icon: const Icon(Icons.chat_outlined, size: 16),
+                          label: const Text('Trimite WA admin'),
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            DailyReportService.instance
+                                .sendToAdminWhatsApp()
+                                .catchError((_) => false);
+                          },
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.preview_outlined, size: 16),
+                label: const Text('Previzualizeaza'),
+                onPressed: () async {
+                  final report =
+                      await DailyReportService.instance.generateReport();
+                  if (!mounted) return;
+                  showDialog<void>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Raport zilnic'),
+                      content: SingleChildScrollView(
+                        child: SelectableText(
+                            DailyReportService.instance.formatAsText(report),
+                            style: const TextStyle(fontSize: 12)),
+                      ),
+                      actions: [
+                        FilledButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('Inchide')),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ── Card alertă garanții ─────────────────────────────────────────────────
+  Widget _buildWarrantyAlertsCard() {
+    final alerts = _warrantyAlerts.all.take(6).toList();
+    final String headerTitle;
+    if (_warrantyAlerts.expired.isNotEmpty) {
+      headerTitle = '⚠ Garanții expirate (${_warrantyAlerts.expired.length})';
+    } else if (_warrantyAlerts.urgent.isNotEmpty) {
+      headerTitle = '⚠ Garanții care expiră în curând (${_warrantyAlerts.urgent.length})';
+    } else {
+      headerTitle = 'Garanții — atenție (${_warrantyAlerts.warning.length})';
+    }
+
+    return _section(
+      title: headerTitle,
+      children: alerts.map((alert) {
+        return ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(alert.severityIcon, color: alert.severityColor, size: 20),
+          title: Text('${alert.clientDisplay} — ${alert.productDisplay}',
+              style: const TextStyle(fontSize: 13)),
+          subtitle: Text(alert.expiryLabel,
+              style: TextStyle(fontSize: 11, color: alert.severityColor)),
+        );
+      }).toList(),
     );
   }
 
