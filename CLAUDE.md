@@ -273,15 +273,9 @@ return _sortTransactions([...cloud, ...localOnly]); // include și offline
 
 ### ❌ BUG 7 — Merge cloud+local suprascrie modificările offline (race condition)
 ```
-Simptom: Modificările făcute offline dispar când app se redeschide cu internet.
-Cauza: listXxx() rulează ÎNAINTE ca syncPending() să trimită modificările în Firestore.
-  1. Utilizator modifică programare offline → local cache = v2, queue = {v2}
-  2. App se redeschide cu internet
-  3. listAppointments() → cloud returnează v1 (queue nu s-a sincronizat încă)
-  4. Merge folosește v1 din cloud → local cache suprascris cu v1 → modificare pierdută!
-  5. syncPending() eventual trimite v2 în Firestore, dar local a fost deja suprascris
-
-Fix: preferă versiunea locală pentru items cu queue pending:
+Simptom: Modificările offline dispar la redeschidere cu internet.
+Cauza: listXxx() rulează ÎNAINTE ca syncPending() să trimită v2 în Firestore → cloud returnează v1 → suprascrie local.
+Fix: la merge, preferă versiunea locală pentru items cu queue pending:
 ```
 ```dart
 // La merge, verifică pending queue:
@@ -326,16 +320,9 @@ Cauza: Firebase direct (pasul 3) este `await`-uit — dacă Firebase e lent, UI-
         Queue-ul din pasul 2 garantează oricum sync-ul — Firebase direct = opțional.
 ```
 ```dart
-// ❌ GREȘIT — blochează UI:
-try {
-  await _col.doc(id).set(map, SetOptions(merge: true));
-} catch (_) {}
-
 // ✅ CORECT — fire-and-forget, UI răspunde imediat:
 _col.doc(id).set(map, SetOptions(merge: true)).catchError((_) {});
-
-// ✅ Același pattern pentru delete:
-_col.doc(id).delete().catchError((_) {});
+_col.doc(id).delete().catchError((_) {}); // pentru delete
 ```
 
 **Implementat în:** `deviz_tehnic_repository.dart` ✅, `deviz_filtre_cta_repository.dart` ✅ mai 2026
@@ -349,27 +336,12 @@ Cauza: Codul face `await _repo.delete(id)` și ABIA DUPĂ actualizează lista.
        Fără indicator vizibil, utilizatorul crede că app-ul s-a blocat.
 ```
 ```dart
-// ❌ GREȘIT — UI blocat vizual în așteptarea operației async:
-await _repo.delete(item.id);
-setState(() => _items.removeWhere((i) => i.id == item.id));
-ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Șters.')));
-
 // ✅ CORECT — optimistic UI: actualizează lista ÎNAINTE, operația async în fundal:
-// Asigură-te că ești mounted după orice await (ex: dialog)
 if (!mounted) return;
-
-// 1. Actualizare imediată — UI răspunde instantaneu
 setState(() => _items.removeWhere((i) => i.id == item.id));
 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Șters.')));
-
-// 2. Operația efectivă în fundal — nu blochează UI
 _repo.delete(item.id).catchError((e) {
-  if (mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Eroare la ștergere: \$e')),
-    );
-    _load(); // restaurează starea corectă la eroare
-  }
+  if (mounted) { ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Eroare: $e'))); _load(); }
 });
 ```
 
@@ -419,12 +391,8 @@ NICIODATĂ `await _repo.delete()` fără feedback vizual imediat (cel puțin loa
 - Pentru performanță/UI responsiveness trebuie test runtime manual pe Windows și Android sau trebuie menționat clar de ce nu s-a putut testa.
 - Dacă o „optimizare” agravează UX-ul, se face rollback punctual. Nu păstra optimizarea doar pentru că pare bună teoretic.
 
-### Caz explicit de evitat — Programări mai 2026:
-- BUG real: preload-ul secundar salva clienții în masă prin `saveClient(...)`.
-- Fiecare `saveClient(...)` declanșa `clientsChangeCount`.
-- Listenerul din Programări făcea reload repetat.
-- Rezultat: reload storm, multe `setState`, multe `build`, blocaj UI pe Windows și Android.
-- Regula permanentă: UI-ul NU are voie să facă import/sync agresiv per item prin metode care notifică global la fiecare element.
+### Caz explicit de evitat:
+NU salva iteme în masă din UI prin metode care declanșează notifier global la fiecare element (ex: `saveClient()` în buclă → `clientsChangeCount++` × N → reload storm în Programări). Folosește metode `batch`/`silent` la nivel de repository.
 
 ---
 
@@ -463,48 +431,10 @@ Checklist obligatoriu înainte de a declara „rezolvat” un patch de performan
 - [ ] testat pe Android sau menționat clar de ce nu s-a putut
 
 ### Template `forceSyncLocalToCloud()` — OBLIGATORIU în orice repository nou:
-```dart
-// ── Sync forțat: publică toate documentele locale în Firestore ───────────
-Future<int> forceSyncLocalToCloud() async {
-  if (!_isCloudAvailable) return 0;
-  final locals = await listLocal();
-  if (locals.isEmpty) return 0;
-  int synced = 0;
-  for (final r in locals) {
-    try {
-      if (r.id.startsWith('local-') || r.id.isEmpty) {
-        final map = r.toMap()..remove('id');
-        final ref = await _col.add(map);
-        final updated = MyRecord.fromMap({...r.toMap(), 'id': ref.id});
-        await _updateLocalCache(updated);
-        await OfflineSyncRuntime.instance.queueXxxUpsert(updated.toMap());
-      } else {
-        final map = r.toMap()..remove('id');
-        await _col.doc(r.id).set(map, SetOptions(merge: true));
-        await OfflineSyncRuntime.instance.queueXxxUpsert(r.toMap());
-      }
-      synced++;
-    } catch (e) {
-      debugPrint('[Modul] ❌ forceSyncLocalToCloud error for ${r.id}: $e');
-    }
-  }
-  return synced;
-}
-```
+Implementare de referință: `deviz_tehnic_repository.dart`. Logică: iterează `listLocal()` → dacă `id.startsWith('local-')` folosește `_col.add()` + actualizează cache cu noul ID → altfel `_col.doc(id).set(merge:true)` → queue fiecare item. Returnează nr. sincronizate. Try/catch per item cu debugPrint.
 
 ### Template statics diagnostice — OBLIGATORIU în orice repository nou:
-```dart
-static String? lastFirestoreError;
-static int lastFirestoreCount = -1;
-static int lastLocalCount = 0;
-// În list():
-lastLocalCount = localItems.length;
-lastFirestoreCount = -1; lastFirestoreError = null;
-// ... on success:
-lastFirestoreCount = cloudItems.length; lastFirestoreError = null;
-// ... on catch:
-lastFirestoreCount = -1; lastFirestoreError = e.toString();
-```
+Adaugă `static String? lastFirestoreError`, `static int lastFirestoreCount = -1`, `static int lastLocalCount = 0`. Actualizează în `list()`: local count la început, cloud count la succes, error string la catch.
 
 ### Template buton sync în pagina de listare — OBLIGATORIU:
 ```dart
@@ -652,69 +582,25 @@ setState(() { _a = 1; _b = 2; _c = 3; });
 ```
 
 ### ❌ ANTI-PATTERN 4 — Pagină cu listă care nu se reîncarcă după startup
+Firebase SDK are DNS lookup ~2s la startup (`isOnline=false`). Fără listener, lista rămâne goală pentru totdeauna dacă pagina se deschide în aceste 2s.
 ```dart
-// GREȘIT — dacă Firebase nu e ready la deschidere, lista rămâne goală pentru totdeauna:
-void initState() {
-  super.initState();
-  _load(); // apelat direct, fără microtask
-  // fără listener onlineNotifier → nu se reîncarcă niciodată automat
-}
-
-// CORECT — pagini cu liste care citesc din Firebase:
+// CORECT — obligatoriu în orice pagină cu liste din Firebase:
 void initState() {
   super.initState();
   FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
-  Future.microtask(_load); // nu blochează initState
+  Future.microtask(_load);
 }
-
 void dispose() {
   FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
   super.dispose();
 }
-
 void _onOnlineChanged() {
-  // Reîncarcă NUMAI dacă lista e goală (nu suprascrie date deja încărcate)
-  if (FirebaseBootstrap.onlineNotifier.value && _items.isEmpty && !_loading) {
-    _load();
-  }
+  if (FirebaseBootstrap.onlineNotifier.value && _items.isEmpty && !_loading) _load();
 }
 ```
 
-**De ce contează:** Firebase SDK are un DNS lookup de ~2s la startup (`isOnline=false`).
-Dacă pagina se deschide în aceste 2 secunde, citește DOAR cache local (gol dacă e prima instalare
-sau alt dispozitiv). Fără listener, datele rămân invizibile până la repornire sau refresh manual.
-Același bug apare după upgrade de versiune: cache local gol + Firebase nu a terminat init = lista goală.
-
 ### ❌ ANTI-PATTERN 5 — Lista goală fără RefreshIndicator și fără debug info
-```dart
-// GREȘIT — utilizatorul nu poate reîncărca manual și nu vede ce se întâmplă:
-child: items.isEmpty
-    ? Center(child: Text('Nicio înregistrare.'))
-    : ListView.builder(...)
-
-// CORECT — lista goală cu RefreshIndicator + info debug + buton Reîncarcă:
-child: items.isEmpty
-    ? RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(children: [
-          Center(child: Column(children: [
-            Text('Nicio înregistrare.'),
-            // Info debug vizibil (ajutor la depanare cross-device):
-            Card(child: Text('Firebase: init=${FirebaseBootstrap.isInitialized} '
-                             'online=${FirebaseBootstrap.isOnline}')),
-            FilledButton.icon(
-              onPressed: _load,
-              icon: Icon(Icons.refresh),
-              label: Text('Reîncarcă din cloud'),
-            ),
-          ])),
-        ]),
-      )
-    : RefreshIndicator(onRefresh: _load, child: ListView.builder(...))
-```
-
-**De ce contează:** Fără RefreshIndicator pe lista goală, utilizatorul nu poate forța
-reîncărcarea. Fără info debug, nu știe dacă problema e de rețea sau de date.
+Lista goală TREBUIE să aibă `RefreshIndicator(onRefresh: _load)` + card debug cu `FirebaseBootstrap.isInitialized`/`isOnline` + `FilledButton` "Reîncarcă din cloud". Fără acestea utilizatorul nu poate forța reîncărcarea și nu știe dacă e problemă de rețea.
 
 ### ✅ CHECKLIST PERFORMANȚĂ:
 - [ ] No `await saveOne()` în buclă → folosește batch
@@ -772,13 +658,6 @@ date în Storage/local fără documente Firestore → noua versiune nu le vede.
 - [ ] Script de migrare pentru datele create cu versiunea veche (dacă e cazul)?
 - [ ] Pagina cu listă are `onlineNotifier` listener + `Future.microtask(_load)`?
 - [ ] Lista goală are `RefreshIndicator` + buton Reîncarcă + info Firebase status?
-
-### Cum verifici că sync-ul funcționează cross-device:
-1. Dispozitiv A: creează/modifică o înregistrare
-2. Verifică în Firebase Console că documentul există în colecția corectă
-3. Verifică că câmpurile sunt exact cum le caută query-ul (ex: `source_entity_id`)
-4. Dispozitiv B: deschide modulul, apasă Reîncarcă
-5. Dacă B nu vede datele → bug în query sau în scriere
 
 ### Citire CLAUDE.md — REGULĂ NOUĂ:
 **La ORICE task nou (nu doar sesiune nouă), citește CLAUDE.md complet.**
@@ -1052,6 +931,13 @@ De încasat NET = max(Σ credit_neincasat − Σ plata_primita, 0)
 - `partner_transactions` — toate tranzacțiile (includ câmpul `financial_direction` din iun 2026)
 - `partner_financial_summary` — sold net per partener
 
+### Semantica tipuri tranzacție în rebuildSummary():
+- `incasareProgramare`/`vanzareProdus`/`consumMateriale` (intrare) → +De încasat
+- `incasareManuala` (intrare) → **−De încasat** (plată primită efectiv, indiferent de status)
+- `plataProgramare`/`achizitieProodus` (iesire) → +De plătit
+- `plataManuala` (iesire) → **−De plătit** (plată efectuată efectiv, indiferent de status)
+- Buton `calculate_outlined` în toolbar → forțează `rebuildSummary()` + reload
+
 ---
 
 ## 📋 BAZA NORME DEVIZ
@@ -1114,45 +1000,31 @@ ClientAutocompleteField(
 
 ## ✅ CE ESTE IMPLEMENTAT
 
-- Autentificare utilizatori + nume real din Firestore în AppBar
-- Modul clienți (CRUD + Firebase)
-- Modul angajați
-- Modul field sales / devize pe teren + PDF
-- Generare PDF devize (cu PdfFontHelper)
-- Sync offline cu queue pentru toate modulele critice
-- Email server settings + notificări programări (cu filtru câmpuri relevante)
-- Catalog materiale + stoc
-- HR: prezență, salarizare, fluturași, pontaje, concedii, deplasări
-- AGFR: echipamente, intervenții, rapoarte, cântărire
-- **AGFR F-Gas automatizări: GWP auto-fill la selecție refrigerant, CO₂ echivalent live, banner avertizare A2L/A3/interzis, auto-fill tehnician din Firebase user** (iun 2026)
-- Vehicule + registratură
-- Partner financial: tranzacții, sold net, dashboard, vânzare catalog, achiziție
-- **Poze teren: upload Storage + sync Firestore + offline queue** (mai 2026)
-- Baza proprie norme deviz
-- **Devize tehnice: sync cross-device, serii DVZ/OFR/STL, culori status, tip implicit** (mai 2026)
-- **Devize Filtre CTA: 15 CTA-uri template, editare prețuri, PDF A4 landscape, sync offline** (mai 2026)
-- **Modul Taskuri: To-Do List cu filtre, priorități, categorii, widget Dashboard, sync offline** (mai 2026)
-- **Financiar angajați: PayEntry per programare, plăți manuale, sold per angajat, filtrare perioadă, sync offline** (mai 2026)
-- **Tarif prestabilit per angajat: EmployeeSettings, tab Tarife în employee_financial_page, pre-fill în programări** (mai 2026)
-- **Colorare calendar: weekend + sărbători legale românești, Paște Ortodox, tooltips** (mai 2026)
-- **Dashboard Financiar consolidat: 8 secțiuni, grafic 6 luni, offline-first, admin+birou** (mai 2026)
-- **Semnătură electronică PV/PIF: SignaturePadWidget, SignatureService, JobSiteDocumentPdfService, Firebase Storage** (mai 2026)
-- **Fișă completă client: ClientProfilePage (4 tab-uri), WhatsApp + telefon în lista clienți** (mai 2026)
-- **Alertă garanții expirate: WarrantyAlertService, card în DashboardPage** (mai 2026)
-- **Template PDF unificat PRO TERM: ProTermPdfTemplate cu culori brand #C62828, header, tabel, semnătură** (mai 2026)
-- **PV/PIF PDF refăcut cu ProTermPdfTemplate: conținut specific per tip (montaj/ventilație/VRF)** (mai 2026)
-- **Contract PDF: ContractPdfService, 13 articole, dialog pre-completat, PdfActionsHelper** (mai 2026)
-- **Documente page: job site documents (PV/PIF) din Firestore job_site_documents** (mai 2026)
-- **HR Redesign: hub 4 tab-uri (Angajați/Pontaj/Fluturași/Setări HR), HrEmployeeDetailPage cu calculator interactiv + popriri, PDF flutuaraș cu detaliu popriri** (mai 2026)
-- **HR Formule fiscale OUG 89/2025: deducere personală 600/7000 RON, CASS pe salariu (TM net_direct), rotunjire RON, stat plată PDF 14 coloane** (mai 2026)
-- **TM = sumă netă directă (net_direct)**: fiscal_treatment = 'net_direct'; CASS calculată NUMAI pe salariu_brut (TM exclus din baza CASS); TM adăugat direct la netFinal fără taxe suplimentare; mealTicketCass = 0, mealTicketIncomeTax = 0 (mai 2026)
-- **Avans reținut = advanceRecoveryTotal** din payslip (deductionEntries, deja scăzut din netFinal); coloana 'Av.reținut' ≠ HrPayrollPayment; 'Virat' = HrPayrollPayment type='salariu'; 'Rest' = netFinal - viratCont (mai 2026)
-- **Plată salariu HR: HrPayrollPayment model, dialog înregistrare plată (avans/salariu), rest de plată live, tab Plăți în HrEmployeeDetailPage, secțiune fluturași PDF, card sumar Dashboard** (mai 2026)
-- **PDF compact pe o singură pagină: ProTermPdfLayout, pontaj A4 landscape 8mm fără chunking, stat plată 12 col A4 portrait, fluturași 2 col A4, repeat header oferte** (mai 2026)
-- **Stat de plată complet cu plăți: HrPayrollEmployeeFinancialSummary (lib/features/hr_payroll_run/hr_payroll_run_models.dart), DataTable 17 col în _buildPayslips(), dialog plată popriri (paymentType='poprire'), centralizator PDF A4 landscape 17 col cu avans/salariu plătit/rest/popriri** (mai 2026)
-- **CRM Pipeline vânzări: 3 tab-uri (Kanban/Listă/Statistici), dialog complet cu 11 câmpuri+autocomplete clienți, integrare auto cu Oferte la schimbare status, alertă startup leaduri cu acțiuni depășite, badge secțiune comercial** (mai 2026)
-- **Sistem Help inteligent: HelpModuleButton cu 4 tab-uri (Info/Ghid/FAQ/AI Help), HelpRepository + Firestore `help_content`, HelpAdminPage în ADMINISTRARE, 14 module cu conținut implicit, înlocuire HelpButton în 11 pagini** (iun 2026)
-- **Certificate garanție PDF — template complet 3 pagini** (mai 2026): `warranty_certificate_pdf_service.dart` — Pagina 1: header PRO TERM + tabel 6 rânduri (echipament, vânzător, cumpărător, instalator, persoane, text legal 7pt); Pagina 2: 3 taloane de intervenție (ordine 3→2→1) cu câmpuri goale (linii punctate) completabile manual; Pagina 3: condiții complete garanție OG 21/1992 (12 paragrafe, para 9 bold, footer). Date PRO TERM (CUI, adresă, email, tel) sunt fallback-uri dacă câmpurile din certificat sunt goale. Condiții garanție hardcodate în serviciu — NU se modifică fără aprobare. `warranty_certificates_page.dart` are buton regenerare bulk (🖨 icon) în toolbar — regenerează PDF-urile pentru toate certificatele din listă cu noul template, fără dialog per certificat.
+- Autentificare, clienți, angajați, field sales + PDF, sync offline toate modulele critice
+- Email notificări programări, catalog materiale + stoc, vehicule, registratură
+- HR: prezență, salarizare, fluturași, pontaje, concedii, deplasări, popriri CPC
+- AGFR: echipamente, intervenții, rapoarte, F-Gas automatizări (GWP auto-fill, CO₂ live, bannere A2L/A3)
+- Partner financial: tranzacții, sold net, dashboard, vânzare/achiziție catalog
+- **Poze teren**: upload Storage + sync Firestore + offline queue (mai 2026)
+- **Devize tehnice**: serii DVZ/OFR/STL, culori status, tip implicit cross-device (mai 2026)
+- **Devize Filtre CTA**: 15 template-uri, editare prețuri, PDF A4 landscape, sync offline (mai 2026)
+- **Modul Taskuri**: To-Do List, priorități, categorii, widget Dashboard, sync offline (mai 2026)
+- **Financiar angajați**: PayEntry per programare, plăți, sold per angajat, sync offline (mai 2026)
+- **Tarif prestabilit per angajat**: EmployeeSettings, tab Tarife, pre-fill programări (mai 2026)
+- **Colorare calendar**: weekend + sărbători legale românești + Paște Ortodox (mai 2026)
+- **Dashboard Financiar consolidat**: 8 secțiuni, grafic 6 luni CustomPainter, offline-first (mai 2026)
+- **Semnătură electronică PV/PIF**: SignaturePadWidget, SignatureService, Firebase Storage (mai 2026)
+- **Fișă completă client**: ClientProfilePage 4 tab-uri, WhatsApp + telefon în listă (mai 2026)
+- **Alertă garanții expirate**: WarrantyAlertService, card Dashboard (mai 2026)
+- **Template PDF unificat PRO TERM**: ProTermPdfTemplate #C62828, PV/PIF, Contract 13 articole (mai 2026)
+- **HR Redesign**: hub 4 tab-uri, HrEmployeeDetailPage calculator + popriri, PDF fluturași cu plăți (mai 2026)
+- **HR Formule fiscale OUG 89/2025**: CAS 25%, CASS 10% pe salariu_brut (TM net_direct exclus), deducere 600-7000 RON, stat plată 12 col (mai 2026)
+- **Plată salariu HR**: HrPayrollPayment (avans/salariu/poprire), DataTable 17 col, PDF centralizator (mai 2026)
+- **CRM Pipeline vânzări**: Kanban/Listă/Statistici, integrare auto Oferte, alertă startup (mai 2026)
+- **Sistem Help inteligent**: HelpModuleButton 4 tab-uri (Info/Ghid/FAQ/AI), 14 module, HelpAdminPage (iun 2026)
+- **Certificate garanție PDF**: 3 pagini — tabel echipament + 3 taloane intervenție + condiții OG 21/1992. Condiții hardcodate, NU se modifică. Regenerare bulk în toolbar (mai 2026)
+- **Versiune în Drawer**: `package_info_plus`, format `v{version}+{buildNumber}` (iun 2026)
+- **Auto-update in-app**: `app_version_checker.dart` + `update_available_banner.dart`, descărcare APK + instalare via `OpenFilex`. Doar Android. Ghid: `docs/ghid_actualizare_apk.md` (iun 2026)
 
 ---
 
@@ -1285,17 +1157,8 @@ Secțiune "Plăți înregistrate" apare automat în PDF dacă `payments.isNotEmp
 - `lightGray = PdfColor(0.9608, 0.9608, 0.9608)` ← #F5F5F5
 - **IMPORTANT:** `PdfColor.fromHex()` NU este const — folosește `PdfColor(r, g, b)` pentru constante statice
 
-### ProTermPdfTemplate — metode:
-- `buildHeader(branding, documentTitle, documentNumber, documentDate, [documentSubtitle])`
-- `buildPartiesSection(branding, clientName, [clientAddress, clientCui, clientPhone])`
-- `buildJobInfoSection(jobCode, jobTitle, location, [teamName, technicians, startDate, endDate])`
-- `buildTable(headers, rows, [columnWidths, showTotal, totalLabel, totalValue])`
-- `buildSection(title, children)` — secțiune cu titlu roșu + divider
-- `buildSignatureSection(executantName, [clientName, date, electronicSignatureBytes, technicianName])`
-- `buildPageFooter(documentTitle, pageNumber, totalPages, date)`
-- `generateDocument({branding, documentTitle, documentNumber, documentDate, contentWidgets, ...})` — async
-- `buildInfoRow(label, value)` — linie label:value cu lățime fixă 160
-- `buildFinancialTotals({subtotal, vatPercent, vatAmount, totalWithVat, currency})`
+### ProTermPdfTemplate — metode disponibile:
+`buildHeader`, `buildPartiesSection`, `buildJobInfoSection`, `buildTable`, `buildSection`, `buildSignatureSection`, `buildPageFooter`, `generateDocument` (async), `buildInfoRow`, `buildFinancialTotals`
 
 ### ContractData — câmpuri:
 - `contractNumber`, `contractDate`, `clientName`, `clientAddress`, `clientCui`, `clientPhone`
@@ -1442,14 +1305,6 @@ AppTask {
 - Per utilizator: query cu `created_by == userId`; admin vede toate taskurile
 - `listTasks(userId, isAdmin)` → merge cloud + local-only, preferă versiunea locală la conflict
 - `forceSyncLocalToCloud()` — buton ☁️↔ în toolbar
-
-### Checklist repository implementat:
-- ✅ `saveTask()` → local → queue upsert → Firebase fire-and-forget
-- ✅ `deleteTask()` → local → queue delete → Firebase fire-and-forget
-- ✅ `completeTask()` / `uncompleteTask()` → wrapper peste saveTask
-- ✅ merge cloud+local cu preferință pentru modificările pending
-- ✅ Statics diagnostice: `lastFirestoreError`, `lastFirestoreCount`, `lastLocalCount`
-- ✅ `forceSyncLocalToCloud()` cu in-place replacement + deduplicare
 
 ---
 
@@ -1719,35 +1574,6 @@ AppTask {
 - `add_client_quick_dialog.dart`: list dinamică `_phoneControllers` (max 5 telefoane, adaugă/șterge)
 - `clients_page.dart`: salvează `phoneNumbers`, caută în phoneNumbers
 
-## 💰 FIX LOGICĂ FINANCIAR PARTENERI (mai 2026)
-
-### Root cause:
-`rebuildSummary()` în `partner_financial_repository.dart` trata ALL `intrare` ca adăugând la `totalDeIncasat` și ALL `iesire` ca adăugând la `totalDePlata`. Dar:
-- `incasareManuala` (direction=intrare) = plată PRIMITĂ de la partener → trebuie să SCADĂ din `totalDeIncasat`
-- `plataManuala` (direction=iesire) = plată EFECTUATĂ către partener → trebuie să SCADĂ din `totalDePlata`
-
-### Fix în rebuildSummary():
-- `incasareManuala` → `totalDeIncasat -= t.amount` (indiferent de status — este o plată reală înregistrată)
-- `plataManuala` → `totalDePlata -= t.amount` (indiferent de status)
-- Celelalte tipuri: logica existentă cu skip pentru `status=platit`
-
-### Tip tranzacție și semantica corectă:
-- `incasareProgramare` (intrare): programare facturată partenerului → +De încasat
-- `vanzareProdus` (intrare): produs vândut partenerului → +De încasat
-- `consumMateriale` (intrare): materiale/kituri folosite pt lucrarea partenerului → +De încasat
-- `incasareManuala` (intrare): partenerul a plătit efectiv → -De încasat
-- `plataProgramare` (iesire): comision partener executant → +De plătit
-- `achizitieProodus` (iesire): produs cumpărat de la partener → +De plătit
-- `plataManuala` (iesire): noi am plătit partenerul efectiv → -De plătit
-
-### Exemple BOGDINSTAL (după fix):
-- De încasat inițial din programări: 11.975,14 RON
-- + Încasare manuală 2.300 RON → De încasat = 9.675,14 RON ✅
-- + Plată manuală 2.300 RON → De plătit scade cu 2.300 RON ✅
-
-### Adăugări UI:
-- Buton `calculate_outlined` în toolbar → forțează `rebuildSummary()` + reload + SnackBar
-
 ## 📊 MODUL CRM — PIPELINE VÂNZĂRI (mai 2026)
 
 ### Fișiere principale:
@@ -1848,53 +1674,7 @@ CrmRecord {
 ### Unde e implementat:
 - `programari_page.dart` → `_maybeStartRealtimeListener()` + `_appointmentsRealtimeSubscription`
 
-### Pattern obligatoriu pentru module cu date partajate cross-device:
-```dart
-// În State class:
-StreamSubscription<QuerySnapshot>? _realtimeSub;
-Timer? _realtimeDebounce;
-bool _isOnlineCached = false;
-
-// initState:
-_isOnlineCached = FirebaseBootstrap.isOnline;
-Future.microtask(_maybeStartRealtimeListener);
-FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
-
-// dispose():
-_realtimeDebounce?.cancel();
-_realtimeSub?.cancel();
-
-// Metoda listener:
-void _maybeStartRealtimeListener() {
-  if (!FirebaseBootstrap.isInitialized || !FirebaseBootstrap.isOnline) return;
-  if (_realtimeSub != null) return; // deja pornit
-  _realtimeSub = FirebaseFirestore.instance
-      .collection('colectie')
-      .where('data_field', isGreaterThanOrEqualTo: windowStart)
-      .snapshots()
-      .listen((snapshot) {
-        if (!mounted || snapshot.docChanges.isEmpty) return;
-        _realtimeDebounce?.cancel();
-        _realtimeDebounce = Timer(const Duration(seconds: 3), () {
-          if (mounted && !_loading) _load();
-        });
-      }, onError: (e) { _realtimeSub?.cancel(); _realtimeSub = null; });
-}
-
-// _onOnlineChanged() actualizat:
-void _onOnlineChanged() {
-  final nowOnline = FirebaseBootstrap.isOnline;
-  final wasOnline = _isOnlineCached;
-  _isOnlineCached = nowOnline;
-  if (mounted) setState(() {});
-  if (nowOnline) {
-    _maybeStartRealtimeListener();
-    if (!wasOnline || _items.isEmpty) _load();
-  } else {
-    _realtimeSub?.cancel(); _realtimeSub = null;
-  }
-}
-```
+**Pattern complet în `programari_page.dart` → `_maybeStartRealtimeListener()`**. Variabile necesare: `_realtimeSub`, `_realtimeDebounce`, `_isOnlineCached`. Pornit în `initState` via `Future.microtask`, oprit în `dispose()`.
 
 ### Reguli critice:
 - **NU înlocui `_load()` cu parse direct din snapshot** — logica de merge (BUG 7, tombstones, offline queue) e în repository, nu în listener
@@ -2012,18 +1792,6 @@ void _onOnlineChanged() {
 - Blochează dacă `offer.isConverted` — afișează SnackBar roșu cu jobCode
 - Dialog confirmare cu "Șterge definitiv" roșu
 - Optimistic UI: scoate din listă imediat, rollback la eroare
-
-### Ce NU s-a implementat (scope redus):
-- DevizTehnic sync → OfertaRecord (prea invaziv)
-- Editare inline `cantitateReala`/`pretUnitarReal` în tab Situație
-- PDF Deviz planificat + Situație reală
-- Noi valori OfferStatus (lucrare_creata, finalizata) — redundant cu `isConverted`
-
----
-
-## 🚀 CE VREAU SĂ IMPLEMENTEZ ÎN VIITOR
-
--
 
 ---
 
