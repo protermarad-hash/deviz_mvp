@@ -151,6 +151,61 @@ class EmployeeFinancialRepository {
     );
   }
 
+  /// Sincronizează din Firestore PayEntry-urile pentru o programare specifică,
+  /// dacă localul e gol. Previne INSERT duplicate la salvare cross-device.
+  Future<List<EmployeePayEntry>> listPayEntriesForAppointmentWithSync(
+    String appointmentId,
+  ) async {
+    final local = await _readLocalPayEntries();
+    final localFiltered =
+        local.where((e) => e.appointmentId == appointmentId).toList();
+    if (localFiltered.isNotEmpty || !_isCloudAvailable) {
+      return _sortPayEntries(localFiltered);
+    }
+    // Local gol + online → sync din Firestore pentru acest appointment
+    try {
+      final snapshot = await _payEntriesCol
+          .where('appointment_id', isEqualTo: appointmentId)
+          .get();
+      if (snapshot.docs.isEmpty) return [];
+      final cloud = snapshot.docs
+          .map((doc) => EmployeePayEntry.fromMap(doc.data()))
+          .toList();
+      // Merge în local cache (nu suprascrie alte entries)
+      final otherLocal =
+          local.where((e) => e.appointmentId != appointmentId).toList();
+      await _writeLocalPayEntries([...otherLocal, ...cloud]);
+      return _sortPayEntries(cloud);
+    } catch (_) {
+      return _sortPayEntries(localFiltered);
+    }
+  }
+
+  /// Curăță PayEntry-urile orfane: angajați care nu mai sunt alocați
+  /// pe programarea asociată. Rulat o dată la deschiderea Financiar Angajați
+  /// pentru a migra datele create înainte de fix-ul de dezalocare.
+  ///
+  /// [appointmentEmployeeMap] = appointmentId → Set de employeeId alocați
+  /// construit din cache-ul local de programări (ultra_appointments_v1).
+  ///
+  /// Returnează numărul de PayEntry-uri șterse.
+  Future<int> cleanupOrphanedPayEntries(
+    Map<String, Set<String>> appointmentEmployeeMap,
+  ) async {
+    if (appointmentEmployeeMap.isEmpty) return 0;
+    final allEntries = await _readLocalPayEntries();
+    int deleted = 0;
+    for (final entry in allEntries) {
+      final allocatedIds = appointmentEmployeeMap[entry.appointmentId];
+      if (allocatedIds == null) continue; // programare necunoscută — nu atingem
+      if (!allocatedIds.contains(entry.employeeId)) {
+        await deletePayEntry(entry.id);
+        deleted++;
+      }
+    }
+    return deleted;
+  }
+
   Future<List<EmployeePayEntry>> listAllPayEntries({
     DateTime? from,
     DateTime? to,

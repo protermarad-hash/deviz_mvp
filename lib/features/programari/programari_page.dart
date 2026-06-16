@@ -4599,6 +4599,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
           employeePayControllers[e.employeeId] = TextEditingController(
             text: e.amountDue.toStringAsFixed(2),
           );
+          // NU adăugăm automat în selectedAssignedEmployeeIds — un angajat
+          // cu PayEntry vechi dar dezalocat trebuie să apară ca "dezalocat"
+          // în UI și PayEntry-ul lui să se șteargă la salvare.
         }
       }
     } else {
@@ -6299,89 +6302,196 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                     helper:
                                         'Sumele datorate fiecărui angajat alocat pe această programare.',
                                     children: [
-                                      if (selectedAssignedEmployeeIds.isEmpty)
-                                        Padding(
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 8,
-                                          ),
-                                          child: Text(
-                                            'Alocați mai întâi persoane în tab-ul Execuție.',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .bodySmall,
-                                          ),
-                                        )
-                                      else ...[
-                                        for (final empId
-                                            in selectedAssignedEmployeeIds)
-                                          Builder(builder: (ctx) {
-                                            final emp =
-                                                _masterEmployees.firstWhere(
-                                              (e) => e.id == empId,
-                                              orElse: () => MasterEmployee(
-                                                id: empId,
-                                                name: empId,
-                                                role: '',
-                                                active: true,
-                                              ),
-                                            );
-                                            final ctrl =
-                                                employeePayControllers
-                                                    .putIfAbsent(
-                                              empId,
-                                              () => TextEditingController(),
-                                            );
-                                            return Padding(
-                                              padding: const EdgeInsets.only(
-                                                bottom: 8,
-                                              ),
-                                              child: Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: Text(
-                                                      emp.name.trim().isEmpty
-                                                          ? empId
-                                                          : emp.name,
-                                                    ),
+                                      Builder(builder: (_) {
+                                        final deallocatedIds =
+                                            employeePayControllers.keys
+                                                .where(
+                                                  (id) =>
+                                                      !selectedAssignedEmployeeIds
+                                                          .contains(id),
+                                                )
+                                                .toList();
+                                        final hasAny =
+                                            selectedAssignedEmployeeIds
+                                                    .isNotEmpty ||
+                                                deallocatedIds.isNotEmpty;
+                                        if (!hasAny) {
+                                          return Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 8,
+                                            ),
+                                            child: Text(
+                                              'Alocați mai întâi persoane în tab-ul Execuție.',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodySmall,
+                                            ),
+                                          );
+                                        }
+                                        return Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            // ── Angajați alocați — editabili ──
+                                            for (final empId
+                                                in selectedAssignedEmployeeIds)
+                                              Builder(builder: (ctx) {
+                                                final emp =
+                                                    _masterEmployees.firstWhere(
+                                                  (e) => e.id == empId,
+                                                  orElse: () => MasterEmployee(
+                                                    id: empId,
+                                                    name: empId,
+                                                    role: '',
+                                                    active: true,
                                                   ),
-                                                  const SizedBox(width: 8),
-                                                  SizedBox(
-                                                    width: 130,
-                                                    child: TextField(
-                                                      controller: ctrl,
-                                                      keyboardType: const TextInputType
-                                                          .numberWithOptions(
-                                                        decimal: true,
+                                                );
+                                                final ctrl =
+                                                    employeePayControllers
+                                                        .putIfAbsent(
+                                                  empId,
+                                                  () => TextEditingController(),
+                                                );
+                                                return Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          bottom: 8),
+                                                  child: Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: Text(
+                                                          emp.name
+                                                                  .trim()
+                                                                  .isEmpty
+                                                              ? empId
+                                                              : emp.name,
+                                                        ),
                                                       ),
-                                                      textAlign: TextAlign.end,
-                                                      decoration:
-                                                          const InputDecoration(
-                                                        labelText: 'Sumă',
-                                                        suffixText: 'RON',
-                                                        isDense: true,
+                                                      const SizedBox(width: 8),
+                                                      SizedBox(
+                                                        width: 130,
+                                                        child: TextField(
+                                                          controller: ctrl,
+                                                          keyboardType:
+                                                              const TextInputType
+                                                                  .numberWithOptions(
+                                                                  decimal: true),
+                                                          textAlign:
+                                                              TextAlign.end,
+                                                          decoration:
+                                                              const InputDecoration(
+                                                            labelText: 'Sumă',
+                                                            suffixText: 'RON',
+                                                            isDense: true,
+                                                          ),
+                                                          onChanged: (_) =>
+                                                              setDialogState(
+                                                                  () {}),
+                                                        ),
                                                       ),
-                                                      onChanged: (_) =>
-                                                          setDialogState(() {}),
-                                                    ),
+                                                    ],
+                                                  ),
+                                                );
+                                              }),
+                                            // ── Angajați dezalocați — read-only,
+                                            //    excluși din Total, șterși la save ──
+                                            for (final empId in deallocatedIds)
+                                              Builder(builder: (ctx) {
+                                                final emp =
+                                                    _masterEmployees.firstWhere(
+                                                  (e) => e.id == empId,
+                                                  orElse: () => MasterEmployee(
+                                                    id: empId,
+                                                    name: empId,
+                                                    role: '',
+                                                    active: true,
+                                                  ),
+                                                );
+                                                final oldAmount = _asDouble(
+                                                  employeePayControllers[empId]
+                                                          ?.text ??
+                                                      '',
+                                                );
+                                                return Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          bottom: 4),
+                                                  child: Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            Text(
+                                                              emp.name
+                                                                      .trim()
+                                                                      .isEmpty
+                                                                  ? empId
+                                                                  : emp.name,
+                                                              style: TextStyle(
+                                                                color: Theme.of(
+                                                                        context)
+                                                                    .colorScheme
+                                                                    .outline,
+                                                              ),
+                                                            ),
+                                                            Text(
+                                                              'dezalocat — nu se plătește',
+                                                              style: Theme.of(
+                                                                context,
+                                                              )
+                                                                  .textTheme
+                                                                  .labelSmall
+                                                                  ?.copyWith(
+                                                                color: Theme.of(
+                                                                        context)
+                                                                    .colorScheme
+                                                                    .outline,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      SizedBox(
+                                                        width: 130,
+                                                        child: Text(
+                                                          '${oldAmount.toStringAsFixed(2)} RON',
+                                                          textAlign:
+                                                              TextAlign.end,
+                                                          style: TextStyle(
+                                                            color: Theme.of(
+                                                                    context)
+                                                                .colorScheme
+                                                                .outline,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                );
+                                              }),
+                                            if (selectedAssignedEmployeeIds
+                                                .isNotEmpty) ...[
+                                              const Divider(height: 16),
+                                              Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.end,
+                                                children: [
+                                                  Text(
+                                                    'Total angajați: ${selectedAssignedEmployeeIds.fold<double>(0, (acc, empId) { final ctrl = employeePayControllers[empId]; return acc + _asDouble(ctrl?.text ?? ''); }).toStringAsFixed(2)} RON',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .titleSmall,
                                                   ),
                                                 ],
                                               ),
-                                            );
-                                          }),
-                                        const Divider(height: 16),
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.end,
-                                          children: [
-                                            Text(
-                                              'Total angajați: ${selectedAssignedEmployeeIds.fold<double>(0, (acc, empId) { final ctrl = employeePayControllers[empId]; return acc + _asDouble(ctrl?.text ?? ''); }).toStringAsFixed(2)} RON',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .titleSmall,
-                                            ),
+                                            ],
                                           ],
-                                        ),
-                                      ],
+                                        );
+                                      }),
                                     ],
                                   ),
                                   const SizedBox(height: 16),
@@ -6663,14 +6773,24 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         () => widget.onAppointmentSaved!(item),
                       );
                     }
-                    if (employeePayData.isNotEmpty) {
+                    // Rulăm background task dacă avem sume de salvat SAU dacă
+                    // editam o programare existentă (pentru a șterge PayEntry-urile
+                    // angajaților dezalocați din Firestore).
+                    if (employeePayData.isNotEmpty || isEditingExisting) {
                       final savedItem = item;
                       final savedAuthUserId = authUserId;
+                      final savedIsEditing = isEditingExisting;
+                      final savedPayData =
+                          Map<String, double>.from(employeePayData);
                       _startBackgroundTask('employee pay save', () async {
                         final payRepo = EmployeeFinancialRepository.instance;
+                        // Sync din Firestore înainte de INSERT/UPDATE previne
+                        // duplicate dacă local cache e gol (cross-device sau
+                        // după reinstall). Query doar când localul e gol.
                         final existing = await payRepo
-                            .listPayEntriesForAppointment(savedItem.id);
-                        for (final entry in employeePayData.entries) {
+                            .listPayEntriesForAppointmentWithSync(savedItem.id);
+                        // 1. Salvare/actualizare pentru angajații alocați
+                        for (final entry in savedPayData.entries) {
                           final empId = entry.key;
                           final amount = entry.value;
                           final emp = _masterEmployees.firstWhere(
@@ -6705,6 +6825,18 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                 createdBy: savedAuthUserId,
                               ),
                             );
+                          }
+                        }
+                        // 2. Ștergere PayEntry pentru angajați dezalocați sau
+                        // cu sumă 0. Previne reapariția sumelor vechi după
+                        // dezalocare + curăță istoricul la prima salvare.
+                        if (savedIsEditing && existing.isNotEmpty) {
+                          final allocatedIds = savedPayData.keys.toSet();
+                          for (final oldEntry in existing) {
+                            if (!allocatedIds
+                                .contains(oldEntry.employeeId)) {
+                              await payRepo.deletePayEntry(oldEntry.id);
+                            }
                           }
                         }
                       });

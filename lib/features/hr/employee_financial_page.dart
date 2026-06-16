@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../master/master_local_store.dart';
@@ -45,7 +48,10 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
     FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
-    Future.microtask(_load);
+    Future.microtask(() async {
+      await _cleanupOrphanedPayEntries();
+      await _load();
+    });
   }
 
   @override
@@ -64,6 +70,42 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
         _payEntries.isEmpty &&
         !_loading) {
       _load();
+    }
+  }
+
+  /// Migrare one-shot: șterge PayEntry-urile angajaților dezalocați.
+  /// Construiește harta appointmentId-employeeIds din cache-ul local
+  /// de programări și deleagă ștergerea la repository.
+  Future<void> _cleanupOrphanedPayEntries() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('ultra_appointments_v1');
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+      final map = <String, Set<String>>{};
+      for (final item in decoded) {
+        if (item is! Map) continue;
+        final apptMap = Map<String, dynamic>.from(item);
+        final id = (apptMap['id'] as String?)?.trim() ?? '';
+        if (id.isEmpty) continue;
+        final raw2 = apptMap['assigned_employee_ids'] ??
+            apptMap['assignedEmployeeIds'];
+        final empIds = (raw2 is List)
+            ? raw2
+                .whereType<String>()
+                .where((s) => s.trim().isNotEmpty)
+                .toSet()
+            : <String>{};
+        map[id] = empIds;
+      }
+      if (map.isEmpty) return;
+      final deleted = await _repo.cleanupOrphanedPayEntries(map);
+      if (deleted > 0) {
+        debugPrint('[FinanciarAngajati] cleanup: $deleted intrări orfane șterse');
+      }
+    } catch (e) {
+      debugPrint('[FinanciarAngajati] cleanup error: $e');
     }
   }
 
