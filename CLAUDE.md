@@ -93,6 +93,34 @@ de model de date, migrări, modificări la sincronizare offline):
 
 ---
 
+## 🔢 VERSIONARE OBLIGATORIE
+
+La FIECARE modificare de cod (fix, feature, refactor) care
+ajunge să fie testată/folosită de utilizator:
+
+1. Incrementează build number-ul în pubspec.yaml:
+   version: X.Y.Z+BUILD → BUILD se incrementează cu 1
+   la fiecare sesiune de modificări livrate
+2. Pentru fix-uri minore/bug-uri: incrementează doar BUILD
+   (ex: 1.0.0+5 → 1.0.0+6)
+3. Pentru funcționalități noi: incrementează Z
+   (ex: 1.0.0+6 → 1.1.0+7)
+4. Versiunea trebuie vizibilă în aplicație (Drawer, sub
+   numele companiei) ca utilizatorul să poată identifica
+   exact ce versiune are instalată
+5. La finalul fiecărui raport de modificări, agentul
+   menționează explicit noul număr de versiune
+
+### Implementare versiune în Drawer (iun 2026):
+- Pachet: `package_info_plus` (`PackageInfo.fromPlatform()`)
+- Fișier: `lib/app/role_ready_shell.dart` → `_RoleReadyAppShellState`
+- Câmp `_appVersionLabel`, încărcat în `initState()` via `Future.microtask(_loadAppVersion)`
+- Afișat ca text mic, gri (`onSurfaceVariant` alpha 0.6, 9-10pt), sub
+  tagline-ul companiei ("Excelenta operationala in HVAC" / mesajul generic)
+- Format: `v{version}+{buildNumber}` (ex: `v1.0.0+2`)
+
+---
+
 ## ⚠️ REGULI ABSOLUTE — APLICAȚIE ÎN PRODUCȚIE
 
 Această aplicație este folosită REAL. Orice greșeală poate afecta date reale.

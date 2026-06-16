@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'deviz_theme_controller.dart';
@@ -225,6 +226,7 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
   Future<void>? _sectionBadgesLoadFuture;
   DateTime? _lastSectionBadgesLoadedAt;
   DateTime? _lastBackPress;
+  String _appVersionLabel = '';
 
   List<ShellDestination> _allDestinations() {
     final allRoles = UserRole.values.toSet();
@@ -622,10 +624,25 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
     _isOnline = FirebaseBootstrap.isOnline;
     FirebaseBootstrap.onlineNotifier.addListener(_onOnlineStatusChanged);
     _initShell();
+    Future.microtask(_loadAppVersion);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _configureNotificationRuntime();
       _scheduleSectionBadgesLoad();
     });
+  }
+
+  // Versiune aplicație — afișată discret în Drawer sub numele companiei,
+  // ca utilizatorul să poată identifica exact ce build are instalat.
+  Future<void> _loadAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() {
+        _appVersionLabel = 'v${info.version}+${info.buildNumber}';
+      });
+    } catch (_) {
+      // best-effort — fără versiune afișată dacă citirea eșuează
+    }
   }
 
   // Un singur SharedPreferences.getInstance() + totul în paralel
@@ -1361,6 +1378,17 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
                             fontSize: compact ? 11 : 12,
                           ),
                         ),
+                        if (_appVersionLabel.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            _appVersionLabel,
+                            style: TextStyle(
+                              color: scheme.onSurfaceVariant
+                                  .withValues(alpha: 0.6),
+                              fontSize: compact ? 9 : 10,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
