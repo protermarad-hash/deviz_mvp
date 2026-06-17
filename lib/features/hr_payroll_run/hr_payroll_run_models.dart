@@ -295,11 +295,14 @@ class HrPayrollEmployeeFinancialSummary {
             p.payrollMonth.month == luna.month)
         .toList();
 
-    // Avansul RETINUT e deja scazut din netFinal prin advanceRecoveryTotal
-    // (vine din deductionEntries din snapshot, nu din HrPayrollPayment)
+    // Avansul RETINUT teoretic (reținere din salariu, afișat în coloana Av.reținut)
+    // Vine din deductionEntries din snapshot — NU e o plată reală HrPayrollPayment
     final avansRetinut = payslip.advanceRecoveryTotal;
 
-    // Virat cont = sumele efectiv platite/virate angajatului (HrPayrollPayment)
+    // Plăți reale efectuate angajatului în luna curentă (avans pe 15 + salariu pe 30)
+    final viratAvans = platiLuna
+        .where((p) => p.paymentType == 'avans')
+        .fold(0.0, (s, p) => s + p.amount);
     final viratCont = platiLuna
         .where((p) => p.paymentType == 'salariu')
         .fold(0.0, (s, p) => s + p.amount);
@@ -307,9 +310,12 @@ class HrPayrollEmployeeFinancialSummary {
         .where((p) => p.paymentType == 'poprire')
         .fold(0.0, (s, p) => s + p.amount);
 
-    // Rest = ce mai trebuie virat (netFinal e deja dupa scaderea avansului)
+    // Suma tuturor plăților reale (avans + salariu) — baza pentru Rest și Achitat
+    final totalPlatitReal = viratAvans + viratCont;
+
+    // Rest = netFinal - toate plățile reale (consistent cu precompletarea dialogului)
     final restDePlata =
-        (payslip.netFinal - viratCont).clamp(0.0, double.infinity);
+        (payslip.netFinal - totalPlatitReal).clamp(0.0, double.infinity);
 
     return HrPayrollEmployeeFinancialSummary(
       employeeId: payslip.employeeId,
@@ -325,15 +331,15 @@ class HrPayrollEmployeeFinancialSummary {
       ticheteValoare: bd('salary_tax_percentages', 'meal_ticket_total'),
       netFaraTichete: bd('salary_tax_percentages', 'net_without_tm'),
       netFinal: payslip.netFinal,
-      avansPlatit: avansRetinut,
-      restDePlata: restDePlata,
-      salariuPlatit: viratCont,
-      totalPlatit: avansRetinut + viratCont,
+      avansPlatit: avansRetinut,      // coloana Av.reținut: neschimbat (reținere teoretică)
+      restDePlata: restDePlata,        // FIXAT: netFinal - totalPlatitReal
+      salariuPlatit: viratCont,        // coloana Sal.virat: neschimbat
+      totalPlatit: totalPlatitReal,    // FIXAT: suma reală plăților (avans+salariu)
       popririRetinute: payslip.garnishmentReservedTotal,
       popririPlatite: popririPlate,
       popririRestDePlata: (payslip.garnishmentReservedTotal - popririPlate)
           .clamp(0.0, double.infinity),
-      esteAchitatIntegral: viratCont >= payslip.netFinal - 0.005,
+      esteAchitatIntegral: totalPlatitReal >= payslip.netFinal - 0.005,
     );
   }
 }

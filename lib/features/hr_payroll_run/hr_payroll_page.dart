@@ -6123,7 +6123,7 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
         (p) => p.employeeId == s.employeeId,
         orElse: () => _payslips.first,
       );
-      final rowTotalPaid = s.avansPlatit + s.salariuPlatit;
+      final rowTotalPaid = s.totalPlatit; // suma reală plăților (avans+salariu)
 
       return DataRow(
         color: rowColor,

@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/cloud_app_data_repository.dart';
@@ -7,6 +9,8 @@ import '../hr_core/hr_employee_models.dart';
 import '../hr_monthly_timesheet/monthly_timesheet_models.dart';
 import '../hr_payroll_calc/hr_payroll_calculation_catalog_service.dart';
 import '../hr_payroll_input/hr_payroll_input_catalog_service.dart';
+import '../hr_variable_payroll/hr_variable_payroll_catalog_service.dart';
+import '../hr_variable_payroll/hr_variable_payroll_models.dart';
 import 'firebase_hr_payroll_accounting_report_repository.dart';
 import 'hr_payroll_accounting_report_cloud_repository.dart';
 import 'hr_payroll_accounting_report_models.dart';
@@ -26,6 +30,7 @@ class HrPayrollRunCatalogService {
     HrPayrollInputCatalogService? payrollInputCatalogService,
     HrPayrollCalculationCatalogService? payrollCalculationCatalogService,
     AppDataRepository? repository,
+    HrVariablePayrollCatalogService? variablePayrollService,
   })  : _cloudRepository = cloudRepository ??
             (FirebaseBootstrap.isInitialized
                 ? FirebaseHrPayrollRunRepository()
@@ -46,7 +51,9 @@ class HrPayrollRunCatalogService {
                 ? CloudAppDataRepository()
                 : LocalAppDataRepository()),
         _payrollCalculationCatalogService = payrollCalculationCatalogService ??
-            HrPayrollCalculationCatalogService();
+            HrPayrollCalculationCatalogService(),
+        _variablePayrollService =
+            variablePayrollService ?? HrVariablePayrollCatalogService();
 
   final HrPayrollRunCloudRepository? _cloudRepository;
   final LocalHrPayrollRunStore _localStore;
@@ -57,6 +64,7 @@ class HrPayrollRunCatalogService {
   final HrPayrollInputCatalogService _payrollInputCatalogService;
   final AppDataRepository _repository;
   final HrPayrollCalculationCatalogService _payrollCalculationCatalogService;
+  final HrVariablePayrollCatalogService _variablePayrollService;
 
   String dataSourceLabel = 'cloud';
   String? fallbackReason;
@@ -569,7 +577,54 @@ class HrPayrollRunCatalogService {
       updatedAt: now,
     );
     await upsertPayslip(payslip);
+    // fire-and-forget: marchează avansurile single_month ca 'recovered' după
+    // ce fluturașul e salvat — nu blochează generarea
+    _markSingleMonthAdvancesRecovered(
+      employeeId: employeeId,
+      payrollMonth: month,
+    ).ignore();
     return payslip;
+  }
+
+  /// Marchează automat status='recovered' pentru avansurile cu
+  /// recoveryMode=='single_month' incluse în fluturașul tocmai generat.
+  /// Se apelează fire-and-forget după salvarea fluturașului.
+  Future<void> _markSingleMonthAdvancesRecovered({
+    required String employeeId,
+    required DateTime payrollMonth,
+  }) async {
+    try {
+      final advances = await _variablePayrollService.activeAdvancesForMonth(
+        employeeId: employeeId,
+        month: payrollMonth,
+      );
+      final now = DateTime.now();
+      for (final adv in advances) {
+        if (adv.recoveryMode != 'single_month') continue;
+        await _variablePayrollService.upsertAdvance(
+          HrAdvance(
+            id: adv.id,
+            employeeId: adv.employeeId,
+            hrEmployeeProfileId: adv.hrEmployeeProfileId,
+            amount: adv.amount,
+            currency: adv.currency,
+            grantedAt: adv.grantedAt,
+            recoveryMode: adv.recoveryMode,
+            effectiveMonth: adv.effectiveMonth,
+            status: 'recovered',
+            notes: adv.notes,
+            createdAt: adv.createdAt,
+            updatedAt: now,
+          ),
+        );
+        debugPrint(
+          '[HrPayrollRunCatalogService] avans ${adv.id} marcat recovered '
+          '(${adv.amount} ${adv.currency}, luna ${adv.effectiveMonth})',
+        );
+      }
+    } catch (e) {
+      debugPrint('[HrPayrollRunCatalogService] _markSingleMonthAdvancesRecovered: $e');
+    }
   }
 
   Future<HrPayrollRun> generatePayrollRunForMonth({

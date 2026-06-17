@@ -235,6 +235,8 @@ class HrAdvance {
     final target = DateTime(month.year, month.month, 1);
     final effective = DateTime(effectiveMonth.year, effectiveMonth.month, 1);
     if (target.isBefore(effective)) return false;
+    // single_month: se recuperează DOAR în luna effectiveMonth, nu în lunile ulterioare
+    if (recoveryMode == 'single_month' && target.isAfter(effective)) return false;
     final value = status.trim().toLowerCase();
     return value != 'cancelled' && value != 'deleted' && value != 'recovered';
   }
