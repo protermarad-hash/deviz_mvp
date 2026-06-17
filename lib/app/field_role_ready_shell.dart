@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/auth/field_auth_service.dart';
 import '../core/auth/field_auth_models.dart';
+import '../core/update/update_available_banner.dart';
 import '../features/notifications/notification_runtime_service.dart';
 
 class FieldRoleReadyShell extends StatelessWidget {
@@ -52,7 +53,12 @@ class FieldRoleReadyShell extends StatelessWidget {
           ),
         ],
       ),
-      body: child,
+      body: Column(
+        children: [
+          const UpdateAvailableBanner(),
+          Expanded(child: child),
+        ],
+      ),
     );
   }
 
