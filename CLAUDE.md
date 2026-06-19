@@ -28,22 +28,23 @@
 
 ## ⚡ FLUX DE LUCRU — EXECUȚIE DIRECTĂ, FĂRĂ APROBARE INTERMEDIARĂ
 
-Agentul lucrează task-uri complete, de la investigație până la implementare și
-verificare, **FĂRĂ să se oprească pentru aprobare intermediară** ("îți arăt
-înainte de a rula", "confirm înainte de a continua" etc.). Raportează complet
-DOAR la final: ce a modificat, de ce, rezultatul `dart analyze`, orice decizie
-luată singur și motivul.
+Agentul lucrează la task-uri complete, de la investigație până la implementare,
+commit, push, build și publicare, **FĂRĂ să se oprească pentru aprobare
+intermediară**. Raportează complet DOAR la final: ce a modificat, de ce,
+rezultatul `dart analyze`, orice decizie luată singur și motivul.
 
-**EXCEPȚII — agentul TREBUIE să ceară aprobare explicită înainte de a continua,
-în aceste 2 cazuri:**
-1. `git push` — orice push către GitHub (indiferent de branch)
-2. Operații ireversibile fără backup posibil — ex: ștergere definitivă de date
-   din Firestore/Storage **fără** export prealabil al stării curente
+**SINGURA EXCEPȚIE — agentul TREBUIE să ceară aprobare explicită doar pentru:**
+- Operații ireversibile fără backup posibil — ex: ștergere definitivă de date
+  din Firestore/Storage **fără** export prealabil al stării curente
 
-**Pentru orice altceva — acționează direct**, respectând în continuare:
+**Tot restul se face direct și automat:** `git add/commit/push`, `flutter build`
+(apk/windows), `node scripts/publish_release.js`, migrări de date CU backup
+(`.bak` local sau export JSON înainte de scriere).
+
+**Agentul respectă în continuare regulile de siguranță existente:**
 - Backup `.bak` obligatoriu înainte de orice modificare de fișier
-- `dart analyze` 0 erori obligatoriu la final
-- Versionare incrementată la livrare confirmată de utilizator
+- `dart analyze` 0 erori obligatoriu înainte de orice commit
+- Versionare incrementată la fiecare livrare
 - Regulile de siguranță din secțiunea "REGULI DE SIGURANȚĂ — PRODUCȚIE"
 
 ---
