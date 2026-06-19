@@ -59,8 +59,14 @@ class DevizLucrarePdfService {
                     useReala: false),
                 pw.SizedBox(height: 6),
               ],
-            _buildTotalSection(job.liniiPlanificate, fonts,
-                useReala: false),
+            _buildTotalSection(
+              job.liniiPlanificate,
+              fonts,
+              useReala: false,
+              regiePercent: job.regiePercent,
+              profitPercent: job.profitPercent,
+              vatPercent: job.vatPercent,
+            ),
           ],
           pw.SizedBox(height: 16),
           _buildNoteSection(fonts),
@@ -346,27 +352,49 @@ class DevizLucrarePdfService {
     List<JobLine> linii,
     PdfFontBundle fonts, {
     required bool useReala,
+    double regiePercent = 0,
+    double profitPercent = 0,
+    double vatPercent = 21,
   }) {
-    final totalFaraTva = linii.fold(
+    final subtotalDirect = linii.fold(
         0.0,
         (s, l) => s +
             (useReala
                 ? l.cantitateReala * l.pretUnitarReal
                 : l.cantitateOferta * l.pretUnitarOferta));
-    const tvaPercent = 21.0;
-    final tva = totalFaraTva * tvaPercent / 100;
-    final totalCuTva = totalFaraTva + tva;
+    final regieValue = subtotalDirect * regiePercent / 100;
+    final profitValue = subtotalDirect * profitPercent / 100;
+    final totalFaraTva = _roundUpToTen(subtotalDirect + regieValue + profitValue);
+    final tva = totalFaraTva * vatPercent / 100;
+    final totalCuTva = _roundUpToTen(totalFaraTva + tva);
 
     return pw.Align(
       alignment: pw.Alignment.centerRight,
       child: pw.Container(
-        width: 200,
+        width: 220,
         child: pw.Column(
           children: [
             pw.Divider(color: _red, thickness: 1),
+            if (regiePercent > 0 || profitPercent > 0) ...[
+              _totalRow(
+                  'Subtotal direct:', _fmtNum.format(subtotalDirect), fonts),
+              if (regiePercent > 0)
+                _totalRow(
+                    'Regie ${regiePercent.toStringAsFixed(1)}%:',
+                    _fmtNum.format(regieValue),
+                    fonts),
+              if (profitPercent > 0)
+                _totalRow(
+                    'Profit ${profitPercent.toStringAsFixed(1)}%:',
+                    _fmtNum.format(profitValue),
+                    fonts),
+              pw.Divider(color: _lightGray, thickness: 0.5),
+            ],
             _totalRow('Total fără TVA:', _fmtNum.format(totalFaraTva), fonts),
             _totalRow(
-                'TVA ${tvaPercent.toStringAsFixed(0)}%:', _fmtNum.format(tva), fonts),
+                'TVA ${vatPercent.toStringAsFixed(0)}%:',
+                _fmtNum.format(tva),
+                fonts),
             pw.Divider(color: _red, thickness: 0.5),
             _totalRow(
               'TOTAL cu TVA:',
@@ -379,6 +407,11 @@ class DevizLucrarePdfService {
         ),
       ),
     );
+  }
+
+  static double _roundUpToTen(double v) {
+    if (v <= 0) return v;
+    return ((v / 10).ceil() * 10).toDouble();
   }
 
   pw.Widget _totalRow(String label, String value, PdfFontBundle fonts,
@@ -592,25 +625,91 @@ class DevizLucrarePdfService {
   }
 
   pw.Widget _buildSumarSituatie(JobRecord job, PdfFontBundle fonts) {
-    final totalOferta = job.totalOferta;
-    final totalReal = job.totalReal;
-    final dif = job.diferenta;
-    final procent = totalOferta > 0 ? (dif / totalOferta * 100) : 0.0;
+    // Calcul planificat (din ofertă, cu regie+profit înghețate)
+    final directPlan = job.subtotalDirectPlanificat;
+    final regiePlan = directPlan * job.regiePercent / 100;
+    final profitPlan = directPlan * job.profitPercent / 100;
+    final subtotalPlan = _roundUpToTen(directPlan + regiePlan + profitPlan);
+    final tvaPlan = subtotalPlan * job.vatPercent / 100;
+    final totalPlanCuTva = _roundUpToTen(subtotalPlan + tvaPlan);
+
+    // Calcul realizat (cantitati reale × prețuri din ofertă, același regie/profit %)
+    final directReal = job.subtotalDirectReal;
+    final regieReal = directReal * job.regiePercent / 100;
+    final profitReal = directReal * job.profitPercent / 100;
+    final subtotalReal = _roundUpToTen(directReal + regieReal + profitReal);
+    final tvaReal = subtotalReal * job.vatPercent / 100;
+    final totalRealCuTva = _roundUpToTen(subtotalReal + tvaReal);
+
+    // Diferența finală (cu TVA)
+    final dif = totalRealCuTva - totalPlanCuTva;
+    final procent = totalPlanCuTva > 0 ? (dif / totalPlanCuTva * 100) : 0.0;
+
+    final hasRegieProfit = job.regiePercent > 0 || job.profitPercent > 0;
 
     return pw.Align(
       alignment: pw.Alignment.centerRight,
       child: pw.Container(
-        width: 240,
+        width: 300,
         padding: const pw.EdgeInsets.all(10),
         decoration: pw.BoxDecoration(
           color: _lightGray,
           borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
         ),
         child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
-            _totalRow('Total ofertă:', '${_fmtNum.format(totalOferta)} RON', fonts),
-            _totalRow('Total realizat:', '${_fmtNum.format(totalReal)} RON', fonts),
+            // ── PLANIFICAT (Ofertă) ──
+            pw.Text(
+              'PLANIFICAT (Ofertă)',
+              style: pw.TextStyle(
+                  font: fonts.bold, fontSize: 8, color: _darkText),
+            ),
+            pw.SizedBox(height: 3),
+            if (hasRegieProfit) ...[
+              _totalRow('Subtotal direct:', _fmtNum.format(directPlan), fonts),
+              if (job.regiePercent > 0)
+                _totalRow('Regie ${job.regiePercent.toStringAsFixed(1)}%:',
+                    _fmtNum.format(regiePlan), fonts),
+              if (job.profitPercent > 0)
+                _totalRow('Profit ${job.profitPercent.toStringAsFixed(1)}%:',
+                    _fmtNum.format(profitPlan), fonts),
+            ],
+            _totalRow('Total fără TVA:', _fmtNum.format(subtotalPlan), fonts),
+            _totalRow(
+                'TVA ${job.vatPercent.toStringAsFixed(0)}%:',
+                _fmtNum.format(tvaPlan),
+                fonts),
+            _totalRow('TOTAL cu TVA:',
+                '${_fmtNum.format(totalPlanCuTva)} RON', fonts,
+                bold: true),
             pw.Divider(color: _darkText, thickness: 0.5),
+            // ── REALIZAT ──
+            pw.Text(
+              'REALIZAT (Situație)',
+              style: pw.TextStyle(
+                  font: fonts.bold, fontSize: 8, color: _darkText),
+            ),
+            pw.SizedBox(height: 3),
+            if (hasRegieProfit) ...[
+              _totalRow('Subtotal direct:', _fmtNum.format(directReal), fonts),
+              if (job.regiePercent > 0)
+                _totalRow('Regie ${job.regiePercent.toStringAsFixed(1)}%:',
+                    _fmtNum.format(regieReal), fonts),
+              if (job.profitPercent > 0)
+                _totalRow('Profit ${job.profitPercent.toStringAsFixed(1)}%:',
+                    _fmtNum.format(profitReal), fonts),
+            ],
+            _totalRow('Total fără TVA:', _fmtNum.format(subtotalReal), fonts),
+            _totalRow(
+                'TVA ${job.vatPercent.toStringAsFixed(0)}%:',
+                _fmtNum.format(tvaReal),
+                fonts),
+            _totalRow('TOTAL cu TVA:',
+                '${_fmtNum.format(totalRealCuTva)} RON', fonts,
+                bold: true),
+            pw.Divider(color: _darkText, thickness: 0.5),
+            // ── DIFERENȚĂ ──
             _totalRow(
               'Diferență (+/-):', '${dif >= 0 ? '+' : ''}${_fmtNum.format(dif)} RON',
               fonts,

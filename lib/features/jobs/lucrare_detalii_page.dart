@@ -12657,6 +12657,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         notes: notesCtrl.text.trim(),
         branding: branding,
         template: template,
+        regiePercent: widget.job.regiePercent,
+        profitPercent: widget.job.profitPercent,
       );
 
       final bytes = await SituatieLucrariPdfService.buildPdfBytes(params);

@@ -1324,6 +1324,10 @@ class _OfertePageState extends State<OfertePage>
       sourceOfferTitle: offer.title,
       createdByUserId: offer.createdByUserId,
       createdByUserEmail: offer.createdByUserEmail,
+      // Procente îngheţate din ofertă — garantează că situaţia coincide cu oferta
+      regiePercent: offer.regiePercent,
+      profitPercent: offer.profitPercent,
+      vatPercent: offer.vatPercent,
       // Populare linii planificate din liniile ofertei (excluzând linii de tip text)
       liniiPlanificate: offer.lines
           .where((l) => l.lineType != OfferLineType.text)

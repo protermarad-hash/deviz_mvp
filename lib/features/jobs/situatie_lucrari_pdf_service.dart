@@ -26,6 +26,8 @@ class SituatieLucrariParams {
     required this.notes,
     required this.branding,
     required this.template,
+    this.regiePercent = 0.0,
+    this.profitPercent = 0.0,
   });
 
   final String number;
@@ -49,6 +51,9 @@ class SituatieLucrariParams {
   final String notes;
   final DocumentBrandingData branding;
   final PdfVisualTemplate template;
+  // Procente regie și profit din oferta sursă (optional — backward compatible)
+  final double regiePercent;
+  final double profitPercent;
 }
 
 class SituatieLucrariPdfService {
@@ -74,9 +79,13 @@ class SituatieLucrariPdfService {
           ? _num(l['total'])
           : _num(l['hours']) * _num(l['rate']);
     }
-    final subtotal = matTotal + laborTotal;
+    final subtotalDirect = matTotal + laborTotal;
+    final regieValue = subtotalDirect * p.regiePercent / 100;
+    final profitValue = subtotalDirect * p.profitPercent / 100;
+    // Rotunjire la 10 — identic cu formula din ofertă
+    final subtotal = _roundUpToTen(subtotalDirect + regieValue + profitValue);
     final vatValue = subtotal * p.vatPercent / 100;
-    final totalWithVat = subtotal + vatValue;
+    final totalWithVat = _roundUpToTen(subtotal + vatValue);
 
     // ---- Widgeturi helper ----
     pw.Widget sectionHeader(String title) => pw.Container(
@@ -498,6 +507,23 @@ class SituatieLucrariPdfService {
                     summaryRow('Total materiale', '${money(matTotal)} lei'),
                   if (p.laborEntries.isNotEmpty)
                     summaryRow('Total manoperă', '${money(laborTotal)} lei'),
+                  if (p.regiePercent > 0 || p.profitPercent > 0) ...[
+                    pw.Divider(color: PdfColors.grey400, height: 12),
+                    summaryRow(
+                      'Subtotal direct',
+                      '${money(subtotalDirect)} lei',
+                    ),
+                  ],
+                  if (p.regiePercent > 0)
+                    summaryRow(
+                      'Regie ${p.regiePercent.toStringAsFixed(1)}%',
+                      '${money(regieValue)} lei',
+                    ),
+                  if (p.profitPercent > 0)
+                    summaryRow(
+                      'Profit ${p.profitPercent.toStringAsFixed(1)}%',
+                      '${money(profitValue)} lei',
+                    ),
                   pw.Divider(color: PdfColors.grey400, height: 12),
                   summaryRow('Total fără TVA', '${money(subtotal)} lei'),
                   summaryRow(
@@ -642,4 +668,10 @@ class SituatieLucrariPdfService {
   }
 
   static String _str(dynamic v) => (v ?? '').toString().trim();
+
+  // Rotunjire în sus la multiplu de 10 — identic cu OfferLaborCalculator
+  static double _roundUpToTen(double v) {
+    if (v <= 0) return v;
+    return ((v / 10).ceil() * 10).toDouble();
+  }
 }

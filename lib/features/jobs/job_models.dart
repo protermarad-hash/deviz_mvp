@@ -356,6 +356,10 @@ class JobRecord {
     // Linii planificate din ofertă (iun 2026) — backward compatible
     this.liniiPlanificate = const <JobLine>[],
     this.totalOferta = 0.0,
+    // Procente îngheţate din ofertă (iun 2026) — backward compatible
+    this.regiePercent = 0.0,
+    this.profitPercent = 0.0,
+    this.vatPercent = 21.0,
     // SmartBill facturare (iun 2026) — backward compatible
     this.smartbillFacturaNumar = '',
     this.smartbillFacturaSerie = '',
@@ -433,9 +437,44 @@ class JobRecord {
   // Linii planificate din ofertă (iun 2026)
   final List<JobLine> liniiPlanificate;
   final double totalOferta;
+  // Procente îngheţate din ofertă la conversie (iun 2026)
+  final double regiePercent;
+  final double profitPercent;
+  final double vatPercent;
   // SmartBill (iun 2026)
   final String smartbillFacturaNumar;
   final String smartbillFacturaSerie;
+
+  // Rotunjire la 10 — identic cu OfferLaborCalculator.roundPriceUpToTen
+  static double _roundUpToTen(double v) {
+    if (v <= 0) return v;
+    return ((v / 10).ceil() * 10).toDouble();
+  }
+
+  /// Suma directă planificată (cantitateOferta × pretUnitarOferta), fără regie/profit
+  double get subtotalDirectPlanificat =>
+      liniiPlanificate.fold(0.0, (s, l) => s + l.totalOferta);
+
+  /// Suma directă realizată (cantitateReala × pretUnitarReal), fără regie/profit
+  double get subtotalDirectReal =>
+      liniiPlanificate.fold(0.0, (s, l) => s + l.totalReal);
+
+  /// Subtotal comercial planificat = subtotalDirect + regie + profit, rotunjit la 10
+  double get subtotalComercialPlanificat {
+    final direct = subtotalDirectPlanificat;
+    final regie = direct * regiePercent / 100;
+    final profit = direct * profitPercent / 100;
+    return _roundUpToTen(direct + regie + profit);
+  }
+
+  /// Subtotal comercial realizat = subtotalDirectReal + regie + profit, rotunjit la 10
+  /// Prețurile unitare rămân cele din ofertă (frozen), doar cantitățile pot varia
+  double get subtotalComercialReal {
+    final direct = subtotalDirectReal;
+    final regie = direct * regiePercent / 100;
+    final profit = direct * profitPercent / 100;
+    return _roundUpToTen(direct + regie + profit);
+  }
 
   double get totalReal =>
       liniiPlanificate.fold(0.0, (s, l) => s + l.totalReal);
@@ -497,6 +536,9 @@ class JobRecord {
     double? profitTaxPercent,
     List<JobLine>? liniiPlanificate,
     double? totalOferta,
+    double? regiePercent,
+    double? profitPercent,
+    double? vatPercent,
     String? smartbillFacturaNumar,
     String? smartbillFacturaSerie,
   }) {
@@ -559,6 +601,9 @@ class JobRecord {
       profitTaxPercent: profitTaxPercent ?? this.profitTaxPercent,
       liniiPlanificate: liniiPlanificate ?? this.liniiPlanificate,
       totalOferta: totalOferta ?? this.totalOferta,
+      regiePercent: regiePercent ?? this.regiePercent,
+      profitPercent: profitPercent ?? this.profitPercent,
+      vatPercent: vatPercent ?? this.vatPercent,
       smartbillFacturaNumar:
           smartbillFacturaNumar ?? this.smartbillFacturaNumar,
       smartbillFacturaSerie:
@@ -627,6 +672,9 @@ class JobRecord {
       'profit_tax_percent': profitTaxPercent,
       'linii_planificate': liniiPlanificate.map((l) => l.toMap()).toList(),
       'total_oferta': totalOferta,
+      'regie_percent': regiePercent,
+      'profit_percent': profitPercent,
+      'vat_percent': vatPercent,
       'smartbill_factura_numar': smartbillFacturaNumar,
       'smartbill_factura_serie': smartbillFacturaSerie,
     };
@@ -801,6 +849,12 @@ class JobRecord {
       })(),
       totalOferta:
           parseDouble(map['total_oferta'] ?? map['totalOferta']) ?? 0.0,
+      regiePercent:
+          parseDouble(map['regie_percent'] ?? map['regiePercent']) ?? 0.0,
+      profitPercent:
+          parseDouble(map['profit_percent'] ?? map['profitPercent']) ?? 0.0,
+      vatPercent:
+          parseDouble(map['vat_percent'] ?? map['vatPercent']) ?? 21.0,
       smartbillFacturaNumar:
           (map['smartbill_factura_numar'] ?? map['smartbillFacturaNumar'] ?? '').toString(),
       smartbillFacturaSerie:
