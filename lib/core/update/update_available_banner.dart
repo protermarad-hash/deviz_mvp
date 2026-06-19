@@ -146,7 +146,10 @@ class _UpdateAvailableBannerState extends State<UpdateAvailableBanner> {
         dir = await getTemporaryDirectory();
       }
 
-      final fileName = 'proterm_update_${info.latestBuildNumber}.exe';
+      // Forțăm .zip indiferent de extensia din URL — distribuim ZIP-uri,
+      // nu installer .exe standalone. Fișierul URL poate fi .exe ca nume
+      // dar conținutul e întotdeauna arhivă ZIP.
+      final fileName = 'proterm_update_${info.latestBuildNumber}.zip';
       final file = File('${dir.path}${Platform.pathSeparator}$fileName');
       final sink = file.openWrite();
       var received = 0;
@@ -322,18 +325,17 @@ class _WindowsUpdateDialog extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Fișierul de instalare a fost salvat. '
+            'Fișierul ZIP a fost salvat în folderul Downloads. '
             'Pentru a actualiza aplicația:',
           ),
           const SizedBox(height: 12),
-          _Step(number: '1', text: 'Închide complet aplicația PRO TERM'),
+          const _Step(number: '1', text: 'Închide complet aplicația PRO TERM'),
           const SizedBox(height: 6),
-          _Step(
+          const _Step(
             number: '2',
-            text: 'Rulează fișierul de mai jos (dublu-click)',
+            text: 'Dezarhivează fișierul ZIP descărcat într-un folder, '
+                'apoi rulează ProVentaris.exe din interior',
           ),
-          const SizedBox(height: 6),
-          _Step(number: '3', text: 'Urmează pașii instalatorului'),
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(8),
