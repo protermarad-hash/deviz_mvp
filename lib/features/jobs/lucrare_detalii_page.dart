@@ -13713,11 +13713,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   Future<void> _repopulateFromOffer() async {
     final sourceId = _jobSnapshot.sourceOfferId.trim();
-    if (sourceId.isEmpty) return;
+    final sourceNumber = _jobSnapshot.sourceOfferNumber.trim();
+    if (sourceId.isEmpty && sourceNumber.isEmpty) return;
 
-    // Încarcă ofertele locale și găsește oferta sursă
+    // Încarcă ofertele locale și găsește oferta sursă.
+    // Fallback după offerNumber când sourceOfferId lipsește (lucrări create cu versiune veche).
     final offers = await LocalOferteRepository().listOffers();
-    final source = offers.where((o) => o.id == sourceId).firstOrNull;
+    final source = offers.where((o) =>
+        (sourceId.isNotEmpty && o.id == sourceId) ||
+        (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
 
     if (source == null) {
       if (!mounted) return;
@@ -13822,13 +13826,13 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 size: 48, color: Colors.grey[400]),
             const SizedBox(height: 12),
             Text(
-              job.sourceOfferId.isNotEmpty
+              (job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty)
                   ? 'Oferta sursă nu conține linii de articole.'
                   : 'Lucrarea nu are ofertă asociată.\nCreează oferta și transformă-o în lucrare pentru a vedea situația.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey[600]),
             ),
-            if (job.sourceOfferId.isNotEmpty) ...[
+            if (job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty) ...[
               const SizedBox(height: 16),
               FilledButton.icon(
                 icon: const Icon(Icons.download_outlined, size: 18),
