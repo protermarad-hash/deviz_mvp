@@ -26,6 +26,28 @@
 
 ---
 
+## ⚡ FLUX DE LUCRU — EXECUȚIE DIRECTĂ, FĂRĂ APROBARE INTERMEDIARĂ
+
+Agentul lucrează task-uri complete, de la investigație până la implementare și
+verificare, **FĂRĂ să se oprească pentru aprobare intermediară** ("îți arăt
+înainte de a rula", "confirm înainte de a continua" etc.). Raportează complet
+DOAR la final: ce a modificat, de ce, rezultatul `dart analyze`, orice decizie
+luată singur și motivul.
+
+**EXCEPȚII — agentul TREBUIE să ceară aprobare explicită înainte de a continua,
+în aceste 2 cazuri:**
+1. `git push` — orice push către GitHub (indiferent de branch)
+2. Operații ireversibile fără backup posibil — ex: ștergere definitivă de date
+   din Firestore/Storage **fără** export prealabil al stării curente
+
+**Pentru orice altceva — acționează direct**, respectând în continuare:
+- Backup `.bak` obligatoriu înainte de orice modificare de fișier
+- `dart analyze` 0 erori obligatoriu la final
+- Versionare incrementată la livrare confirmată de utilizator
+- Regulile de siguranță din secțiunea "REGULI DE SIGURANȚĂ — PRODUCȚIE"
+
+---
+
 ## 📖 REGULA ZERO — CITEȘTE CLAUDE.MD ÎNAINTE DE ORICE
 
 **La ÎNCEPUTUL fiecărei sesiuni sau task nou, OBLIGATORIU:**

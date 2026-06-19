@@ -202,6 +202,7 @@ class SituatieLucrariPdfService {
       for (int i = 0; i < p.materials.length; i++) {
         final m = p.materials[i];
         final name = _str(m['name']);
+        final obs = _str(m['observatii']);
         final um = _str(m['um']);
         final qty = _num(m['qty']);
         final price = _num(m['price']);
@@ -212,7 +213,21 @@ class SituatieLucrariPdfService {
           ),
           children: [
             dataCell('${i + 1}', align: pw.TextAlign.center),
-            dataCell(name),
+            pw.Padding(
+              padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(name, style: const pw.TextStyle(fontSize: 8.2)),
+                  if (obs.isNotEmpty)
+                    pw.Text(obs,
+                        style: pw.TextStyle(
+                            fontSize: 7.2,
+                            color: PdfColors.grey600,
+                            fontStyle: pw.FontStyle.italic)),
+                ],
+              ),
+            ),
             dataCell(um, align: pw.TextAlign.center),
             dataCell(money(qty), align: pw.TextAlign.right),
             dataCell(money(price), align: pw.TextAlign.right),
@@ -265,6 +280,8 @@ class SituatieLucrariPdfService {
       for (int i = 0; i < p.laborEntries.length; i++) {
         final l = p.laborEntries[i];
         final who = _str(l['who']);
+        final obs = _str(l['observatii']);
+        final um = _str(l['um']);
         final hours = _num(l['hours']);
         final rate = _num(l['rate']);
         final total = _num(l['total']) > 0 ? _num(l['total']) : hours * rate;
@@ -274,8 +291,22 @@ class SituatieLucrariPdfService {
           ),
           children: [
             dataCell('${i + 1}', align: pw.TextAlign.center),
-            dataCell(who),
-            dataCell('oră', align: pw.TextAlign.center),
+            pw.Padding(
+              padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(who, style: const pw.TextStyle(fontSize: 8.2)),
+                  if (obs.isNotEmpty)
+                    pw.Text(obs,
+                        style: pw.TextStyle(
+                            fontSize: 7.2,
+                            color: PdfColors.grey600,
+                            fontStyle: pw.FontStyle.italic)),
+                ],
+              ),
+            ),
+            dataCell(um.isNotEmpty ? um : 'oră', align: pw.TextAlign.center),
             dataCell(money(hours), align: pw.TextAlign.right),
             dataCell(rate > 0 ? money(rate) : '-', align: pw.TextAlign.right),
             dataCell(

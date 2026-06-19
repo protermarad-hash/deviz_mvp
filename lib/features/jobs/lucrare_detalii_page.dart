@@ -57,6 +57,8 @@ import 'lucrari_cloud_repository.dart';
 import 'situatie_lucrari_pdf_service.dart';
 import 'contract_pdf_service.dart';
 import '../../core/pdf_actions_helper.dart';
+import '../oferte/local_oferte_repository.dart';
+import '../oferte/offer_models.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -12472,8 +12474,21 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       text: job.notes.trim(),
     );
 
-    bool includeMaterials = _materials.isNotEmpty;
-    bool includeLabor = _labor.isNotEmpty;
+    // Sursa primară = liniiPlanificate (copiate din ofertă la conversie).
+    // Fallback la _materials/_labor manuale NUMAI dacă liniiPlanificate e gol
+    // (lucrări vechi care nu au venit din conversie ofertă).
+    final hasPlanificate = _jobSnapshot.liniiPlanificate.isNotEmpty;
+    final planMateriale = hasPlanificate
+        ? _jobSnapshot.liniiPlanificate.where((l) => l.categorie == 'material').toList()
+        : <JobLine>[];
+    final planManopera = hasPlanificate
+        ? _jobSnapshot.liniiPlanificate.where((l) => l.categorie == 'manopera').toList()
+        : <JobLine>[];
+    final matCount = hasPlanificate ? planMateriale.length : _materials.length;
+    final laborCount = hasPlanificate ? planManopera.length : _labor.length;
+
+    bool includeMaterials = hasPlanificate ? planMateriale.isNotEmpty : _materials.isNotEmpty;
+    bool includeLabor = hasPlanificate ? planManopera.isNotEmpty : _labor.isNotEmpty;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -12495,6 +12510,20 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 Text('Client: ${widget.clientName}'),
+                if (hasPlanificate)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      children: [
+                        Icon(Icons.link, size: 14, color: Colors.green[700]),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Date preluate din oferta ${_jobSnapshot.sourceOfferNumber}',
+                          style: TextStyle(fontSize: 12, color: Colors.green[700]),
+                        ),
+                      ],
+                    ),
+                  ),
                 const SizedBox(height: 12),
                 TextField(
                   textCapitalization: TextCapitalization.sentences,
@@ -12574,17 +12603,19 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 ),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text('Materiale (${_materials.length} înregistrări)'),
+                  title: Text('Materiale ($matCount înregistrări'
+                      '${hasPlanificate ? " · din ofertă" : ""})'),
                   value: includeMaterials,
-                  onChanged: _materials.isEmpty
+                  onChanged: matCount == 0
                       ? null
                       : (v) => setDlg(() => includeMaterials = v ?? false),
                 ),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text('Manoperă (${_labor.length} înregistrări)'),
+                  title: Text('Manoperă ($laborCount înregistrări'
+                      '${hasPlanificate ? " · din ofertă" : ""})'),
                   value: includeLabor,
-                  onChanged: _labor.isEmpty
+                  onChanged: laborCount == 0
                       ? null
                       : (v) => setDlg(() => includeLabor = v ?? false),
                 ),
@@ -12617,26 +12648,40 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           _defaultVatPercent;
 
       final materialsForPdf = includeMaterials
-          ? _materials
-              .map((m) => <String, dynamic>{
+          ? (hasPlanificate
+              ? planMateriale.map((l) => <String, dynamic>{
+                    'name': l.denumire,
+                    'um': l.um,
+                    'qty': l.cantitateReala,
+                    'price': l.pretUnitarReal,
+                    'total': l.totalReal,
+                    'observatii': l.observatii,
+                  }).toList(growable: false)
+              : _materials.map((m) => <String, dynamic>{
                     'name': '${m['name'] ?? ''}',
                     'um': '${m['um'] ?? ''}',
                     'qty': _asDouble(m['qty']),
                     'price': _asDouble(m['price']),
                     'total': _asDouble(m['total']),
-                  })
-              .toList(growable: false)
+                  }).toList(growable: false))
           : <Map<String, dynamic>>[];
 
       final laborForPdf = includeLabor
-          ? _labor
-              .map((l) => <String, dynamic>{
+          ? (hasPlanificate
+              ? planManopera.map((l) => <String, dynamic>{
+                    'who': l.denumire,
+                    'um': l.um,
+                    'hours': l.cantitateReala,
+                    'rate': l.pretUnitarReal,
+                    'total': l.totalReal,
+                    'observatii': l.observatii,
+                  }).toList(growable: false)
+              : _labor.map((l) => <String, dynamic>{
                     'who': '${l['who'] ?? ''}',
                     'hours': _asDouble(l['hours']),
                     'rate': _laborRateForRow(l),
                     'total': _laborTotalLineCost(l),
-                  })
-              .toList(growable: false)
+                  }).toList(growable: false))
           : <Map<String, dynamic>>[];
 
       final params = SituatieLucrariParams(
@@ -13645,9 +13690,125 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
+  // ── Helpers pentru liniiPlanificate ─────────────────────────────────────────
+
+  Future<void> _saveLiniiPlanificate(List<JobLine> linii) async {
+    final updated = _jobSnapshot.copyWith(liniiPlanificate: linii);
+    try {
+      _jobSnapshot = await widget.repository.saveJob(updated);
+      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
+    } catch (e) {
+      debugPrint('[Situatie] _saveLiniiPlanificate error: $e');
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _updateLinieObservatii(String lineId, String value) {
+    final linii = List<JobLine>.from(_jobSnapshot.liniiPlanificate);
+    final idx = linii.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    linii[idx] = linii[idx].copyWith(observatii: value);
+    _saveLiniiPlanificate(linii);
+  }
+
+  Future<void> _repopulateFromOffer() async {
+    final sourceId = _jobSnapshot.sourceOfferId.trim();
+    if (sourceId.isEmpty) return;
+
+    // Încarcă ofertele locale și găsește oferta sursă
+    final offers = await LocalOferteRepository().listOffers();
+    final source = offers.where((o) => o.id == sourceId).firstOrNull;
+
+    if (source == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(
+            'Oferta sursă (${_jobSnapshot.sourceOfferNumber}) nu a fost găsită local. '
+            'Deschide aplicația cu internet pentru a o sincroniza.')),
+      );
+      return;
+    }
+
+    final candidateLinii = source.lines
+        .where((l) => l.lineType != OfferLineType.text)
+        .toList();
+
+    if (candidateLinii.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Oferta sursă nu are linii de articole.')),
+      );
+      return;
+    }
+
+    // Construiește preview pentru dialog de confirmare
+    final previewLines = candidateLinii.map((l) =>
+        '• ${l.name} — ${l.quantity} ${l.unit} × ${l.unitPrice.toStringAsFixed(2)} RON'
+        ' [${l.lineType == OfferLineType.manopera ? "manoperă" : "material"}]').join('\n');
+
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          const Icon(Icons.warning_amber_outlined, color: Colors.orange),
+          const SizedBox(width: 8),
+          Text('Re-populare din ${source.offerNumber}'),
+        ]),
+        content: SizedBox(
+          width: 480,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Acțiunea va importa liniile de mai jos în câmpul '
+                    '"Linii planificate" al lucrării. Cantitățile reale vor fi '
+                    'inițializate la valorile din ofertă.'),
+                const SizedBox(height: 12),
+                Text('Linii de importat (${candidateLinii.length}):',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text(previewLines, style: const TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Confirmă import'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final newLinii = candidateLinii.map((l) => JobLine.fromOfertaLine(
+          id: '',
+          ofertaLineId: l.id,
+          denumire: l.name,
+          um: l.unit,
+          cantitate: l.quantity,
+          pretUnitar: l.unitPrice,
+          categorie: l.lineType == OfferLineType.manopera ? 'manopera' : 'material',
+        )).toList(growable: false);
+
+    await _saveLiniiPlanificate(newLinii);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${newLinii.length} linii importate din ${source.offerNumber}.')),
+    );
+  }
+
   // ── TAB: SITUAȚIE LUCRARE (comparativ ofertă vs realizat) ──────────────────
   Widget _buildSituatieTab(BuildContext context) {
-    final job = widget.job;
+    final job = _jobSnapshot;
     final linii = job.liniiPlanificate;
     String fmtCurr(double v) => '${v.toStringAsFixed(2)} RON';
 
@@ -13667,6 +13828,20 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey[600]),
             ),
+            if (job.sourceOfferId.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: Text('Re-populează din ${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "oferta sursă"}'),
+                onPressed: _repopulateFromOffer,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Importă liniile din oferta originală în situația de lucrări.',
+                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                textAlign: TextAlign.center,
+              ),
+            ],
           ],
         ),
       );
@@ -13836,6 +14011,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  _LineObservationsField(
+                    key: ValueKey('obs-${linie.id}'),
+                    initial: linie.observatii,
+                    onSave: (val) => _updateLinieObservatii(linie.id, val),
                   ),
                 ],
               ),
@@ -16111,4 +16292,66 @@ String _fileNameFromPath(String path) {
   if (normalized.isEmpty) return '';
   final index = normalized.lastIndexOf('/');
   return index < 0 ? normalized : normalized.substring(index + 1);
+}
+
+// ── Câmp observații per linie (stateful, controller propriu) ─────────────────
+class _LineObservationsField extends StatefulWidget {
+  const _LineObservationsField({
+    super.key,
+    required this.initial,
+    required this.onSave,
+  });
+  final String initial;
+  final ValueChanged<String> onSave;
+  @override
+  State<_LineObservationsField> createState() => _LineObservationsFieldState();
+}
+
+class _LineObservationsFieldState extends State<_LineObservationsField> {
+  late TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void didUpdateWidget(_LineObservationsField old) {
+    super.didUpdateWidget(old);
+    // Sincronizează controllerul dacă valoarea externă s-a schimbat
+    // (ex: după re-populare din ofertă)
+    if (old.initial != widget.initial && _ctrl.text != widget.initial) {
+      _ctrl.text = widget.initial;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _ctrl,
+      textCapitalization: TextCapitalization.sentences,
+      decoration: InputDecoration(
+        labelText: 'Observații',
+        hintText: 'notă per articol (apare în PDF)...',
+        isDense: true,
+        border: const OutlineInputBorder(),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        suffixIcon: IconButton(
+          icon: const Icon(Icons.check, size: 18),
+          tooltip: 'Salvează',
+          onPressed: () => widget.onSave(_ctrl.text.trim()),
+        ),
+      ),
+      style: const TextStyle(fontSize: 12),
+      onSubmitted: (v) => widget.onSave(v.trim()),
+    );
+  }
 }

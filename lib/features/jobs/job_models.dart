@@ -12,6 +12,7 @@ class JobLine {
     required this.pretUnitarReal,
     required this.categorie,
     this.ofertaLineId = '',
+    this.observatii = '',
   });
 
   final String id;
@@ -23,6 +24,7 @@ class JobLine {
   final double pretUnitarOferta;
   final double pretUnitarReal;
   final String categorie; // 'material' | 'manopera' | 'transport' | 'altul'
+  final String observatii;
 
   double get totalOferta => cantitateOferta * pretUnitarOferta;
   double get totalReal => cantitateReala * pretUnitarReal;
@@ -47,11 +49,13 @@ class JobLine {
         pretUnitarOferta: pretUnitar,
         pretUnitarReal: pretUnitar,
         categorie: categorie,
+        observatii: '',
       );
 
   JobLine copyWith({
     double? cantitateReala,
     double? pretUnitarReal,
+    String? observatii,
   }) =>
       JobLine(
         id: id,
@@ -63,6 +67,7 @@ class JobLine {
         pretUnitarOferta: pretUnitarOferta,
         pretUnitarReal: pretUnitarReal ?? this.pretUnitarReal,
         categorie: categorie,
+        observatii: observatii ?? this.observatii,
       );
 
   Map<String, dynamic> toMap() => {
@@ -75,6 +80,7 @@ class JobLine {
         'pret_unitar_oferta': pretUnitarOferta,
         'pret_unitar_real': pretUnitarReal,
         'categorie': categorie,
+        'observatii': observatii,
       };
 
   factory JobLine.fromMap(Map<String, dynamic> map) {
@@ -90,6 +96,7 @@ class JobLine {
       pretUnitarOferta: d(map['pret_unitar_oferta'] ?? map['pret_unitar']),
       pretUnitarReal: d(map['pret_unitar_real'] ?? map['pret_unitar_oferta'] ?? map['pret_unitar']),
       categorie: (map['categorie'] ?? 'altul').toString(),
+      observatii: (map['observatii'] ?? '').toString(),
     );
   }
 }

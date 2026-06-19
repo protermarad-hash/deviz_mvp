@@ -240,21 +240,6 @@ class DevizLucrarePdfService {
     required bool useReala,
   }) {
     final label = _catLabel(categorie).toUpperCase();
-    final rows = linii.asMap().entries.map((e) {
-      final l = e.value;
-      final cant = useReala ? l.cantitateReala : l.cantitateOferta;
-      final pret = useReala ? l.pretUnitarReal : l.pretUnitarOferta;
-      final val = cant * pret;
-      return [
-        '${e.key + 1}',
-        l.denumire,
-        l.um,
-        cant.toStringAsFixed(cant == cant.roundToDouble() ? 0 : 2),
-        _fmtNum.format(pret),
-        _fmtNum.format(val),
-      ];
-    }).toList();
-
     final catTotal = linii.fold(
         0.0,
         (s, l) => s +
@@ -286,7 +271,41 @@ class DevizLucrarePdfService {
           },
           children: [
             _tableHeaderRow(fonts),
-            ...rows.map((r) => _tableDataRow(r, fonts)),
+            ...linii.asMap().entries.map((e) {
+              final l = e.value;
+              final cant = useReala ? l.cantitateReala : l.cantitateOferta;
+              final pret = useReala ? l.pretUnitarReal : l.pretUnitarOferta;
+              final val = cant * pret;
+              return pw.TableRow(
+                children: [
+                  _cell('${e.key + 1}', fonts.base, 8, align: pw.Alignment.center),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        pw.Text(l.denumire,
+                            style: pw.TextStyle(font: fonts.base, fontSize: 8, color: _darkText)),
+                        if (l.observatii.isNotEmpty)
+                          pw.Text(l.observatii,
+                              style: pw.TextStyle(
+                                  font: fonts.base,
+                                  fontSize: 7,
+                                  color: const PdfColor(0.4, 0.4, 0.4),
+                                  fontStyle: pw.FontStyle.italic)),
+                      ],
+                    ),
+                  ),
+                  _cell(l.um, fonts.base, 8, align: pw.Alignment.center),
+                  _cell(
+                    cant.toStringAsFixed(cant == cant.roundToDouble() ? 0 : 2),
+                    fonts.base, 8, align: pw.Alignment.centerRight,
+                  ),
+                  _cell(_fmtNum.format(pret), fonts.base, 8, align: pw.Alignment.centerRight),
+                  _cell(_fmtNum.format(val), fonts.base, 8, align: pw.Alignment.centerRight),
+                ],
+              );
+            }),
             _tableTotalRow(catTotal, fonts),
           ],
         ),
@@ -308,15 +327,6 @@ class DevizLucrarePdfService {
       children: headers
           .map((h) => _cell(h, fonts.bold, 8, align: pw.Alignment.center))
           .toList(),
-    );
-  }
-
-  pw.TableRow _tableDataRow(List<String> row, PdfFontBundle fonts) {
-    return pw.TableRow(
-      children: row.asMap().entries.map((e) {
-        final align = e.key >= 3 ? pw.Alignment.centerRight : pw.Alignment.centerLeft;
-        return _cell(e.value, fonts.base, 8, align: align);
-      }).toList(),
     );
   }
 
