@@ -49,3 +49,25 @@ key.properties
 android/key.properties
 *.keystore
 *.jks
+
+# Node.js dependencies (Firebase Functions)
+node_modules/
+functions/node_modules/
+
+# Fișiere backup create de agentul Claude Code
+*.bak
+*.bak_*
+*.cap_bak
+# Excepție: fișierele .bak YAML/TOML de configurare dacă există
+!*.yaml.bak
+
+# Fișiere debug și log-uri locale
+debug_log.txt
+*.debug.txt
+
+# Snapshot-uri baze de date locale
+snapshot_baza_*/
+
+# Windows build artifacts (generate automat)
+windows/x64/
+x64/Release/
