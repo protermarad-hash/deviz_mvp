@@ -13714,26 +13714,40 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Future<void> _repopulateFromOffer() async {
     final sourceId = _jobSnapshot.sourceOfferId.trim();
     final sourceNumber = _jobSnapshot.sourceOfferNumber.trim();
-    if (sourceId.isEmpty && sourceNumber.isEmpty) return;
 
     // Încarcă ofertele locale și găsește oferta sursă.
     // Fallback după offerNumber când sourceOfferId lipsește (lucrări create cu versiune veche).
     final offers = await LocalOferteRepository().listOffers();
-    final source = offers.where((o) =>
-        (sourceId.isNotEmpty && o.id == sourceId) ||
-        (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
 
-    if (source == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(
-            'Oferta sursă (${_jobSnapshot.sourceOfferNumber}) nu a fost găsită local. '
-            'Deschide aplicația cu internet pentru a o sincroniza.')),
-      );
-      return;
+    OfferRecord? source;
+    if (sourceId.isNotEmpty || sourceNumber.isNotEmpty) {
+      source = offers.where((o) =>
+          (sourceId.isNotEmpty && o.id == sourceId) ||
+          (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
     }
 
-    final candidateLinii = source.lines
+    // Dacă oferta sursă nu e găsită sau câmpurile sursă sunt goale → arată picker.
+    if (source == null) {
+      if (!mounted) return;
+      if (offers.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nu există oferte salvate local.')),
+        );
+        return;
+      }
+      // Picker manual — permite selecția oricărei oferte disponibile
+      final picked = await showDialog<OfferRecord>(
+        context: context,
+        builder: (ctx) => _OfferPickerDialog(offers: offers),
+      );
+      if (picked == null || !mounted) return;
+      source = picked;
+    }
+    // Captură non-nullabilă explicită înainte de closure-urile din builder:
+    // Dart narrowing prin flow analysis nu se propagă în lambdas async.
+    final OfferRecord offer = source;
+
+    final candidateLinii = offer.lines
         .where((l) => l.lineType != OfferLineType.text)
         .toList();
 
@@ -13757,7 +13771,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         title: Row(children: [
           const Icon(Icons.warning_amber_outlined, color: Colors.orange),
           const SizedBox(width: 8),
-          Text('Re-populare din ${source.offerNumber}'),
+          Text('Re-populare din ${offer.offerNumber}'),
         ]),
         content: SizedBox(
           width: 480,
@@ -13806,7 +13820,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${newLinii.length} linii importate din ${source.offerNumber}.')),
+      SnackBar(content: Text('${newLinii.length} linii importate din ${offer.offerNumber}.')),
     );
   }
 
@@ -13816,8 +13830,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final linii = job.liniiPlanificate;
     String fmtCurr(double v) => '${v.toStringAsFixed(2)} RON';
 
-    // Dacă lucrarea nu are linii din ofertă
+    // Dacă lucrarea nu are linii planificate — arată buton de import indiferent de câmpurile sursă.
+    // Acoperă și cazul JOB-uri vechi cu sourceOfferId/sourceOfferNumber gol în cache.
     if (linii.isEmpty) {
+      final hasKnownOffer = job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty;
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -13826,26 +13842,26 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 size: 48, color: Colors.grey[400]),
             const SizedBox(height: 12),
             Text(
-              (job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty)
-                  ? 'Oferta sursă nu conține linii de articole.'
-                  : 'Lucrarea nu are ofertă asociată.\nCreează oferta și transformă-o în lucrare pentru a vedea situația.',
+              hasKnownOffer
+                  ? 'Oferta sursă (${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "asociată"}) nu are linii importate încă.'
+                  : 'Liniile planificate nu au fost importate.\nPoți importa din orice ofertă disponibilă.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey[600]),
             ),
-            if (job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                icon: const Icon(Icons.download_outlined, size: 18),
-                label: Text('Re-populează din ${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "oferta sursă"}'),
-                onPressed: _repopulateFromOffer,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Importă liniile din oferta originală în situația de lucrări.',
-                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                textAlign: TextAlign.center,
-              ),
-            ],
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: Text(hasKnownOffer
+                  ? 'Re-populează din ${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "oferta sursă"}'
+                  : 'Importă linii din ofertă'),
+              onPressed: _repopulateFromOffer,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Importă articolele din oferta originală în situația de lucrări.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       );
@@ -16287,6 +16303,79 @@ class _MaterialOption {
         price: double.tryParse(
                 read(() => (raw as dynamic).price).replaceAll(',', '.')) ??
             0);
+  }
+}
+
+// ── Dialog selecție ofertă pentru import linii în Situație ───────────────────
+class _OfferPickerDialog extends StatefulWidget {
+  const _OfferPickerDialog({required this.offers});
+  final List<OfferRecord> offers;
+
+  @override
+  State<_OfferPickerDialog> createState() => _OfferPickerDialogState();
+}
+
+class _OfferPickerDialogState extends State<_OfferPickerDialog> {
+  String _search = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _search.isEmpty
+        ? widget.offers
+        : widget.offers.where((o) =>
+            o.offerNumber.toLowerCase().contains(_search.toLowerCase()) ||
+            o.title.toLowerCase().contains(_search.toLowerCase()) ||
+            o.clientName.toLowerCase().contains(_search.toLowerCase())).toList();
+
+    return AlertDialog(
+      title: const Text('Selectează oferta sursă'),
+      content: SizedBox(
+        width: 480,
+        height: 400,
+        child: Column(
+          children: [
+            TextField(
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'Caută după număr, titlu sau client...',
+                prefixIcon: Icon(Icons.search),
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => _search = v),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: filtered.isEmpty
+                  ? const Center(child: Text('Nicio ofertă găsită.'))
+                  : ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (ctx, i) {
+                        final o = filtered[i];
+                        return ListTile(
+                          dense: true,
+                          title: Text('${o.offerNumber} — ${o.title}',
+                              overflow: TextOverflow.ellipsis),
+                          subtitle: Text(o.clientName,
+                              overflow: TextOverflow.ellipsis),
+                          trailing: Text(
+                            '${o.lines.where((l) => l.lineType.name != 'text').length} art.',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          onTap: () => Navigator.of(ctx).pop(o),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Anulează'),
+        ),
+      ],
+    );
   }
 }
 
