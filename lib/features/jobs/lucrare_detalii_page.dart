@@ -61,6 +61,7 @@ import '../oferte/offer_models.dart';
 import '../deviz_tehnic/deviz_tehnic_models.dart';
 import '../deviz_tehnic/deviz_tehnic_repository.dart';
 import 'lucrare_detalii_models.dart';
+import 'lucrare_detalii_widgets.dart';
 import 'lucrare_format_utils.dart';
 import 'lucrare_import_parser.dart';
 
@@ -14000,7 +14001,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       }
       final picked = await showDialog<LucrareSourceDocument>(
         context: context,
-        builder: (ctx) => _SourcePickerDialog(offers: offers, devize: devize),
+        builder: (ctx) =>
+            LucrareSourcePickerDialog(offers: offers, devize: devize),
       );
       if (picked == null || !mounted) return;
       foundOffer = picked.offer;
@@ -14340,7 +14342,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  _LineObservationsField(
+                  LineObservationsField(
                     key: ValueKey('obs-${linie.id}'),
                     initial: linie.observatii,
                     onSave: (val) => _updateLinieObservatii(linie.id, val),
@@ -16339,99 +16341,6 @@ String? _safeDropdownValue(Iterable<dynamic> options, String? selectedValue) {
   return matches.length == 1 ? matches.first : null;
 }
 
-// ── Dialog picker combinat: oferte simple + devize tehnice ────────────────────
-class _SourcePickerDialog extends StatefulWidget {
-  const _SourcePickerDialog({required this.offers, required this.devize});
-  final List<OfferRecord> offers;
-  final List<DevizTehnicRecord> devize;
-
-  @override
-  State<_SourcePickerDialog> createState() => _SourcePickerDialogState();
-}
-
-class _SourcePickerDialogState extends State<_SourcePickerDialog> {
-  String _search = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final all = [
-      ...widget.offers.map(LucrareSourceDocument.fromOffer),
-      ...widget.devize.map(LucrareSourceDocument.fromDeviz),
-    ];
-    final filtered = _search.isEmpty
-        ? all
-        : all.where((s) =>
-            s.numar.toLowerCase().contains(_search.toLowerCase()) ||
-            s.titlu.toLowerCase().contains(_search.toLowerCase()) ||
-            s.client.toLowerCase().contains(_search.toLowerCase())).toList();
-
-    return AlertDialog(
-      title: const Text('Selectează documentul sursă'),
-      content: SizedBox(
-        width: 520,
-        height: 440,
-        child: Column(
-          children: [
-            TextField(
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                hintText: 'Caută după număr, titlu sau client...',
-                prefixIcon: Icon(Icons.search),
-                isDense: true,
-              ),
-              onChanged: (v) => setState(() => _search = v),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: filtered.isEmpty
-                  ? const Center(child: Text('Niciun document găsit.'))
-                  : ListView.builder(
-                      itemCount: filtered.length,
-                      itemBuilder: (ctx, i) {
-                        final s = filtered[i];
-                        return ListTile(
-                          dense: true,
-                          leading: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: s.tipColor.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                  color: s.tipColor.withValues(alpha: 0.4)),
-                            ),
-                            child: Text(s.tipLabel,
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    color: s.tipColor,
-                                    fontWeight: FontWeight.bold)),
-                          ),
-                          title: Text('${s.numar} — ${s.titlu}',
-                              overflow: TextOverflow.ellipsis),
-                          subtitle: Text(s.client,
-                              overflow: TextOverflow.ellipsis),
-                          trailing: Text(
-                            '${s.nrArticole} art.',
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                          onTap: () => Navigator.of(ctx).pop(s),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Anulează'),
-        ),
-      ],
-    );
-  }
-}
-
 // ── Helper pentru _buildSituatieTab ──────────────────────────────────────────
 String _fileNameFromPath(String path) {
   final normalized = path.trim().replaceAll('\\', '/');
@@ -16440,64 +16349,3 @@ String _fileNameFromPath(String path) {
   return index < 0 ? normalized : normalized.substring(index + 1);
 }
 
-// ── Câmp observații per linie (stateful, controller propriu) ─────────────────
-class _LineObservationsField extends StatefulWidget {
-  const _LineObservationsField({
-    super.key,
-    required this.initial,
-    required this.onSave,
-  });
-  final String initial;
-  final ValueChanged<String> onSave;
-  @override
-  State<_LineObservationsField> createState() => _LineObservationsFieldState();
-}
-
-class _LineObservationsFieldState extends State<_LineObservationsField> {
-  late TextEditingController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  void didUpdateWidget(_LineObservationsField old) {
-    super.didUpdateWidget(old);
-    // Sincronizează controllerul dacă valoarea externă s-a schimbat
-    // (ex: după re-populare din ofertă)
-    if (old.initial != widget.initial && _ctrl.text != widget.initial) {
-      _ctrl.text = widget.initial;
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: _ctrl,
-      textCapitalization: TextCapitalization.sentences,
-      decoration: InputDecoration(
-        labelText: 'Observații',
-        hintText: 'notă per articol (apare în PDF)...',
-        isDense: true,
-        border: const OutlineInputBorder(),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        suffixIcon: IconButton(
-          icon: const Icon(Icons.check, size: 18),
-          tooltip: 'Salvează',
-          onPressed: () => widget.onSave(_ctrl.text.trim()),
-        ),
-      ),
-      style: const TextStyle(fontSize: 12),
-      onSubmitted: (v) => widget.onSave(v.trim()),
-    );
-  }
-}
