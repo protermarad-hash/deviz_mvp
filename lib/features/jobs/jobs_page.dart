@@ -806,52 +806,320 @@ class _JobsPageState extends State<JobsPage> {
                               child: Text('Nu există lucrări salvate.'),
                             )
                           : ListView.separated(
+                              padding: const EdgeInsets.fromLTRB(
+                                  16, 8, 16, 100),
                               itemCount: _filteredJobs.length,
                               separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 10),
+                                  const SizedBox(height: 8),
                               itemBuilder: (context, index) {
                                 final job = _filteredJobs[index];
+                                final statusColor = job.status.color;
+                                final cs = Theme.of(context).colorScheme;
                                 final dueText = job.dueDate != null
                                     ? _formatDate(job.dueDate!)
-                                    : '-';
+                                    : null;
+                                final clientLabel =
+                                    _clientName(job.clientId);
                                 return Card(
-                                  child: ListTile(
-                                    contentPadding: const EdgeInsets.all(12),
-                                    onTap: () => _openJobDetails(job),
-                                    title:
-                                        Text('${job.jobCode} • ${job.title}'),
-                                    subtitle: Padding(
-                                      padding: const EdgeInsets.only(top: 6),
-                                      child: Text(
-                                        'Client: ${_clientName(job.clientId).isEmpty ? '-' : _clientName(job.clientId)}'
-                                        '\nLocație: ${job.location.isEmpty ? '-' : job.location}'
-                                        '\nOraș: ${job.city.isEmpty ? '-' : job.city}'
-                                        '\nStatus: ${job.status.label} • Termen: $dueText • ${job.isActive ? 'Activă' : 'Inactivă'}'
-                                        '${job.sourceOfferNumber.trim().isNotEmpty ? '\nSursă: Ofertă ${job.sourceOfferNumber}' : ''}',
-                                      ),
+                                  clipBehavior: Clip.antiAlias,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    side: BorderSide(
+                                      color:
+                                          statusColor.withValues(alpha: 0.5),
+                                      width: 1.5,
                                     ),
-                                    isThreeLine: true,
-                                    trailing: _isTechnician
-                                        ? null
-                                        : Wrap(
-                                            spacing: 8,
+                                  ),
+                                  child: InkWell(
+                                    onTap: () => _openJobDetails(job),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: statusColor
+                                            .withValues(alpha: 0.06),
+                                        borderRadius:
+                                            BorderRadius.circular(12),
+                                      ),
+                                      padding: const EdgeInsets.all(12),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          // ── Rând 1: cod + status badge + dată ──
+                                          Row(
                                             children: [
-                                              IconButton(
-                                                tooltip: 'Editează',
-                                                onPressed: () =>
-                                                    _openJobForm(existing: job),
-                                                icon: const Icon(
-                                                    Icons.edit_outlined),
+                                              if (job.jobCode
+                                                  .trim()
+                                                  .isNotEmpty) ...[
+                                                Container(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 2),
+                                                  decoration: BoxDecoration(
+                                                    color:
+                                                        cs.primaryContainer,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            4),
+                                                  ),
+                                                  child: Text(
+                                                    job.jobCode.trim(),
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      color: cs
+                                                          .onPrimaryContainer,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                              ],
+                                              // Badge status colorat
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 6,
+                                                        vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: statusColor
+                                                      .withValues(alpha: 0.18),
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                  border: Border.all(
+                                                    color: statusColor
+                                                        .withValues(alpha: 0.5),
+                                                    width: 1,
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  job.status.label,
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    color: statusColor,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
                                               ),
-                                              IconButton(
-                                                tooltip: 'Șterge',
-                                                onPressed: () =>
-                                                    _deleteJob(job),
-                                                icon: const Icon(
-                                                    Icons.delete_outline),
-                                              ),
+                                              if (!job.isActive) ...[
+                                                const SizedBox(width: 6),
+                                                Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                          horizontal: 6,
+                                                          vertical: 2),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.grey.shade200,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                            4),
+                                                  ),
+                                                  child: Text(
+                                                    'Inactivă',
+                                                    style: TextStyle(
+                                                      fontSize: 10,
+                                                      color:
+                                                          Colors.grey.shade700,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                              const Spacer(),
+                                              if (dueText != null)
+                                                Text(
+                                                  'Termen: $dueText',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: cs.outline,
+                                                  ),
+                                                ),
+                                              if (!_isTechnician) ...[
+                                                const SizedBox(width: 4),
+                                                SizedBox(
+                                                  width: 32,
+                                                  height: 32,
+                                                  child: PopupMenuButton<
+                                                      String>(
+                                                    padding: EdgeInsets.zero,
+                                                    icon: const Icon(
+                                                        Icons.more_vert,
+                                                        size: 18),
+                                                    tooltip: 'Acțiuni',
+                                                    onSelected: (v) {
+                                                      if (v == 'edit') {
+                                                        _openJobForm(
+                                                            existing: job);
+                                                      } else if (v ==
+                                                          'delete') {
+                                                        _deleteJob(job);
+                                                      }
+                                                    },
+                                                    itemBuilder: (_) => [
+                                                      const PopupMenuItem(
+                                                        value: 'edit',
+                                                        child: ListTile(
+                                                          leading: Icon(Icons
+                                                              .edit_outlined),
+                                                          title:
+                                                              Text('Editează'),
+                                                          dense: true,
+                                                          contentPadding:
+                                                              EdgeInsets.zero,
+                                                        ),
+                                                      ),
+                                                      const PopupMenuItem(
+                                                        value: 'delete',
+                                                        child: ListTile(
+                                                          leading: Icon(
+                                                              Icons
+                                                                  .delete_outline,
+                                                              color:
+                                                                  Colors.red),
+                                                          title: Text('Șterge',
+                                                              style: TextStyle(
+                                                                  color: Colors
+                                                                      .red)),
+                                                          dense: true,
+                                                          contentPadding:
+                                                              EdgeInsets.zero,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
                                             ],
                                           ),
+                                          const SizedBox(height: 6),
+                                          // ── Titlu lucrare ──
+                                          Text(
+                                            job.title.isNotEmpty
+                                                ? job.title
+                                                : '(fără titlu)',
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                          if (clientLabel.isNotEmpty) ...[
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              children: [
+                                                Icon(Icons.person_outline,
+                                                    size: 13,
+                                                    color: cs.outline),
+                                                const SizedBox(width: 4),
+                                                Expanded(
+                                                  child: Text(
+                                                    clientLabel,
+                                                    style: TextStyle(
+                                                        fontSize: 13,
+                                                        color: cs.outline),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                          if (job.location.isNotEmpty ||
+                                              job.city.isNotEmpty) ...[
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                    Icons
+                                                        .location_on_outlined,
+                                                    size: 13,
+                                                    color: cs.outline),
+                                                const SizedBox(width: 4),
+                                                Expanded(
+                                                  child: Text(
+                                                    [
+                                                      job.location,
+                                                      job.city
+                                                    ]
+                                                        .where((s) =>
+                                                            s.isNotEmpty)
+                                                        .join(', '),
+                                                    style: TextStyle(
+                                                        fontSize: 13,
+                                                        color: cs.outline),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                          if (job.sourceOfferNumber
+                                              .trim()
+                                              .isNotEmpty) ...[
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Ofertă: ${job.sourceOfferNumber.trim()}',
+                                              style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: cs.outline),
+                                            ),
+                                          ],
+                                          // ── Butoane rapide schimbare status ──
+                                          if (!_isTechnician) ...[
+                                            const SizedBox(height: 8),
+                                            SingleChildScrollView(
+                                              scrollDirection: Axis.horizontal,
+                                              child: Row(
+                                                children: JobStatus.values
+                                                    .where(
+                                                        (s) => s != job.status)
+                                                    .map(
+                                                      (s) => Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(right: 6),
+                                                        child: OutlinedButton(
+                                                          style: OutlinedButton
+                                                              .styleFrom(
+                                                            foregroundColor:
+                                                                s.color,
+                                                            side: BorderSide(
+                                                                color: s.color
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            0.5)),
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .symmetric(
+                                                                    horizontal:
+                                                                        10,
+                                                                    vertical:
+                                                                        4),
+                                                            minimumSize:
+                                                                const Size(
+                                                                    0, 28),
+                                                            tapTargetSize:
+                                                                MaterialTapTargetSize
+                                                                    .shrinkWrap,
+                                                            textStyle:
+                                                                const TextStyle(
+                                                                    fontSize:
+                                                                        11),
+                                                          ),
+                                                          onPressed: () =>
+                                                              _changeJobStatus(
+                                                                  job, s),
+                                                          child: Text(
+                                                              '→ ${s.label}'),
+                                                        ),
+                                                      ),
+                                                    )
+                                                    .toList(),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 );
                               },
@@ -868,6 +1136,32 @@ class _JobsPageState extends State<JobsPage> {
               label: const Text('Adaugă lucrare'),
             ),
     );
+  }
+
+  Future<void> _changeJobStatus(JobRecord job, JobStatus newStatus) async {
+    final updated = job.copyWith(status: newStatus, updatedAt: DateTime.now());
+    // Optimistic UI
+    setState(() {
+      final idx = _jobs.indexWhere((j) => j.id == job.id);
+      if (idx >= 0) _jobs[idx] = updated;
+      final idx2 = _filteredJobs.indexWhere((j) => j.id == job.id);
+      if (idx2 >= 0) _filteredJobs[idx2] = updated;
+    });
+    _saveJobResolved(updated).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Eroare schimbare status: $e')));
+        _loadData();
+      }
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Status → ${newStatus.label}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   String? _normalizeClientFilter() {

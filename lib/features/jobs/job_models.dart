@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 // ── Linie planificată din ofertă (iun 2026) ────────────────────────────────
@@ -147,6 +148,25 @@ enum JobStatus {
         return 'Finalizată';
       case JobStatus.inchisa:
         return 'Închisă';
+    }
+  }
+
+  Color get color {
+    switch (this) {
+      case JobStatus.noua:
+        return Colors.blueGrey;
+      case JobStatus.ofertata:
+        return Colors.blue;
+      case JobStatus.planificata:
+        return Colors.orange;
+      case JobStatus.inExecutie:
+        return Colors.indigo;
+      case JobStatus.suspendata:
+        return Colors.red;
+      case JobStatus.finalizata:
+        return Colors.green;
+      case JobStatus.inchisa:
+        return Colors.grey;
     }
   }
 
