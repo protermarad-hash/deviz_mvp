@@ -1,7 +1,6 @@
 ﻿// ignore_for_file: dead_code, unused_element, unused_local_variable, unused_field, prefer_final_locals, unnecessary_string_interpolations, no_leading_underscores_for_local_identifiers, unnecessary_brace_in_string_interps
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:archive/archive.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -63,6 +62,7 @@ import '../deviz_tehnic/deviz_tehnic_models.dart';
 import '../deviz_tehnic/deviz_tehnic_repository.dart';
 import 'lucrare_detalii_models.dart';
 import 'lucrare_format_utils.dart';
+import 'lucrare_import_parser.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -3552,224 +3552,31 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     }
   }
 
-  String _decodeImportBytes(Uint8List bytes) {
-    try {
-      return utf8.decode(bytes);
-    } catch (_) {
-      return latin1.decode(bytes, allowInvalid: true);
-    }
-  }
+  String _decodeImportBytes(Uint8List bytes) => lucrareDecodeImportBytes(bytes);
 
-  String _decodeXmlText(String raw) {
-    return raw
-        .replaceAllMapped(RegExp(r'<[^>]+>'), (_) => ' ')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&gt;', '>')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&apos;', "'")
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-  }
+  String _decodeXmlText(String raw) => lucrareDecodeXmlText(raw);
 
-  String _extractDocxText(Uint8List bytes) {
-    final archive = ZipDecoder().decodeBytes(bytes, verify: false);
-    for (final file in archive) {
-      if (file.name == 'word/document.xml' && file.isFile) {
-        final content = file.content;
-        final xml = content is List<int>
-            ? _decodeImportBytes(Uint8List.fromList(content))
-            : '$content';
-        return _decodeXmlText(xml);
-      }
-    }
-    return '';
-  }
+  String _extractDocxText(Uint8List bytes) => lucrareExtractDocxText(bytes);
 
-  String _extractXlsxText(Uint8List bytes) {
-    final archive = ZipDecoder().decodeBytes(bytes, verify: false);
-    final sharedStrings = <String>[];
-    for (final file in archive) {
-      if (file.name == 'xl/sharedStrings.xml' && file.isFile) {
-        final content = file.content;
-        final xml = content is List<int>
-            ? _decodeImportBytes(Uint8List.fromList(content))
-            : '$content';
-        for (final match in RegExp(r'<t[^>]*>([\s\S]*?)</t>').allMatches(xml)) {
-          sharedStrings.add(_decodeXmlText(match.group(1) ?? ''));
-        }
-      }
-    }
+  String _extractXlsxText(Uint8List bytes) => lucrareExtractXlsxText(bytes);
 
-    final rows = <String>[];
-    final worksheetFiles = archive
-        .where((file) =>
-            file.isFile && file.name.startsWith('xl/worksheets/sheet'))
-        .toList(growable: false)
-      ..sort((a, b) => a.name.compareTo(b.name));
-    for (final file in worksheetFiles) {
-      final content = file.content;
-      final xml = content is List<int>
-          ? _decodeImportBytes(Uint8List.fromList(content))
-          : '$content';
-      for (final rowMatch
-          in RegExp(r'<row[^>]*>([\s\S]*?)</row>').allMatches(xml)) {
-        final rowBody = rowMatch.group(1) ?? '';
-        final values = <String>[];
-        for (final cellMatch
-            in RegExp(r'<c([^>]*)>([\s\S]*?)</c>').allMatches(rowBody)) {
-          final attrs = cellMatch.group(1) ?? '';
-          final body = cellMatch.group(2) ?? '';
-          String value = '';
-          final shared = attrs.contains('t="s"') || attrs.contains("t='s'");
-          if (shared) {
-            final rawIndex =
-                RegExp(r'<v>(.*?)</v>').firstMatch(body)?.group(1) ?? '';
-            final index = int.tryParse(rawIndex.trim());
-            if (index != null && index >= 0 && index < sharedStrings.length) {
-              value = sharedStrings[index];
-            }
-          } else {
-            final inlineText =
-                RegExp(r'<is>[\s\S]*?<t[^>]*>([\s\S]*?)</t>[\s\S]*?</is>')
-                    .firstMatch(body)
-                    ?.group(1);
-            if (inlineText != null) {
-              value = _decodeXmlText(inlineText);
-            } else {
-              value =
-                  RegExp(r'<v>(.*?)</v>').firstMatch(body)?.group(1)?.trim() ??
-                      '';
-            }
-          }
-          if (value.trim().isNotEmpty) {
-            values.add(value.trim());
-          }
-        }
-        if (values.isNotEmpty) {
-          rows.add(values.join('\t'));
-        }
-      }
-    }
-    return rows.join('\n');
-  }
+  List<String> _splitImportedMaterialLine(String line) =>
+      lucrareSplitImportedMaterialLine(line);
 
-  List<String> _splitImportedMaterialLine(String line) {
-    final candidates = <String>['\t', ';', '|'];
-    for (final separator in candidates) {
-      if (!line.contains(separator)) continue;
-      final parts = line
-          .split(separator)
-          .map((item) => item.trim())
-          .where((item) => item.isNotEmpty)
-          .toList(growable: false);
-      if (parts.length >= 2) return parts;
-    }
-    if (line.split(',').length >= 3) {
-      final parts = line
-          .split(',')
-          .map((item) => item.trim())
-          .where((item) => item.isNotEmpty)
-          .toList(growable: false);
-      if (parts.length >= 2) return parts;
-    }
-    return <String>[line.trim()];
-  }
-
-  bool _looksLikeImportHeader(String line) {
-    final normalized = line.trim().toLowerCase();
-    return normalized.contains('denumire') &&
-        (normalized.contains('cant') || normalized.contains('um'));
-  }
+  bool _looksLikeImportHeader(String line) =>
+      lucrareLooksLikeImportHeader(line);
 
   BeneficiarySuppliedMaterial? _parseImportedBeneficiaryMaterial(
     String rawLine,
     int index,
-  ) {
-    final cleaned = rawLine
-        .replaceFirst(RegExp(r'^[-*•]+\s*'), '')
-        .replaceFirst(RegExp(r'^\d+[\.)]\s*'), '')
-        .trim();
-    if (cleaned.isEmpty || _looksLikeImportHeader(cleaned)) {
-      return null;
-    }
-    final parts = _splitImportedMaterialLine(cleaned);
-    if (parts.isEmpty) return null;
-    final name = parts.first.trim();
-    if (name.isEmpty) return null;
-
-    var unit = '';
-    var quantity = 1.0;
-    final notes = <String>[];
-    var numericIndex = -1;
-    for (var i = 1; i < parts.length; i++) {
-      if (double.tryParse(parts[i].replaceAll(',', '.')) != null) {
-        numericIndex = i;
-        break;
-      }
-    }
-    if (numericIndex == 1) {
-      quantity = double.tryParse(parts[1].replaceAll(',', '.')) ?? 1.0;
-      if (parts.length > 2) {
-        notes.addAll(parts.skip(2));
-      }
-    } else if (numericIndex > 1) {
-      unit = parts[1].trim();
-      quantity =
-          double.tryParse(parts[numericIndex].replaceAll(',', '.')) ?? 1.0;
-      if (numericIndex > 2) {
-        notes.addAll(parts.sublist(2, numericIndex));
-      }
-      if (numericIndex + 1 < parts.length) {
-        notes.addAll(parts.sublist(numericIndex + 1));
-      }
-    } else {
-      if (parts.length > 1) {
-        unit = parts[1].trim();
-      }
-      if (parts.length > 2) {
-        notes.addAll(parts.skip(2));
-      }
-    }
-
-    return BeneficiarySuppliedMaterial(
-      id: 'beneficiary-material-import-${DateTime.now().microsecondsSinceEpoch}-$index',
-      name: name,
-      unit: unit,
-      quantity: quantity,
-      notes: notes.join(' | ').trim(),
-    );
-  }
+  ) =>
+      lucrareParseImportedBeneficiaryMaterial(rawLine, index);
 
   List<BeneficiarySuppliedMaterial> _mergeBeneficiaryMaterialImports(
     List<BeneficiarySuppliedMaterial> existing,
     List<BeneficiarySuppliedMaterial> imported,
-  ) {
-    final merged = <String, BeneficiarySuppliedMaterial>{
-      for (final item in existing)
-        '${item.name.trim().toLowerCase()}|${item.unit.trim().toLowerCase()}':
-            item,
-    };
-    for (final item in imported) {
-      final key =
-          '${item.name.trim().toLowerCase()}|${item.unit.trim().toLowerCase()}';
-      final previous = merged[key];
-      if (previous == null) {
-        merged[key] = item;
-        continue;
-      }
-      final mergedNotes = <String>[
-        if (previous.notes.trim().isNotEmpty) previous.notes.trim(),
-        if (item.notes.trim().isNotEmpty && item.notes.trim() != previous.notes)
-          item.notes.trim(),
-      ].join(' | ');
-      merged[key] = previous.copyWith(
-        quantity: previous.quantity + item.quantity,
-        notes: mergedNotes,
-      );
-    }
-    return merged.values.toList(growable: false);
-  }
+  ) =>
+      lucrareMergeBeneficiaryMaterialImports(existing, imported);
 
   Future<void> _onImportBeneficiaryMaterials() async {
     final result = await FilePicker.pickFiles(
