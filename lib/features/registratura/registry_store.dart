@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 class RegistryStore {
@@ -133,7 +135,9 @@ class RegistryStore {
         if (decoded is Map) {
           rows.add(Map<String, dynamic>.from(decoded));
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[RegistryStore] parsare intrare registratură eșuată: $e');
+      }
     }
     rows.sort((a, b) {
       final aUpdated = '${a['updatedAt'] ?? a['createdAt'] ?? ''}';
@@ -399,7 +403,9 @@ class RegistryStore {
           if (decoded is Map) {
             rows.add(Map<String, dynamic>.from(decoded));
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[RegistryStore] parsare rând listă eșuată: $e');
+        }
       }
       if (rows.isNotEmpty) {
         return rows;
@@ -419,7 +425,9 @@ class RegistryStore {
         } else if (decoded is Map) {
           rows.add(Map<String, dynamic>.from(decoded));
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[RegistryStore] parsare format legacy eșuată: $e');
+      }
     }
 
     return rows;

@@ -31,20 +31,25 @@ class CommunicationService {
 
   // ── Telefon ─────────────────────────────────────────────────────────────────
 
-  Future<void> callPhone(String phone) async {
+  Future<bool> callPhone(String phone) async {
     final normalized = _normalizePhone(phone);
-    if (normalized.isEmpty) return;
+    if (normalized.isEmpty) return false;
     final url = Uri(scheme: 'tel', path: normalized);
     try {
       if (await canLaunchUrl(url)) {
         await launchUrl(url, mode: LaunchMode.externalApplication);
+        return true;
       }
-    } catch (_) {}
+      debugPrint('[CommunicationService] canLaunchUrl=false pentru: $url');
+    } catch (e) {
+      debugPrint('[CommunicationService] callPhone eroare: $e');
+    }
+    return false;
   }
 
   // ── Email ───────────────────────────────────────────────────────────────────
 
-  Future<void> sendEmail({
+  Future<bool> sendEmail({
     required String email,
     required String subject,
     String body = '',
@@ -60,8 +65,13 @@ class CommunicationService {
     try {
       if (await canLaunchUrl(url)) {
         await launchUrl(url, mode: LaunchMode.externalApplication);
+        return true;
       }
-    } catch (_) {}
+      debugPrint('[CommunicationService] canLaunchUrl=false pentru: $url');
+    } catch (e) {
+      debugPrint('[CommunicationService] sendEmail eroare: $e');
+    }
+    return false;
   }
 
   // ── Normalizare număr telefon ────────────────────────────────────────────────

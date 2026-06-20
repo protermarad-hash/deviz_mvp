@@ -285,7 +285,9 @@ class DevizTehnicRepository {
             return parts.length >= 3 ? int.tryParse(parts.last) ?? 0 : 0;
           }).toList();
           localNums.addAll(cloudNums);
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[DevizTehnicRepo] citire numere cloud eșuată, folosesc local: $e');
+        }
       }
 
       final maxNum =
@@ -327,7 +329,9 @@ class DevizTehnicRepository {
             .collection(_firestoreSettingsColl)
             .doc(_firestoreSettingsDoc)
             .set({'default_tip_document': tip.value}, SetOptions(merge: true));
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[DevizTehnicRepo] salvare tip implicit cloud best-effort eșuată (local persistă): $e');
+      }
     }
   }
 
@@ -348,7 +352,9 @@ class DevizTehnicRepository {
           await prefs.setString(_prefKeyDefaultTip, tip.value);
           return tip;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[DevizTehnicRepo] citire tip implicit cloud eșuată, folosesc local: $e');
+      }
     }
 
     // Fallback: local

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:http/http.dart' as http;
 
 import '../../core/ai_config_store.dart';
@@ -62,7 +64,9 @@ class ClaudeChatService {
       try {
         final decoded = jsonDecode(response.body);
         detail = (decoded['error']?['message'] ?? '').toString();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[ClaudeChat] parsare detaliu eroare API eșuată: $e');
+      }
       throw Exception(
         'Eroare API Claude (${response.statusCode})'
         '${detail.isEmpty ? '' : ': $detail'}',

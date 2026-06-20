@@ -74,7 +74,9 @@ class _FinancialDashboardPageState extends State<FinancialDashboardPage> {
             rataConversieActuala: 0,
           );
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[FinancialDashboard] calcul progres obiectiv eșuat: $e');
+      }
       if (mounted) {
         setState(() {
           _data = results[0] as FinancialDashboardData;

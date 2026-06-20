@@ -72,7 +72,7 @@ class ExportContabilitateService {
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/ProTerm_Contabilitate_${numeLuna}_$an.xlsx');
     await file.writeAsBytes(bytes);
-    await CommunicationService.instance.sendEmail(
+    final emailLansat = await CommunicationService.instance.sendEmail(
       email: email,
       subject: 'ProVentaris — Raport contabilitate $numeLuna $an',
       body: 'Buna ziua,\n\nAlaturat gasiti raportul de contabilitate '
@@ -85,6 +85,12 @@ class ExportContabilitateService {
           '- Rezumat financiar lunar\n\n'
           'Cu respect,\nSC PRO TERM SRL',
     );
+    if (!emailLansat) {
+      throw Exception(
+        'Nu s-a putut deschide aplicația de email pentru $email. '
+        'Fișierul a fost generat: ${file.path}',
+      );
+    }
     await _markExportDone(an, luna);
   }
 

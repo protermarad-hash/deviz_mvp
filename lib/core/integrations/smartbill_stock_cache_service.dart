@@ -158,6 +158,6 @@ class SmartBillStockCacheService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_cacheKey);
       await prefs.remove(_cacheTimestampKey);
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: curățare cache best-effort */}
   }
 }

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:http/http.dart' as http;
 
 import '../../core/ai_config_store.dart';
@@ -463,7 +465,9 @@ class AiAssistantService {
       try {
         final decoded = jsonDecode(response.body);
         detail = (decoded['error']?['message'] ?? '').toString();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[AiAssistant] parsare detaliu eroare API eșuată: $e');
+      }
       throw Exception(
         'Claude API (${response.statusCode})'
         '${detail.isEmpty ? '' : ': $detail'}',
@@ -625,7 +629,9 @@ class AiAssistantService {
       if (decoded is Map) {
         return Map<String, dynamic>.from(decoded);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[AiAssistant] decodare JSON directă eșuată, încerc extragere acoladă: $e');
+    }
     final firstBrace = raw.indexOf('{');
     final lastBrace = raw.lastIndexOf('}');
     if (firstBrace < 0 || lastBrace <= firstBrace) return null;
@@ -638,7 +644,9 @@ class AiAssistantService {
       if (decoded is Map) {
         return Map<String, dynamic>.from(decoded);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[AiAssistant] decodare JSON din substring eșuată: $e');
+    }
     return null;
   }
 

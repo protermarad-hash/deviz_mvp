@@ -154,7 +154,9 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
         _templateCatalog = templates;
         _sugestii = _buildSugestii(materials, templates);
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[DevizTehnicForm] încărcare catalog materiale/template eșuată: $e');
+    }
   }
 
   static List<_Sugestie> _buildSugestii(
@@ -259,7 +261,9 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     try {
       final n = await widget.repository.nextNumber(tip ?? _tipDocument);
       if (mounted) setState(() => _numarCtrl.text = n);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[DevizTehnicForm] generare următor număr eșuată: $e');
+    }
   }
 
   @override
@@ -634,7 +638,9 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
           await _templateRepo.upsertLocal(tpl);
           try {
             await _templateRepo.upsertToFirebase(tpl);
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('[DevizTehnicForm] upsert template la Firebase eșuat (local persistă): $e');
+          }
         }
       }
       final saved = await widget.repository.save(record);

@@ -70,7 +70,9 @@ class _PipelineDashboardPageState extends State<PipelineDashboardPage> {
               .map((m) => OfferRecord.fromMap(Map<String, dynamic>.from(m)))
               .where((o) => o.id.isNotEmpty)
               .toList();
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[PipelineDashboard] parsare oferte eșuată: $e');
+        }
       }
 
       // Lucrări
@@ -84,7 +86,9 @@ class _PipelineDashboardPageState extends State<PipelineDashboardPage> {
               .map((m) => JobRecord.fromMap(Map<String, dynamic>.from(m)))
               .where((j) => j.id.isNotEmpty && j.isActive)
               .toList();
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[PipelineDashboard] parsare lucrări eșuată: $e');
+        }
       }
 
       // CRM
@@ -98,7 +102,9 @@ class _PipelineDashboardPageState extends State<PipelineDashboardPage> {
               .map((m) => CrmRecord.fromMap(Map<String, dynamic>.from(m)))
               .where((c) => c.id.isNotEmpty)
               .toList();
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[PipelineDashboard] parsare CRM eșuată: $e');
+        }
       }
 
       // Calculează statistici

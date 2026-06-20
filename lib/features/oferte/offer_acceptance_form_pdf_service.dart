@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
@@ -36,7 +37,9 @@ class OfferAcceptanceFormPdfService {
       try {
         final bytes = _decodeBase64(company.logoBase64);
         logoImage = pw.MemoryImage(bytes);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[OfferAcceptancePdf] decodare logo eșuată: $e');
+      }
     }
 
     // Decodează semnătura client dacă există
@@ -45,7 +48,9 @@ class OfferAcceptanceFormPdfService {
     if (clientSig.isNotEmpty) {
       try {
         clientSigImage = pw.MemoryImage(_decodeBase64(clientSig));
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[OfferAcceptancePdf] decodare semnătură client eșuată: $e');
+      }
     }
 
     // Decodează semnătura emitent
@@ -53,7 +58,9 @@ class OfferAcceptanceFormPdfService {
     if (offer.issuerSignatureBase64.isNotEmpty) {
       try {
         issuerSigImage = pw.MemoryImage(_decodeBase64(offer.issuerSignatureBase64));
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[OfferAcceptancePdf] decodare semnătură emitent eșuată: $e');
+      }
     }
 
     final dateFormatter = DateFormat('dd.MM.yyyy', 'ro');
@@ -125,7 +132,9 @@ class OfferAcceptanceFormPdfService {
     if (branding.logoBytes != null && branding.logoBytes!.isNotEmpty) {
       try {
         logoImage = pw.MemoryImage(branding.logoBytes!);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[OfferAcceptancePdf] încărcare logo din branding eșuată: $e');
+      }
     }
 
     pw.MemoryImage? clientSigImage;
@@ -134,7 +143,9 @@ class OfferAcceptanceFormPdfService {
         clientSigImage = pw.MemoryImage(
           _decodeBase64(offer.acceptanceFormSignatureBase64),
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[OfferAcceptancePdf] decodare semnătură client (form) eșuată: $e');
+      }
     }
 
     pw.MemoryImage? issuerSigImage;
@@ -143,7 +154,9 @@ class OfferAcceptanceFormPdfService {
         issuerSigImage = pw.MemoryImage(
           _decodeBase64(offer.issuerSignatureBase64),
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[OfferAcceptancePdf] decodare semnătură emitent (form) eșuată: $e');
+      }
     }
 
     final dateFormatter = DateFormat('dd.MM.yyyy', 'ro');

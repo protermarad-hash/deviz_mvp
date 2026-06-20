@@ -268,7 +268,7 @@ class FieldPhotoCaptureService {
     try {
       final authUser = FirebaseAuth.instance.currentUser;
       if (authUser != null) await authUser.getIdToken(true);
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: refresh token best-effort înainte de upload */}
     debugPrint('[FieldPhotoRetry] path=${ref.fullPath}');
     debugPrint('[FieldPhotoRetry] bucket=${FirebaseStorage.instance.bucket}');
     debugPrint('[FieldPhotoRetry] user=${FirebaseAuth.instance.currentUser?.uid ?? 'null (neautentificat)'}');
@@ -343,7 +343,7 @@ class FieldPhotoCaptureService {
     }
     try {
       await FirebaseStorage.instance.ref(cloudPath).delete();
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: ștergere remote best-effort (poate fi deja ștearsă) */}
   }
 
   static String _normalizedFileName(String raw) {

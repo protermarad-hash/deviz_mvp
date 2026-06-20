@@ -50,7 +50,9 @@ class _CrmPageState extends State<CrmPage>
     if (widget.repository != null && _clients.isEmpty) {
       try {
         _clients = await widget.repository!.listClients();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[CrmPage] încărcare clienți eșuată: $e');
+      }
     }
     if (!mounted) return;
     setState(() {
@@ -450,8 +452,21 @@ class _CrmPageState extends State<CrmPage>
                     label:
                         const Text('Suna', style: TextStyle(fontSize: 11)),
                     visualDensity: VisualDensity.compact,
-                    onPressed: () =>
-                        CommunicationService.instance.callPhone(phone),
+                    onPressed: () async {
+                      final ok = await CommunicationService.instance
+                          .callPhone(phone);
+                      if (!ok && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Nu s-a putut iniția apelul. '
+                              'Verificați aplicația de telefon.',
+                            ),
+                            duration: Duration(seconds: 4),
+                          ),
+                        );
+                      }
+                    },
                   ),
                 ActionChip(
                   avatar: const Icon(Icons.edit_outlined, size: 14),

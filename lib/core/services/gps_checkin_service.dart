@@ -177,7 +177,9 @@ class GpsCheckinService {
         ];
         if (parts.isNotEmpty) adresaGeo = parts.join(', ');
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[GpsCheckin] geocodare inversă (adresă) eșuată: $e');
+    }
 
     // 5. Calculează distanța față de adresa programării
     double? distanta;
@@ -194,7 +196,9 @@ class GpsCheckinService {
           );
           inRaza = distanta <= _razaAcceptata;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[GpsCheckin] calcul distanță față de adresă eșuat: $e');
+      }
     }
 
     // 6. Creează și salvează înregistrarea

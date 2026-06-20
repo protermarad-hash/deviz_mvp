@@ -293,7 +293,9 @@ class _PartnerFinancialDashboardPageState
           preserveExistingStatus: true,
         );
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[PartnerFinancialDashboard] sync tranzacții batch eșuat: $e');
+    }
   }
 
   Future<void> _recalculateAll() async {

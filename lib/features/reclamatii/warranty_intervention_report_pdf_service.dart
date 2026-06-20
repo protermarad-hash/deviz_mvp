@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -499,7 +500,9 @@ class WarrantyInterventionReportPdfService {
         final bytes = Uint8List.fromList(const Base64Decoder().convert(b64));
         images.add(pw.MemoryImage(bytes));
         captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[WarrantyReportPdf] decodare poză base64 eșuată: $e');
+      }
     }
 
     if (images.isEmpty) {
@@ -513,7 +516,9 @@ class WarrantyInterventionReportPdfService {
             images.add(pw.MemoryImage(response.bodyBytes));
             captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[WarrantyReportPdf] descărcare poză din URL eșuată: $e');
+        }
       }
     }
 

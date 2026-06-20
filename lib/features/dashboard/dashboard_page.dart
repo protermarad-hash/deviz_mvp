@@ -200,7 +200,9 @@ class _DashboardPageState extends State<DashboardPage> {
           if (user.email.trim().toLowerCase() == authEmail) return user;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Dashboard] rezolvare utilizator curent eșuată: $e');
+    }
     return null;
   }
 

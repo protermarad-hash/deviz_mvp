@@ -225,7 +225,9 @@ class _HrEmployeeDetailPageState extends State<HrEmployeeDetailPage>
       final payments = await HrPayrollPaymentRepository.instance
           .listPaymentsForEmployee(widget.profile.employeeId);
       if (mounted) setState(() => _payments = payments);
-    } catch (_) {} finally {
+    } catch (e) {
+      debugPrint('[HrEmployeeDetail] încărcare plăți angajat eșuată: $e');
+    } finally {
       if (mounted) setState(() => _loadingPayments = false);
     }
   }

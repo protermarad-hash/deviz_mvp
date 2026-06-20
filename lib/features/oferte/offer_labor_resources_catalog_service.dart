@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/app_models.dart';
@@ -579,7 +581,9 @@ class OfferLaborResourcesCatalogService {
             .map((row) => Map<String, dynamic>.from(row))
             .toList(growable: false);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[OfferLaborCatalog] parsare cache eșuată: $e');
+    }
     return const <Map<String, dynamic>>[];
   }
 

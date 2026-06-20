@@ -119,7 +119,9 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
           for (final a in allLocal) {
             localById[a.id] = a;
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[PartnerFinancialPage] citire programări locale eșuată: $e');
+        }
       }
 
       final results = await Future.wait([

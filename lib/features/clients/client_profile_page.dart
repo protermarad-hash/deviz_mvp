@@ -116,7 +116,9 @@ class _ClientProfilePageState extends State<ClientProfilePage>
         final cloud = await FirebaseOferteRepository().listOffers();
         await _localOffersRepo.replaceOffers(cloud);
         return cloud;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[ClientProfile] citire oferte cloud eșuată, folosesc local: $e');
+      }
     }
     return _localOffersRepo.listOffers();
   }

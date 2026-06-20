@@ -522,7 +522,9 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
               'Mini-oferta PDF generata din Agent teren pentru cererea ${persisted.id}.',
           status: 'emis',
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[FieldSalesPage] înregistrare document în registratură eșuată: $e');
+      }
       if (!mounted) return;
       if (share) {
         ClientRecord? client;
@@ -669,7 +671,7 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
     try {
       await FirebaseAuth.instance.currentUser?.getIdToken(true);
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: refresh token best-effort înainte de upload */}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
     try {
       await ref.putData(

@@ -106,21 +106,27 @@ class _ComplaintQuickOfferTabState extends State<ComplaintQuickOfferTab> {
           if (_existingOfertaNumar?.isEmpty == true) _existingOfertaNumar = null;
         }
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[ComplaintQuickOffer] încărcare draft ofertă eșuată: $e');
+    }
   }
 
   Future<void> _loadCatalog() async {
     try {
       final mats = await MaterialsCatalogService().listMaterials();
       if (mounted) setState(() => _catalog = mats);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[ComplaintQuickOffer] încărcare catalog materiale eșuată: $e');
+    }
   }
 
   Future<void> _loadCompanyProfile() async {
     try {
       final profile = await widget.repository.loadCompanyProfile();
       if (mounted) setState(() => _companyProfile = profile);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[ComplaintQuickOffer] încărcare profil firmă eșuată: $e');
+    }
   }
 
   Future<void> _saveDraft() async {

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 class MasterEmployee {
@@ -378,7 +380,9 @@ class MasterLocalStore {
             .map((e) => Map<String, dynamic>.from(e))
             .toList(growable: false);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[MasterLocalStore] parsare listă JSON eșuată: $e');
+    }
     return const [];
   }
 }

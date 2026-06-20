@@ -81,7 +81,9 @@ class EmailServerService {
           await _writeConfigs(cloudItems);
           return cloudItems;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[EmailServer] listEmailServerConfigs cloud eșuat, fallback: $e');
+      }
     }
 
     if (!_isCloudAvailable) return localItems;
@@ -119,7 +121,9 @@ class EmailServerService {
           await _writeLogs(cloudItems);
           return cloudItems;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[EmailServer] listEmailDeliveryLogs cloud eșuat, fallback: $e');
+      }
     }
 
     if (!_isCloudAvailable) {

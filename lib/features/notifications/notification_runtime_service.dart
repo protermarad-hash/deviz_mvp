@@ -14,7 +14,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('[NotificationRuntime] init Firebase în background handler eșuat: $e');
+  }
 }
 
 typedef NotificationTapHandler = Future<void> Function(
@@ -189,7 +191,9 @@ class NotificationRuntimeService {
       final decoded = jsonDecode(payload);
       if (decoded is! Map) return;
       await _tapHandler?.call(Map<String, dynamic>.from(decoded));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[NotificationRuntime] procesare payload notificare eșuată: $e');
+    }
   }
 
   /// Afișează o notificare locală imediată, fără server (util pentru alerte on-device).

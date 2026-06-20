@@ -730,7 +730,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
       }
       if (!mounted) return;
       _setStateLogged('photo counts ready', () => _photoCountByEntityId = counts);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Programari] calcul contoare poze eșuat: $e');
+    }
   }
 
   bool get _hasEditorReferenceData =>
@@ -1063,7 +1065,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Programari] rezolvare utilizator curent eșuată: $e');
+    }
     return null;
   }
 

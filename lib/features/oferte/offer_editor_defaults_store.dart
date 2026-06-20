@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/company_profile.dart';
@@ -117,7 +119,9 @@ class OfferEditorDefaultsStore {
           regiePercent: regiePercent,
         );
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[OfferEditorDefaults] parsare cache eșuată, folosesc default: $e');
+    }
     return OfferEditorDefaults(
       vatPercent: vatPercent,
       profitPercent: profitPercent,

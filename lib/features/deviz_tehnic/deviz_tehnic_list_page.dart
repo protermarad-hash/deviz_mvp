@@ -376,7 +376,9 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
       if (FirebaseBootstrap.isInitialized) {
         try {
           cloudRepo = FirebaseLucrariRepository();
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[DevizTehnicList] init repo cloud lucrări eșuat: $e');
+        }
       }
       var queuedOffline = cloudRepo == null;
       if (cloudRepo != null) {

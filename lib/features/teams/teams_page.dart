@@ -258,7 +258,9 @@ class _TeamsPageState extends State<TeamsPage> {
     if (cloud != null) {
       try {
         await cloud.upsertEmployee(row);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[TeamsPage] upsert angajat cloud best-effort eșuat: $e');
+      }
     }
     final next = [..._employees];
     final index = next.indexWhere((e) => e.id == row.id);

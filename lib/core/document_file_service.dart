@@ -235,7 +235,7 @@ class DocumentFileService {
       directories.add(appDocs.path);
       directories.add('${appDocs.path}${Platform.pathSeparator}PDF');
       directories.add('${appDocs.path}${Platform.pathSeparator}jobs_pdf');
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: probare director best-effort, se adaugă alte căi mai jos */}
 
     if (Platform.isWindows) {
       final userProfile = (Platform.environment['USERPROFILE'] ?? '').trim();

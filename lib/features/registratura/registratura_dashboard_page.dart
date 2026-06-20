@@ -213,7 +213,9 @@ class _RegistraturaDashboardPageState extends State<RegistraturaDashboardPage> {
           arguments: row['sourceArgs'],
         );
         return;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[RegistraturaDashboard] navigare rută eșuată, încerc filePath: $e');
+      }
     }
     final path = '${row['filePath'] ?? ''}'.trim();
     if (path.isNotEmpty) {

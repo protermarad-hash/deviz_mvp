@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -406,7 +408,9 @@ class EmployeeFinancialRepository {
         await _upsertLocalSummary(summary);
         return summary;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[EmployeeFinancial] citire sumar cloud eșuată, folosesc local: $e');
+    }
 
     return localSummary;
   }
@@ -449,7 +453,9 @@ class EmployeeFinancialRepository {
           await _upsertLocalSummary(existing);
           return existing;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[EmployeeFinancial] citire sumar existent cloud eșuată (guard cache gol): $e');
+      }
     }
 
     final allPayments = await _readLocalPayments();
@@ -524,7 +530,9 @@ class EmployeeFinancialRepository {
         await _upsertLocalSettings(settings);
         return settings;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[EmployeeFinancial] citire settings cloud eșuată, folosesc local: $e');
+    }
     return localSetting;
   }
 
@@ -601,7 +609,9 @@ class EmployeeFinancialRepository {
         await OfflineSyncRuntime.instance
             .queueEmployeePayEntryUpsert(e.toMap());
         synced++;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[EmployeeFinancial] sync pay entry la cloud eșuat: $e');
+      }
     }
 
     final payments = await _readLocalPayments();
@@ -613,7 +623,9 @@ class EmployeeFinancialRepository {
         await OfflineSyncRuntime.instance
             .queueEmployeePaymentUpsert(p.toMap());
         synced++;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[EmployeeFinancial] sync payment la cloud eșuat: $e');
+      }
     }
 
     return synced;

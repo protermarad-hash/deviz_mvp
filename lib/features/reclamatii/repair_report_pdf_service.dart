@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -514,7 +515,9 @@ class RepairReportPdfService {
         final bytes = Uint8List.fromList(const Base64Decoder().convert(b64));
         images.add(pw.MemoryImage(bytes));
         captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[RepairReportPdf] decodare poză base64 eșuată: $e');
+      }
     }
 
     // Fallback la URL Firebase Storage dacă nu avem base64
@@ -529,7 +532,9 @@ class RepairReportPdfService {
             images.add(pw.MemoryImage(response.bodyBytes));
             captions.add(i < report.photoCaptions.length ? report.photoCaptions[i] : '');
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[RepairReportPdf] descărcare poză din URL eșuată: $e');
+        }
       }
     }
 

@@ -1,4 +1,6 @@
 import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -280,7 +282,9 @@ class NotificationCenterService {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Notifications] upsert preference cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writePreferences(items..sort(_comparePreferences));
   }
@@ -426,7 +430,9 @@ class NotificationCenterService {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Notifications] upsert device token cloud best-effort eșuat: $e');
+      }
     }
     await _writeDeviceTokens(items..sort(_compareDeviceTokens));
   }
@@ -449,7 +455,9 @@ class NotificationCenterService {
               updated.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Notifications] dezactivare device token cloud best-effort eșuată: $e');
+      }
     }
     await _writeDeviceTokens(items..sort(_compareDeviceTokens));
   }
@@ -777,7 +785,9 @@ class NotificationCenterService {
         if (snapshot.exists) {
           return NotificationEmailQueueRecord.fromMap(snapshot.data() ?? {});
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Notifications] citire email queue cloud eșuată: $e');
+      }
     }
 
     final local = await _readLocalEmailQueueOnly();

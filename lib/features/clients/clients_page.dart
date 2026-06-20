@@ -109,7 +109,9 @@ class _ClientsPageState extends State<ClientsPage> {
           _typeFilter = ClientType.values.firstWhere(
             (e) => e.name == typeName,
           );
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[ClientsPage] parsare filtru tip client eșuată: $e');
+        }
       }
       if (activeStr == 'true') {
         _activeFilter = true;
@@ -348,7 +350,9 @@ class _ClientsPageState extends State<ClientsPage> {
         final cloudItems = await FirebaseOferteRepository().listOffers();
         await _localOffersRepository.replaceOffers(cloudItems);
         return cloudItems;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[ClientsPage] citire oferte cloud eșuată, folosesc local: $e');
+      }
     }
     return _localOffersRepository.listOffers();
   }

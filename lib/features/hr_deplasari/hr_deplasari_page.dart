@@ -95,7 +95,9 @@ class _HrDeplasariPageState extends State<HrDeplasariPage>
           _tripStatus = TripStatus.values.firstWhere(
             (e) => e.name == tripStatusName,
           );
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[HrDeplasari] parsare filtru status deplasare eșuată: $e');
+        }
       }
       _tripClient = prefs.getString(_prefTripClient) ?? '';
       _tripTeam = prefs.getString(_prefTripTeam) ?? '';
@@ -113,7 +115,9 @@ class _HrDeplasariPageState extends State<HrDeplasariPage>
           _orderStatus = TravelOrderStatus.values.firstWhere(
             (e) => e.name == orderStatusName,
           );
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[HrDeplasari] parsare filtru status ordin eșuată: $e');
+        }
       }
       final orderFromMs = prefs.getInt(_prefOrderFrom);
       if (orderFromMs != null) {

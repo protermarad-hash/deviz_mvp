@@ -238,7 +238,9 @@ class _HrMonthlyTimesheetPageState extends State<HrMonthlyTimesheetPage> {
       try {
         employees = await FirebaseAngajatiRepository().listEmployees();
         await MasterLocalStore.writeEmployees(employees);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[HrMonthlyTimesheet] citire angajați cloud eșuată, folosesc local: $e');
+      }
     }
     final teams = await MasterLocalStore.readTeams();
     final teamNameById = <String, String>{

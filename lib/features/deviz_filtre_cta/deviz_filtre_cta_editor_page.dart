@@ -96,7 +96,9 @@ class _DevizFiltreCtaEditorPageState
     try {
       final nr = await widget.repository.nextNumber();
       if (mounted) setState(() => _numarCtrl.text = nr);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[FiltreCtaEditor] generare număr eșuată: $e');
+    }
   }
 
   Future<void> _loadClients() async {
@@ -108,7 +110,9 @@ class _DevizFiltreCtaEditorPageState
           ..sort((a, b) =>
               a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[FiltreCtaEditor] încărcare clienți eșuată: $e');
+    }
   }
 
   // ── Totale ─────────────────────────────────────────────────────────────────

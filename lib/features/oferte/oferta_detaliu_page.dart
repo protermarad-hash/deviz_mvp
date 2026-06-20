@@ -2457,7 +2457,7 @@ if (Test-Path \$attachment) {
         'notification_email_attachments/oferte/$safeEntity/${now}_$normalizedFileName';
     try {
       await FirebaseAuth.instance.currentUser?.getIdToken(true);
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: refresh token best-effort înainte de upload */}
     final ref = FirebaseStorage.instance.ref().child(path);
     try {
       await ref.putData(
@@ -2697,10 +2697,10 @@ if (Test-Path \$attachment) {
         if (name.startsWith(prefix) && name.endsWith('.pdf')) {
           try {
             entity.deleteSync();
-          } catch (_) {}
+          } catch (_) {/* intenționat ignorat: ștergere best-effort PDF temporar vechi */}
         }
       }
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: curățare best-effort director PDF-uri vechi */}
   }
 
   Future<void> _showGeneratedPdfActions(String filePath) async {

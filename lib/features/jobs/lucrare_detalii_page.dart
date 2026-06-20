@@ -248,7 +248,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               if (memberName.isNotEmpty) {
                 return memberName;
               }
-            } catch (_) {}
+            } catch (_) {/* intenționat ignorat: probare duck-typing .name pe membru dynamic */}
             return '$member'.trim();
           }).where((member) => member.isNotEmpty),
       ];
@@ -564,7 +564,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           commercialSettings =
               _mergeCommercialSettings(Map<String, dynamic>.from(decoded));
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LucrareDetalii] parsare commercial settings eșuată: $e');
+      }
     }
     final latestReportRegistryRow =
         _latestRegistryReportForCurrentJob(registryRows);
@@ -577,7 +579,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         if (decoded is Map) {
           savedTeam = _Option.fromMap(Map<String, dynamic>.from(decoded));
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LucrareDetalii] parsare echipă salvată eșuată: $e');
+      }
     }
 
     final availableTeamIds = teamsFromStore
@@ -1135,12 +1139,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final dynamic repo = widget.repository;
       final dynamic raw = await (repo.listTeamsLookup() as Future<dynamic>);
       if (raw is Iterable) return _toOptions(raw);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] listTeamsLookup eșuat, încerc sursa următoare: $e');
+    }
     try {
       final dynamic repo = widget.repository;
       final dynamic raw = await (repo.listTeams() as Future<dynamic>);
       if (raw is Iterable) return _toOptions(raw);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] listTeams eșuat: $e');
+    }
     return const [];
   }
 
@@ -1149,12 +1157,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final lookup = await widget.repository.listEmployeesLookup();
       final rows = lookup.map(_Option.fromAny).toList(growable: false);
       if (rows.isNotEmpty) return _dedupeOptions(rows);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] listEmployeesLookup eșuat, încerc sursa următoare: $e');
+    }
     try {
       final dynamic repo = widget.repository;
       final dynamic raw = await (repo.listEmployees() as Future<dynamic>);
       if (raw is Iterable) return _toOptions(raw);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] listEmployees eșuat: $e');
+    }
     final local = await MasterLocalStore.readEmployees();
     if (local.isNotEmpty) {
       return local
@@ -1180,12 +1192,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final dynamic repo = widget.repository;
       final dynamic raw = await (repo.listMaterials() as Future<dynamic>);
       if (raw is Iterable) return _toMaterials(raw);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] listMaterials eșuat, încerc sursa următoare: $e');
+    }
     try {
       final dynamic repo = widget.repository;
       final dynamic raw = await (repo.listMaterialsLookup() as Future<dynamic>);
       if (raw is Iterable) return _toMaterials(raw);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] listMaterialsLookup eșuat: $e');
+    }
     final local = await MasterLocalStore.readMaterials();
     if (local.isNotEmpty) {
       return local
@@ -1283,7 +1299,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             .map((e) => Map<String, dynamic>.from(e))
             .toList(growable: false);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] parsare rânduri JSON eșuată: $e');
+    }
     return const [];
   }
 
@@ -1311,7 +1329,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         }
         return out;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] parsare checklist eșuată, folosesc default: $e');
+    }
     return defaults;
   }
 
@@ -1882,7 +1902,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       if (localJobsMax > max) {
         max = localJobsMax;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[LucrareDetalii] citire secvență max din jobs locale eșuată: $e');
+    }
     final cloud = _cloudRepository;
     if (cloud != null) {
       try {
@@ -4761,12 +4783,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     if (id.isNotEmpty) {
       try {
         await widget.repository.deleteAppointment(id);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LucrareDetalii] deleteAppointment eșuat (queue rămâne plasă de siguranță): $e');
+      }
       // Queue the delete in OfflineSyncRuntime as a safety net — ensures the
       // tombstone is written even if the repository call above partially failed.
       try {
         await OfflineSyncRuntime.instance.queueAppointmentDelete(id);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LucrareDetalii] queueAppointmentDelete eșuat: $e');
+      }
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -11445,8 +11471,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         final dynamic converted = profile.toMap();
         if (converted is Map<String, dynamic>) return converted;
         if (converted is Map) return Map<String, dynamic>.from(converted);
-      } catch (_) {}
-    } catch (_) {}
+      } catch (_) {/* intenționat ignorat: probare duck-typing .toMap() pe dynamic */}
+    } catch (_) {/* intenționat ignorat: profil fără toMap valid → returnez map gol */}
     return <String, dynamic>{};
   }
 
@@ -13209,7 +13235,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
     try {
       await FirebaseAuth.instance.currentUser?.getIdToken(true);
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: refresh token best-effort înainte de upload */}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
     try {
       await ref.putData(
@@ -16795,7 +16821,7 @@ class _Option {
         requiresLodgingByDefault =
             value?.toString().toLowerCase().trim() == 'true';
       }
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: probare duck-typing pe dynamic, folosesc default */}
     bool active = true;
     try {
       final dynamic value = (raw as dynamic).active;
@@ -16804,7 +16830,7 @@ class _Option {
       } else {
         active = value?.toString().toLowerCase().trim() != 'false';
       }
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: probare duck-typing pe dynamic, folosesc default */}
     return _Option(
       id: id,
       label: label.isEmpty ? id : label,

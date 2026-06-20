@@ -780,7 +780,9 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         // Alertă locală o singură dată per sesiune (folosim un flag de sesiune)
         _showCrmAlertIfNeeded(crmPending.length);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[RoleReadyShell] încărcare badge-uri CRM eșuată: $e');
+    }
   }
 
   static bool _crmAlertShownThisSession = false;

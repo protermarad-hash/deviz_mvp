@@ -698,7 +698,9 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
       if (validRepositoryRows.isNotEmpty) {
         return validRepositoryRows;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Reclamatii] citire echipe din repository eșuată, folosesc local: $e');
+    }
 
     return localRows
         .where((row) => row.id.trim().isNotEmpty)
@@ -718,7 +720,9 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
         );
         return validRepositoryRows;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Reclamatii] citire angajați din repository eșuată, folosesc local: $e');
+    }
 
     final localRows = await MasterLocalStore.readEmployees();
     return localRows

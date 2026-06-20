@@ -622,7 +622,9 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
               Uint8List? bytes;
               try {
                 bytes = base64Decode(_photoBase64List[i]);
-              } catch (_) {}
+              } catch (e) {
+                debugPrint('[RepairReportEditor] decodare poză preview eșuată: $e');
+              }
               return Column(
                 children: [
                   Expanded(

@@ -313,7 +313,9 @@ class PartnerFinancialRepository {
         await _upsertLocalSummary(summary);
         return summary;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[PartnerFinancial] citire sumar cloud eșuată, folosesc local: $e');
+    }
 
     return localSummary;
   }
@@ -365,7 +367,9 @@ class PartnerFinancialRepository {
           await _upsertLocalSummary(existingSummary);
           return existingSummary;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[PartnerFinancial] citire sumar existent cloud eșuată (guard cache gol): $e');
+      }
     }
 
     // Formula definitivă — bazată pe financialDirection (getter robust în model):

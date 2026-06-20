@@ -828,7 +828,7 @@ class LocalAppDataRepository implements AppDataRepository {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_tombstoneCacheTsKey);
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: doar invalidare cache tombstone */}
   }
 
   @override
@@ -1967,7 +1967,9 @@ class LocalAppDataRepository implements AppDataRepository {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] upsert warranty intervention report cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writeWarrantyInterventionReports(sorted);
   }
@@ -1981,7 +1983,9 @@ class LocalAppDataRepository implements AppDataRepository {
     if (_isRepairReportsCloudAvailable) {
       try {
         await _warrantyInterventionReportsCollection.doc(trimmedId).delete();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] delete warranty intervention report cloud best-effort eșuat: $e');
+      }
     }
     final items = [...await _readLocalWarrantyInterventionReportsOnly()]
       ..removeWhere((item) => item.id == trimmedId);
@@ -2060,7 +2064,9 @@ class LocalAppDataRepository implements AppDataRepository {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] upsert complaint client centralizer cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writeComplaintClientCentralizers(sorted);
   }
@@ -2074,7 +2080,9 @@ class LocalAppDataRepository implements AppDataRepository {
     if (_isComplaintsCloudAvailable) {
       try {
         await _complaintClientCentralizersCollection.doc(trimmedId).delete();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] delete complaint client centralizer cloud best-effort eșuat: $e');
+      }
     }
     final items = [...await _readLocalComplaintClientCentralizersOnly()]
       ..removeWhere((item) => item.id == trimmedId);
@@ -2149,7 +2157,9 @@ class LocalAppDataRepository implements AppDataRepository {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] upsert complaint work order cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writeComplaintWorkOrders(sorted);
   }
@@ -2163,7 +2173,9 @@ class LocalAppDataRepository implements AppDataRepository {
     if (_isComplaintsCloudAvailable) {
       try {
         await _complaintWorkOrdersCollection.doc(trimmedId).delete();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] delete complaint work order cloud best-effort eșuat: $e');
+      }
     }
     final items = [...await _readLocalComplaintWorkOrdersOnly()]
       ..removeWhere((item) => item.id == trimmedId);
@@ -2271,7 +2283,9 @@ class LocalAppDataRepository implements AppDataRepository {
                   item.toMap(),
                   SetOptions(merge: true),
                 );
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('[LocalAppData] forceSync field photo cloud best-effort eșuat: $e');
+          }
           cloudItems = <FieldPhotoRecord>[...cloudItems, item];
           knownIds.add(id);
         }
@@ -2363,7 +2377,9 @@ class LocalAppDataRepository implements AppDataRepository {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] upsert field photo cloud best-effort eșuat (queue/local persistă): $e');
+      }
     }
   }
 
@@ -2383,7 +2399,9 @@ class LocalAppDataRepository implements AppDataRepository {
     if (_isFieldPhotosCloudAvailable) {
       try {
         await _fieldPhotosCollection.doc(trimmedId).delete();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] delete field photo cloud best-effort eșuat (queue persistă): $e');
+      }
     }
   }
 
@@ -2443,7 +2461,9 @@ class LocalAppDataRepository implements AppDataRepository {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] upsert monthly timesheet cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writeMonthlyTimesheets(sorted);
   }
@@ -2457,7 +2477,9 @@ class LocalAppDataRepository implements AppDataRepository {
     if (_isMonthlyTimesheetsCloudAvailable) {
       try {
         await _monthlyTimesheetsCollection.doc(trimmedId).delete();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] delete monthly timesheet cloud best-effort eșuat: $e');
+      }
     }
     final items = [...await _readLocalMonthlyTimesheetsOnly()]
       ..removeWhere((item) => item.id == trimmedId);
@@ -2654,7 +2676,9 @@ class LocalAppDataRepository implements AppDataRepository {
             return items;
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] citire cloud eșuată, fallback la date locale legacy: $e');
+      }
     }
 
     final legacy = await _loadLegacyListRows(
@@ -3127,7 +3151,9 @@ class LocalAppDataRepository implements AppDataRepository {
             ..sort((a, b) => b.updatedAt.millisecondsSinceEpoch
                 .compareTo(a.updatedAt.millisecondsSinceEpoch));
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] parsare jobs locale eșuată: $e');
+      }
     }
     return const <JobRecord>[];
   }
@@ -3654,7 +3680,9 @@ class LocalAppDataRepository implements AppDataRepository {
           settings.toMap(),
           SetOptions(merge: true),
         );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] upsert registry settings cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writeLocalRegistrySettings(settings);
   }
@@ -5002,7 +5030,9 @@ class LocalAppDataRepository implements AppDataRepository {
         if (decoded is Map) {
           return PdfExportSettings.fromMap(Map<String, dynamic>.from(decoded));
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] parsare PDF export settings eșuată, folosesc default: $e');
+      }
     }
     return (fallbackProfile ?? const CompanyProfile()).pdfExportSettings;
   }
@@ -5027,7 +5057,9 @@ class LocalAppDataRepository implements AppDataRepository {
         } else if (decoded is Map) {
           base = Map<String, dynamic>.from(decoded);
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[LocalAppData] parsare cache company settings eșuată: $e');
+      }
     }
     final merged = <String, dynamic>{...base, ...profile.toMap()};
     final payload = jsonEncode(merged);

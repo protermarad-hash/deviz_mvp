@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -108,7 +110,9 @@ class FieldSalesService {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[FieldSales] upsert lead cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writeLeads(items..sort(_compareLeads));
   }
@@ -165,7 +169,9 @@ class FieldSalesService {
               next.toMap(),
               SetOptions(merge: true),
             );
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[FieldSales] upsert request cloud best-effort eșuat (local persistă): $e');
+      }
     }
     await _writeRequests(items..sort(_compareRequests));
   }

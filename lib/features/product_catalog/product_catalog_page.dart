@@ -964,7 +964,7 @@ class _ProductCatalogPageState extends State<ProductCatalogPage>
         'notification_email_attachments/$sourceModule/$safeEntity/${DateTime.now().millisecondsSinceEpoch}_$normalizedName';
     try {
       await FirebaseAuth.instance.currentUser?.getIdToken(true);
-    } catch (_) {}
+    } catch (_) {/* intenționat ignorat: refresh token best-effort înainte de upload */}
     final ref = FirebaseStorage.instance.ref().child(storagePath);
     try {
       await ref.putData(

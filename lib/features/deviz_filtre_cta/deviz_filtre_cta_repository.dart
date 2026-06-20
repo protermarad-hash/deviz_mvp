@@ -309,7 +309,9 @@ class DevizFiltreCtaRepository {
             return parts.length >= 3 ? int.tryParse(parts.last) ?? 0 : 0;
           }).toList();
           localNums.addAll(cloudNums);
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[FiltreCtaRepo] citire numere cloud eșuată, folosesc local: $e');
+        }
       }
 
       final maxNum =
