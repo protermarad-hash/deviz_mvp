@@ -13898,6 +13898,58 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     _saveLiniiPlanificate(linii);
   }
 
+  Widget _buildRepopulareCard(BuildContext context) {
+    final ofertaRef = _jobSnapshot.sourceOfferNumber.isNotEmpty
+        ? _jobSnapshot.sourceOfferNumber
+        : _jobSnapshot.sourceOfferId;
+    return Card(
+      color: Colors.orange[50],
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Colors.orange.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.orange[700], size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Linii planificate neimportate',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange[800],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Această lucrare a fost convertită din oferta $ofertaRef, '
+              'dar liniile planificate nu au fost importate încă. '
+              'Importă liniile pentru a folosi tracking-ul de execuție.',
+              style: TextStyle(fontSize: 13, color: Colors.orange[900]),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: Text('Re-populează din $ofertaRef'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.orange[700],
+              ),
+              onPressed: _repopulateFromOffer,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildLiniiTracking(BuildContext context) {
     final linii = _jobSnapshot.liniiPlanificate;
     final totalExecutat = linii.fold(0.0, (s, l) => s + l.cantitateReala);
@@ -15002,6 +15054,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             // ── Tracking execuție: nou (ofertă sursă) vs vechi (manual) ─
             if (_jobSnapshot.liniiPlanificate.isNotEmpty)
               _buildLiniiTracking(context)
+            else if (_jobSnapshot.sourceOfferId.isNotEmpty ||
+                _jobSnapshot.sourceOfferNumber.isNotEmpty)
+              // Lucrare convertită din ofertă, dar liniile nu au fost importate încă
+              _buildRepopulareCard(context)
             else ...[
               _section(
                 context,
