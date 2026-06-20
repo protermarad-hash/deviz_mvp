@@ -4790,12 +4790,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Future<void> _onAddMaterial() async {
-    if (_materialsCatalog.isEmpty) {
-      _snack('Nu există materiale definite.');
-      return;
-    }
-
-    String? selectedMaterialId;
+    _MaterialOption? selectedMaterial;
+    final nameController = TextEditingController();
+    final umController = TextEditingController();
     final qtyController = TextEditingController(text: '1');
     final priceController = TextEditingController(text: '0');
 
@@ -4809,31 +4806,80 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                DropdownButtonFormField<String?>(
-                  initialValue: selectedMaterialId,
-                  decoration:
-                      const InputDecoration(labelText: 'Selectează material'),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      value: null,
-                      child: Text('Selectează material'),
-                    ),
-                    ..._materialsCatalog.map(
-                      (m) => DropdownMenuItem<String?>(
-                        value: m.id,
-                        child: Text(m.name),
-                      ),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    setDialogState(() => selectedMaterialId = value);
-                    final selected =
-                        _materialsCatalog.where((m) => m.id == value).toList();
-                    if (selected.isNotEmpty) {
-                      priceController.text =
-                          selected.first.price.toStringAsFixed(2);
-                    }
+                // ── Autocomplete material — sugestii live din catalog ──
+                Autocomplete<_MaterialOption>(
+                  displayStringForOption: (m) => m.name,
+                  optionsBuilder: (textEditingValue) {
+                    final q = textEditingValue.text.toLowerCase().trim();
+                    if (q.isEmpty) return _materialsCatalog.take(8);
+                    return _materialsCatalog
+                        .where((m) => m.name.toLowerCase().contains(q))
+                        .take(10);
                   },
+                  onSelected: (m) {
+                    setDialogState(() {
+                      selectedMaterial = m;
+                      umController.text = m.um;
+                      priceController.text = m.price.toStringAsFixed(2);
+                    });
+                  },
+                  fieldViewBuilder:
+                      (ctx, autoCtrl, focusNode, onFieldSubmitted) {
+                    // Sincronizează controller-ul intern cu nameController
+                    autoCtrl.addListener(
+                        () => nameController.text = autoCtrl.text);
+                    return TextField(
+                      controller: autoCtrl,
+                      focusNode: focusNode,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Material',
+                        hintText:
+                            'Tastează pentru sugestii sau scriere liberă...',
+                      ),
+                      onChanged: (_) =>
+                          setDialogState(() => selectedMaterial = null),
+                    );
+                  },
+                  optionsViewBuilder: (ctx, onSelected, options) {
+                    final rows = options.toList(growable: false);
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4,
+                        borderRadius: BorderRadius.circular(8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: 240,
+                            minWidth: 380,
+                            maxWidth: 560,
+                          ),
+                          child: ListView.builder(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            itemCount: rows.length,
+                            itemBuilder: (_, i) {
+                              final m = rows[i];
+                              return ListTile(
+                                dense: true,
+                                title: Text(m.name),
+                                subtitle: Text(
+                                    'UM: ${m.um} • Preț: ${m.price.toStringAsFixed(2)}'),
+                                onTap: () => onSelected(m),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: umController,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration:
+                      const InputDecoration(labelText: 'Unitate măsură'),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -4868,26 +4914,22 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 child: const Text('Anulează')),
             FilledButton(
               onPressed: () {
-                if (selectedMaterialId == null ||
-                    selectedMaterialId!.trim().isEmpty) {
-                  return;
-                }
-                final selected = _materialsCatalog
-                    .where((m) => m.id == selectedMaterialId)
-                    .toList();
-                if (selected.isEmpty) return;
-                final qty =
-                    double.tryParse(qtyController.text.replaceAll(',', '.')) ??
-                        0;
+                final name = nameController.text.trim();
+                if (name.isEmpty) return;
+                final qty = double.tryParse(
+                        qtyController.text.replaceAll(',', '.')) ??
+                    0;
                 final price = double.tryParse(
                         priceController.text.replaceAll(',', '.')) ??
                     0;
-                final material = selected.first;
+                final um = umController.text.trim();
+                final matId = selectedMaterial?.id ??
+                    'mat-${DateTime.now().millisecondsSinceEpoch}';
                 Navigator.of(context).pop({
                   'id': 'job-mat-${DateTime.now().millisecondsSinceEpoch}',
-                  'materialId': material.id,
-                  'name': material.name,
-                  'um': material.um,
+                  'materialId': matId,
+                  'name': name,
+                  'um': um.isEmpty ? (selectedMaterial?.um ?? '') : um,
                   'qty': qty,
                   'price': price,
                   'total': qty * price,
@@ -4900,9 +4942,43 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       ),
     );
 
+    nameController.dispose();
+    umController.dispose();
     qtyController.dispose();
     priceController.dispose();
     if (created == null) return;
+
+    // Dacă materialul nu era în catalog, îl adaugă automat pentru viitoare sugestii
+    final savedName = '${created['name'] ?? ''}'.trim();
+    if (selectedMaterial == null && savedName.isNotEmpty) {
+      final existing = await MasterLocalStore.readMaterials();
+      final alreadyExists = existing.any(
+          (m) => m.name.toLowerCase() == savedName.toLowerCase());
+      if (!alreadyExists) {
+        final newMat = MasterMaterial(
+          id: '${created['materialId']}',
+          name: savedName,
+          unit: '${created['um'] ?? ''}',
+          price:
+              double.tryParse('${created['price'] ?? 0}'.replaceAll(',', '.')) ??
+                  0,
+          notes: '',
+        );
+        await MasterLocalStore.writeMaterials([...existing, newMat]);
+        // Actualizează catalogul în pagina curentă
+        setState(() {
+          _materialsCatalog = [
+            ..._materialsCatalog,
+            _MaterialOption(
+              id: newMat.id,
+              name: newMat.name,
+              um: newMat.unit,
+              price: newMat.price,
+            ),
+          ];
+        });
+      }
+    }
 
     final next = <Map<String, dynamic>>[..._materials, created];
     await _persistJobMaterials(next);
@@ -4919,15 +4995,20 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       return;
     }
     final row = _materials[index];
-    String? selectedMaterialId = '${row['materialId'] ?? ''}'.trim();
-    if (selectedMaterialId.isEmpty) {
-      final match = _materialsCatalog
-          .where((m) => m.name == '${row['name'] ?? ''}')
-          .toList();
-      if (match.isNotEmpty) {
-        selectedMaterialId = match.first.id;
-      }
+    final existingName = '${row['name'] ?? ''}'.trim();
+    // Caută în catalog după ID sau după nume
+    _MaterialOption? selectedMaterial;
+    final existingId = '${row['materialId'] ?? ''}'.trim();
+    if (existingId.isNotEmpty) {
+      selectedMaterial = _materialsCatalog
+          .where((m) => m.id == existingId)
+          .fold<_MaterialOption?>(null, (_, m) => m);
     }
+    selectedMaterial ??= _materialsCatalog
+        .where((m) => m.name.toLowerCase() == existingName.toLowerCase())
+        .fold<_MaterialOption?>(null, (_, m) => m);
+
+    final nameController = TextEditingController(text: existingName);
     final umController = TextEditingController(text: '${row['um'] ?? ''}');
     final qtyController =
         TextEditingController(text: _asDouble(row['qty']).toString());
@@ -4957,33 +5038,72 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  DropdownButtonFormField<String?>(
-                    initialValue: selectedMaterialId?.isEmpty == true
-                        ? null
-                        : selectedMaterialId,
-                    decoration: const InputDecoration(labelText: 'Material'),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Selectează material'),
-                      ),
-                      ..._materialsCatalog.map(
-                        (m) => DropdownMenuItem<String?>(
-                          value: m.id,
-                          child: Text(m.name),
+                  // ── Autocomplete material cu text pre-completat ────────
+                  Autocomplete<_MaterialOption>(
+                    initialValue: TextEditingValue(text: existingName),
+                    displayStringForOption: (m) => m.name,
+                    optionsBuilder: (textEditingValue) {
+                      final q = textEditingValue.text.toLowerCase().trim();
+                      if (q.isEmpty) return _materialsCatalog.take(8);
+                      return _materialsCatalog
+                          .where((m) => m.name.toLowerCase().contains(q))
+                          .take(10);
+                    },
+                    onSelected: (m) {
+                      setDialogState(() {
+                        selectedMaterial = m;
+                        nameController.text = m.name;
+                        umController.text = m.um;
+                        priceController.text = m.price.toStringAsFixed(2);
+                      });
+                    },
+                    fieldViewBuilder:
+                        (ctx, autoCtrl, focusNode, onFieldSubmitted) {
+                      autoCtrl.addListener(
+                          () => nameController.text = autoCtrl.text);
+                      return TextField(
+                        controller: autoCtrl,
+                        focusNode: focusNode,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: const InputDecoration(
+                          labelText: 'Material',
+                          hintText: 'Tastează pentru sugestii...',
                         ),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setDialogState(() => selectedMaterialId = value);
-                      final selected = _materialsCatalog
-                          .where((m) => m.id == value)
-                          .toList();
-                      if (selected.isNotEmpty) {
-                        umController.text = selected.first.um;
-                        priceController.text =
-                            selected.first.price.toStringAsFixed(2);
-                      }
+                        onChanged: (_) =>
+                            setDialogState(() => selectedMaterial = null),
+                      );
+                    },
+                    optionsViewBuilder: (ctx, onSelected, options) {
+                      final rows = options.toList(growable: false);
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(8),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxHeight: 240,
+                              minWidth: 380,
+                              maxWidth: 560,
+                            ),
+                            child: ListView.builder(
+                              shrinkWrap: true,
+                              padding: EdgeInsets.zero,
+                              itemCount: rows.length,
+                              itemBuilder: (_, i) {
+                                final m = rows[i];
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(m.name),
+                                  subtitle: Text(
+                                      'UM: ${m.um} • Preț: ${m.price.toStringAsFixed(2)}'),
+                                  onTap: () => onSelected(m),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      );
                     },
                   ),
                   const SizedBox(height: 8),
@@ -5033,30 +5153,25 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               ),
               FilledButton(
                 onPressed: () {
+                  final name = nameController.text.trim();
+                  if (name.isEmpty) return;
                   final qty = double.tryParse(
                           qtyController.text.replaceAll(',', '.')) ??
                       0;
                   final price = double.tryParse(
                           priceController.text.replaceAll(',', '.')) ??
                       0;
-                  final selected = _materialsCatalog
-                      .where((m) => m.id == selectedMaterialId)
-                      .toList();
-                  final name = selected.isNotEmpty
-                      ? selected.first.name
-                      : '${row['name'] ?? '-'}';
+                  final matId = selectedMaterial?.id ??
+                      '${row['materialId'] ?? 'mat-${DateTime.now().millisecondsSinceEpoch}'}';
+                  final um = umController.text.trim().isEmpty
+                      ? (selectedMaterial?.um ?? '${row['um'] ?? ''}')
+                      : umController.text.trim();
                   Navigator.of(context).pop({
                     ...row,
-                    'id':
-                        '${row['id'] ?? 'job-mat-${DateTime.now().millisecondsSinceEpoch}'}',
-                    'materialId':
-                        selectedMaterialId ?? '${row['materialId'] ?? ''}',
+                    'id': '${row['id'] ?? 'job-mat-${DateTime.now().millisecondsSinceEpoch}'}',
+                    'materialId': matId,
                     'name': name,
-                    'um': umController.text.trim().isEmpty
-                        ? (selected.isNotEmpty
-                            ? selected.first.um
-                            : '${row['um'] ?? ''}')
-                        : umController.text.trim(),
+                    'um': um,
                     'qty': qty,
                     'price': price,
                     'total': qty * price,
@@ -5070,10 +5185,44 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       ),
     );
 
+    nameController.dispose();
     umController.dispose();
     qtyController.dispose();
     priceController.dispose();
     if (updated == null) return;
+
+    // Dacă materialul editat e nou (nu din catalog), adaugă-l în catalog
+    final savedName = '${updated['name'] ?? ''}'.trim();
+    if (selectedMaterial == null && savedName.isNotEmpty) {
+      final existing = await MasterLocalStore.readMaterials();
+      final alreadyExists = existing.any(
+          (m) => m.name.toLowerCase() == savedName.toLowerCase());
+      if (!alreadyExists) {
+        final newMat = MasterMaterial(
+          id: '${updated['materialId']}',
+          name: savedName,
+          unit: '${updated['um'] ?? ''}',
+          price: double.tryParse(
+                  '${updated['price'] ?? 0}'.replaceAll(',', '.')) ??
+              0,
+          notes: '',
+        );
+        await MasterLocalStore.writeMaterials([...existing, newMat]);
+        if (mounted) {
+          setState(() {
+            _materialsCatalog = [
+              ..._materialsCatalog,
+              _MaterialOption(
+                id: newMat.id,
+                name: newMat.name,
+                um: newMat.unit,
+                price: newMat.price,
+              ),
+            ];
+          });
+        }
+      }
+    }
 
     final next = [..._materials];
     next[index] = updated;
