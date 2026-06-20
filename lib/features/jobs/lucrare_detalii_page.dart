@@ -13860,6 +13860,277 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     _saveLiniiPlanificate(linii);
   }
 
+  void _updateLinieCantitateReala(String lineId, double value) {
+    final linii = List<JobLine>.from(_jobSnapshot.liniiPlanificate);
+    final idx = linii.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    linii[idx] = linii[idx].copyWith(cantitateReala: value);
+    _saveLiniiPlanificate(linii);
+  }
+
+  Future<void> _applyProgresGlobal(double percent) async {
+    final linii = _jobSnapshot.liniiPlanificate.map((l) {
+      final qty = double.parse(
+          (l.cantitateOferta * percent / 100).toStringAsFixed(4));
+      return l.copyWith(cantitateReala: qty);
+    }).toList();
+    final updated = _jobSnapshot.copyWith(
+      liniiPlanificate: linii,
+      progresGlobalPercent: percent,
+    );
+    try {
+      _jobSnapshot = await widget.repository.saveJob(updated);
+      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
+    } catch (e) {
+      debugPrint('[Executie] _applyProgresGlobal error: $e');
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleLiniaBifata(String lineId, bool checked) async {
+    final linii = List<JobLine>.from(_jobSnapshot.liniiPlanificate);
+    final idx = linii.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    final l = linii[idx];
+    linii[idx] = l.copyWith(
+      cantitateReala: checked ? l.cantitateOferta : 0.0,
+    );
+    _saveLiniiPlanificate(linii);
+  }
+
+  Widget _buildLiniiTracking(BuildContext context) {
+    final linii = _jobSnapshot.liniiPlanificate;
+    final totalExecutat = linii.fold(0.0, (s, l) => s + l.cantitateReala);
+    final totalPlanificat = linii.fold(0.0, (s, l) => s + l.cantitateOferta);
+    final liniiFinalizate = linii.where((l) => l.cantitateReala > 0).length;
+    final progresController = TextEditingController(
+      text: _jobSnapshot.progresGlobalPercent != null
+          ? _jobSnapshot.progresGlobalPercent!.toStringAsFixed(0)
+          : '',
+    );
+    return StatefulBuilder(builder: (ctx, setLocal) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Card sumar progres ──────────────────────────────────────────
+          Card(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.track_changes_outlined,
+                          size: 18,
+                          color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text('Tracking execuție',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(
+                                  fontWeight: FontWeight.bold)),
+                      const Spacer(),
+                      Text(
+                          '$liniiFinalizate/${linii.length} linii completate',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: totalPlanificat > 0
+                        ? (totalExecutat / totalPlanificat).clamp(0.0, 1.0)
+                        : 0.0,
+                    backgroundColor: Theme.of(context)
+                        .colorScheme
+                        .outline
+                        .withValues(alpha: 0.2),
+                  ),
+                  const SizedBox(height: 12),
+                  // ── Override progres global ─────────────────────────
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: progresController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: false),
+                          decoration: const InputDecoration(
+                            labelText: 'Override progres global (%)',
+                            hintText: '0 – 100',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            suffixText: '%',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: () {
+                          final val = double.tryParse(
+                              progresController.text.trim());
+                          if (val == null || val < 0 || val > 100) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text(
+                                        'Valoare invalidă. Introdu 0–100.')));
+                            return;
+                          }
+                          _applyProgresGlobal(val);
+                        },
+                        child: const Text('Aplică'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // ── Carduri per linie ──────────────────────────────────────────
+          ...linii.map((linie) {
+            final isBifata = linie.cantitateReala > 0;
+            final qtyCtrl = TextEditingController(
+              text: linie.cantitateReala > 0
+                  ? linie.cantitateReala.toStringAsFixed(2)
+                  : '',
+            );
+            final categorieIcon = switch (linie.categorie) {
+              'manopera' => Icons.engineering_outlined,
+              'transport' => Icons.local_shipping_outlined,
+              'utilaj' => Icons.construction_outlined,
+              _ => Icons.inventory_2_outlined,
+            };
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(
+                  color: isBifata
+                      ? Colors.green.withValues(alpha: 0.5)
+                      : Theme.of(context)
+                          .colorScheme
+                          .outline
+                          .withValues(alpha: 0.3),
+                ),
+              ),
+              color: isBifata
+                  ? Colors.green.withValues(alpha: 0.05)
+                  : null,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(categorieIcon,
+                            size: 16,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            linie.denumire,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 14),
+                          ),
+                        ),
+                        Checkbox(
+                          value: isBifata,
+                          onChanged: (checked) =>
+                              _toggleLiniaBifata(linie.id, checked ?? false),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Planificat: ${linie.cantitateOferta.toStringAsFixed(2)} ${linie.um}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(
+                          width: 140,
+                          child: TextField(
+                            controller: qtyCtrl,
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                                    decimal: true),
+                            textCapitalization: TextCapitalization.none,
+                            decoration: InputDecoration(
+                              labelText: 'Executat',
+                              suffixText: linie.um,
+                              isDense: true,
+                              border: const OutlineInputBorder(),
+                            ),
+                            onSubmitted: (v) {
+                              final val = double.tryParse(
+                                  v.trim().replaceAll(',', '.'));
+                              if (val != null && val >= 0) {
+                                _updateLinieCantitateReala(linie.id, val);
+                              }
+                            },
+                            onEditingComplete: () {
+                              final val = double.tryParse(qtyCtrl.text
+                                  .trim()
+                                  .replaceAll(',', '.'));
+                              if (val != null && val >= 0) {
+                                _updateLinieCantitateReala(linie.id, val);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (linie.observatii.trim().isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Obs: ${linie.observatii.trim()}',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                  fontStyle: FontStyle.italic,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      );
+    });
+  }
+
   Future<void> _repopulateFromOffer() async {
     final sourceId = _jobSnapshot.sourceOfferId.trim();
     final sourceNumber = _jobSnapshot.sourceOfferNumber.trim();
@@ -14728,117 +14999,119 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 ],
               ),
             ),
-            _section(
-              context,
-              'Materiale asociate',
-              _materials.isEmpty
-                  ? const Text('Nu există date.')
-                  : Column(
-                      children: List<Widget>.generate(_materials.length,
-                          (index) {
-                        final e = _materials[index];
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text((e['name'] ?? '-').toString()),
-                          subtitle: Text(
-                            _isTechnician
-                                ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
-                                : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
-                          ),
-                          trailing: Wrap(
-                            spacing: 4,
-                            children: [
-                              IconButton(
-                                tooltip: 'Editează',
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () => _onEditMaterial(index),
-                              ),
-                              if (!_isTechnician)
+            // ── Tracking execuție: nou (ofertă sursă) vs vechi (manual) ─
+            if (_jobSnapshot.liniiPlanificate.isNotEmpty)
+              _buildLiniiTracking(context)
+            else ...[
+              _section(
+                context,
+                'Materiale asociate',
+                _materials.isEmpty
+                    ? const Text('Nu există date.')
+                    : Column(
+                        children: List<Widget>.generate(_materials.length,
+                            (index) {
+                          final e = _materials[index];
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text((e['name'] ?? '-').toString()),
+                            subtitle: Text(
+                              _isTechnician
+                                  ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
+                                  : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
                                 IconButton(
-                                  tooltip: 'Șterge',
-                                  icon:
-                                      const Icon(Icons.delete_outline),
-                                  onPressed: () =>
-                                      _onDeleteMaterial(index),
+                                  tooltip: 'Editează',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () => _onEditMaterial(index),
                                 ),
-                            ],
-                          ),
-                        );
-                      }),
-                    ),
-              action: TextButton.icon(
-                onPressed: _onAddMaterial,
-                icon: const Icon(Icons.add),
-                label: const Text('Adaugă material'),
+                                if (!_isTechnician)
+                                  IconButton(
+                                    tooltip: 'Șterge',
+                                    icon: const Icon(Icons.delete_outline),
+                                    onPressed: () =>
+                                        _onDeleteMaterial(index),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ),
+                action: TextButton.icon(
+                  onPressed: _onAddMaterial,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Adaugă material'),
+                ),
               ),
-            ),
-            _section(
-              context,
-              'Manoperă / ore',
-              _labor.isEmpty
-                  ? const Text('Nu există date.')
-                  : Column(
-                      children:
-                          List<Widget>.generate(_labor.length, (index) {
-                        final e = _labor[index];
-                        final dateLabel = '${e['date'] ?? '-'}';
-                        final hoursLabel =
-                            _asDouble(e['hours']).toStringAsFixed(2);
-                        final rateValue = _laborRateForRow(e);
-                        final rateLabel = rateValue > 0
-                            ? rateValue.toStringAsFixed(2)
-                            : '0.00 (fallback)';
-                        final costOreLabel =
-                            _laborOreCost(e).toStringAsFixed(2);
-                        final costDiurnaLabel =
-                            _laborPerDiemCost(e).toStringAsFixed(2);
-                        final costCazareLabel =
-                            _laborLodgingCost(e).toStringAsFixed(2);
-                        final costTotalLabel =
-                            _laborTotalLineCost(e).toStringAsFixed(2);
-                        final notesLabel = '${e['notes'] ?? ''}'.trim();
-                        final tripDaysLabel =
-                            _formatDecimal(_laborTripDays(e));
-                        final periodLabel = _laborPeriodLabel(e);
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text((e['who'] ?? '-').toString()),
-                          subtitle: Text(
-                            _isTechnician
-                                ? (notesLabel.isEmpty
-                                    ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
-                                    : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
-                                : (notesLabel.isEmpty
-                                    ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
-                                    : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
-                          ),
-                          trailing: Wrap(
-                            spacing: 4,
-                            children: [
-                              IconButton(
-                                tooltip: 'Editează',
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () => _onEditLabor(index),
-                              ),
-                              if (!_isTechnician)
+              _section(
+                context,
+                'Manoperă / ore',
+                _labor.isEmpty
+                    ? const Text('Nu există date.')
+                    : Column(
+                        children:
+                            List<Widget>.generate(_labor.length, (index) {
+                          final e = _labor[index];
+                          final dateLabel = '${e['date'] ?? '-'}';
+                          final hoursLabel =
+                              _asDouble(e['hours']).toStringAsFixed(2);
+                          final rateValue = _laborRateForRow(e);
+                          final rateLabel = rateValue > 0
+                              ? rateValue.toStringAsFixed(2)
+                              : '0.00 (fallback)';
+                          final costOreLabel =
+                              _laborOreCost(e).toStringAsFixed(2);
+                          final costDiurnaLabel =
+                              _laborPerDiemCost(e).toStringAsFixed(2);
+                          final costCazareLabel =
+                              _laborLodgingCost(e).toStringAsFixed(2);
+                          final costTotalLabel =
+                              _laborTotalLineCost(e).toStringAsFixed(2);
+                          final notesLabel = '${e['notes'] ?? ''}'.trim();
+                          final tripDaysLabel =
+                              _formatDecimal(_laborTripDays(e));
+                          final periodLabel = _laborPeriodLabel(e);
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text((e['who'] ?? '-').toString()),
+                            subtitle: Text(
+                              _isTechnician
+                                  ? (notesLabel.isEmpty
+                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
+                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
+                                  : (notesLabel.isEmpty
+                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
+                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
                                 IconButton(
-                                  tooltip: 'Șterge',
-                                  icon:
-                                      const Icon(Icons.delete_outline),
-                                  onPressed: () =>
-                                      _onDeleteLabor(index),
+                                  tooltip: 'Editează',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () => _onEditLabor(index),
                                 ),
-                            ],
-                          ),
-                        );
-                      }),
-                    ),
-              action: TextButton.icon(
-                onPressed: _onAddLabor,
-                icon: const Icon(Icons.add),
-                label: const Text('Adaugă ore'),
+                                if (!_isTechnician)
+                                  IconButton(
+                                    tooltip: 'Șterge',
+                                    icon: const Icon(Icons.delete_outline),
+                                    onPressed: () => _onDeleteLabor(index),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ),
+                action: TextButton.icon(
+                  onPressed: _onAddLabor,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Adaugă ore'),
+                ),
               ),
-            ),
+            ],
             _section(
               context,
               'Echipamente furnizate de beneficiar',

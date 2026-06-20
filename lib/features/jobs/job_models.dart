@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+const _sentinel = Object();
+
 // ── Linie planificată din ofertă (iun 2026) ────────────────────────────────
 class JobLine {
   const JobLine({
@@ -392,6 +394,8 @@ class JobRecord {
     this.smartbillFacturaSerie = '',
     // Tip document sursă (iun 2026) — 'oferta' | 'deviz_tehnic' — backward compatible
     this.sourceDocumentType = 'oferta',
+    // Override procent progres global (iun 2026) — null = neutilizat
+    this.progresGlobalPercent,
   });
 
   final String id;
@@ -475,6 +479,8 @@ class JobRecord {
   final String smartbillFacturaSerie;
   // Tip document sursă (iun 2026)
   final String sourceDocumentType;
+  // Override procent progres global (iun 2026) — null = neutilizat
+  final double? progresGlobalPercent;
 
   // Rotunjire la 10 — identic cu OfferLaborCalculator.roundPriceUpToTen
   static double _roundUpToTen(double v) {
@@ -573,6 +579,7 @@ class JobRecord {
     String? smartbillFacturaNumar,
     String? smartbillFacturaSerie,
     String? sourceDocumentType,
+    Object? progresGlobalPercent = _sentinel,
   }) {
     return JobRecord(
       id: id ?? this.id,
@@ -641,6 +648,9 @@ class JobRecord {
       smartbillFacturaSerie:
           smartbillFacturaSerie ?? this.smartbillFacturaSerie,
       sourceDocumentType: sourceDocumentType ?? this.sourceDocumentType,
+      progresGlobalPercent: identical(progresGlobalPercent, _sentinel)
+          ? this.progresGlobalPercent
+          : progresGlobalPercent as double?,
     );
   }
 
@@ -711,6 +721,7 @@ class JobRecord {
       'smartbill_factura_numar': smartbillFacturaNumar,
       'smartbill_factura_serie': smartbillFacturaSerie,
       'source_document_type': sourceDocumentType,
+      'progres_global_percent': progresGlobalPercent,
     };
   }
 
@@ -895,6 +906,8 @@ class JobRecord {
           (map['smartbill_factura_serie'] ?? map['smartbillFacturaSerie'] ?? '').toString(),
       sourceDocumentType:
           (map['source_document_type'] ?? map['sourceDocumentType'] ?? 'oferta').toString(),
+      progresGlobalPercent:
+          parseDouble(map['progres_global_percent'] ?? map['progresGlobalPercent']),
     );
   }
 }

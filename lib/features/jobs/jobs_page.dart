@@ -323,7 +323,18 @@ class _JobsPageState extends State<JobsPage> {
 
   Future<void> _saveJobResolved(JobRecord job) async {
     final previous = _findJobById(job.id);
-    final next = await _repository.saveJob(job);
+    // Auto-completare linii planificate la finalizare
+    JobRecord effective = job;
+    if (job.status == JobStatus.finalizata && job.liniiPlanificate.isNotEmpty) {
+      final liniiAutoComplete = job.liniiPlanificate.map((l) {
+        if (l.cantitateReala <= 0) {
+          return l.copyWith(cantitateReala: l.cantitateOferta);
+        }
+        return l;
+      }).toList();
+      effective = job.copyWith(liniiPlanificate: liniiAutoComplete);
+    }
+    final next = await _repository.saveJob(effective);
     _refreshCloudRepository();
     final cloud = _cloudRepository;
     if (cloud != null) {
