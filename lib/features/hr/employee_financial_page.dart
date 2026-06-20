@@ -813,6 +813,9 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
     final amountCtrl = TextEditingController();
     final notesCtrl = TextEditingController();
     DateTime paymentDate = DateTime.now();
+    // Capturăm messenger ÎNAINTE de orice await — context-ul e parametru local,
+    // deci sigur de folosit după gap-urile async chiar dacă ecranul se închide.
+    final messenger = ScaffoldMessenger.of(context);
 
     final saved = await showDialog<bool>(
       context: context,
@@ -933,8 +936,7 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
     setState(() {
       _payments = [payment, ..._payments];
     });
-    // ignore: use_build_context_synchronously
-    ScaffoldMessenger.of(context).showSnackBar(
+    messenger.showSnackBar(
       SnackBar(
         content: Text(
           'Plată de ${amount.toStringAsFixed(2)} RON înregistrată pentru ${emp.name}.',
