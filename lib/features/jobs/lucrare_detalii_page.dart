@@ -61,6 +61,7 @@ import '../oferte/local_oferte_repository.dart';
 import '../oferte/offer_models.dart';
 import '../deviz_tehnic/deviz_tehnic_models.dart';
 import '../deviz_tehnic/deviz_tehnic_repository.dart';
+import 'lucrare_detalii_models.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -266,11 +267,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   bool _isLoading = true;
 
-  List<_Option> _teams = const [];
-  List<_Option> _employees = const [];
+  List<LucrareOption> _teams = const [];
+  List<LucrareOption> _employees = const [];
   List<Map<String, dynamic>> _teamsSourceRows = const [];
-  List<_MaterialOption> _materialsCatalog = const [];
-  _Option? _assignedTeam;
+  List<LucrareMaterialOption> _materialsCatalog = const [];
+  LucrareOption? _assignedTeam;
   String _assignedTeamMembersLabel = '';
 
   List<Map<String, dynamic>> _appointments = const [];
@@ -518,10 +519,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final prefs = loadResults[0] as SharedPreferences;
     final companyProfile = loadResults[1] as CompanyProfile;
     _defaultVatPercent = companyProfile.defaultVatPercent;
-    final teams = loadResults[2] as List<_Option>;
-    final employees = loadResults[3] as List<_Option>;
+    final teams = loadResults[2] as List<LucrareOption>;
+    final employees = loadResults[3] as List<LucrareOption>;
     final teamsFromStore = loadResults[4] as List<Map<String, dynamic>>;
-    final catalog = loadResults[5] as List<_MaterialOption>;
+    final catalog = loadResults[5] as List<LucrareMaterialOption>;
     final remoteAppointments = loadResults[6] as List<Map<String, dynamic>>;
     final clients = loadResults[7] as List<ClientRecord>;
     final masterPartners = loadResults[8] as List<PartnerRecord>;
@@ -571,13 +572,13 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final latestReportRegistryRow =
         _latestRegistryReportForCurrentJob(registryRows);
 
-    _Option? savedTeam;
+    LucrareOption? savedTeam;
     final rawTeam = prefs.getString(_teamKey);
     if (rawTeam != null && rawTeam.trim().isNotEmpty) {
       try {
         final decoded = jsonDecode(rawTeam);
         if (decoded is Map) {
-          savedTeam = _Option.fromMap(Map<String, dynamic>.from(decoded));
+          savedTeam = LucrareOption.fromMap(Map<String, dynamic>.from(decoded));
         }
       } catch (e) {
         debugPrint('[LucrareDetalii] parsare echipă salvată eșuată: $e');
@@ -632,7 +633,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final syncedAssignedTeam = _jobSnapshot.assignedTeamId.trim().isEmpty &&
             _jobSnapshot.assignedTeamLabel.trim().isEmpty
         ? null
-        : _Option(
+        : LucrareOption(
             id: _jobSnapshot.assignedTeamId.trim(),
             label: _jobSnapshot.assignedTeamLabel.trim(),
           );
@@ -1128,11 +1129,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
-  Future<List<_Option>> _readTeams() async {
+  Future<List<LucrareOption>> _readTeams() async {
     final local = await MasterLocalStore.readTeams();
     if (local.isNotEmpty) {
       return local
-          .map((e) => _Option(id: e.id, label: e.name.isEmpty ? e.id : e.name))
+          .map((e) => LucrareOption(id: e.id, label: e.name.isEmpty ? e.id : e.name))
           .toList(growable: false);
     }
     try {
@@ -1152,10 +1153,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return const [];
   }
 
-  Future<List<_Option>> _readEmployees() async {
+  Future<List<LucrareOption>> _readEmployees() async {
     try {
       final lookup = await widget.repository.listEmployeesLookup();
-      final rows = lookup.map(_Option.fromAny).toList(growable: false);
+      final rows = lookup.map(LucrareOption.fromAny).toList(growable: false);
       if (rows.isNotEmpty) return _dedupeOptions(rows);
     } catch (e) {
       debugPrint('[LucrareDetalii] listEmployeesLookup eșuat, încerc sursa următoare: $e');
@@ -1172,7 +1173,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       return local
           .where((e) => e.active)
           .map(
-            (e) => _Option(
+            (e) => LucrareOption(
               id: e.id,
               label: e.name.isEmpty ? e.id : e.name,
               hourlyRate: e.effectiveTarifOrar,
@@ -1187,7 +1188,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return const [];
   }
 
-  Future<List<_MaterialOption>> _readMaterials() async {
+  Future<List<LucrareMaterialOption>> _readMaterials() async {
     try {
       final dynamic repo = widget.repository;
       final dynamic raw = await (repo.listMaterials() as Future<dynamic>);
@@ -1206,7 +1207,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     if (local.isNotEmpty) {
       return local
           .map(
-            (e) => _MaterialOption(
+            (e) => LucrareMaterialOption(
               id: e.id,
               name: e.name.isEmpty ? e.id : e.name,
               um: e.unit,
@@ -1233,30 +1234,30 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     }
   }
 
-  List<_Option> _toOptions(Iterable raw) => _dedupeOptions(
+  List<LucrareOption> _toOptions(Iterable raw) => _dedupeOptions(
         raw
-            .map(_Option.fromAny)
+            .map(LucrareOption.fromAny)
             .where((e) => e.id.isNotEmpty)
             .toList(growable: false),
       );
 
-  List<_MaterialOption> _toMaterials(Iterable raw) => _dedupeMaterials(
+  List<LucrareMaterialOption> _toMaterials(Iterable raw) => _dedupeMaterials(
         raw
-            .map(_MaterialOption.fromAny)
+            .map(LucrareMaterialOption.fromAny)
             .where((e) => e.id.isNotEmpty)
             .toList(growable: false),
       );
 
-  List<_Option> _dedupeOptions(List<_Option> rows) {
-    final map = <String, _Option>{};
+  List<LucrareOption> _dedupeOptions(List<LucrareOption> rows) {
+    final map = <String, LucrareOption>{};
     for (final row in rows) {
       map[row.id] = row;
     }
     return map.values.toList(growable: false);
   }
 
-  List<_MaterialOption> _dedupeMaterials(List<_MaterialOption> rows) {
-    final map = <String, _MaterialOption>{};
+  List<LucrareMaterialOption> _dedupeMaterials(List<LucrareMaterialOption> rows) {
+    final map = <String, LucrareMaterialOption>{};
     for (final row in rows) {
       map[row.id] = row;
     }
@@ -1650,7 +1651,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Future<void> _persistOperationalJobDetails({
-    _Option? assignedTeam,
+    LucrareOption? assignedTeam,
     List<Map<String, dynamic>>? documents,
     List<Map<String, dynamic>>? labor,
     List<Map<String, dynamic>>? journal,
@@ -2691,7 +2692,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     }
   }
 
-  Future<void> _saveTeam(_Option? team) async {
+  Future<void> _saveTeam(LucrareOption? team) async {
     await _persistOperationalJobDetails(assignedTeam: team);
     await _loadData();
   }
@@ -4379,7 +4380,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final dialogTeams = _dedupeOptions(
       teamsFromStore
           .map(
-            (team) => _Option(
+            (team) => LucrareOption(
               id: '${team['id'] ?? ''}'.trim(),
               label: '${team['name'] ?? ''}'.trim(),
             ),
@@ -4818,7 +4819,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Future<void> _onAddMaterial() async {
-    _MaterialOption? selectedMaterial;
+    LucrareMaterialOption? selectedMaterial;
     final nameController = TextEditingController();
     final umController = TextEditingController();
     final qtyController = TextEditingController(text: '1');
@@ -4835,7 +4836,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // ── Autocomplete material — sugestii live din catalog ──
-                Autocomplete<_MaterialOption>(
+                Autocomplete<LucrareMaterialOption>(
                   displayStringForOption: (m) => m.name,
                   optionsBuilder: (textEditingValue) {
                     final q = textEditingValue.text.toLowerCase().trim();
@@ -4997,7 +4998,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         setState(() {
           _materialsCatalog = [
             ..._materialsCatalog,
-            _MaterialOption(
+            LucrareMaterialOption(
               id: newMat.id,
               name: newMat.name,
               um: newMat.unit,
@@ -5025,16 +5026,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final row = _materials[index];
     final existingName = '${row['name'] ?? ''}'.trim();
     // Caută în catalog după ID sau după nume
-    _MaterialOption? selectedMaterial;
+    LucrareMaterialOption? selectedMaterial;
     final existingId = '${row['materialId'] ?? ''}'.trim();
     if (existingId.isNotEmpty) {
       selectedMaterial = _materialsCatalog
           .where((m) => m.id == existingId)
-          .fold<_MaterialOption?>(null, (_, m) => m);
+          .fold<LucrareMaterialOption?>(null, (_, m) => m);
     }
     selectedMaterial ??= _materialsCatalog
         .where((m) => m.name.toLowerCase() == existingName.toLowerCase())
-        .fold<_MaterialOption?>(null, (_, m) => m);
+        .fold<LucrareMaterialOption?>(null, (_, m) => m);
 
     final nameController = TextEditingController(text: existingName);
     final umController = TextEditingController(text: '${row['um'] ?? ''}');
@@ -5067,7 +5068,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // ── Autocomplete material cu text pre-completat ────────
-                  Autocomplete<_MaterialOption>(
+                  Autocomplete<LucrareMaterialOption>(
                     initialValue: TextEditingValue(text: existingName),
                     displayStringForOption: (m) => m.name,
                     optionsBuilder: (textEditingValue) {
@@ -5240,7 +5241,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           setState(() {
             _materialsCatalog = [
               ..._materialsCatalog,
-              _MaterialOption(
+              LucrareMaterialOption(
                 id: newMat.id,
                 name: newMat.name,
                 um: newMat.unit,
@@ -6025,7 +6026,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return teamRate;
   }
 
-  _Option? _findActiveEmployeeByRef(String reference) {
+  LucrareOption? _findActiveEmployeeByRef(String reference) {
     final normalizedRef = _normalizeEmployeeRef(reference);
     if (normalizedRef.isEmpty) return null;
     for (final employee in _employees) {
@@ -14262,7 +14263,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         );
         return;
       }
-      final picked = await showDialog<_SourceDocument>(
+      final picked = await showDialog<LucrareSourceDocument>(
         context: context,
         builder: (ctx) => _SourcePickerDialog(offers: offers, devize: devize),
       );
@@ -16603,303 +16604,6 @@ String? _safeDropdownValue(Iterable<dynamic> options, String? selectedValue) {
   return matches.length == 1 ? matches.first : null;
 }
 
-class _Option {
-  const _Option({
-    required this.id,
-    required this.label,
-    this.hourlyRate = 0,
-    this.dailyAllowance = 0,
-    this.defaultLodgingCost = 0,
-    this.requiresLodgingByDefault = false,
-    this.active = true,
-  });
-  final String id;
-  final String label;
-  final double hourlyRate;
-  final double dailyAllowance;
-  final double defaultLodgingCost;
-  final bool requiresLodgingByDefault;
-  final bool active;
-  Map<String, dynamic> toMap() => {
-        'id': id,
-        'label': label,
-        'hourlyRate': hourlyRate,
-        'dailyAllowance': dailyAllowance,
-        'defaultLodgingCost': defaultLodgingCost,
-        'requiresLodgingByDefault': requiresLodgingByDefault,
-        'active': active,
-      };
-  factory _Option.fromMap(Map<String, dynamic> map) => _Option(
-        id: (map['id'] ?? '').toString().trim(),
-        label: (map['label'] ?? '').toString().trim(),
-        hourlyRate: double.tryParse(
-                (map['hourlyRate'] ?? '0').toString().replaceAll(',', '.')) ??
-            0,
-        dailyAllowance: double.tryParse((map['dailyAllowance'] ?? '0')
-                .toString()
-                .replaceAll(',', '.')) ??
-            0,
-        defaultLodgingCost: double.tryParse(
-              (map['defaultLodgingCost'] ?? '0')
-                  .toString()
-                  .replaceAll(',', '.'),
-            ) ??
-            0,
-        requiresLodgingByDefault: map['requiresLodgingByDefault'] == true,
-        active: map['active'] != false,
-      );
-  factory _Option.fromAny(dynamic raw) {
-    if (raw is Map) {
-      final m = Map<String, dynamic>.from(raw);
-      final id = (m['id'] ?? '').toString().trim();
-      final label = ((m['label'] ??
-                  m['displayName'] ??
-                  m['title'] ??
-                  m['name'] ??
-                  m['companyName'] ??
-                  m['contactPerson']) ??
-              '')
-          .toString()
-          .trim();
-      final hourlyRate = double.tryParse(
-            (m['hourlyRate'] ??
-                    m['hourly_rate'] ??
-                    m['rate'] ??
-                    m['ratePerHour'] ??
-                    '0')
-                .toString()
-                .replaceAll(',', '.'),
-          ) ??
-          0.0;
-      final monthlyCost = double.tryParse(
-            (m['costLunar'] ??
-                    m['cost_lunar'] ??
-                    m['monthlyCost'] ??
-                    m['monthly_cost'] ??
-                    m['monthly_salary_optional'] ??
-                    '0')
-                .toString()
-                .replaceAll(',', '.'),
-          ) ??
-          0.0;
-      final monthlyHours = double.tryParse(
-            (m['oreLunareStandard'] ??
-                    m['ore_lunare_standard'] ??
-                    m['standardMonthlyHours'] ??
-                    m['monthly_hours_standard'] ??
-                    '168')
-                .toString()
-                .replaceAll(',', '.'),
-          ) ??
-          168.0;
-      final laborCostType = (m['laborCostType'] ??
-              m['labor_cost_type'] ??
-              m['tipCostManopera'] ??
-              m['tip_cost_manopera'] ??
-              '')
-          .toString()
-          .trim()
-          .toLowerCase();
-      final bool isLunarCostType = laborCostType == 'lunar';
-      final double effectiveHourlyRate = isLunarCostType
-          ? (monthlyCost > 0 && monthlyHours > 0
-              ? monthlyCost / monthlyHours
-              : 0.0)
-          : (hourlyRate > 0 ? hourlyRate : 0.0);
-      final dailyAllowance = double.tryParse(
-            (m['dailyAllowance'] ??
-                    m['daily_allowance'] ??
-                    m['perDiemPerDay'] ??
-                    m['per_diem_per_day'] ??
-                    m['per_diem'] ??
-                    m['diurna'] ??
-                    '0')
-                .toString()
-                .replaceAll(',', '.'),
-          ) ??
-          0;
-      final defaultLodgingCost = double.tryParse(
-            (m['defaultLodgingCost'] ??
-                    m['default_lodging_cost'] ??
-                    m['lodgingPerDay'] ??
-                    m['lodging_per_day'] ??
-                    m['lodging'] ??
-                    m['cazare'] ??
-                    '0')
-                .toString()
-                .replaceAll(',', '.'),
-          ) ??
-          0;
-      final requiresLodgingByDefaultRaw =
-          m['requiresLodgingByDefault'] ?? m['requires_lodging_by_default'];
-      final requiresLodgingByDefault = requiresLodgingByDefaultRaw is bool
-          ? requiresLodgingByDefaultRaw
-          : '${requiresLodgingByDefaultRaw ?? ''}'.toLowerCase().trim() ==
-              'true';
-      final activeRaw = m['active'];
-      final active = activeRaw is bool
-          ? activeRaw
-          : !('${activeRaw ?? 'true'}'.toLowerCase().trim() == 'false');
-      return _Option(
-        id: id,
-        label: label.isEmpty ? id : label,
-        hourlyRate: effectiveHourlyRate,
-        dailyAllowance: dailyAllowance,
-        defaultLodgingCost: defaultLodgingCost,
-        requiresLodgingByDefault: requiresLodgingByDefault,
-        active: active,
-      );
-    }
-    String read(dynamic Function() getter) {
-      try {
-        return getter()?.toString().trim() ?? '';
-      } catch (_) {
-        return '';
-      }
-    }
-
-    final id = read(() => (raw as dynamic).id);
-    final label = read(() => (raw as dynamic).label).isNotEmpty
-        ? read(() => (raw as dynamic).label)
-        : (read(() => (raw as dynamic).displayName).isNotEmpty
-            ? read(() => (raw as dynamic).displayName)
-            : read(() => (raw as dynamic).name));
-    final hourlyRateRaw = read(() => (raw as dynamic).hourlyRate).isNotEmpty
-        ? read(() => (raw as dynamic).hourlyRate)
-        : (read(() => (raw as dynamic).hourly_rate).isNotEmpty
-            ? read(() => (raw as dynamic).hourly_rate)
-            : read(() => (raw as dynamic).rate));
-    final hourlyRate =
-        double.tryParse(hourlyRateRaw.replaceAll(',', '.')) ?? 0.0;
-    final monthlyCostRaw = read(() => (raw as dynamic).costLunar).isNotEmpty
-        ? read(() => (raw as dynamic).costLunar)
-        : (read(() => (raw as dynamic).monthlyCost).isNotEmpty
-            ? read(() => (raw as dynamic).monthlyCost)
-            : read(() => (raw as dynamic).monthly_cost));
-    final monthlyCost =
-        double.tryParse(monthlyCostRaw.replaceAll(',', '.')) ?? 0.0;
-    final monthlyHoursRaw =
-        read(() => (raw as dynamic).oreLunareStandard).isNotEmpty
-            ? read(() => (raw as dynamic).oreLunareStandard)
-            : (read(() => (raw as dynamic).standardMonthlyHours).isNotEmpty
-                ? read(() => (raw as dynamic).standardMonthlyHours)
-                : read(() => (raw as dynamic).monthly_hours_standard));
-    final monthlyHours =
-        double.tryParse(monthlyHoursRaw.replaceAll(',', '.')) ?? 168.0;
-    final laborCostTypeRaw =
-        read(() => (raw as dynamic).laborCostType).isNotEmpty
-            ? read(() => (raw as dynamic).laborCostType)
-            : read(() => (raw as dynamic).tipCostManopera);
-    final isLunarCostType = laborCostTypeRaw.trim().toLowerCase() == 'lunar';
-    final double effectiveHourlyRate = isLunarCostType
-        ? (monthlyCost > 0 && monthlyHours > 0
-            ? monthlyCost / monthlyHours
-            : 0.0)
-        : (hourlyRate > 0 ? hourlyRate : 0.0);
-    final dailyAllowanceRaw =
-        read(() => (raw as dynamic).dailyAllowance).isNotEmpty
-            ? read(() => (raw as dynamic).dailyAllowance)
-            : (read(() => (raw as dynamic).perDiemPerDay).isNotEmpty
-                ? read(() => (raw as dynamic).perDiemPerDay)
-                : read(() => (raw as dynamic).per_diem_per_day));
-    final dailyAllowance =
-        double.tryParse(dailyAllowanceRaw.replaceAll(',', '.')) ?? 0;
-    final defaultLodgingCostRaw =
-        read(() => (raw as dynamic).defaultLodgingCost).isNotEmpty
-            ? read(() => (raw as dynamic).defaultLodgingCost)
-            : (read(() => (raw as dynamic).lodgingPerDay).isNotEmpty
-                ? read(() => (raw as dynamic).lodgingPerDay)
-                : read(() => (raw as dynamic).lodging_per_day));
-    final defaultLodgingCost =
-        double.tryParse(defaultLodgingCostRaw.replaceAll(',', '.')) ?? 0;
-    bool requiresLodgingByDefault = false;
-    try {
-      final dynamic value = (raw as dynamic).requiresLodgingByDefault;
-      if (value is bool) {
-        requiresLodgingByDefault = value;
-      } else {
-        requiresLodgingByDefault =
-            value?.toString().toLowerCase().trim() == 'true';
-      }
-    } catch (_) {/* intenționat ignorat: probare duck-typing pe dynamic, folosesc default */}
-    bool active = true;
-    try {
-      final dynamic value = (raw as dynamic).active;
-      if (value is bool) {
-        active = value;
-      } else {
-        active = value?.toString().toLowerCase().trim() != 'false';
-      }
-    } catch (_) {/* intenționat ignorat: probare duck-typing pe dynamic, folosesc default */}
-    return _Option(
-      id: id,
-      label: label.isEmpty ? id : label,
-      hourlyRate: effectiveHourlyRate,
-      dailyAllowance: dailyAllowance,
-      defaultLodgingCost: defaultLodgingCost,
-      requiresLodgingByDefault: requiresLodgingByDefault,
-      active: active,
-    );
-  }
-}
-
-class _MaterialOption {
-  const _MaterialOption(
-      {required this.id,
-      required this.name,
-      required this.um,
-      required this.price});
-  final String id;
-  final String name;
-  final String um;
-  final double price;
-  factory _MaterialOption.fromAny(dynamic raw) {
-    if (raw is Map) {
-      final m = Map<String, dynamic>.from(raw);
-      return _MaterialOption(
-          id: (m['id'] ?? '').toString().trim(),
-          name: (m['name'] ?? m['label'] ?? m['title'] ?? '').toString().trim(),
-          um: (m['um'] ?? m['unit'] ?? '').toString().trim(),
-          price: double.tryParse((m['price'] ?? m['unitPrice'] ?? '0')
-                  .toString()
-                  .replaceAll(',', '.')) ??
-              0);
-    }
-    String read(dynamic Function() getter) {
-      try {
-        return getter()?.toString().trim() ?? '';
-      } catch (_) {
-        return '';
-      }
-    }
-
-    return _MaterialOption(
-        id: read(() => (raw as dynamic).id),
-        name: read(() => (raw as dynamic).name),
-        um: read(() => (raw as dynamic).um),
-        price: double.tryParse(
-                read(() => (raw as dynamic).price).replaceAll(',', '.')) ??
-            0);
-  }
-}
-
-// ── Wrapper tip uniune pentru picker combinat oferte + devize ─────────────────
-class _SourceDocument {
-  _SourceDocument.fromOffer(OfferRecord o) : offer = o, deviz = null;
-  _SourceDocument.fromDeviz(DevizTehnicRecord d) : deviz = d, offer = null;
-  final OfferRecord? offer;
-  final DevizTehnicRecord? deviz;
-
-  String get numar => offer?.offerNumber ?? deviz?.numar ?? '';
-  String get titlu => offer?.title ?? deviz?.titlu ?? '';
-  String get client => offer?.clientName ?? deviz?.clientName ?? '';
-  String get tipLabel => offer != null ? 'Ofertă' : 'Deviz tehnic';
-  Color get tipColor => offer != null ? Colors.blue : Colors.purple;
-  int get nrArticole => offer != null
-      ? offer!.lines.where((l) => l.lineType.name != 'text').length
-      : (deviz?.articole.length ?? 0);
-}
-
 // ── Dialog picker combinat: oferte simple + devize tehnice ────────────────────
 class _SourcePickerDialog extends StatefulWidget {
   const _SourcePickerDialog({required this.offers, required this.devize});
@@ -16916,8 +16620,8 @@ class _SourcePickerDialogState extends State<_SourcePickerDialog> {
   @override
   Widget build(BuildContext context) {
     final all = [
-      ...widget.offers.map(_SourceDocument.fromOffer),
-      ...widget.devize.map(_SourceDocument.fromDeviz),
+      ...widget.offers.map(LucrareSourceDocument.fromOffer),
+      ...widget.devize.map(LucrareSourceDocument.fromDeviz),
     ];
     final filtered = _search.isEmpty
         ? all
