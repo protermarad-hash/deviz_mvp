@@ -494,6 +494,9 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
       final path = await JobSiteDocumentPdfService.export(
         repository: widget.repository,
         document: document,
+        liniiPlanificate: widget.job.liniiPlanificate.isNotEmpty
+            ? widget.job.liniiPlanificate
+            : null,
       );
       if (!mounted) return;
       await PdfActionsHelper.showPdfActions(
