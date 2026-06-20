@@ -62,6 +62,7 @@ import '../oferte/offer_models.dart';
 import '../deviz_tehnic/deviz_tehnic_models.dart';
 import '../deviz_tehnic/deviz_tehnic_repository.dart';
 import 'lucrare_detalii_models.dart';
+import 'lucrare_format_utils.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -5691,58 +5692,18 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
-  double _asDouble(dynamic raw) {
-    if (raw is num) {
-      return raw.toDouble();
-    }
-    return double.tryParse((raw ?? '0').toString().replaceAll(',', '.')) ?? 0.0;
-  }
+  double _asDouble(dynamic raw) => lucrareAsDouble(raw);
 
-  bool _asBool(dynamic raw) {
-    if (raw is bool) {
-      return raw;
-    }
-    final value = (raw ?? '').toString().trim().toLowerCase();
-    if (value == 'true' || value == '1' || value == 'da' || value == 'yes') {
-      return true;
-    }
-    if (value == 'false' || value == '0' || value == 'nu' || value == 'no') {
-      return false;
-    }
-    return false;
-  }
+  bool _asBool(dynamic raw) => lucrareAsBool(raw);
 
-  String _formatDecimal(double value) {
-    final rounded = value.roundToDouble();
-    if ((value - rounded).abs() < 0.0001) {
-      return rounded.toStringAsFixed(0);
-    }
-    return value.toStringAsFixed(2);
-  }
+  String _formatDecimal(double value) => lucrareFormatDecimal(value);
 
-  DateTime _dateOnly(DateTime value) {
-    return DateTime(value.year, value.month, value.day);
-  }
+  DateTime _dateOnly(DateTime value) => lucrareDateOnly(value);
 
-  DateTime? _tryParseLaborDate(dynamic raw) {
-    final value = '${raw ?? ''}'.trim();
-    if (value.isEmpty) return null;
-    final parsedIso = DateTime.tryParse(value);
-    if (parsedIso != null) {
-      return _dateOnly(parsedIso.toLocal());
-    }
-    final match = RegExp(r'^(\d{2})\.(\d{2})\.(\d{4})$').firstMatch(value);
-    if (match == null) return null;
-    final day = int.tryParse(match.group(1) ?? '');
-    final month = int.tryParse(match.group(2) ?? '');
-    final year = int.tryParse(match.group(3) ?? '');
-    if (day == null || month == null || year == null) return null;
-    return DateTime(year, month, day);
-  }
+  DateTime? _tryParseLaborDate(dynamic raw) => lucrareTryParseLaborDate(raw);
 
-  String _encodeLaborPeriodDate(DateTime value) {
-    return _dateOnly(value).toIso8601String();
-  }
+  String _encodeLaborPeriodDate(DateTime value) =>
+      lucrareEncodeLaborPeriodDate(value);
 
   double _laborPeriodDays({
     required DateTime periodStart,
@@ -6355,17 +6316,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return _laborTotalLineCost(row);
   }
 
-  DateTime _parseDateOrNow(String raw) {
-    final trimmed = raw.trim();
-    final match = RegExp(r'^(\d{2})\.(\d{2})\.(\d{4})$').firstMatch(trimmed);
-    if (match != null) {
-      final day = int.tryParse(match.group(1) ?? '') ?? 1;
-      final month = int.tryParse(match.group(2) ?? '') ?? 1;
-      final year = int.tryParse(match.group(3) ?? '') ?? DateTime.now().year;
-      return DateTime(year, month, day);
-    }
-    return DateTime.now();
-  }
+  DateTime _parseDateOrNow(String raw) => lucrareParseDateOrNow(raw);
 
   String _laborTypeOf(Map<String, dynamic> row) {
     return _canonicalLaborType(
@@ -11333,25 +11284,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
-  String _formatDate(DateTime value) {
-    final d = value.day.toString().padLeft(2, '0');
-    final m = value.month.toString().padLeft(2, '0');
-    return '$d.$m.${value.year}';
-  }
+  String _formatDate(DateTime value) => lucrareFormatDate(value);
 
-  String _formatDateTime(String raw) {
-    if (raw.trim().isEmpty) return '-';
-    try {
-      final value = DateTime.parse(raw).toLocal();
-      final d = value.day.toString().padLeft(2, '0');
-      final m = value.month.toString().padLeft(2, '0');
-      final h = value.hour.toString().padLeft(2, '0');
-      final min = value.minute.toString().padLeft(2, '0');
-      return '$d.$m.${value.year} $h:$min';
-    } catch (_) {
-      return raw;
-    }
-  }
+  String _formatDateTime(String raw) => lucrareFormatDateTime(raw);
 
   String _sanitizeDisplayText(String raw) {
     var value = raw;
@@ -11406,14 +11341,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return value;
   }
 
-  String _sanitizeFilePart(String value) {
-    final sanitized = value
-        .trim()
-        .replaceAll(RegExp(r'[^a-zA-Z0-9_\-]+'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .replaceAll(RegExp(r'^_+|_+$'), '');
-    return sanitized.isEmpty ? 'doc' : sanitized;
-  }
+  String _sanitizeFilePart(String value) => lucrareSanitizeFilePart(value);
 
   String _readCompanyField(Map<String, dynamic> map, List<String> keys) {
     for (final key in keys) {
