@@ -2223,6 +2223,16 @@ class _ClientsPageState extends State<ClientsPage> {
     final uri = Uri.parse('https://wa.me/$e164?text=$msg');
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'WhatsApp nu a putut fi deschis. '
+            'Verificați că aplicația este instalată.',
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
     }
   }
 

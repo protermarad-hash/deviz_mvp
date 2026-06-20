@@ -422,13 +422,27 @@ class _CrmPageState extends State<CrmPage>
                     label: const Text('WhatsApp',
                         style: TextStyle(fontSize: 11)),
                     visualDensity: VisualDensity.compact,
-                    onPressed: () =>
-                        CommunicationService.instance.sendWhatsApp(
-                      phone: phone,
-                      message: 'Buna ziua, ${r.contactPerson.isNotEmpty ? r.contactPerson : r.clientName}!\n\n'
-                          'Va contactam in legatura cu: ${r.titlu}.\n\n'
-                          'SC PRO TERM SRL',
-                    ),
+                    onPressed: () async {
+                      final ok = await CommunicationService.instance
+                          .sendWhatsApp(
+                        phone: phone,
+                        message:
+                            'Buna ziua, ${r.contactPerson.isNotEmpty ? r.contactPerson : r.clientName}!\n\n'
+                            'Va contactam in legatura cu: ${r.titlu}.\n\n'
+                            'SC PRO TERM SRL',
+                      );
+                      if (!ok && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'WhatsApp nu a putut fi deschis. '
+                              'Verificați că aplicația este instalată.',
+                            ),
+                            duration: Duration(seconds: 4),
+                          ),
+                        );
+                      }
+                    },
                   ),
                 if (phone.isNotEmpty)
                   ActionChip(

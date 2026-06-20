@@ -8614,7 +8614,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           ActionChip(
                             avatar: const Icon(Icons.chat_outlined, size: 16),
                             label: const Text('Confirmare WA'),
-                            onPressed: () {
+                            onPressed: () async {
                               final msg = CommunicationService.instance
                                   .mesajConfirmareProgramare(
                                 numeClient: item.clientName.trim().isNotEmpty
@@ -8631,10 +8631,22 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                     ? item.location
                                     : null,
                               );
-                              CommunicationService.instance.sendWhatsApp(
+                              final ok = await CommunicationService.instance
+                                  .sendWhatsApp(
                                 phone: phone.trim(),
                                 message: msg,
                               );
+                              if (!ok && mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'WhatsApp nu a putut fi deschis. '
+                                      'Verificați că aplicația este instalată.',
+                                    ),
+                                    duration: Duration(seconds: 4),
+                                  ),
+                                );
+                              }
                             },
                           ),
                         if (phone.trim().isNotEmpty)
@@ -8642,7 +8654,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                             avatar: const Icon(Icons.schedule_outlined,
                                 size: 16),
                             label: const Text('Reminder WA'),
-                            onPressed: () {
+                            onPressed: () async {
                               final start =
                                   item.effectiveStartDateTime;
                               final oraStr =
@@ -8659,10 +8671,22 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                         ? item.assignedUserEmail
                                         : item.teamId,
                               );
-                              CommunicationService.instance.sendWhatsApp(
+                              final ok = await CommunicationService.instance
+                                  .sendWhatsApp(
                                 phone: phone.trim(),
                                 message: msg,
                               );
+                              if (!ok && mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'WhatsApp nu a putut fi deschis. '
+                                      'Verificați că aplicația este instalată.',
+                                    ),
+                                    duration: Duration(seconds: 4),
+                                  ),
+                                );
+                              }
                             },
                           ),
                         if (email.trim().isNotEmpty)
