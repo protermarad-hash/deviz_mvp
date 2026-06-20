@@ -12474,21 +12474,18 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       text: job.notes.trim(),
     );
 
-    // Sursa primară = liniiPlanificate (copiate din ofertă la conversie).
-    // Fallback la _materials/_labor manuale NUMAI dacă liniiPlanificate e gol
-    // (lucrări vechi care nu au venit din conversie ofertă).
+    // Sursa EXCLUSIVĂ = liniiPlanificate (copiate din ofertă via import/conversie).
+    // _materials/_labor din tab Economic = urmărire internă, NU apar în Situația de Lucrări.
     final hasPlanificate = _jobSnapshot.liniiPlanificate.isNotEmpty;
-    final planMateriale = hasPlanificate
-        ? _jobSnapshot.liniiPlanificate.where((l) => l.categorie == 'material').toList()
-        : <JobLine>[];
-    final planManopera = hasPlanificate
-        ? _jobSnapshot.liniiPlanificate.where((l) => l.categorie == 'manopera').toList()
-        : <JobLine>[];
-    final matCount = hasPlanificate ? planMateriale.length : _materials.length;
-    final laborCount = hasPlanificate ? planManopera.length : _labor.length;
+    final planMateriale = _jobSnapshot.liniiPlanificate
+        .where((l) => l.categorie == 'material').toList();
+    final planManopera = _jobSnapshot.liniiPlanificate
+        .where((l) => l.categorie == 'manopera').toList();
+    final matCount = planMateriale.length;
+    final laborCount = planManopera.length;
 
-    bool includeMaterials = hasPlanificate ? planMateriale.isNotEmpty : _materials.isNotEmpty;
-    bool includeLabor = hasPlanificate ? planManopera.isNotEmpty : _labor.isNotEmpty;
+    bool includeMaterials = planMateriale.isNotEmpty;
+    bool includeLabor = planManopera.isNotEmpty;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -12520,6 +12517,24 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         Text(
                           'Date preluate din oferta ${_jobSnapshot.sourceOfferNumber}',
                           style: TextStyle(fontSize: 12, color: Colors.green[700]),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.warning_amber_outlined,
+                            size: 15, color: Colors.orange[700]),
+                        const SizedBox(width: 6),
+                        const Expanded(
+                          child: Text(
+                            'Nu există linii din ofertă importate. Accesează tab-ul Situație → "Importă linii din ofertă" înainte de generare.',
+                            style: TextStyle(fontSize: 12, color: Colors.orange),
+                          ),
                         ),
                       ],
                     ),
@@ -12648,40 +12663,25 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           _defaultVatPercent;
 
       final materialsForPdf = includeMaterials
-          ? (hasPlanificate
-              ? planMateriale.map((l) => <String, dynamic>{
-                    'name': l.denumire,
-                    'um': l.um,
-                    'qty': l.cantitateReala,
-                    'price': l.pretUnitarReal,
-                    'total': l.totalReal,
-                    'observatii': l.observatii,
-                  }).toList(growable: false)
-              : _materials.map((m) => <String, dynamic>{
-                    'name': '${m['name'] ?? ''}',
-                    'um': '${m['um'] ?? ''}',
-                    'qty': _asDouble(m['qty']),
-                    'price': _asDouble(m['price']),
-                    'total': _asDouble(m['total']),
-                  }).toList(growable: false))
+          ? planMateriale.map((l) => <String, dynamic>{
+                'name': l.denumire,
+                'um': l.um,
+                'qty': l.cantitateReala,
+                'price': l.pretUnitarReal,
+                'total': l.totalReal,
+                'observatii': l.observatii,
+              }).toList(growable: false)
           : <Map<String, dynamic>>[];
 
       final laborForPdf = includeLabor
-          ? (hasPlanificate
-              ? planManopera.map((l) => <String, dynamic>{
-                    'who': l.denumire,
-                    'um': l.um,
-                    'hours': l.cantitateReala,
-                    'rate': l.pretUnitarReal,
-                    'total': l.totalReal,
-                    'observatii': l.observatii,
-                  }).toList(growable: false)
-              : _labor.map((l) => <String, dynamic>{
-                    'who': '${l['who'] ?? ''}',
-                    'hours': _asDouble(l['hours']),
-                    'rate': _laborRateForRow(l),
-                    'total': _laborTotalLineCost(l),
-                  }).toList(growable: false))
+          ? planManopera.map((l) => <String, dynamic>{
+                'who': l.denumire,
+                'um': l.um,
+                'hours': l.cantitateReala,
+                'rate': l.pretUnitarReal,
+                'total': l.totalReal,
+                'observatii': l.observatii,
+              }).toList(growable: false)
           : <Map<String, dynamic>>[];
 
       final params = SituatieLucrariParams(
