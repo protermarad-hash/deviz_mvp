@@ -255,6 +255,69 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
     });
   }
 
+  Future<void> _duplicateDevizTehnic(DevizTehnicRecord source) async {
+    final now = DateTime.now();
+    final numar = await _devizRepo.nextNumber(source.tipDocument);
+    if (!mounted) return;
+    final draft = DevizTehnicRecord(
+      id: 'dvz-dup-${now.microsecondsSinceEpoch}',
+      numar: numar,
+      titlu: source.titlu,
+      obiectiv: source.obiectiv,
+      clientId: source.clientId,
+      clientName: source.clientName,
+      clientCui: source.clientCui,
+      clientAddress: source.clientAddress,
+      clientPhone: source.clientPhone,
+      clientEmail: source.clientEmail,
+      contactPerson: source.contactPerson,
+      contactDepartment: source.contactDepartment,
+      dataEmiterii: now,
+      zileValabilitate: source.zileValabilitate,
+      articole: source.articole
+          .map((a) => a.copyWith())
+          .toList(growable: false),
+      regiePercent: source.regiePercent,
+      profitPercent: source.profitPercent,
+      tvaPercent: source.tvaPercent,
+      intocmitDe: source.intocmitDe,
+      note: source.note,
+      createdAt: now,
+      updatedAt: now,
+      createdByUserId: widget.currentUserId,
+      tipDocument: source.tipDocument,
+      status: DevizTehnicStatus.draft,
+      priceDisplay: source.priceDisplay,
+      registryEntryId: '',
+      registryNumber: '',
+    );
+    final result = await Navigator.of(context).push<DevizTehnicRecord>(
+      MaterialPageRoute(
+        builder: (_) => DevizTehnicFormPage(
+          existing: draft,
+          clients: _clients,
+          currentUserName: widget.currentUserName,
+          currentUserId: widget.currentUserId,
+          repository: _devizRepo,
+          appRepository: widget.repository,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (result != null) {
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${source.tipDocument.label} ${source.numar.isNotEmpty ? source.numar : source.titlu} '
+            'duplicat ca ${result.numar}.',
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _forceSyncToCloud() async {
     setState(() => _syncing = true);
     try {
@@ -716,17 +779,77 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                         tooltip: 'Exportă PDF',
                                         onPressed: () => _exportPdf(d),
                                       ),
-                                      IconButton(
-                                        icon: const Icon(Icons.edit_outlined,
-                                            size: 18),
-                                        tooltip: 'Editează',
-                                        onPressed: () => _openForm(existing: d),
-                                      ),
-                                      IconButton(
-                                        icon: Icon(Icons.delete_outline,
-                                            size: 18, color: cs.error),
-                                        tooltip: 'Șterge',
-                                        onPressed: () => _confirmDelete(d),
+                                      SizedBox(
+                                        width: 36,
+                                        height: 36,
+                                        child: PopupMenuButton<String>(
+                                          padding: EdgeInsets.zero,
+                                          icon: const Icon(Icons.more_vert,
+                                              size: 20),
+                                          tooltip: 'Acțiuni',
+                                          onSelected: (value) {
+                                            switch (value) {
+                                              case 'open':
+                                                _openForm(existing: d);
+                                              case 'edit':
+                                                _openForm(existing: d);
+                                              case 'duplicate':
+                                                _duplicateDevizTehnic(d);
+                                              case 'delete':
+                                                _confirmDelete(d);
+                                            }
+                                          },
+                                          itemBuilder: (context) => [
+                                            const PopupMenuItem(
+                                              value: 'open',
+                                              child: ListTile(
+                                                leading: Icon(Icons
+                                                    .visibility_outlined),
+                                                title:
+                                                    Text('Deschide detaliu'),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                            const PopupMenuItem(
+                                              value: 'edit',
+                                              child: ListTile(
+                                                leading:
+                                                    Icon(Icons.edit_outlined),
+                                                title: Text('Editează'),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                            const PopupMenuItem(
+                                              value: 'duplicate',
+                                              child: ListTile(
+                                                leading: Icon(Icons
+                                                    .content_copy_outlined),
+                                                title: Text('Duplică'),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                            const PopupMenuItem(
+                                              value: 'delete',
+                                              child: ListTile(
+                                                leading: Icon(
+                                                    Icons.delete_outline,
+                                                    color: Colors.red),
+                                                title: Text('Șterge',
+                                                    style: TextStyle(
+                                                        color: Colors.red)),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ],
                                   ),

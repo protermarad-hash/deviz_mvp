@@ -179,6 +179,53 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
     });
   }
 
+  Future<void> _duplicateDevizFiltreCta(DevizFiltreCta source) async {
+    final now = DateTime.now();
+    final numar = await _repo.nextNumber();
+    if (!mounted) return;
+    final draft = DevizFiltreCta(
+      id: 'cta-dup-${now.microsecondsSinceEpoch}',
+      titluDeviz: source.titluDeviz,
+      anDeviz: now.year.toString(),
+      clientId: source.clientId,
+      clientName: source.clientName,
+      numar: numar,
+      moneda: source.moneda,
+      inclusivaOnorariu: source.inclusivaOnorariu,
+      note: source.note,
+      intocmitDe: source.intocmitDe,
+      ctas: source.ctas.map((c) => c.copyWith()).toList(growable: false),
+      dataEmitere: now,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final result = await Navigator.of(context).push<DevizFiltreCta>(
+      MaterialPageRoute(
+        builder: (_) => DevizFiltreCtaEditorPage(
+          existing: draft,
+          repository: _repo,
+          appRepository: widget.appRepository,
+          currentUserName: widget.currentUserName,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (result != null) {
+      await _load();
+      if (!mounted) return;
+      final srcLabel = source.numar.isNotEmpty
+          ? source.numar
+          : source.titluDeviz.isNotEmpty
+              ? source.titluDeviz
+              : 'deviz';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$srcLabel duplicat ca ${result.numar}.'),
+        ),
+      );
+    }
+  }
+
   Future<void> _forceSyncToCloud() async {
     setState(() => _syncing = true);
     try {
@@ -570,25 +617,69 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
                         padding: const EdgeInsets.symmetric(
                             horizontal: 10, vertical: 4)),
                   ),
-                  TextButton.icon(
-                    onPressed: () => _openEditor(existing: d),
-                    icon: const Icon(Icons.edit_outlined, size: 16),
-                    label: const Text('Editează',
-                        style: TextStyle(fontSize: 12)),
-                    style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4)),
-                  ),
-                  TextButton.icon(
-                    onPressed: () => _delete(d),
-                    icon: Icon(Icons.delete_outline,
-                        size: 16, color: Colors.red.shade700),
-                    label: Text('Șterge',
-                        style: TextStyle(
-                            fontSize: 12, color: Colors.red.shade700)),
-                    style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4)),
+                  SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: PopupMenuButton<String>(
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(Icons.more_vert, size: 20),
+                      tooltip: 'Acțiuni',
+                      onSelected: (value) {
+                        switch (value) {
+                          case 'open':
+                            _openEditor(existing: d);
+                          case 'edit':
+                            _openEditor(existing: d);
+                          case 'duplicate':
+                            _duplicateDevizFiltreCta(d);
+                          case 'delete':
+                            _delete(d);
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'open',
+                          child: ListTile(
+                            leading:
+                                Icon(Icons.visibility_outlined),
+                            title: Text('Deschide detaliu'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'edit',
+                          child: ListTile(
+                            leading: Icon(Icons.edit_outlined),
+                            title: Text('Editează'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'duplicate',
+                          child: ListTile(
+                            leading:
+                                Icon(Icons.content_copy_outlined),
+                            title: Text('Duplică'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: ListTile(
+                            leading: Icon(Icons.delete_outline,
+                                color: Colors.red),
+                            title: Text('Șterge',
+                                style: TextStyle(
+                                    color: Colors.red)),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
