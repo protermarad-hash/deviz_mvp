@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../clients/client_models.dart';
+import '../jobs/firebase_lucrari_repository.dart';
+import '../jobs/job_models.dart';
 import 'deviz_tehnic_models.dart';
 import 'deviz_tehnic_pdf_service.dart';
 import 'deviz_tehnic_repository.dart';
@@ -188,6 +191,200 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
               : '${result.tipDocument.label} actualizat: ${result.numar}'),
         ),
       );
+    }
+  }
+
+  Future<void> _convertDevizToJob(DevizTehnicRecord d) async {
+    if (d.isConverted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Devizul este deja convertit în lucrare (${d.convertedToJobId}).'),
+          ),
+        );
+      }
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Convertește în lucrare'),
+        content: Text(
+          'Creezi o lucrare nouă din devizul "${d.numar.isNotEmpty ? d.numar : d.titlu}"?\n\n'
+          'Liniile și totalul vor fi copiate ca plan de lucrare.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Convertește'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    try {
+      final now = DateTime.now();
+      String nextJobCode = '';
+      try {
+        nextJobCode = await widget.repository.nextJobCode();
+      } catch (_) {
+        final stamp = now.millisecondsSinceEpoch.toString();
+        final tail =
+            stamp.length > 4 ? stamp.substring(stamp.length - 4) : stamp;
+        nextJobCode = 'JOB-$tail';
+      }
+
+      // Mapare articole deviz → linii planificate JobLine
+      // Fiecare articol poate avea până la 4 componente de preț;
+      // generăm câte o linie separată per componentă nenulă.
+      final linii = <JobLine>[];
+      for (final a in d.articole) {
+        if (a.pretMat > 0) {
+          linii.add(JobLine(
+            id: '',
+            ofertaLineId: a.id,
+            denumire: '${a.denumire} (Mat)',
+            um: a.um,
+            cantitateOferta: a.cantitate,
+            cantitateReala: 0,
+            pretUnitarOferta: a.pretMat,
+            pretUnitarReal: 0,
+            categorie: 'material',
+          ));
+        }
+        if (a.pretMan > 0) {
+          linii.add(JobLine(
+            id: '',
+            ofertaLineId: a.id,
+            denumire: '${a.denumire} (Man)',
+            um: a.um,
+            cantitateOferta: a.cantitate,
+            cantitateReala: 0,
+            pretUnitarOferta: a.pretMan,
+            pretUnitarReal: 0,
+            categorie: 'manopera',
+          ));
+        }
+        if (a.pretUtilaj > 0) {
+          linii.add(JobLine(
+            id: '',
+            ofertaLineId: a.id,
+            denumire: '${a.denumire} (Utilaj)',
+            um: a.um,
+            cantitateOferta: a.cantitate,
+            cantitateReala: 0,
+            pretUnitarOferta: a.pretUtilaj,
+            pretUnitarReal: 0,
+            categorie: 'utilaj',
+          ));
+        }
+        if (a.pretTransport > 0) {
+          linii.add(JobLine(
+            id: '',
+            ofertaLineId: a.id,
+            denumire: '${a.denumire} (Transport)',
+            um: a.um,
+            cantitateOferta: a.cantitate,
+            cantitateReala: 0,
+            pretUnitarOferta: a.pretTransport,
+            pretUnitarReal: 0,
+            categorie: 'transport',
+          ));
+        }
+      }
+
+      // Formula profitului SPECIFICĂ devizului tehnic:
+      //   regie  = totalDirect × regiePercent/100
+      //   profit = (totalDirect + regie) × profitPercent/100  ← diferit față de Oferte
+      // totalOferta = deviz.totalFaraTva (calculat corect cu formula devizului)
+      final job = JobRecord(
+        id: 'job-${now.microsecondsSinceEpoch}',
+        jobCode: nextJobCode.trim(),
+        clientId: d.clientId,
+        title: d.titlu.isNotEmpty
+            ? d.titlu
+            : 'Lucrare din deviz ${d.numar}',
+        location: '',
+        city: '',
+        county: '',
+        contactPerson: d.contactPerson,
+        contactPhone: d.clientPhone,
+        description: 'Generata din deviz tehnic ${d.numar}',
+        category: 'deviz_tehnic',
+        status: JobStatus.planificata,
+        startDate: null,
+        dueDate: null,
+        closedDate: null,
+        estimatedValue: d.totalFaraTva > 0 ? d.totalFaraTva : null,
+        notes: [
+          if (d.note.trim().isNotEmpty) d.note.trim(),
+          'Sursa deviz tehnic: ${d.numar}',
+        ].join('\n'),
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+        sourceOfferId: d.id,
+        sourceOfferNumber: d.numar,
+        sourceOfferTitle: d.titlu,
+        sourceDocumentType: 'deviz_tehnic',
+        createdByUserId: d.createdByUserId,
+        regiePercent: d.regiePercent,
+        profitPercent: d.profitPercent,
+        vatPercent: d.tvaPercent,
+        liniiPlanificate: linii,
+        totalOferta: d.totalFaraTva,
+      );
+
+      // Salvare locală + cloud (pattern din oferte_page._saveJobResolved)
+      FirebaseLucrariRepository? cloudRepo;
+      if (FirebaseBootstrap.isInitialized) {
+        try {
+          cloudRepo = FirebaseLucrariRepository();
+        } catch (_) {}
+      }
+      var queuedOffline = cloudRepo == null;
+      if (cloudRepo != null) {
+        try {
+          await cloudRepo.upsertJob(job);
+        } catch (e) {
+          FirebaseBootstrap.registerRuntimeError(e);
+          queuedOffline = true;
+        }
+      }
+      final savedJob = await widget.repository.saveJob(job);
+      if (queuedOffline) {
+        await OfflineSyncRuntime.instance.queueJob(savedJob);
+      }
+
+      // Marchează devizul ca convertit
+      final updatedDeviz = d.copyWith(
+        convertedToJobId: savedJob.id,
+        updatedAt: now,
+      );
+      await _devizRepo.save(updatedDeviz);
+      await _load();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                'Lucrare creată: ${savedJob.jobCode.isNotEmpty ? savedJob.jobCode : savedJob.id}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Eroare conversie: $e')));
+      }
     }
   }
 
@@ -708,6 +905,31 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                           ),
                                         ),
                                       ),
+                                      if (d.isConverted) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: Colors.green.withValues(
+                                                alpha: 0.12),
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                            border: Border.all(
+                                              color: Colors.green
+                                                  .withValues(alpha: 0.4),
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            '✓ Lucrare',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color: Colors.green,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                       const Spacer(),
                                       Text(
                                         dateFmt.format(d.dataEmiterii),
@@ -795,6 +1017,8 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                                 _openForm(existing: d);
                                               case 'duplicate':
                                                 _duplicateDevizTehnic(d);
+                                              case 'convert':
+                                                _convertDevizToJob(d);
                                               case 'delete':
                                                 _confirmDelete(d);
                                             }
@@ -834,6 +1058,33 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                                     EdgeInsets.zero,
                                               ),
                                             ),
+                                            if (d.tipDocument !=
+                                                DevizTehnicTipDocument
+                                                    .situatieLucrari)
+                                              PopupMenuItem(
+                                                value: 'convert',
+                                                child: ListTile(
+                                                  leading: Icon(
+                                                    Icons.transform_outlined,
+                                                    color: d.isConverted
+                                                        ? Colors.green
+                                                        : null,
+                                                  ),
+                                                  title: Text(
+                                                    d.isConverted
+                                                        ? 'Convertit în lucrare'
+                                                        : 'Convertește în lucrare',
+                                                    style: TextStyle(
+                                                      color: d.isConverted
+                                                          ? Colors.green
+                                                          : null,
+                                                    ),
+                                                  ),
+                                                  dense: true,
+                                                  contentPadding:
+                                                      EdgeInsets.zero,
+                                                ),
+                                              ),
                                             const PopupMenuItem(
                                               value: 'delete',
                                               child: ListTile(

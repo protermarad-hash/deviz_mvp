@@ -390,6 +390,8 @@ class JobRecord {
     // SmartBill facturare (iun 2026) — backward compatible
     this.smartbillFacturaNumar = '',
     this.smartbillFacturaSerie = '',
+    // Tip document sursă (iun 2026) — 'oferta' | 'deviz_tehnic' — backward compatible
+    this.sourceDocumentType = 'oferta',
   });
 
   final String id;
@@ -471,6 +473,8 @@ class JobRecord {
   // SmartBill (iun 2026)
   final String smartbillFacturaNumar;
   final String smartbillFacturaSerie;
+  // Tip document sursă (iun 2026)
+  final String sourceDocumentType;
 
   // Rotunjire la 10 — identic cu OfferLaborCalculator.roundPriceUpToTen
   static double _roundUpToTen(double v) {
@@ -568,6 +572,7 @@ class JobRecord {
     double? vatPercent,
     String? smartbillFacturaNumar,
     String? smartbillFacturaSerie,
+    String? sourceDocumentType,
   }) {
     return JobRecord(
       id: id ?? this.id,
@@ -635,6 +640,7 @@ class JobRecord {
           smartbillFacturaNumar ?? this.smartbillFacturaNumar,
       smartbillFacturaSerie:
           smartbillFacturaSerie ?? this.smartbillFacturaSerie,
+      sourceDocumentType: sourceDocumentType ?? this.sourceDocumentType,
     );
   }
 
@@ -704,6 +710,7 @@ class JobRecord {
       'vat_percent': vatPercent,
       'smartbill_factura_numar': smartbillFacturaNumar,
       'smartbill_factura_serie': smartbillFacturaSerie,
+      'source_document_type': sourceDocumentType,
     };
   }
 
@@ -886,6 +893,8 @@ class JobRecord {
           (map['smartbill_factura_numar'] ?? map['smartbillFacturaNumar'] ?? '').toString(),
       smartbillFacturaSerie:
           (map['smartbill_factura_serie'] ?? map['smartbillFacturaSerie'] ?? '').toString(),
+      sourceDocumentType:
+          (map['source_document_type'] ?? map['sourceDocumentType'] ?? 'oferta').toString(),
     );
   }
 }

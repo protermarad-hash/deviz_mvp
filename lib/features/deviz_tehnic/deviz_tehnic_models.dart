@@ -288,6 +288,7 @@ class DevizTehnicRecord {
     this.registryEntryId = '',
     this.registryNumber = '',
     this.registeredAt,
+    this.convertedToJobId = '',
   });
 
   final String id;
@@ -320,6 +321,9 @@ class DevizTehnicRecord {
   final String registryEntryId;
   final String registryNumber;
   final DateTime? registeredAt;
+  final String convertedToJobId;
+
+  bool get isConverted => convertedToJobId.trim().isNotEmpty;
 
   // ── Totaluri calculate ──────────────────────────────────────────
   double get totalMat =>
@@ -364,6 +368,7 @@ class DevizTehnicRecord {
     String? registryEntryId,
     String? registryNumber,
     DateTime? registeredAt,
+    String? convertedToJobId,
   }) {
     return DevizTehnicRecord(
       id: id,
@@ -395,6 +400,7 @@ class DevizTehnicRecord {
       registryEntryId: registryEntryId ?? this.registryEntryId,
       registryNumber: registryNumber ?? this.registryNumber,
       registeredAt: registeredAt ?? this.registeredAt,
+      convertedToJobId: convertedToJobId ?? this.convertedToJobId,
     );
   }
 
@@ -429,6 +435,7 @@ class DevizTehnicRecord {
         'registry_entry_id': registryEntryId,
         'registry_number': registryNumber,
         'registered_at': registeredAt?.toIso8601String(),
+        'converted_to_job_id': convertedToJobId,
       };
 
   factory DevizTehnicRecord.fromMap(Map<String, dynamic> m) {
@@ -474,6 +481,7 @@ class DevizTehnicRecord {
       priceDisplay: DevizTehnicPriceDisplay.fromValue(m['price_display']?.toString()),
       registryEntryId: (m['registry_entry_id'] ?? '').toString(),
       registryNumber: (m['registry_number'] ?? '').toString(),
+      convertedToJobId: (m['converted_to_job_id'] ?? '').toString(),
       registeredAt: m['registered_at'] != null
           ? (m['registered_at'] is Timestamp
               ? (m['registered_at'] as Timestamp).toDate()
