@@ -18,6 +18,36 @@ import 'job_models.dart';
 import 'lucrare_detalii_page.dart';
 import 'lucrari_cloud_repository.dart';
 
+/// Prioritatea de afișare a unei lucrări după status (sortare logică, nu cronologică).
+/// Ordinea dorită: În execuție → Planificate → (Noi/Ofertate) →
+/// În așteptare/blocate → Anulate (Închise) → Finalizate (ultimele).
+int _jobStatusRank(JobStatus status) {
+  switch (status) {
+    case JobStatus.inExecutie:
+      return 0;
+    case JobStatus.planificata:
+      return 1;
+    case JobStatus.noua:
+      return 2;
+    case JobStatus.ofertata:
+      return 3;
+    case JobStatus.suspendata:
+      return 4;
+    case JobStatus.inchisa:
+      return 5;
+    case JobStatus.finalizata:
+      return 6;
+  }
+}
+
+/// Comparator: întâi după prioritatea statusului, apoi (în cadrul aceluiași
+/// status) după dată descrescător (cele mai recente primele).
+int _compareJobsByStatus(JobRecord a, JobRecord b) {
+  final byStatus = _jobStatusRank(a.status).compareTo(_jobStatusRank(b.status));
+  if (byStatus != 0) return byStatus;
+  return b.createdAt.compareTo(a.createdAt);
+}
+
 class JobsPage extends StatefulWidget {
   const JobsPage({
     super.key,
@@ -185,8 +215,7 @@ class _JobsPageState extends State<JobsPage> {
     });
     try {
       final List<JobRecord> jobs = await _loadJobsResolved();
-      final sortedJobs = List<JobRecord>.from(jobs)
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final sortedJobs = List<JobRecord>.from(jobs)..sort(_compareJobsByStatus);
 
       final Iterable<dynamic> clientsRaw = await _loadClientsRawSafe();
 
@@ -296,7 +325,7 @@ class _JobsPageState extends State<JobsPage> {
         return;
       }
       final sortedJobs = List<JobRecord>.from(mergedJobs)
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        ..sort(_compareJobsByStatus);
       final filteredJobs = _computeFilteredJobs(
         jobs: sortedJobs,
         clients: _clients,

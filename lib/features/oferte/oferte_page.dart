@@ -37,6 +37,37 @@ import 'deviz_articole_baza_page.dart';
 import '../../core/help/help_module_button.dart';
 import '../../core/widgets/client_autocomplete_field.dart';
 
+/// Prioritatea de afișare a unei oferte după status (sortare logică).
+/// Ordinea dorită: Acceptat → Trimis → (În așteptare) → Draft → Respins →
+/// Anulat → Convertită (ultimele). Convertirea are prioritate ABSOLUTĂ peste
+/// statusul de bază: o ofertă convertită în lucrare merge ultima indiferent
+/// dacă era „acceptată” înainte.
+int _offerStatusRank(OfferRecord o) {
+  if (o.isConverted) return 100;
+  switch (o.status) {
+    case OfferStatus.accepted:
+      return 0;
+    case OfferStatus.sent:
+      return 1;
+    case OfferStatus.awaiting:
+      return 2;
+    case OfferStatus.draft:
+      return 3;
+    case OfferStatus.rejected:
+      return 4;
+    case OfferStatus.cancelled:
+      return 5;
+  }
+}
+
+/// Comparator: întâi după prioritatea statusului, apoi (în cadrul aceluiași
+/// status) după dată descrescător (cele mai recente primele).
+int _compareOffersByStatus(OfferRecord a, OfferRecord b) {
+  final byStatus = _offerStatusRank(a).compareTo(_offerStatusRank(b));
+  if (byStatus != 0) return byStatus;
+  return b.updatedAt.compareTo(a.updatedAt);
+}
+
 class OfertePage extends StatefulWidget {
   const OfertePage({
     super.key,
@@ -296,8 +327,7 @@ class _OfertePageState extends State<OfertePage>
         }
         setState(() {
           _setCloudSource();
-          _items = [...cloudItems]
-            ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+          _items = [...cloudItems]..sort(_compareOffersByStatus);
           _loading = false;
         });
       },
@@ -483,7 +513,7 @@ class _OfertePageState extends State<OfertePage>
       if (!mounted) return;
       setState(() {
         _items = [...(results[0] as List<OfferRecord>)]
-          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+          ..sort(_compareOffersByStatus);
         _clients = results[1] as List<ClientRecord>;
         _jobs = results[2] as List<JobRecord>;
         // Construieste Maps O(1) pentru lookup rapid

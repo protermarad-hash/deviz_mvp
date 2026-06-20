@@ -13,6 +13,34 @@ import 'deviz_tehnic_pdf_service.dart';
 import 'deviz_tehnic_repository.dart';
 import 'deviz_tehnic_form_page.dart';
 
+/// Prioritatea de afișare a unui deviz tehnic / ofertă / situație după status
+/// (sortare logică, nu cronologică). Ordinea dorită: Acceptat → Trimis →
+/// Draft → Respins → Anulat → Convertită (ultimele). Convertirea în lucrare are
+/// prioritate ABSOLUTĂ peste statusul de bază.
+int _devizStatusRank(DevizTehnicRecord d) {
+  if (d.isConverted) return 100;
+  switch (d.status) {
+    case DevizTehnicStatus.acceptat:
+      return 0;
+    case DevizTehnicStatus.trimis:
+      return 1;
+    case DevizTehnicStatus.draft:
+      return 2;
+    case DevizTehnicStatus.respins:
+      return 3;
+    case DevizTehnicStatus.anulat:
+      return 4;
+  }
+}
+
+/// Comparator: întâi după prioritatea statusului, apoi (în cadrul aceluiași
+/// status) după dată descrescător (cele mai recente primele).
+int _compareDevizeByStatus(DevizTehnicRecord a, DevizTehnicRecord b) {
+  final byStatus = _devizStatusRank(a).compareTo(_devizStatusRank(b));
+  if (byStatus != 0) return byStatus;
+  return b.updatedAt.compareTo(a.updatedAt);
+}
+
 /// Lista devizelor tehnice cu logica de calcul Excel (Mat/Man/Utilaj/Transport).
 class DevizTehnicListPage extends StatefulWidget {
   const DevizTehnicListPage({
@@ -85,7 +113,8 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
       ]);
       if (!mounted) return;
       setState(() {
-        _items = results[0] as List<DevizTehnicRecord>;
+        _items = (results[0] as List<DevizTehnicRecord>)
+          ..sort(_compareDevizeByStatus);
         _clients = results[1] as List<ClientRecord>;
         _loading = false;
       });
