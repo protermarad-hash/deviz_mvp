@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 /// Serviciu central pentru comunicare cu clienți/parteneri.
@@ -21,7 +22,10 @@ class CommunicationService {
         await launchUrl(url, mode: LaunchMode.externalApplication);
         return true;
       }
-    } catch (_) {}
+      debugPrint('[CommunicationService] canLaunchUrl=false pentru: $url');
+    } catch (e) {
+      debugPrint('[CommunicationService] sendWhatsApp eroare: $e');
+    }
     return false;
   }
 

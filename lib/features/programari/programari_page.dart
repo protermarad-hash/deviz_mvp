@@ -6988,8 +6988,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
           FilledButton.icon(
             icon: const Icon(Icons.chat_outlined, size: 16),
             label: const Text('Trimite WhatsApp'),
-            onPressed: () {
-              Navigator.pop(ctx, true);
+            onPressed: () async {
               final ora =
                   '${start.hour.toString().padLeft(2, '0')}:${start.minute.toString().padLeft(2, '0')}';
               final data =
@@ -7002,9 +7001,20 @@ class _ProgramariPageState extends State<ProgramariPage> {
                 numeTechnician: '',
                 adresaLocatie: location.isNotEmpty ? location : null,
               );
-              CommunicationService.instance
-                  .sendWhatsApp(phone: phone, message: msg)
-                  .catchError((_) => false);
+              Navigator.pop(ctx, true);
+              final ok = await CommunicationService.instance
+                  .sendWhatsApp(phone: phone, message: msg);
+              if (!ok && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'WhatsApp nu a putut fi deschis. '
+                      'Verificați că aplicația este instalată.',
+                    ),
+                    duration: Duration(seconds: 4),
+                  ),
+                );
+              }
             },
           ),
         ],
