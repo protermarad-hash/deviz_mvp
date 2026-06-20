@@ -59,6 +59,8 @@ import 'contract_pdf_service.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../oferte/local_oferte_repository.dart';
 import '../oferte/offer_models.dart';
+import '../deviz_tehnic/deviz_tehnic_models.dart';
+import '../deviz_tehnic/deviz_tehnic_repository.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -14186,55 +14188,136 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Future<void> _repopulateFromOffer() async {
     final sourceId = _jobSnapshot.sourceOfferId.trim();
     final sourceNumber = _jobSnapshot.sourceOfferNumber.trim();
+    final sourceDocType = _jobSnapshot.sourceDocumentType.trim();
 
-    // Încarcă ofertele locale și găsește oferta sursă.
-    // Fallback după offerNumber când sourceOfferId lipsește (lucrări create cu versiune veche).
-    final offers = await LocalOferteRepository().listOffers();
+    // Încarcă ambele surse în paralel (local cache pentru viteză și offline-safe)
+    final results = await Future.wait([
+      LocalOferteRepository().listOffers(),
+      DevizTehnicRepository().listLocal(),
+    ]);
+    final offers = results[0] as List<OfferRecord>;
+    final devize = results[1] as List<DevizTehnicRecord>;
 
-    OfferRecord? source;
+    OfferRecord? foundOffer;
+    DevizTehnicRecord? foundDeviz;
+
     if (sourceId.isNotEmpty || sourceNumber.isNotEmpty) {
-      source = offers.where((o) =>
-          (sourceId.isNotEmpty && o.id == sourceId) ||
-          (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
+      if (sourceDocType == 'deviz_tehnic') {
+        // Sursa e din Devize tehnice — caută acolo primul
+        foundDeviz = devize.where((d) =>
+            (sourceId.isNotEmpty && d.id == sourceId) ||
+            (sourceId.isEmpty && d.numar == sourceNumber)).firstOrNull;
+        // Fallback la oferte (edge case: doc vechi cu tip incorect salvat)
+        if (foundDeviz == null) {
+          foundOffer = offers.where((o) =>
+              (sourceId.isNotEmpty && o.id == sourceId) ||
+              (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
+        }
+      } else {
+        // Sursa e din Oferte simple — caută acolo primul
+        foundOffer = offers.where((o) =>
+            (sourceId.isNotEmpty && o.id == sourceId) ||
+            (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
+        // Fallback la devize tehnice
+        if (foundOffer == null) {
+          foundDeviz = devize.where((d) =>
+              (sourceId.isNotEmpty && d.id == sourceId) ||
+              (sourceId.isEmpty && d.numar == sourceNumber)).firstOrNull;
+        }
+      }
     }
 
-    // Dacă oferta sursă nu e găsită sau câmpurile sursă sunt goale → arată picker.
-    if (source == null) {
+    // Dacă documentul sursă nu a fost găsit automat → picker combinat
+    if (foundOffer == null && foundDeviz == null) {
       if (!mounted) return;
-      if (offers.isEmpty) {
+      if (offers.isEmpty && devize.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Nu există oferte salvate local.')),
+          const SnackBar(content: Text('Nu există documente sursă salvate local.')),
         );
         return;
       }
-      // Picker manual — permite selecția oricărei oferte disponibile
-      final picked = await showDialog<OfferRecord>(
+      final picked = await showDialog<_SourceDocument>(
         context: context,
-        builder: (ctx) => _OfferPickerDialog(offers: offers),
+        builder: (ctx) => _SourcePickerDialog(offers: offers, devize: devize),
       );
       if (picked == null || !mounted) return;
-      source = picked;
+      foundOffer = picked.offer;
+      foundDeviz = picked.deviz;
     }
-    // Captură non-nullabilă explicită înainte de closure-urile din builder:
-    // Dart narrowing prin flow analysis nu se propagă în lambdas async.
-    final OfferRecord offer = source;
 
-    final candidateLinii = offer.lines
-        .where((l) => l.lineType != OfferLineType.text)
-        .toList();
+    // Mapează documentul sursă la linii JobLine
+    List<JobLine> newLinii;
+    String sourceLabel;
+    String previewLines;
 
-    if (candidateLinii.isEmpty) {
+    if (foundDeviz != null) {
+      final d = foundDeviz;
+      sourceLabel = d.numar;
+      newLinii = [];
+      final previewParts = <String>[];
+      for (final a in d.articole) {
+        if (a.pretMat > 0) {
+          newLinii.add(JobLine.fromOfertaLine(
+            id: '', ofertaLineId: a.id,
+            denumire: '${a.denumire} — materiale',
+            um: a.um, cantitate: a.cantitate,
+            pretUnitar: a.pretMat, categorie: 'material',
+          ));
+          previewParts.add('• ${a.denumire} — materiale: ${a.cantitate} ${a.um} × ${a.pretMat.toStringAsFixed(2)} RON');
+        }
+        if (a.pretMan > 0) {
+          newLinii.add(JobLine.fromOfertaLine(
+            id: '', ofertaLineId: a.id,
+            denumire: '${a.denumire} — manoperă',
+            um: a.um, cantitate: a.cantitate,
+            pretUnitar: a.pretMan, categorie: 'manopera',
+          ));
+          previewParts.add('• ${a.denumire} — manoperă: ${a.cantitate} ${a.um} × ${a.pretMan.toStringAsFixed(2)} RON');
+        }
+        if (a.pretUtilaj > 0) {
+          newLinii.add(JobLine.fromOfertaLine(
+            id: '', ofertaLineId: a.id,
+            denumire: '${a.denumire} — utilaj',
+            um: a.um, cantitate: a.cantitate,
+            pretUnitar: a.pretUtilaj, categorie: 'utilaj',
+          ));
+          previewParts.add('• ${a.denumire} — utilaj: ${a.cantitate} ${a.um} × ${a.pretUtilaj.toStringAsFixed(2)} RON');
+        }
+        if (a.pretTransport > 0) {
+          newLinii.add(JobLine.fromOfertaLine(
+            id: '', ofertaLineId: a.id,
+            denumire: '${a.denumire} — transport',
+            um: a.um, cantitate: a.cantitate,
+            pretUnitar: a.pretTransport, categorie: 'transport',
+          ));
+          previewParts.add('• ${a.denumire} — transport: ${a.cantitate} ${a.um} × ${a.pretTransport.toStringAsFixed(2)} RON');
+        }
+      }
+      previewLines = previewParts.join('\n');
+    } else {
+      final offer = foundOffer!;
+      sourceLabel = offer.offerNumber;
+      final candidateLinii = offer.lines
+          .where((l) => l.lineType != OfferLineType.text)
+          .toList();
+      newLinii = candidateLinii.map((l) => JobLine.fromOfertaLine(
+            id: '', ofertaLineId: l.id,
+            denumire: l.name, um: l.unit,
+            cantitate: l.quantity, pretUnitar: l.unitPrice,
+            categorie: l.lineType == OfferLineType.manopera ? 'manopera' : 'material',
+          )).toList(growable: false);
+      previewLines = candidateLinii.map((l) =>
+          '• ${l.name} — ${l.quantity} ${l.unit} × ${l.unitPrice.toStringAsFixed(2)} RON'
+          ' [${l.lineType == OfferLineType.manopera ? "manoperă" : "material"}]').join('\n');
+    }
+
+    if (newLinii.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Oferta sursă nu are linii de articole.')),
+        const SnackBar(content: Text('Documentul sursă nu are articole cu valoare > 0.')),
       );
       return;
     }
-
-    // Construiește preview pentru dialog de confirmare
-    final previewLines = candidateLinii.map((l) =>
-        '• ${l.name} — ${l.quantity} ${l.unit} × ${l.unitPrice.toStringAsFixed(2)} RON'
-        ' [${l.lineType == OfferLineType.manopera ? "manoperă" : "material"}]').join('\n');
 
     if (!mounted) return;
     final ok = await showDialog<bool>(
@@ -14243,7 +14326,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         title: Row(children: [
           const Icon(Icons.warning_amber_outlined, color: Colors.orange),
           const SizedBox(width: 8),
-          Text('Re-populare din ${offer.offerNumber}'),
+          Text('Re-populare din $sourceLabel'),
         ]),
         content: SizedBox(
           width: 480,
@@ -14254,9 +14337,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               children: [
                 const Text('Acțiunea va importa liniile de mai jos în câmpul '
                     '"Linii planificate" al lucrării. Cantitățile reale vor fi '
-                    'inițializate la valorile din ofertă.'),
+                    'inițializate la valorile din document.'),
                 const SizedBox(height: 12),
-                Text('Linii de importat (${candidateLinii.length}):',
+                Text('Linii de importat (${newLinii.length}):',
                     style: const TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
                 Text(previewLines, style: const TextStyle(fontSize: 12)),
@@ -14278,21 +14361,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
     if (ok != true || !mounted) return;
 
-    final newLinii = candidateLinii.map((l) => JobLine.fromOfertaLine(
-          id: '',
-          ofertaLineId: l.id,
-          denumire: l.name,
-          um: l.unit,
-          cantitate: l.quantity,
-          pretUnitar: l.unitPrice,
-          categorie: l.lineType == OfferLineType.manopera ? 'manopera' : 'material',
-        )).toList(growable: false);
-
     await _saveLiniiPlanificate(newLinii);
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${newLinii.length} linii importate din ${offer.offerNumber}.')),
+      SnackBar(content: Text('${newLinii.length} linii importate din $sourceLabel.')),
     );
   }
 
@@ -16784,32 +16857,54 @@ class _MaterialOption {
   }
 }
 
-// ── Dialog selecție ofertă pentru import linii în Situație ───────────────────
-class _OfferPickerDialog extends StatefulWidget {
-  const _OfferPickerDialog({required this.offers});
-  final List<OfferRecord> offers;
+// ── Wrapper tip uniune pentru picker combinat oferte + devize ─────────────────
+class _SourceDocument {
+  _SourceDocument.fromOffer(OfferRecord o) : offer = o, deviz = null;
+  _SourceDocument.fromDeviz(DevizTehnicRecord d) : deviz = d, offer = null;
+  final OfferRecord? offer;
+  final DevizTehnicRecord? deviz;
 
-  @override
-  State<_OfferPickerDialog> createState() => _OfferPickerDialogState();
+  String get numar => offer?.offerNumber ?? deviz?.numar ?? '';
+  String get titlu => offer?.title ?? deviz?.titlu ?? '';
+  String get client => offer?.clientName ?? deviz?.clientName ?? '';
+  String get tipLabel => offer != null ? 'Ofertă' : 'Deviz tehnic';
+  Color get tipColor => offer != null ? Colors.blue : Colors.purple;
+  int get nrArticole => offer != null
+      ? offer!.lines.where((l) => l.lineType.name != 'text').length
+      : (deviz?.articole.length ?? 0);
 }
 
-class _OfferPickerDialogState extends State<_OfferPickerDialog> {
+// ── Dialog picker combinat: oferte simple + devize tehnice ────────────────────
+class _SourcePickerDialog extends StatefulWidget {
+  const _SourcePickerDialog({required this.offers, required this.devize});
+  final List<OfferRecord> offers;
+  final List<DevizTehnicRecord> devize;
+
+  @override
+  State<_SourcePickerDialog> createState() => _SourcePickerDialogState();
+}
+
+class _SourcePickerDialogState extends State<_SourcePickerDialog> {
   String _search = '';
 
   @override
   Widget build(BuildContext context) {
+    final all = [
+      ...widget.offers.map(_SourceDocument.fromOffer),
+      ...widget.devize.map(_SourceDocument.fromDeviz),
+    ];
     final filtered = _search.isEmpty
-        ? widget.offers
-        : widget.offers.where((o) =>
-            o.offerNumber.toLowerCase().contains(_search.toLowerCase()) ||
-            o.title.toLowerCase().contains(_search.toLowerCase()) ||
-            o.clientName.toLowerCase().contains(_search.toLowerCase())).toList();
+        ? all
+        : all.where((s) =>
+            s.numar.toLowerCase().contains(_search.toLowerCase()) ||
+            s.titlu.toLowerCase().contains(_search.toLowerCase()) ||
+            s.client.toLowerCase().contains(_search.toLowerCase())).toList();
 
     return AlertDialog(
-      title: const Text('Selectează oferta sursă'),
+      title: const Text('Selectează documentul sursă'),
       content: SizedBox(
-        width: 480,
-        height: 400,
+        width: 520,
+        height: 440,
         child: Column(
           children: [
             TextField(
@@ -16824,22 +16919,37 @@ class _OfferPickerDialogState extends State<_OfferPickerDialog> {
             const SizedBox(height: 8),
             Expanded(
               child: filtered.isEmpty
-                  ? const Center(child: Text('Nicio ofertă găsită.'))
+                  ? const Center(child: Text('Niciun document găsit.'))
                   : ListView.builder(
                       itemCount: filtered.length,
                       itemBuilder: (ctx, i) {
-                        final o = filtered[i];
+                        final s = filtered[i];
                         return ListTile(
                           dense: true,
-                          title: Text('${o.offerNumber} — ${o.title}',
+                          leading: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: s.tipColor.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                  color: s.tipColor.withValues(alpha: 0.4)),
+                            ),
+                            child: Text(s.tipLabel,
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: s.tipColor,
+                                    fontWeight: FontWeight.bold)),
+                          ),
+                          title: Text('${s.numar} — ${s.titlu}',
                               overflow: TextOverflow.ellipsis),
-                          subtitle: Text(o.clientName,
+                          subtitle: Text(s.client,
                               overflow: TextOverflow.ellipsis),
                           trailing: Text(
-                            '${o.lines.where((l) => l.lineType.name != 'text').length} art.',
+                            '${s.nrArticole} art.',
                             style: const TextStyle(fontSize: 11),
                           ),
-                          onTap: () => Navigator.of(ctx).pop(o),
+                          onTap: () => Navigator.of(ctx).pop(s),
                         );
                       },
                     ),
