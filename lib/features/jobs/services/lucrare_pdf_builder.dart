@@ -118,6 +118,13 @@ class LucrarePdfBuilder {
     final detailsA =
         '${row['obiectDescriere'] ?? row['descrierePunereInFunctiune'] ?? ''}';
     final detailsB = '${row['constatari'] ?? row['parametriRezultate'] ?? ''}';
+    final selectedLinesRaw = row['selectedLinesSnapshot'];
+    final selectedLines = selectedLinesRaw is List
+        ? selectedLinesRaw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList(growable: false)
+        : const <Map<String, dynamic>>[];
     final subtype = normalizedType.isEmpty
         ? normalizeDocumentTypeCanonical(
             '${row['documentSubtype'] ?? row['type'] ?? row['tipDocument'] ?? ''}',
@@ -258,6 +265,65 @@ class LucrarePdfBuilder {
                 ),
               )),
       ];
+    }
+
+    pw.Widget positionsTable(List<Map<String, dynamic>> lines) {
+      pw.Widget cell(
+        String text, {
+        bool header = false,
+        pw.TextAlign align = pw.TextAlign.left,
+      }) {
+        return pw.Padding(
+          padding: const pw.EdgeInsets.all(4),
+          child: pw.Text(
+            sanitizePdfText(text),
+            textAlign: align,
+            style: pw.TextStyle(
+              fontSize: 9,
+              fontWeight: header ? pw.FontWeight.bold : pw.FontWeight.normal,
+            ),
+          ),
+        );
+      }
+
+      return pw.Table(
+        border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
+        columnWidths: const <int, pw.TableColumnWidth>{
+          0: pw.FlexColumnWidth(0.5),
+          1: pw.FlexColumnWidth(3.2),
+          2: pw.FlexColumnWidth(1.0),
+          3: pw.FlexColumnWidth(0.8),
+          4: pw.FlexColumnWidth(1.4),
+          5: pw.FlexColumnWidth(2.2),
+        },
+        children: [
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(color: PdfColors.grey300),
+            children: [
+              cell('Nr', header: true),
+              cell('Descriere', header: true),
+              cell('Cant.', header: true, align: pw.TextAlign.right),
+              cell('UM', header: true),
+              cell('Status', header: true),
+              cell('Observatii', header: true),
+            ],
+          ),
+          for (var i = 0; i < lines.length; i++)
+            pw.TableRow(
+              children: [
+                cell('${i + 1}'),
+                cell('${lines[i]['denumire'] ?? '-'}'),
+                cell(
+                  lucrareAsDouble(lines[i]['cantitate']).toStringAsFixed(2),
+                  align: pw.TextAlign.right,
+                ),
+                cell('${lines[i]['um'] ?? ''}'),
+                cell('${lines[i]['status'] ?? '-'}'),
+                cell('${lines[i]['observatii'] ?? ''}'),
+              ],
+            ),
+        ],
+      );
     }
 
     final appointmentsText = appointmentSource.map((e) {
@@ -666,6 +732,12 @@ class LucrarePdfBuilder {
               beneficiaryMaterialsText,
             ),
             pw.SizedBox(height: 8),
+          ],
+          if ((subtype == 'pv' || subtype == 'pif') &&
+              selectedLines.isNotEmpty) ...[
+            sectionTitle('Pozitii lucrare (status individual)'),
+            positionsTable(selectedLines),
+            pw.SizedBox(height: 10),
           ],
           if (subtype == 'pv') ...[
             line('Obiect / descriere', detailsA.isEmpty ? '-' : detailsA),

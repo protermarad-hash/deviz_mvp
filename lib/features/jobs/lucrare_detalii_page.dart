@@ -5626,6 +5626,206 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return result;
   }
 
+  /// Opțiuni status individual pentru pozițiile din PIF / PV.
+  static const List<String> _lineStatusOptions = <String>[
+    'Instalat',
+    'Funcțional',
+    'De remediat',
+    'Neinstalat',
+  ];
+
+  /// Construiește lista de poziții pentru ecranul de selecție PIF/PV.
+  /// Prioritate: `job.liniiPlanificate` (sursa unificată folosită de tab
+  /// Situație/Execuție). Dacă e gol, fallback pe materialele și manopera
+  /// încărcate în pagină. Întoarce listă goală dacă nu există nicio sursă.
+  List<Map<String, dynamic>> _resolveWorkLinesForSelection() {
+    final lines = widget.job.liniiPlanificate;
+    if (lines.isNotEmpty) {
+      return lines
+          .where((l) => l.denumire.trim().isNotEmpty)
+          .map((l) {
+            final qty =
+                l.cantitateReala > 0 ? l.cantitateReala : l.cantitateOferta;
+            final price =
+                l.pretUnitarReal > 0 ? l.pretUnitarReal : l.pretUnitarOferta;
+            return <String, dynamic>{
+              'id': l.id,
+              'denumire': l.denumire.trim(),
+              'um': l.um,
+              'cantitate': qty,
+              'pretUnitar': price,
+              'categorie': l.categorie,
+              'observatii': l.observatii,
+            };
+          })
+          .toList(growable: false);
+    }
+    // Fallback: poziții din materialele + manopera deja încărcate în pagină.
+    final fallback = <Map<String, dynamic>>[];
+    for (final m in _materials) {
+      final name = '${m['name'] ?? ''}'.trim();
+      if (name.isEmpty) continue;
+      fallback.add(<String, dynamic>{
+        'id': '${m['id'] ?? ''}',
+        'denumire': name,
+        'um': '${m['um'] ?? ''}',
+        'cantitate': _asDouble(m['qty']),
+        'pretUnitar': _asDouble(m['price']),
+        'categorie': 'material',
+        'observatii': '${m['observatii'] ?? m['notes'] ?? ''}',
+      });
+    }
+    for (final l in _labor) {
+      final who = '${l['whoLabel'] ?? l['who'] ?? l['label'] ?? ''}'.trim();
+      if (who.isEmpty) continue;
+      fallback.add(<String, dynamic>{
+        'id': '${l['id'] ?? ''}',
+        'denumire': who,
+        'um': 'ore',
+        'cantitate': _asDouble(l['hours'] ?? l['ore']),
+        'pretUnitar': 0.0,
+        'categorie': 'manopera',
+        'observatii': '${l['observatii'] ?? l['notes'] ?? ''}',
+      });
+    }
+    return fallback;
+  }
+
+  /// Ecran partajat PIF/PV: selecție poziții + status individual + observații.
+  /// Întoarce lista pozițiilor bifate (cu `status` și `observatii`) sau `null`
+  /// dacă utilizatorul anulează.
+  Future<List<Map<String, dynamic>>?> _showWorkLinesSelectionDialog({
+    required String documentLabel,
+    required List<Map<String, dynamic>> positions,
+  }) async {
+    final included = List<bool>.filled(positions.length, true);
+    final statuses =
+        List<String>.filled(positions.length, _lineStatusOptions.first);
+    final obsControllers = positions
+        .map((p) =>
+            TextEditingController(text: '${p['observatii'] ?? ''}'.trim()))
+        .toList();
+
+    final result = await showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('Poziții $documentLabel'),
+          content: SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Bifează pozițiile incluse, alege statusul și completează observațiile.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var i = 0; i < positions.length; i++)
+                          Card(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Checkbox(
+                                        value: included[i],
+                                        onChanged: (v) => setDialogState(
+                                            () => included[i] = v ?? false),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          '${positions[i]['denumire']} '
+                                          '(${_asDouble(positions[i]['cantitate']).toStringAsFixed(2)} ${positions[i]['um']})',
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w600),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (included[i]) ...[
+                                    DropdownButtonFormField<String>(
+                                      initialValue: statuses[i],
+                                      isDense: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Status',
+                                        isDense: true,
+                                      ),
+                                      items: _lineStatusOptions
+                                          .map((s) => DropdownMenuItem<String>(
+                                              value: s, child: Text(s)))
+                                          .toList(growable: false),
+                                      onChanged: (v) {
+                                        if (v == null) return;
+                                        setDialogState(() => statuses[i] = v);
+                                      },
+                                    ),
+                                    const SizedBox(height: 6),
+                                    TextField(
+                                      controller: obsControllers[i],
+                                      textCapitalization:
+                                          TextCapitalization.sentences,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Observații',
+                                        isDense: true,
+                                      ),
+                                      minLines: 1,
+                                      maxLines: 2,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Anuleaza'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final selected = <Map<String, dynamic>>[];
+                for (var i = 0; i < positions.length; i++) {
+                  if (!included[i]) continue;
+                  selected.add(<String, dynamic>{
+                    ...positions[i],
+                    'status': statuses[i],
+                    'observatii': obsControllers[i].text.trim(),
+                  });
+                }
+                Navigator.of(context).pop(selected);
+              },
+              child: const Text('Continua'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    for (final c in obsControllers) {
+      c.dispose();
+    }
+    return result;
+  }
+
   Future<void> _onGenerateProcesVerbal({
     Map<String, dynamic>? appointment,
   }) async {
@@ -5660,6 +5860,20 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
     if (payload == null) return;
 
+    // Selecție poziții + status individual (partajat cu PIF). Dacă nu există
+    // nicio sursă de poziții, se păstrează comportamentul vechi (fără tabel).
+    final pvPositions = _resolveWorkLinesForSelection();
+    List<Map<String, dynamic>> pvSelectedLines = const <Map<String, dynamic>>[];
+    if (pvPositions.isNotEmpty) {
+      if (!mounted) return;
+      final selection = await _showWorkLinesSelectionDialog(
+        documentLabel: 'proces verbal',
+        positions: pvPositions,
+      );
+      if (selection == null) return; // utilizatorul a anulat
+      pvSelectedLines = selection;
+    }
+
     final nowIso = DateTime.now().toIso8601String();
     final resolvedNumber = '${payload['number'] ?? ''}'.trim().isEmpty
         ? autoNumber
@@ -5683,6 +5897,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       'jobId': widget.job.id,
       'client': widget.clientName,
       'location': widget.job.location,
+      'selectedLinesSnapshot': pvSelectedLines,
       'type': 'process_verbal',
       'tipDocument': 'Proces verbal',
       'titlu': payload['title'] ?? '',
@@ -5777,6 +5992,21 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
     if (payload == null) return;
 
+    // Selecție poziții + status individual (partajat cu PV). Dacă nu există
+    // nicio sursă de poziții, se păstrează comportamentul vechi (fără tabel).
+    final pifPositions = _resolveWorkLinesForSelection();
+    List<Map<String, dynamic>> pifSelectedLines =
+        const <Map<String, dynamic>>[];
+    if (pifPositions.isNotEmpty) {
+      if (!mounted) return;
+      final selection = await _showWorkLinesSelectionDialog(
+        documentLabel: 'PIF',
+        positions: pifPositions,
+      );
+      if (selection == null) return; // utilizatorul a anulat
+      pifSelectedLines = selection;
+    }
+
     final nowIso = DateTime.now().toIso8601String();
     final resolvedNumber = '${payload['number'] ?? ''}'.trim().isEmpty
         ? autoNumber
@@ -5800,6 +6030,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       'jobId': widget.job.id,
       'client': widget.clientName,
       'location': widget.job.location,
+      'selectedLinesSnapshot': pifSelectedLines,
       'type': 'pif',
       'tipDocument': 'PIF',
       'titlu': payload['title'] ?? '',
