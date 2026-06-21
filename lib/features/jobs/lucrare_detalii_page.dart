@@ -98,6 +98,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   late JobRecord _jobSnapshot;
   LucrariCloudRepository? _cloudRepository;
 
+  /// Sursă detectată prin legătură inversă (document cu convertedToJobId ==
+  /// job.id), pentru lucrări vechi fără sourceOfferId/sourceOfferNumber salvate.
+  /// Calculată o singură dată după încărcare, doar când liniiPlanificate e gol.
+  LucrareSourceDocument? _reverseDetectedSource;
+
   // --- Profit & Partener ---
   String _selectedProfitPartnerId = '';
   String _selectedProfitPartnerName = '';
@@ -760,6 +765,52 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       _latestReportRegistryRow = latestReportRegistryRow;
       _isLoading = false;
     });
+    // Detectează sursa prin legătură inversă (lucrări vechi fără link forward).
+    // Rulează după setState (UI deja afișat) — actualizează UI când termină.
+    await _detectReverseSourceIfNeeded();
+  }
+
+  /// Pentru lucrările fără linii planificate ȘI fără legătură forward salvată
+  /// (sourceOfferId/Number goale), caută documentul sursă prin legătura inversă
+  /// convertedToJobId == job.id și memorează rezultatul pentru afișare.
+  Future<void> _detectReverseSourceIfNeeded() async {
+    if (_jobSnapshot.liniiPlanificate.isNotEmpty) return;
+    if (_jobSnapshot.sourceOfferId.trim().isNotEmpty ||
+        _jobSnapshot.sourceOfferNumber.trim().isNotEmpty) {
+      return;
+    }
+    final found = await _findSourceByReverseLink();
+    if (!mounted || found == null) return;
+    setState(() => _reverseDetectedSource = found);
+  }
+
+  /// Caută în Oferte + Devize tehnice documentul care a fost convertit în
+  /// această lucrare (convertedToJobId == job.id). Întoarce match-ul DOAR dacă
+  /// e unic; pentru 0 sau 2+ potriviri întoarce null (ambiguu → picker generic).
+  Future<LucrareSourceDocument?> _findSourceByReverseLink() async {
+    final jobId = _jobSnapshot.id.trim();
+    if (jobId.isEmpty) return null;
+    try {
+      final results = await Future.wait([
+        LocalOferteRepository().listOffers(),
+        DevizTehnicRepository().listLocal(),
+      ]);
+      final offers = results[0] as List<OfferRecord>;
+      final devize = results[1] as List<DevizTehnicRecord>;
+      final matches = <LucrareSourceDocument>[
+        ...offers
+            .where((o) => o.convertedToJobId.trim() == jobId)
+            .map(LucrareSourceDocument.fromOffer),
+        ...devize
+            .where((d) => d.convertedToJobId.trim() == jobId)
+            .map(LucrareSourceDocument.fromDeviz),
+      ];
+      if (matches.length == 1) return matches.first;
+      return null;
+    } catch (e) {
+      debugPrint('[Situatie] _findSourceByReverseLink error: $e');
+      return null;
+    }
   }
 
   ClientRecord? _clientRecordForJob() {
@@ -10536,8 +10587,22 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   // ── Helpers pentru liniiPlanificate ─────────────────────────────────────────
 
-  Future<void> _saveLiniiPlanificate(List<JobLine> linii) async {
-    final updated = _jobSnapshot.copyWith(liniiPlanificate: linii);
+  Future<void> _saveLiniiPlanificate(
+    List<JobLine> linii, {
+    String? sourceOfferId,
+    String? sourceOfferNumber,
+    String? sourceOfferTitle,
+    String? sourceDocumentType,
+  }) async {
+    // Parametrii de sursă sunt opționali: copyWith îi ignoră când sunt null,
+    // deci apelurile fără sursă (editare cantitate/observații) nu schimbă legătura.
+    final updated = _jobSnapshot.copyWith(
+      liniiPlanificate: linii,
+      sourceOfferId: sourceOfferId,
+      sourceOfferNumber: sourceOfferNumber,
+      sourceOfferTitle: sourceOfferTitle,
+      sourceDocumentType: sourceDocumentType,
+    );
     try {
       _jobSnapshot = await widget.repository.saveJob(updated);
       await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
@@ -10596,7 +10661,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Widget _buildRepopulareCard(BuildContext context) {
     final ofertaRef = _jobSnapshot.sourceOfferNumber.isNotEmpty
         ? _jobSnapshot.sourceOfferNumber
-        : _jobSnapshot.sourceOfferId;
+        : (_jobSnapshot.sourceOfferId.isNotEmpty
+            ? _jobSnapshot.sourceOfferId
+            : (_reverseDetectedSource?.numar ?? 'oferta sursă'));
     return Card(
       color: Colors.orange[50],
       shape: RoundedRectangleBorder(
@@ -10920,6 +10987,23 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       }
     }
 
+    // PAS 1 — auto-detectare prin legătură inversă (convertedToJobId == job.id),
+    // pentru lucrări vechi fără sourceOfferId/sourceOfferNumber salvate.
+    // Folosește listele deja încărcate; importă direct DOAR la match unic.
+    if (foundOffer == null && foundDeviz == null) {
+      final jobId = _jobSnapshot.id.trim();
+      if (jobId.isNotEmpty) {
+        final reverseOffers =
+            offers.where((o) => o.convertedToJobId.trim() == jobId).toList();
+        final reverseDevize =
+            devize.where((d) => d.convertedToJobId.trim() == jobId).toList();
+        if (reverseOffers.length + reverseDevize.length == 1) {
+          foundOffer = reverseOffers.isNotEmpty ? reverseOffers.first : null;
+          foundDeviz = reverseDevize.isNotEmpty ? reverseDevize.first : null;
+        }
+      }
+    }
+
     // Dacă documentul sursă nu a fost găsit automat → picker combinat
     if (foundOffer == null && foundDeviz == null) {
       if (!mounted) return;
@@ -11055,7 +11139,36 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
     if (ok != true || !mounted) return;
 
-    await _saveLiniiPlanificate(newLinii);
+    // PAS 2 — backfill: salvează liniile ÎMPREUNĂ cu legătura sursă pe lucrare,
+    // ca data viitoare să apară direct butonul țintit (fără căutare inversă).
+    final d = foundDeviz;
+    final o = foundOffer;
+    String srcId = '';
+    String srcNumber = '';
+    String srcTitle = '';
+    String srcType = 'oferta';
+    if (d != null) {
+      srcId = d.id;
+      srcNumber = d.numar;
+      srcTitle = d.titlu;
+      srcType = 'deviz_tehnic';
+    } else if (o != null) {
+      srcId = o.id;
+      srcNumber = o.offerNumber;
+      srcTitle = o.title;
+      srcType = 'oferta';
+    }
+    await _saveLiniiPlanificate(
+      newLinii,
+      sourceOfferId: srcId,
+      sourceOfferNumber: srcNumber,
+      sourceOfferTitle: srcTitle,
+      sourceDocumentType: srcType,
+    );
+    // Legătura forward e acum salvată — nu mai e nevoie de detecția inversă.
+    if (mounted) {
+      setState(() => _reverseDetectedSource = null);
+    }
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -11072,7 +11185,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     // Dacă lucrarea nu are linii planificate — arată buton de import indiferent de câmpurile sursă.
     // Acoperă și cazul JOB-uri vechi cu sourceOfferId/sourceOfferNumber gol în cache.
     if (linii.isEmpty) {
-      final hasKnownOffer = job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty;
+      // Eticheta sursei: forward (sourceOfferNumber) sau, pentru lucrări vechi,
+      // sursa detectată prin legătură inversă (convertedToJobId == job.id).
+      final reverseNumber = _reverseDetectedSource?.numar ?? '';
+      final hasKnownOffer = job.sourceOfferId.isNotEmpty ||
+          job.sourceOfferNumber.isNotEmpty ||
+          reverseNumber.isNotEmpty;
+      final knownLabel = job.sourceOfferNumber.isNotEmpty
+          ? job.sourceOfferNumber
+          : (reverseNumber.isNotEmpty ? reverseNumber : 'oferta sursă');
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -11082,7 +11203,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             const SizedBox(height: 12),
             Text(
               hasKnownOffer
-                  ? 'Oferta sursă (${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "asociată"}) nu are linii importate încă.'
+                  ? 'Oferta sursă ($knownLabel) nu are linii importate încă.'
                   : 'Liniile planificate nu au fost importate.\nPoți importa din orice ofertă disponibilă.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey[600]),
@@ -11091,7 +11212,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             FilledButton.icon(
               icon: const Icon(Icons.download_outlined, size: 18),
               label: Text(hasKnownOffer
-                  ? 'Re-populează din ${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "oferta sursă"}'
+                  ? 'Re-populează din $knownLabel'
                   : 'Importă linii din ofertă'),
               onPressed: _repopulateFromOffer,
             ),
@@ -11822,8 +11943,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             if (_jobSnapshot.liniiPlanificate.isNotEmpty)
               _buildLiniiTracking(context)
             else if (_jobSnapshot.sourceOfferId.isNotEmpty ||
-                _jobSnapshot.sourceOfferNumber.isNotEmpty)
-              // Lucrare convertită din ofertă, dar liniile nu au fost importate încă
+                _jobSnapshot.sourceOfferNumber.isNotEmpty ||
+                _reverseDetectedSource != null)
+              // Lucrare convertită din ofertă (link forward sau detectat invers),
+              // dar liniile nu au fost importate încă
               _buildRepopulareCard(context)
             else ...[
               _section(
