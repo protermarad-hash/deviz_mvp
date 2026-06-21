@@ -68,6 +68,7 @@ import 'dialogs/beneficiary_dialogs.dart';
 import 'dialogs/own_vehicle_dialog.dart';
 import 'dialogs/contract_dialog.dart';
 import 'dialogs/work_task_dialog.dart';
+import 'services/lucrare_persistence.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -306,24 +307,24 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   double _defaultVatPercent = 21.0;
   String? _selectedAppointmentFilterId;
 
-  String get _teamKey => 'job_team_v4_${widget.job.id}';
-  String get _appointmentsKey => 'job_appointments_v4_${widget.job.id}';
-  String get _materialsKey => 'job_materials_v4_${widget.job.id}';
-  String get _laborKey => 'job_labor_v4_${widget.job.id}';
-  String get _timeEntriesKey => 'job_time_entries_v1_${widget.job.id}';
-  String get _partnersKey => 'job_partners_v1_${widget.job.id}';
-  String get _partnerWorkersKey => 'job_partner_workers_v1_${widget.job.id}';
-  String get _partnerVehiclesKey => 'job_partner_vehicles_v1_${widget.job.id}';
-  String get _ownVehiclesKey => 'job_own_vehicles_v1_${widget.job.id}';
-  String get _documentsKey => 'job_documents_v1_${widget.job.id}';
-  String get _journalKey => 'job_journal_v1_${widget.job.id}';
-  String get _checklistKey => 'job_checklist_v1_${widget.job.id}';
-  String get _workTaskEntriesKey => 'job_work_tasks_v1_${widget.job.id}';
-  String get _beneficiaryEquipmentKey =>
-      'job_beneficiary_equipment_v1_${widget.job.id}';
-  String get _beneficiaryMaterialsKey =>
-      'job_beneficiary_materials_v1_${widget.job.id}';
-  String get _commercialSettingsKey => 'commercial_settings_v1';
+  late final LucrareStorageKeys _keys = LucrareStorageKeys(widget.job.id);
+
+  String get _teamKey => _keys.team;
+  String get _appointmentsKey => _keys.appointments;
+  String get _materialsKey => _keys.materials;
+  String get _laborKey => _keys.labor;
+  String get _timeEntriesKey => _keys.timeEntries;
+  String get _partnersKey => _keys.partners;
+  String get _partnerWorkersKey => _keys.partnerWorkers;
+  String get _partnerVehiclesKey => _keys.partnerVehicles;
+  String get _ownVehiclesKey => _keys.ownVehicles;
+  String get _documentsKey => _keys.documents;
+  String get _journalKey => _keys.journal;
+  String get _checklistKey => _keys.checklist;
+  String get _workTaskEntriesKey => _keys.workTaskEntries;
+  String get _beneficiaryEquipmentKey => _keys.beneficiaryEquipment;
+  String get _beneficiaryMaterialsKey => _keys.beneficiaryMaterials;
+  String get _commercialSettingsKey => LucrareStorageKeys.commercialSettings;
 
   static const List<MapEntry<String, String>> _checklistDefs = [
     MapEntry<String, String>('programare_facuta', 'Programare facuta'),
@@ -1296,27 +1297,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     }
   }
 
-  List<Map<String, dynamic>> _readRows(String? raw) {
-    if (raw == null || raw.trim().isEmpty) return const [];
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is List) {
-        return decoded
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList(growable: false);
-      }
-    } catch (e) {
-      debugPrint('[LucrareDetalii] parsare rânduri JSON eșuată: $e');
-    }
-    return const [];
-  }
+  List<Map<String, dynamic>> _readRows(String? raw) => lucrareReadRows(raw);
 
-  List<Map<String, dynamic>> _cloneRows(List<Map<String, dynamic>> rows) {
-    return rows
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList(growable: false);
-  }
+  List<Map<String, dynamic>> _cloneRows(List<Map<String, dynamic>> rows) =>
+      lucrareCloneRows(rows);
 
   Map<String, bool> _cloneChecklist(Map<String, bool> value) {
     return Map<String, bool>.from(value);
@@ -1342,10 +1326,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return defaults;
   }
 
-  Future<void> _saveRows(String key, List<Map<String, dynamic>> rows) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(key, jsonEncode(rows));
-  }
+  Future<void> _saveRows(String key, List<Map<String, dynamic>> rows) =>
+      lucrareSaveRows(key, rows);
 
   Future<void> _persistTimeEntries(List<Map<String, dynamic>> entries) async {
     final normalized = _cloneRows(entries);
@@ -1356,20 +1338,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       updatedAt: now,
     );
     _refreshCloudRepository();
-    final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
-    if (cloud != null) {
-      try {
-        await cloud.upsertJob(nextJob);
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        queuedOffline = true;
-      }
-    }
-    _jobSnapshot = await widget.repository.saveJob(nextJob);
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
-    }
+    _jobSnapshot = await lucrareSaveJobWithSync(
+      job: nextJob,
+      repository: widget.repository,
+      cloud: _cloudRepository,
+    );
   }
 
   Future<void> _persistJobMaterials(List<Map<String, dynamic>> rows) async {
@@ -1382,20 +1355,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       updatedAt: now,
     );
     _refreshCloudRepository();
-    final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
-    if (cloud != null) {
-      try {
-        await cloud.upsertJob(nextJob);
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        queuedOffline = true;
-      }
-    }
-    _jobSnapshot = await widget.repository.saveJob(nextJob);
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
-    }
+    _jobSnapshot = await lucrareSaveJobWithSync(
+      job: nextJob,
+      repository: widget.repository,
+      cloud: _cloudRepository,
+    );
   }
 
   Future<void> _savePartnerProfit() async {
@@ -1409,20 +1373,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       updatedAt: now,
     );
     _refreshCloudRepository();
-    final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
-    if (cloud != null) {
-      try {
-        await cloud.upsertJob(nextJob);
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        queuedOffline = true;
-      }
-    }
-    _jobSnapshot = await widget.repository.saveJob(nextJob);
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
-    }
+    _jobSnapshot = await lucrareSaveJobWithSync(
+      job: nextJob,
+      repository: widget.repository,
+      cloud: _cloudRepository,
+    );
     if (mounted) _snack('Împărțire profit salvată.');
   }
 
@@ -1741,20 +1696,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           .toList(growable: false),
     );
     _refreshCloudRepository();
-    final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
-    if (cloud != null) {
-      try {
-        await cloud.upsertJob(nextJob);
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        queuedOffline = true;
-      }
-    }
-    _jobSnapshot = await widget.repository.saveJob(nextJob);
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
-    }
+    _jobSnapshot = await lucrareSaveJobWithSync(
+      job: nextJob,
+      repository: widget.repository,
+      cloud: _cloudRepository,
+    );
   }
 
   String _teamMembersLabelFor(String teamId) {
