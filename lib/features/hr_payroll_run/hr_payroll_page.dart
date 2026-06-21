@@ -41,6 +41,7 @@ import 'hr_payroll_monthly_statement_pdf_service.dart';
 import 'hr_payslip_pdf_service.dart';
 import 'hr_payroll_payment_models.dart';
 import 'hr_payroll_payment_repository.dart';
+import 'hr_advances_migration_dialog.dart';
 import 'hr_payroll_run_catalog_service.dart';
 import 'hr_payroll_run_models.dart';
 
@@ -7918,7 +7919,46 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
           _buildHrAdmin(),
           const SizedBox(height: 12),
           _buildPayrollValidationDashboard(),
+          const SizedBox(height: 12),
+          _buildMigrationSection(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMigrationSection() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.published_with_changes_outlined, size: 18),
+              const SizedBox(width: 8),
+              Text('Migrare date — o singură rulare',
+                  style: Theme.of(context).textTheme.titleSmall),
+            ]),
+            const SizedBox(height: 8),
+            const Text(
+              'Marchează avansurile single_month din mai 2026 ca "recovered".\n'
+              'Folosit o singură dată pentru date istorice. Șterge butonul după confirmare.',
+              style: TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _canManageSensitiveHr
+                  ? () => showHrAdvancesMay2026MigrationDialog(
+                        context,
+                        service: _variablePayrollService,
+                        employees: _employees,
+                      ).then((_) => _reload())
+                  : null,
+              icon: const Icon(Icons.manage_history_outlined),
+              label: const Text('Migrare avansuri mai 2026'),
+            ),
+          ],
+        ),
       ),
     );
   }
