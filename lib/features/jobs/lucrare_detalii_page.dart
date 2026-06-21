@@ -294,9 +294,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   double _defaultVatPercent = 21.0;
   String? _selectedAppointmentFilterId;
 
-  late final LucrareStorageKeys _keys = LucrareStorageKeys(widget.job.id);
+  late final LucrareStorageKeys _keys = LucrareStorageKeys(_jobSnapshot.id);
   late final LucrareLaborCalculator _laborCalc = LucrareLaborCalculator(
-    jobId: widget.job.id,
+    jobId: _jobSnapshot.id,
     employeesProvider: () => _employees,
     teamsProvider: () => _teamsSourceRows,
   );
@@ -310,8 +310,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   );
   late final LucrareRegistryService _registryService = LucrareRegistryService(
     repository: widget.repository,
-    jobId: widget.job.id,
-    jobCode: widget.job.jobCode,
+    jobId: _jobSnapshot.id,
+    jobCode: _jobSnapshot.jobCode,
     clientName: widget.clientName,
     documentTypeLabelFromType: _documentTypeLabelFromType,
   );
@@ -465,17 +465,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     super.initState();
     _aiAssistantService = AiAssistantService(repository: widget.repository);
     _jobSnapshot = widget.job;
-    _selectedProfitPartnerId = widget.job.partnerId;
-    _selectedProfitPartnerName = widget.job.partnerName;
-    _partnerProfitPercent = widget.job.partnerProfitPercent;
-    _partnerResources = widget.job.partnerResources;
-    _profitTaxPercent = widget.job.profitTaxPercent;
+    _selectedProfitPartnerId = _jobSnapshot.partnerId;
+    _selectedProfitPartnerName = _jobSnapshot.partnerName;
+    _partnerProfitPercent = _jobSnapshot.partnerProfitPercent;
+    _partnerResources = _jobSnapshot.partnerResources;
+    _profitTaxPercent = _jobSnapshot.profitTaxPercent;
     _profitTaxCtrl = TextEditingController(
-        text: widget.job.profitTaxPercent.toStringAsFixed(1));
+        text: _jobSnapshot.profitTaxPercent.toStringAsFixed(1));
     _partnerProfitPercentCtrl = TextEditingController(
-        text: widget.job.partnerProfitPercent.toStringAsFixed(1));
+        text: _jobSnapshot.partnerProfitPercent.toStringAsFixed(1));
     _partnerResourcesCtrl = TextEditingController(
-        text: widget.job.partnerResources.toStringAsFixed(2));
+        text: _jobSnapshot.partnerResources.toStringAsFixed(2));
     _refreshCloudRepository();
     // Future.microtask evită blocarea primului frame (CLAUDE.md ANTI-PATTERN 2)
     Future.microtask(_loadData);
@@ -1139,7 +1139,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   Future<void> _openFieldPhotosForJob() async {
     final jobId =
-        _jobSnapshot.id.trim().isEmpty ? widget.job.id : _jobSnapshot.id;
+        _jobSnapshot.id.trim().isEmpty ? _jobSnapshot.id : _jobSnapshot.id;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FieldPhotosPage(
@@ -1162,7 +1162,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       return;
     }
     final jobId =
-        _jobSnapshot.id.trim().isEmpty ? widget.job.id : _jobSnapshot.id;
+        _jobSnapshot.id.trim().isEmpty ? _jobSnapshot.id : _jobSnapshot.id;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FieldPhotosPage(
@@ -1287,7 +1287,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       return raw
           .map(_appointmentFromAny)
           .where(
-              (row) => (row['jobId'] ?? '').toString().trim() == widget.job.id)
+              (row) => (row['jobId'] ?? '').toString().trim() == _jobSnapshot.id)
           .toList(growable: false);
     } catch (_) {
       return const [];
@@ -1950,7 +1950,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       'action': action,
       'message': message,
       'at': DateTime.now().toIso8601String(),
-      'jobId': widget.job.id,
+      'jobId': _jobSnapshot.id,
     });
     await _persistOperationalJobDetails(journal: rows);
     if (!mounted) return;
@@ -1978,7 +1978,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     String selectedType = 'Deviz';
     String selectedStatus = _documentStatuses.first;
     String title = _jobSnapshot.title.trim().isEmpty
-        ? widget.job.title
+        ? _jobSnapshot.title
         : _jobSnapshot.title.trim();
     String number = '';
     String date = _formatDate(DateTime.now());
@@ -2057,15 +2057,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     }
     if (title.trim().isEmpty) {
       title = _jobSnapshot.title.trim().isEmpty
-          ? widget.job.title
+          ? _jobSnapshot.title
           : _jobSnapshot.title.trim();
     }
 
     return <String, dynamic>{
       'id': 'job-doc-ai-${DateTime.now().microsecondsSinceEpoch}',
-      'jobId': widget.job.id,
+      'jobId': _jobSnapshot.id,
       'client': widget.clientName,
-      'location': widget.job.location,
+      'location': _jobSnapshot.location,
       'type': _normalizeDocumentType(selectedType),
       'tipDocument': selectedType,
       'documentSubtype': _documentSubtypeFromSelectedType(selectedType),
@@ -2089,7 +2089,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   String get _jobSiteDocumentsCacheKey {
     final jobId =
-        _jobSnapshot.id.trim().isEmpty ? widget.job.id : _jobSnapshot.id;
+        _jobSnapshot.id.trim().isEmpty ? _jobSnapshot.id : _jobSnapshot.id;
     return 'job_site_documents_v1_$jobId';
   }
 
@@ -2137,7 +2137,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Future<List<JobSiteDocumentRecord>> _readExistingJobSiteDocuments() async {
     final cloud = _jobSiteDocumentsCloudRepository;
     final jobId =
-        _jobSnapshot.id.trim().isEmpty ? widget.job.id : _jobSnapshot.id;
+        _jobSnapshot.id.trim().isEmpty ? _jobSnapshot.id : _jobSnapshot.id;
     if (cloud != null) {
       try {
         final rows = await cloud.listDocumentsForJob(jobId);
@@ -2244,7 +2244,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Future<AiAssistantRuntimeContext> _buildJobAiContext() async {
     final currentUser = await widget.repository.loadCurrentUser();
     final jobId =
-        _jobSnapshot.id.trim().isEmpty ? widget.job.id : _jobSnapshot.id;
+        _jobSnapshot.id.trim().isEmpty ? _jobSnapshot.id : _jobSnapshot.id;
     final jobLabel = _jobSnapshot.jobCode.trim().isNotEmpty
         ? _jobSnapshot.jobCode.trim()
         : (_jobSnapshot.title.trim().isNotEmpty
@@ -2549,7 +2549,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       showPartnerDialog(
         context,
         masterPartners: _masterPartners,
-        jobId: widget.job.id,
+        jobId: _jobSnapshot.id,
         onValidationError: _snack,
         existing: existing,
       );
@@ -2562,7 +2562,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         context,
         partner: partner,
         masterWorkers: _masterWorkersForJobPartner(partner),
-        jobId: widget.job.id,
+        jobId: _jobSnapshot.id,
         onValidationError: _snack,
         existing: existing,
       );
@@ -2575,7 +2575,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         context,
         partner: partner,
         masterVehicles: _masterVehiclesForJobPartner(partner),
-        jobId: widget.job.id,
+        jobId: _jobSnapshot.id,
         onValidationError: _snack,
         existing: existing,
       );
@@ -3037,7 +3037,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       showOwnVehicleDialog(
         context,
         masterOwnVehicles: _masterOwnVehicles,
-        jobId: widget.job.id,
+        jobId: _jobSnapshot.id,
         onValidationError: _snack,
         existing: existing,
       );
@@ -3107,7 +3107,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           ? 'Programare lucrare'
           : widget.clientName.trim(),
     );
-    final locationController = TextEditingController(text: widget.job.location);
+    final locationController = TextEditingController(text: _jobSnapshot.location);
     DateTime date = DateTime.now();
 
     final created = await showDialog<Map<String, dynamic>>(
@@ -3156,7 +3156,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             FilledButton(
               onPressed: () => Navigator.of(context).pop({
                 'id': 'job-appt-${DateTime.now().millisecondsSinceEpoch}',
-                'jobId': widget.job.id,
+                'jobId': _jobSnapshot.id,
                 'title': titleController.text.trim(),
                 'location': locationController.text.trim(),
                 'date': _formatDate(date),
@@ -3395,7 +3395,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 ...row,
                 'id':
                     '${row['id'] ?? 'job-appt-${DateTime.now().millisecondsSinceEpoch}'}',
-                'jobId': '${row['jobId'] ?? widget.job.id}',
+                'jobId': '${row['jobId'] ?? _jobSnapshot.id}',
                 'title': titleController.text.trim(),
                 'location': locationController.text.trim(),
                 'date': _formatDate(date),
@@ -4305,7 +4305,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final costCazare = noptiCazare * valoareCazarePeNoapte;
                 Navigator.of(context).pop({
                   'id': 'job-labor-${DateTime.now().millisecondsSinceEpoch}',
-                  'jobId': widget.job.id,
+                  'jobId': _jobSnapshot.id,
                   'whoId': normalizedSelection,
                   'type': normalizedSelection.startsWith('team:')
                       ? 'team'
@@ -4687,7 +4687,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   double get _realTotalCost => _materialsTotal + _laborTotalCost;
 
-  double get _estimatedValue => widget.job.estimatedValue ?? 0;
+  double get _estimatedValue => _jobSnapshot.estimatedValue ?? 0;
 
   double get _estimatedVsRealDifference => _estimatedValue - _realTotalCost;
 
@@ -5405,7 +5405,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 Navigator.of(context).pop({
                   'id':
                       '${row['id'] ?? 'job-labor-${DateTime.now().millisecondsSinceEpoch}'}',
-                  'jobId': '${row['jobId'] ?? widget.job.id}',
+                  'jobId': '${row['jobId'] ?? _jobSnapshot.id}',
                   'whoId': normalizedSelection,
                   'type': normalizedSelection.startsWith('team:')
                       ? 'team'
@@ -5519,7 +5519,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final normalizedNotesPrefix = (notesPrefix ?? '').trim();
     final notesController = TextEditingController(
       text:
-          '${normalizedNotesPrefix.isEmpty ? '' : '$normalizedNotesPrefix\n\n'}Cod lucrare: ${widget.job.jobCode}\nTitlu: ${widget.job.title}\nClient: ${widget.clientName}\nLocatie: ${widget.job.location}\nStatus lucrare: ${'${widget.job.status.label}'.replaceAll('\uFFFD', '').replaceAll('', '')}\nEchipa: ${_assignedTeam?.label ?? '-'}\nProgramari: ${_appointments.length}\nMateriale: ${_materials.length}\nManopera/ore: ${_labor.length}',
+          '${normalizedNotesPrefix.isEmpty ? '' : '$normalizedNotesPrefix\n\n'}Cod lucrare: ${_jobSnapshot.jobCode}\nTitlu: ${_jobSnapshot.title}\nClient: ${widget.clientName}\nLocatie: ${_jobSnapshot.location}\nStatus lucrare: ${'${_jobSnapshot.status.label}'.replaceAll('\uFFFD', '').replaceAll('', '')}\nEchipa: ${_assignedTeam?.label ?? '-'}\nProgramari: ${_appointments.length}\nMateriale: ${_materials.length}\nManopera/ore: ${_labor.length}',
     );
 
     final result = await showDialog<Map<String, dynamic>>(
@@ -5639,7 +5639,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   /// Situație/Execuție). Dacă e gol, fallback pe materialele și manopera
   /// încărcate în pagină. Întoarce listă goală dacă nu există nicio sursă.
   List<Map<String, dynamic>> _resolveWorkLinesForSelection() {
-    final lines = widget.job.liniiPlanificate;
+    // Sursa de adevăr actualizată local (după re-populare / import / conversie),
+    // NU _jobSnapshot (snapshot original imuabil, gol până la re-deschiderea paginii).
+    final lines = _jobSnapshot.liniiPlanificate;
     if (lines.isNotEmpty) {
       return lines
           .where((l) => l.denumire.trim().isNotEmpty)
@@ -5836,14 +5838,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final appointmentDate =
         '${appointment?['date'] ?? appointment?['scheduledDate'] ?? ''}'.trim();
     final appointmentLocation =
-        '${appointment?['location'] ?? widget.job.location}'.trim();
+        '${appointment?['location'] ?? _jobSnapshot.location}'.trim();
     final appointmentNotes =
         '${appointment?['notes'] ?? appointment?['observatii'] ?? ''}'.trim();
     final payload = await _showGeneratedDocumentDialog(
       documentType: 'Proces verbal',
       defaultTitle: appointment == null
-          ? 'Proces verbal - ${widget.job.jobCode}'
-          : 'Proces verbal - ${widget.job.jobCode} - ${appointmentTitle.isEmpty ? '-' : appointmentTitle}',
+          ? 'Proces verbal - ${_jobSnapshot.jobCode}'
+          : 'Proces verbal - ${_jobSnapshot.jobCode} - ${appointmentTitle.isEmpty ? '-' : appointmentTitle}',
       detailsLabelA: 'Obiect / Descriere',
       detailsLabelB: 'Constatari',
       defaultNumber: autoNumber,
@@ -5894,9 +5896,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         .toList(growable: false);
     final doc = <String, dynamic>{
       'id': 'job-doc-${DateTime.now().microsecondsSinceEpoch}',
-      'jobId': widget.job.id,
+      'jobId': _jobSnapshot.id,
       'client': widget.clientName,
-      'location': widget.job.location,
+      'location': _jobSnapshot.location,
       'selectedLinesSnapshot': pvSelectedLines,
       'type': 'process_verbal',
       'tipDocument': 'Proces verbal',
@@ -5917,9 +5919,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       'sourceAppointmentLocation': appointmentLocation,
       'obiectDescriere': payload['detailsA'] ?? '',
       'constatari': payload['detailsB'] ?? '',
-      'jobCode': widget.job.jobCode,
-      'jobTitle': widget.job.title,
-      'jobStatus': widget.job.status.label,
+      'jobCode': _jobSnapshot.jobCode,
+      'jobTitle': _jobSnapshot.title,
+      'jobStatus': _jobSnapshot.status.label,
       'teamLabel': _assignedTeam?.label ?? '-',
       'teamMembers': _assignedTeamMembersLabel,
       'appointmentsCount': _appointments.length,
@@ -5968,14 +5970,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final appointmentDate =
         '${appointment?['date'] ?? appointment?['scheduledDate'] ?? ''}'.trim();
     final appointmentLocation =
-        '${appointment?['location'] ?? widget.job.location}'.trim();
+        '${appointment?['location'] ?? _jobSnapshot.location}'.trim();
     final appointmentNotes =
         '${appointment?['notes'] ?? appointment?['observatii'] ?? ''}'.trim();
     final payload = await _showGeneratedDocumentDialog(
       documentType: 'PIF',
       defaultTitle: appointment == null
-          ? 'PIF - ${widget.job.jobCode}'
-          : 'PIF - ${widget.job.jobCode} - ${appointmentTitle.isEmpty ? '-' : appointmentTitle}',
+          ? 'PIF - ${_jobSnapshot.jobCode}'
+          : 'PIF - ${_jobSnapshot.jobCode} - ${appointmentTitle.isEmpty ? '-' : appointmentTitle}',
       detailsLabelA: 'Descriere punere in functiune',
       detailsLabelB: 'Parametri / rezultate',
       defaultNumber: autoNumber,
@@ -6027,9 +6029,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         .toList(growable: false);
     final doc = <String, dynamic>{
       'id': 'job-doc-${DateTime.now().microsecondsSinceEpoch}',
-      'jobId': widget.job.id,
+      'jobId': _jobSnapshot.id,
       'client': widget.clientName,
-      'location': widget.job.location,
+      'location': _jobSnapshot.location,
       'selectedLinesSnapshot': pifSelectedLines,
       'type': 'pif',
       'tipDocument': 'PIF',
@@ -6050,9 +6052,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       'sourceAppointmentLocation': appointmentLocation,
       'descrierePunereInFunctiune': payload['detailsA'] ?? '',
       'parametriRezultate': payload['detailsB'] ?? '',
-      'jobCode': widget.job.jobCode,
-      'jobTitle': widget.job.title,
-      'jobStatus': widget.job.status.label,
+      'jobCode': _jobSnapshot.jobCode,
+      'jobTitle': _jobSnapshot.title,
+      'jobStatus': _jobSnapshot.status.label,
       'teamLabel': _assignedTeam?.label ?? '-',
       'teamMembers': _assignedTeamMembersLabel,
       'appointmentsCount': _appointments.length,
@@ -6112,9 +6114,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       await PdfActionsHelper.showPdfActions(
         context,
         filePath: path,
-        title: 'Contract ${widget.job.jobCode}',
+        title: 'Contract ${_jobSnapshot.jobCode}',
         shareSubject: 'Contract de prestări servicii',
-        shareText: 'Contract PRO TERM SRL — ${widget.job.title}',
+        shareText: 'Contract PRO TERM SRL — ${_jobSnapshot.title}',
       );
     } catch (e) {
       if (mounted) _snack('Eroare la generarea contractului: $e');
@@ -6131,9 +6133,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       materialTotal: materialTotal,
       laborTotal: laborTotal,
       clientName: widget.clientName,
-      jobCode: widget.job.jobCode,
-      jobTitle: widget.job.title,
-      location: widget.job.location,
+      jobCode: _jobSnapshot.jobCode,
+      jobTitle: _jobSnapshot.title,
+      location: _jobSnapshot.location,
       teamName: _assignedTeam?.label ?? '',
       teamMembers: _assignedTeamMembersLabel,
     );
@@ -6157,15 +6159,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final clientName =
         widget.clientName.trim().isEmpty ? '-' : widget.clientName.trim();
     final jobCode =
-        widget.job.jobCode.trim().isEmpty ? '-' : widget.job.jobCode.trim();
+        _jobSnapshot.jobCode.trim().isEmpty ? '-' : _jobSnapshot.jobCode.trim();
     final jobTitle =
-        widget.job.title.trim().isEmpty ? '-' : widget.job.title.trim();
+        _jobSnapshot.title.trim().isEmpty ? '-' : _jobSnapshot.title.trim();
     final jobLocation =
-        widget.job.location.trim().isEmpty ? '-' : widget.job.location.trim();
-    final jobStatus = widget.job.status.label.trim().isEmpty
+        _jobSnapshot.location.trim().isEmpty ? '-' : _jobSnapshot.location.trim();
+    final jobStatus = _jobSnapshot.status.label.trim().isEmpty
         ? '-'
-        : widget.job.status.label.trim();
-    final estimated = _asDouble(widget.job.estimatedValue);
+        : _jobSnapshot.status.label.trim();
+    final estimated = _asDouble(_jobSnapshot.estimatedValue);
     final teamLabel = teamName.trim().isEmpty ? '-' : teamName.trim();
     final teamMembersLabel =
         teamMembers.trim().isEmpty ? '-' : teamMembers.trim();
@@ -6399,17 +6401,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       'number': '',
       'dataDocument': nowIso.split('T').first,
       'date': nowIso.split('T').first,
-      'titlu': '$titlePrefix - ${widget.job.jobCode}',
-      'title': '$titlePrefix - ${widget.job.jobCode}',
+      'titlu': '$titlePrefix - ${_jobSnapshot.jobCode}',
+      'title': '$titlePrefix - ${_jobSnapshot.jobCode}',
       'status': 'Draft',
-      'jobId': widget.job.id,
-      'jobCode': widget.job.jobCode,
-      'titluLucrare': widget.job.title,
-      'jobTitle': widget.job.title,
+      'jobId': _jobSnapshot.id,
+      'jobCode': _jobSnapshot.jobCode,
+      'titluLucrare': _jobSnapshot.title,
+      'jobTitle': _jobSnapshot.title,
       'clientName': widget.clientName,
-      'location': widget.job.location,
-      'jobStatus': widget.job.status.label,
-      'estimatedValue': widget.job.estimatedValue,
+      'location': _jobSnapshot.location,
+      'jobStatus': _jobSnapshot.status.label,
+      'estimatedValue': _jobSnapshot.estimatedValue,
       'teamName': teamName,
       'teamMembers': teamMembers,
       // Convenție unificată (engleză), consistentă cu PV/PIF și restul codului.
@@ -6517,7 +6519,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       template['partiContractante'] =
           'Prestator: ${companyName.trim().isEmpty ? '-' : companyName}\nBeneficiar: ${widget.clientName.trim().isEmpty ? '-' : widget.clientName}';
       template['documenteReferinte'] =
-          'Cod lucrare: ${widget.job.jobCode}\nTitlu lucrare: ${widget.job.title}\nLocatie: ${widget.job.location}';
+          'Cod lucrare: ${_jobSnapshot.jobCode}\nTitlu lucrare: ${_jobSnapshot.title}\nLocatie: ${_jobSnapshot.location}';
       template['durataExecutie'] = '-';
       template['avans'] = '-';
       template['transePlata'] = '-';
@@ -6536,7 +6538,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       template['dispozitiiFinale'] = '-';
       template['semnaturi'] =
           'Responsabil: ____________________\nBeneficiar: ____________________';
-      template['obiectContract'] = 'Obiect contract: ${widget.job.title}';
+      template['obiectContract'] = 'Obiect contract: ${_jobSnapshot.title}';
     }
     final registered = await _registerDocumentForRegistry(template);
     final next = [..._documents, registered];
@@ -7249,7 +7251,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         case 'Premium':
           return {
             'object':
-                'Obiect ofertă: Soluție completă premium pentru ${widget.job.title}',
+                'Obiect ofertă: Soluție completă premium pentru ${_jobSnapshot.title}',
             'content': [
               'Soluție comercială premium, configurată pentru performanță și fiabilitate extinsă.',
               'Include implementare completă, reglaje finale și suport la recepție.',
@@ -7324,7 +7326,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         case 'Standard':
         default:
           return {
-            'object': 'Obiect ofertă: ${widget.job.title}',
+            'object': 'Obiect ofertă: ${_jobSnapshot.title}',
             'content': [
               'Structură comercială standard pentru lucrarea curentă.',
               '',
@@ -7766,9 +7768,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       );
 
       clientCtrl.text = widget.clientName;
-      jobCodeCtrl.text = widget.job.jobCode;
-      jobTitleCtrl.text = widget.job.title;
-      locationCtrl.text = widget.job.location;
+      jobCodeCtrl.text = _jobSnapshot.jobCode;
+      jobTitleCtrl.text = _jobSnapshot.title;
+      locationCtrl.text = _jobSnapshot.location;
       subtotalCtrl.text = subtotal.toStringAsFixed(2);
       vatCtrl.text = vatPercent.toStringAsFixed(2);
       totalCtrl.text = grandTotal.toStringAsFixed(2);
@@ -7777,7 +7779,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       notesCtrl.text = sections['notes'] ?? notesCtrl.text;
 
       if (normalizedType == 'oferta') {
-        objectCtrl.text = 'Obiect oferta: ${widget.job.title}';
+        objectCtrl.text = 'Obiect oferta: ${_jobSnapshot.title}';
         vatCtrl.text = _commercialValue('vatPercent');
         termExecCtrl.text = _commercialValue('executionTerm');
         termPayCtrl.text = _commercialValue('paymentTerm');
@@ -7802,9 +7804,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         signaturesCtrl.text = _commercialValue('defaultSignatures');
         partsCtrl.text =
             'Prestator: ${companyName.trim().isEmpty ? '-' : companyName}\nBeneficiar: ${widget.clientName.trim().isEmpty ? '-' : widget.clientName}';
-        objectCtrl.text = 'Obiect contract: ${widget.job.title}';
+        objectCtrl.text = 'Obiect contract: ${_jobSnapshot.title}';
         refsCtrl.text =
-            'Cod lucrare: ${widget.job.jobCode}\nTitlu lucrare: ${widget.job.title}\nLocatie: ${widget.job.location}';
+            'Cod lucrare: ${_jobSnapshot.jobCode}\nTitlu lucrare: ${_jobSnapshot.title}\nLocatie: ${_jobSnapshot.location}';
         durationCtrl.text = '-';
         vatContractCtrl.text = vatPercent.toStringAsFixed(2);
         advanceCtrl.text = '-';
@@ -8248,7 +8250,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final date = clean('${doc['dataDocument'] ?? doc['date'] ?? ''}');
     final status = clean('${doc['status'] ?? '-'}');
     final notes = clean('${doc['observatii'] ?? doc['notes'] ?? ''}');
-    final jobStatus = clean('${widget.job.status.label}');
+    final jobStatus = clean('${_jobSnapshot.status.label}');
 
     if (!mounted) return;
     if (!mounted) return;
@@ -8375,14 +8377,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     String selectedType =
         typeOptions.isNotEmpty ? typeOptions.first : _documentTypes.first;
     String selectedStatus = _documentStatuses.first;
-    final titleController = TextEditingController(text: widget.job.title);
+    final titleController = TextEditingController(text: _jobSnapshot.title);
     final numberController = TextEditingController();
     final dateController =
         TextEditingController(text: _formatDate(DateTime.now()));
     final filePathController = TextEditingController();
     final notesController = TextEditingController(
       text:
-          'Cod lucrare: ${widget.job.jobCode}\nClient: ${widget.clientName}\nLocatie: ${widget.job.location}',
+          'Cod lucrare: ${_jobSnapshot.jobCode}\nClient: ${widget.clientName}\nLocatie: ${_jobSnapshot.location}',
     );
 
     final created = await showDialog<Map<String, dynamic>>(
@@ -8514,9 +8516,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             FilledButton(
               onPressed: () => Navigator.of(context).pop({
                 'id': 'job-doc-${DateTime.now().microsecondsSinceEpoch}',
-                'jobId': widget.job.id,
+                'jobId': _jobSnapshot.id,
                 'client': widget.clientName,
-                'location': widget.job.location,
+                'location': _jobSnapshot.location,
                 'type': _normalizeDocumentType(selectedType),
                 'tipDocument': selectedType,
                 'documentSubtype':
@@ -8922,12 +8924,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
     final updated = <String, dynamic>{
       ...row,
-      'jobId': widget.job.id,
+      'jobId': _jobSnapshot.id,
       'client': widget.clientName,
-      'location': widget.job.location,
-      'jobCode': widget.job.jobCode,
-      'jobTitle': widget.job.title,
-      'jobStatus': widget.job.status.label,
+      'location': _jobSnapshot.location,
+      'jobCode': _jobSnapshot.jobCode,
+      'jobTitle': _jobSnapshot.title,
+      'jobStatus': _jobSnapshot.status.label,
       'teamLabel': _assignedTeam?.label ?? '-',
       'teamMembers': _assignedTeamMembersLabel,
       'appointmentsCount': _appointments.length,
@@ -9183,11 +9185,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
     return LucrareReportData(
       generatedAtLabel: '$d.$m.${now.year} $h:$min',
-      jobCode: widget.job.jobCode,
-      jobTitle: widget.job.title,
+      jobCode: _jobSnapshot.jobCode,
+      jobTitle: _jobSnapshot.title,
       clientName: widget.clientName,
-      location: widget.job.location,
-      statusLabel: widget.job.status.label,
+      location: _jobSnapshot.location,
+      statusLabel: _jobSnapshot.status.label,
       estimatedValue: _estimatedValue,
       materialsTotal: _materialsTotal,
       laborOreTotal: _laborOreTotal,
@@ -9262,7 +9264,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       }
     }
 
-    final estimatedValue = _asDouble(widget.job.estimatedValue);
+    final estimatedValue = _asDouble(_jobSnapshot.estimatedValue);
     final realTotalCost = materialTotal + laborFullTotal;
     final differenceVsEstimate = estimatedValue - realTotalCost;
     final materialsCount = materials.length;
@@ -9273,11 +9275,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         : _assignedTeamMembersLabel.trim();
 
     return <String, dynamic>{
-      'jobCode': widget.job.jobCode,
-      'jobTitle': widget.job.title,
+      'jobCode': _jobSnapshot.jobCode,
+      'jobTitle': _jobSnapshot.title,
       'clientName': widget.clientName,
-      'location': widget.job.location,
-      'statusLabel': widget.job.status.label,
+      'location': _jobSnapshot.location,
+      'statusLabel': _jobSnapshot.status.label,
       'generatedAt': _formatDateTime(DateTime.now().toIso8601String()),
       'estimatedValue': estimatedValue,
       'materialTotal': materialTotal,
@@ -9484,7 +9486,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return _pdfBuilder.buildDocumentPdfBytes(
       row,
       companyMap: companyMap,
-      job: widget.job,
+      job: _jobSnapshot,
       clientName: widget.clientName,
       appointmentsFallback: _appointments,
       materialsFallback: _materials,
@@ -9518,7 +9520,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }) async {
     try {
       final bytes = await _buildCompleteReportPdfBytes(payload);
-      final jobCode = '${payload['jobCode'] ?? widget.job.jobCode}'.trim();
+      final jobCode = '${payload['jobCode'] ?? _jobSnapshot.jobCode}'.trim();
       final fileName =
           'RAPORT_${_sanitizeFilePart(jobCode.isEmpty ? 'JOB' : jobCode)}.pdf';
       final filePath = await PdfSaveService.savePdf(
@@ -9533,14 +9535,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final reportNumber =
           'RAP-${_sanitizeFilePart(jobCode.isEmpty ? 'JOB' : jobCode)}';
       final statusLabel =
-          '${payload['statusLabel'] ?? widget.job.status.label}'.trim();
+          '${payload['statusLabel'] ?? _jobSnapshot.status.label}'.trim();
       await _saveRegistryProjectionEntry(
         type: reportType,
         number: reportNumber,
         title: 'Raport lucrare - ${jobCode.isEmpty ? 'JOB' : jobCode}',
         documentDate: reportDate,
         status: statusLabel.isEmpty ? 'Final' : statusLabel,
-        referenceId: 'report-${widget.job.jobCode}',
+        referenceId: 'report-${_jobSnapshot.jobCode}',
         filePath: filePath,
       );
       if (!mounted) return;
@@ -9553,10 +9555,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           'date': reportDate,
           'status': statusLabel.isEmpty ? 'Final' : statusLabel,
           'client': widget.clientName,
-          'jobCode': widget.job.jobCode,
-          'jobId': '${widget.job.id}'.trim().isEmpty
-              ? widget.job.jobCode
-              : '${widget.job.id}',
+          'jobCode': _jobSnapshot.jobCode,
+          'jobId': '${_jobSnapshot.id}'.trim().isEmpty
+              ? _jobSnapshot.jobCode
+              : '${_jobSnapshot.id}',
           'filePath': filePath,
         };
       });
@@ -9578,7 +9580,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _onGenerateSituatieLucrari() async {
-    final job = widget.job;
+    final job = _jobSnapshot;
 
     // Controlere pentru dialog
     final numberCtrl = TextEditingController(
@@ -9817,22 +9819,22 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         number:
             numberCtrl.text.trim().isEmpty ? 'SL-001' : numberCtrl.text.trim(),
         documentDate: DateTime.now(),
-        jobCode: widget.job.jobCode,
-        jobTitle: widget.job.title,
+        jobCode: _jobSnapshot.jobCode,
+        jobTitle: _jobSnapshot.title,
         clientName: widget.clientName,
         contractNumber: contractNumberCtrl.text.trim(),
         contractDate: contractDateCtrl.text.trim(),
         periodStart: periodStartCtrl.text.trim(),
         periodEnd: periodEndCtrl.text.trim(),
-        location: widget.job.location.trim(),
+        location: _jobSnapshot.location.trim(),
         materials: materialsForPdf,
         laborEntries: laborForPdf,
         vatPercent: vat,
         notes: notesCtrl.text.trim(),
         branding: branding,
         template: template,
-        regiePercent: widget.job.regiePercent,
-        profitPercent: widget.job.profitPercent,
+        regiePercent: _jobSnapshot.regiePercent,
+        profitPercent: _jobSnapshot.profitPercent,
       );
 
       final bytes = await SituatieLucrariPdfService.buildPdfBytes(params);
@@ -9840,7 +9842,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final docNumber = _sanitizeFilePart(
           numberCtrl.text.trim().isEmpty ? 'SL' : numberCtrl.text.trim());
       final jobPart = _sanitizeFilePart(
-          widget.job.jobCode.isEmpty ? 'JOB' : widget.job.jobCode);
+          _jobSnapshot.jobCode.isEmpty ? 'JOB' : _jobSnapshot.jobCode);
       final fileName = 'SITUATIE_${docNumber}_${jobPart}.pdf';
 
       final filePath = await PdfSaveService.savePdf(
@@ -9854,10 +9856,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       await _saveRegistryProjectionEntry(
         type: 'situatie_lucrari',
         number: numberCtrl.text.trim(),
-        title: 'Situație lucrări - ${widget.job.jobCode}',
+        title: 'Situație lucrări - ${_jobSnapshot.jobCode}',
         documentDate: reportDate,
         status: 'Final',
-        referenceId: 'sl-${widget.job.jobCode}',
+        referenceId: 'sl-${_jobSnapshot.jobCode}',
         filePath: filePath,
       );
 
@@ -9893,7 +9895,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final numberPart =
           _sanitizeFilePart(number.isEmpty ? '$prefix-0000' : number);
       final jobPart = _sanitizeFilePart(
-          widget.job.jobCode.isEmpty ? 'JOB' : widget.job.jobCode);
+          _jobSnapshot.jobCode.isEmpty ? 'JOB' : _jobSnapshot.jobCode);
       final fileName = '${numberPart}_${jobPart}.pdf';
       final filePath = await PdfSaveService.savePdf(
         repository: widget.repository,
@@ -10076,7 +10078,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         ? file.uri.pathSegments.last
         : 'document.pdf';
     final defaultSubject =
-        'Document ${widget.job.jobCode.trim().isEmpty ? 'lucrare' : widget.job.jobCode.trim()}';
+        'Document ${_jobSnapshot.jobCode.trim().isEmpty ? 'lucrare' : _jobSnapshot.jobCode.trim()}';
     final defaultBody =
         'Buna ziua,\n\nAtasat gasiti documentul solicitat.\n\nCu stima,';
 
@@ -10130,7 +10132,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         filePath: filePath,
         fileName: fileName,
         sourceModule: 'jobs',
-        sourceEntityId: widget.job.id,
+        sourceEntityId: _jobSnapshot.id,
       );
 
       final queueItem = await _notificationService.sendEmailNotification(
@@ -10142,10 +10144,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         attachments: <Map<String, dynamic>>[attachment],
         inlineAssets: inlineAssets,
         sourceModule: 'jobs',
-        sourceEntityId: widget.job.id,
+        sourceEntityId: _jobSnapshot.id,
         eventType: NotificationEventType.documentGenerated,
         metadata: <String, dynamic>{
-          'job_code': widget.job.jobCode,
+          'job_code': _jobSnapshot.jobCode,
           'document_file_name': fileName,
         },
       );
@@ -10312,8 +10314,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   bool _isRegistryRowForCurrentJob(Map<String, dynamic> row) {
-    final currentJobId = '${widget.job.id}'.trim().toLowerCase();
-    final currentJobCode = widget.job.jobCode.trim().toLowerCase();
+    final currentJobId = '${_jobSnapshot.id}'.trim().toLowerCase();
+    final currentJobCode = _jobSnapshot.jobCode.trim().toLowerCase();
     final rowJobId = '${row['jobId'] ?? ''}'.trim().toLowerCase();
     final rowJobCode = '${row['jobCode'] ?? ''}'.trim().toLowerCase();
     if (currentJobCode.isNotEmpty && rowJobCode == currentJobCode) return true;
@@ -10325,7 +10327,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final rowReferenceId =
         '${row['referenceId'] ?? row['id'] ?? ''}'.trim().toLowerCase();
     final normalizedJobCode =
-        _sanitizeFilePart(widget.job.jobCode).toLowerCase();
+        _sanitizeFilePart(_jobSnapshot.jobCode).toLowerCase();
     if (normalizedJobCode.isNotEmpty && rowNumber.contains(normalizedJobCode)) {
       return true;
     }
@@ -11671,16 +11673,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final branding = DocumentBrandingData.fromCompanyProfile(profile);
       final path = planificat
           ? await DevizLucrarePdfService.instance
-              .generateDevizPlanificat(widget.job, branding)
+              .generateDevizPlanificat(_jobSnapshot, branding)
           : await DevizLucrarePdfService.instance
-              .generateSituatieLucrari(widget.job, branding);
+              .generateSituatieLucrari(_jobSnapshot, branding);
       if (!mounted) return;
       await PdfActionsHelper.showPdfActions(
         context,
         filePath: path,
         title: planificat
-            ? 'Deviz planificat ${widget.job.jobCode}'
-            : 'Situație lucrări ${widget.job.jobCode}',
+            ? 'Deviz planificat ${_jobSnapshot.jobCode}'
+            : 'Situație lucrări ${_jobSnapshot.jobCode}',
       );
     } catch (e) {
       if (mounted) {
@@ -11704,7 +11706,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             children: [
               const Text('Fişă lucrare'),
               Text(
-                '${widget.job.jobCode} · $client',
+                '${_jobSnapshot.jobCode} · $client',
                 style: Theme.of(context).textTheme.bodySmall,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -11824,19 +11826,19 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 context,
                 'Header lucrare',
                 Wrap(spacing: 8, runSpacing: 8, children: [
-                  _chip('Cod', widget.job.jobCode),
-                  _chip('Titlu', widget.job.title),
+                  _chip('Cod', _jobSnapshot.jobCode),
+                  _chip('Titlu', _jobSnapshot.title),
                   _chip('Client', client),
                   _chip(
                       'Locație',
-                      widget.job.location.trim().isEmpty
+                      _jobSnapshot.location.trim().isEmpty
                           ? '-'
-                          : widget.job.location.trim()),
+                          : _jobSnapshot.location.trim()),
                 ])),
-            if (widget.job.clientDepartmentName.trim().isNotEmpty ||
-                widget.job.contactPerson.trim().isNotEmpty ||
-                widget.job.contactPersonEmail.trim().isNotEmpty ||
-                widget.job.contactPhone.trim().isNotEmpty)
+            if (_jobSnapshot.clientDepartmentName.trim().isNotEmpty ||
+                _jobSnapshot.contactPerson.trim().isNotEmpty ||
+                _jobSnapshot.contactPersonEmail.trim().isNotEmpty ||
+                _jobSnapshot.contactPhone.trim().isNotEmpty)
               _section(
                 context,
                 'Contact comercial',
@@ -11844,27 +11846,27 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    if (widget.job.clientDepartmentName
+                    if (_jobSnapshot.clientDepartmentName
                         .trim()
                         .isNotEmpty)
                       _chip(
                         'Departament',
-                        widget.job.clientDepartmentName.trim(),
+                        _jobSnapshot.clientDepartmentName.trim(),
                       ),
-                    if (widget.job.contactPerson.trim().isNotEmpty)
+                    if (_jobSnapshot.contactPerson.trim().isNotEmpty)
                       _chip(
                         'Persoana de contact',
-                        widget.job.contactPerson.trim(),
+                        _jobSnapshot.contactPerson.trim(),
                       ),
-                    if (widget.job.contactPersonEmail.trim().isNotEmpty)
+                    if (_jobSnapshot.contactPersonEmail.trim().isNotEmpty)
                       _chip(
                         'Email',
-                        widget.job.contactPersonEmail.trim(),
+                        _jobSnapshot.contactPersonEmail.trim(),
                       ),
-                    if (widget.job.contactPhone.trim().isNotEmpty)
+                    if (_jobSnapshot.contactPhone.trim().isNotEmpty)
                       _chip(
                         'Telefon',
-                        widget.job.contactPhone.trim(),
+                        _jobSnapshot.contactPhone.trim(),
                       ),
                   ],
                 ),
@@ -12535,7 +12537,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Future<void> _onEmiteFacturaSmartBill() async {
-    final job = widget.job;
+    final job = _jobSnapshot;
     if (job.liniiPlanificate.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text(
@@ -12604,18 +12606,18 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           padding: const EdgeInsets.all(16),
           children: [
             // ── SmartBill facturare ─────────────────────────────────────────
-            if (widget.job.smartbillFacturaNumar.isNotEmpty)
+            if (_jobSnapshot.smartbillFacturaNumar.isNotEmpty)
               Card(
                 color: Colors.green[50],
                 child: ListTile(
                   leading:
                       const Icon(Icons.check_circle, color: Colors.green),
                   title: Text(
-                      'Facturat SmartBill: ${widget.job.smartbillFacturaSerie}${widget.job.smartbillFacturaNumar}'),
+                      'Facturat SmartBill: ${_jobSnapshot.smartbillFacturaSerie}${_jobSnapshot.smartbillFacturaNumar}'),
                   subtitle: const Text('Factură deja emisă'),
                 ),
               )
-            else if (widget.job.status == JobStatus.finalizata)
+            else if (_jobSnapshot.status == JobStatus.finalizata)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: FilledButton.icon(
@@ -12683,7 +12685,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         '${b['updatedAt'] ?? b['createdAt'] ?? b['dataDocument'] ?? ''}';
                     return bDate.compareTo(aDate);
                   });
-                final statusLabel = '${widget.job.status.label}'
+                final statusLabel = '${_jobSnapshot.status.label}'
                     .replaceAll('\uFFFD', '')
                     .replaceAll('', '');
                 final assignedTeamLabel = _assignedTeam?.label ?? '-';
@@ -12716,17 +12718,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                           _chip('Client', client),
                           _chip('Status lucrare', statusLabel),
                           _chip('Echipa', assignedTeamLabel),
-                          if (widget.job.clientDepartmentName
+                          if (_jobSnapshot.clientDepartmentName
                               .trim()
                               .isNotEmpty)
                             _chip('Departament',
-                                widget.job.clientDepartmentName.trim()),
-                          if (widget.job.contactPerson
+                                _jobSnapshot.clientDepartmentName.trim()),
+                          if (_jobSnapshot.contactPerson
                               .trim()
                               .isNotEmpty)
                             _chip(
                               'Contact',
-                              widget.job.contactPerson.trim(),
+                              _jobSnapshot.contactPerson.trim(),
                             ),
                           _chip(
                             'Programari relevante',
