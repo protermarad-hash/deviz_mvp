@@ -250,6 +250,50 @@ class JobSiteDocumentTemplateService {
   }
 
   Future<_ResolvedDocumentResources> _resolveResources(JobRecord job) async {
+    // 0. Prioritate maxima: liniiPlanificate — sursa unificata folosita de tab
+    // Situatie/Executie. Daca exista, anexele se construiesc direct din ea.
+    final fromLinii = _fromLiniiPlanificate(job);
+    if (fromLinii.materials.isNotEmpty ||
+        fromLinii.labor.isNotEmpty ||
+        fromLinii.equipment.isNotEmpty) {
+      return _ResolvedDocumentResources(
+        materials: fromLinii.materials,
+        equipment: fromLinii.equipment,
+        labor: fromLinii.labor,
+        beneficiaryEquipment: job.beneficiarySuppliedEquipment
+            .map(
+              (item) => JobSiteDocumentAnnexItem(
+                id: item.id,
+                label: item.name,
+                quantity: _formatNumber(item.quantity),
+                unit: 'buc',
+                details: <String>[
+                  if (item.equipmentType.trim().isNotEmpty)
+                    item.equipmentType.trim(),
+                  if (item.brand.trim().isNotEmpty) item.brand.trim(),
+                  if (item.model.trim().isNotEmpty) item.model.trim(),
+                  if (item.serialNumber.trim().isNotEmpty)
+                    'SN ${item.serialNumber.trim()}',
+                ].join(' | '),
+                source: 'job_beneficiary_equipment',
+              ),
+            )
+            .toList(growable: false),
+        beneficiaryMaterials: job.beneficiarySuppliedMaterials
+            .map(
+              (item) => JobSiteDocumentAnnexItem(
+                id: item.id,
+                label: item.name,
+                quantity: _formatNumber(item.quantity),
+                unit: item.unit,
+                details: item.notes.trim(),
+                source: 'job_beneficiary_materials',
+              ),
+            )
+            .toList(growable: false),
+      );
+    }
+
     final jobMaterials = _fromJobMaterials(job);
     final jobEquipment = _fromJobEquipment(job, jobMaterials);
 
@@ -298,6 +342,68 @@ class JobSiteDocumentTemplateService {
     }
 
     return _fromOfferBundle(job);
+  }
+
+  /// Construieste resursele direct din `job.liniiPlanificate` (sursa unificata
+  /// planificat vs realizat). Liniile de manopera ajung in [labor], restul in
+  /// [materials]; echipamentele se deduc dupa cuvinte-cheie din [materials].
+  _ResolvedDocumentResources _fromLiniiPlanificate(JobRecord job) {
+    final lines = job.liniiPlanificate;
+    if (lines.isEmpty) return const _ResolvedDocumentResources();
+
+    final materials = <JobSiteDocumentAnnexItem>[];
+    final labor = <JobSiteDocumentAnnexItem>[];
+    for (final line in lines) {
+      final label = line.denumire.trim();
+      if (label.isEmpty) continue;
+      // Cantitate / pret: prefera valoarea reala daca exista, altfel ofertata.
+      final qty =
+          line.cantitateReala > 0 ? line.cantitateReala : line.cantitateOferta;
+      final price = line.pretUnitarReal > 0
+          ? line.pretUnitarReal
+          : line.pretUnitarOferta;
+      final categorie = line.categorie.trim().toLowerCase();
+      final details = <String>[
+        _categorieLabel(line.categorie),
+        if (price > 0) 'Pret unitar ${_formatNumber(price)}',
+        if (line.observatii.trim().isNotEmpty) line.observatii.trim(),
+      ].where((item) => item.isNotEmpty).join(' | ');
+      final item = JobSiteDocumentAnnexItem(
+        id: line.id,
+        label: label,
+        quantity: _formatNumber(qty),
+        unit: line.um,
+        details: details,
+        source: 'job_linii_planificate',
+      );
+      if (categorie == 'manopera') {
+        labor.add(item);
+      } else {
+        materials.add(item);
+      }
+    }
+
+    return _ResolvedDocumentResources(
+      materials: materials,
+      equipment:
+          materials.where((item) => _looksLikeEquipment(item.label)).toList(
+                growable: false,
+              ),
+      labor: labor,
+    );
+  }
+
+  String _categorieLabel(String categorie) {
+    switch (categorie.trim().toLowerCase()) {
+      case 'material':
+        return 'Material';
+      case 'manopera':
+        return 'Manopera';
+      case 'transport':
+        return 'Transport';
+      default:
+        return categorie.trim().isEmpty ? '' : categorie.trim();
+    }
   }
 
   List<JobSiteDocumentAnnexItem> _fromJobMaterials(JobRecord job) {
@@ -420,6 +526,7 @@ class JobSiteDocumentTemplateService {
   ) {
     final materials = _materialsAnnex(resources.materials);
     final equipments = _equipmentAnnex(resources);
+    final laborAnnex = _laborAnnex(resources.labor);
     final commissionedEquipment =
         _commissionedEquipmentAnnex(resources.equipment);
     final airMaterials = _airDistributionAnnex(resources.materials);
@@ -429,6 +536,7 @@ class JobSiteDocumentTemplateService {
       case JobSiteDocumentType.montajExecutie:
         return <JobSiteDocumentAnnex>[
           materials,
+          if (laborAnnex.items.isNotEmpty) laborAnnex,
           equipments,
         ];
       case JobSiteDocumentType.pifVentilatieRecuperator:
@@ -436,14 +544,27 @@ class JobSiteDocumentTemplateService {
           commissionedEquipment,
           airMaterials,
           airNetwork,
+          if (laborAnnex.items.isNotEmpty) laborAnnex,
         ];
       case JobSiteDocumentType.pifVrfClimatizare:
         return <JobSiteDocumentAnnex>[
           commissionedEquipment,
           airMaterials,
           equipments,
+          if (laborAnnex.items.isNotEmpty) laborAnnex,
         ];
     }
+  }
+
+  JobSiteDocumentAnnex _laborAnnex(List<JobSiteDocumentAnnexItem> items) {
+    return JobSiteDocumentAnnex(
+      key: 'lista_manopera',
+      title: 'Anexa - manopera / lucrari',
+      description:
+          'Generata automat din executia reala (liniile planificate ale lucrarii).',
+      summary: 'Total pozitii manopera: ${items.length}',
+      items: items,
+    );
   }
 
   JobSiteDocumentAnnex _materialsAnnex(List<JobSiteDocumentAnnexItem> items) {
@@ -817,12 +938,14 @@ class _ResolvedDocumentResources {
   const _ResolvedDocumentResources({
     this.materials = const <JobSiteDocumentAnnexItem>[],
     this.equipment = const <JobSiteDocumentAnnexItem>[],
+    this.labor = const <JobSiteDocumentAnnexItem>[],
     this.beneficiaryEquipment = const <JobSiteDocumentAnnexItem>[],
     this.beneficiaryMaterials = const <JobSiteDocumentAnnexItem>[],
   });
 
   final List<JobSiteDocumentAnnexItem> materials;
   final List<JobSiteDocumentAnnexItem> equipment;
+  final List<JobSiteDocumentAnnexItem> labor;
   final List<JobSiteDocumentAnnexItem> beneficiaryEquipment;
   final List<JobSiteDocumentAnnexItem> beneficiaryMaterials;
 }
