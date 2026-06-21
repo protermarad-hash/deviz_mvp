@@ -6412,13 +6412,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       'estimatedValue': widget.job.estimatedValue,
       'teamName': teamName,
       'teamMembers': teamMembers,
-      'programariSnapshot': _appointments
+      // Convenție unificată (engleză), consistentă cu PV/PIF și restul codului.
+      // Builder-ul citește și cheile vechi românești pentru documentele deja
+      // persistate (backward compatible).
+      'appointmentsSnapshot': _appointments
           .map((e) => Map<String, dynamic>.from(e))
           .toList(growable: false),
-      'materialeSnapshot': _materials
+      'materialsSnapshot': _materials
           .map((e) => Map<String, dynamic>.from(e))
           .toList(growable: false),
-      'manoperaSnapshot': _labor
+      'laborSnapshot': _labor
           .map((e) => Map<String, dynamic>.from(e))
           .toList(growable: false),
       'beneficiarySuppliedEquipmentSnapshot': _beneficiarySuppliedEquipment

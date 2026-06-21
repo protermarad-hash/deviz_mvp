@@ -131,9 +131,16 @@ class LucrarePdfBuilder {
           )
         : normalizedType;
 
-    final appointmentSourceRaw = row['programariSnapshot'];
-    final materialSourceRaw = row['materialeSnapshot'];
-    final laborSourceRaw = row['manoperaSnapshot'];
+    // Citim AMBELE convetii de chei: engleza (scrisa de PV/PIF si de
+    // _onRegenerateGeneratedDocument) cu prioritate, apoi romana (scrisa de
+    // fluxul template Deviz/Oferta si de documentele deja persistate). Inainte,
+    // builder-ul citea doar varianta romana => snapshot-urile PV/PIF (engleza)
+    // erau ignorate complet.
+    final appointmentSourceRaw =
+        row['appointmentsSnapshot'] ?? row['programariSnapshot'];
+    final materialSourceRaw =
+        row['materialsSnapshot'] ?? row['materialeSnapshot'];
+    final laborSourceRaw = row['laborSnapshot'] ?? row['manoperaSnapshot'];
     final beneficiaryEquipmentSourceRaw =
         row['beneficiarySuppliedEquipmentSnapshot'];
     final beneficiaryMaterialsSourceRaw =
@@ -344,6 +351,41 @@ class LucrarePdfBuilder {
       final map = Map<String, dynamic>.from(e as Map);
       return 'Data: ${map['date'] ?? '-'} | Resursa: ${map['who'] ?? '-'} | Ore: ${lucrareAsDouble(map['hours']).toStringAsFixed(2)} | Tarif: ${laborCalc.laborRateForRow(map).toStringAsFixed(2)} | Cost ore: ${laborCalc.laborOreCost(map).toStringAsFixed(2)} | Cost diurna: ${laborCalc.laborPerDiemCost(map).toStringAsFixed(2)} | Cost cazare: ${laborCalc.laborLodgingCost(map).toStringAsFixed(2)} | Cost total: ${laborCalc.laborTotalLineCost(map).toStringAsFixed(2)}';
     }).toList(growable: false);
+
+    // Fallback din liniiPlanificate (sursa unificata planificat/realizat) cand
+    // sectiunile generice raman goale: ex. lucrari unde materialele/manopera
+    // exista DOAR in liniiPlanificate, nu in listele operationale _materials /
+    // _labor. Formatare pura (fara laborCalc) ca sa nu apara costuri eronate.
+    String fmtNum(double v) => v == v.roundToDouble()
+        ? v.toStringAsFixed(0)
+        : v.toStringAsFixed(2);
+    double lineQty(JobLine l) =>
+        l.cantitateReala > 0 ? l.cantitateReala : l.cantitateOferta;
+    double linePrice(JobLine l) =>
+        l.pretUnitarReal > 0 ? l.pretUnitarReal : l.pretUnitarOferta;
+    final liniiMaterials = job.liniiPlanificate
+        .where((l) =>
+            l.denumire.trim().isNotEmpty &&
+            l.categorie.trim().toLowerCase() != 'manopera')
+        .map((l) {
+      final qty = lineQty(l);
+      final price = linePrice(l);
+      return 'Material: ${l.denumire.trim()} | UM: ${l.um} | Cant: ${fmtNum(qty)} | Pret: ${fmtNum(price)} | Total: ${fmtNum(qty * price)}';
+    }).toList(growable: false);
+    final liniiLabor = job.liniiPlanificate
+        .where((l) =>
+            l.denumire.trim().isNotEmpty &&
+            l.categorie.trim().toLowerCase() == 'manopera')
+        .map((l) {
+      final qty = lineQty(l);
+      final price = linePrice(l);
+      return 'Resursa: ${l.denumire.trim()} | UM: ${l.um} | Cant: ${fmtNum(qty)} | Pret: ${fmtNum(price)} | Total: ${fmtNum(qty * price)}';
+    }).toList(growable: false);
+    final materialsTextEffective =
+        materialsText.isNotEmpty ? materialsText : liniiMaterials;
+    final laborTextEffective =
+        laborText.isNotEmpty ? laborText : liniiLabor;
+
     final beneficiaryEquipmentText = beneficiaryEquipmentSource.map((e) {
       final map = Map<String, dynamic>.from(e as Map);
       final details = <String>[
@@ -557,9 +599,9 @@ class LucrarePdfBuilder {
           pw.SizedBox(height: 2),
           if (subtype == 'oferta') ...[
             sectionTitle('Structura comerciala'),
-            ...simpleList('Lista comerciala / sintetica', materialsText),
+            ...simpleList('Lista comerciala / sintetica', materialsTextEffective),
             pw.SizedBox(height: 8),
-            ...simpleList('Manopera (sinteza)', laborText),
+            ...simpleList('Manopera (sinteza)', laborTextEffective),
             pw.SizedBox(height: 8),
             infoBlock(
               title: 'Totaluri oferta',
@@ -604,9 +646,9 @@ class LucrarePdfBuilder {
             ),
           ] else if (subtype == 'deviz') ...[
             sectionTitle('Structura tehnica'),
-            ...simpleList('Materiale', materialsText),
+            ...simpleList('Materiale', materialsTextEffective),
             pw.SizedBox(height: 8),
-            ...simpleList('Manopera', laborText),
+            ...simpleList('Manopera', laborTextEffective),
             pw.SizedBox(height: 8),
             infoBlock(
               title: 'Totaluri deviz',
@@ -714,9 +756,9 @@ class LucrarePdfBuilder {
           ] else ...[
             ...simpleList('Programari asociate', appointmentsText),
             pw.SizedBox(height: 8),
-            ...simpleList('Materiale asociate', materialsText),
+            ...simpleList('Materiale asociate', materialsTextEffective),
             pw.SizedBox(height: 8),
-            ...simpleList('Manopera / ore', laborText),
+            ...simpleList('Manopera / ore', laborTextEffective),
             pw.SizedBox(height: 8),
           ],
           if (beneficiaryEquipmentText.isNotEmpty) ...[

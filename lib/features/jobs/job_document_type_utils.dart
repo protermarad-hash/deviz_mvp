@@ -62,7 +62,14 @@ String normalizeDocumentTypeCanonical(dynamic rawValue) {
       compact == 'proces verbal' ||
       compact == 'proces-verbal' ||
       compact == 'proces_verbal' ||
-      compact.startsWith('pv ')) {
+      // 'process_verbal' (valoarea reala din row['type']) devine, dupa
+      // compactare underscore->spatiu, 'process verbal' (ortografie EN cu
+      // dublu 's'). Fara aceasta varianta, PV-ul nu se potrivea niciodata.
+      compact == 'process verbal' ||
+      compact == 'processverbal' ||
+      compact.startsWith('pv ') ||
+      compact.startsWith('process verbal') ||
+      compact.startsWith('proces verbal')) {
     return 'pv';
   }
   if (compact == 'pif' || compact.startsWith('pif ')) {
