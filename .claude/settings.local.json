@@ -93,7 +93,11 @@
       "PowerShell(grep *)",
       "PowerShell(python *)",
       "PowerShell(python3 *)",
-      "WebSearch"
+      "WebSearch",
+      "PowerShell($sp = Get-Content \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Roaming\\\\com.example\\\\ProVentaris\\\\shared_preferences.json\" -Raw -Encoding UTF8 | ConvertFrom-Json; $offersRaw = $sp.'flutter.ultra_offers_v1'; if \\($offersRaw\\) { $offers = $offersRaw | ConvertFrom-Json; $offer = $offers | Where-Object { $_.offer_number -eq 'OFR-0042' }; if \\($offer\\) { Write-Host \"=== OFR-0042 === ID=$\\($offer.id\\)\"; $offer.lines | ForEach-Object { $lt = if \\($_.line_type\\) { $_.line_type } else { $_.lineType }; Write-Host \"  [$lt] $\\($_.name\\) qty=$\\($_.quantity\\) pret=$\\($_.unit_price\\)\" } } else { Write-Host \"Nu e in ProVentaris. Incerc devizpro_ultra...\" } })",
+      "PowerShell($sp = Get-Content \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Roaming\\\\com.example\\\\devizpro_ultra\\\\shared_preferences.json\" -Raw -Encoding UTF8 | ConvertFrom-Json; $offersRaw = $sp.'flutter.ultra_offers_v1'; if \\($offersRaw\\) { $offers = $offersRaw | ConvertFrom-Json; $offer = $offers | Where-Object { $_.offer_number -eq 'OFR-0042' }; if \\($offer\\) { Write-Host \"=== OFR-0042 ===\"; $offer.lines | ForEach-Object { $lt = if \\($_.line_type\\) { $_.line_type } else { \"?\" }; Write-Host \"  [$lt] $\\($_.name\\) qty=$\\($_.quantity\\) pret=$\\($_.unit_price\\)\" } } else { Write-Host \"Nu e in devizpro_ultra. Disponibile: $\\(\\($offers | Select-Object -First 5 | ForEach-Object { $_.offer_number }\\) -join ', '\\)\" } })",
+      "Bash(ls -la dialogs/)",
+      "Bash(ls -la services/)"
     ]
   }
 }

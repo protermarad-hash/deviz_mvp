@@ -16,6 +16,41 @@ Sunt suportate două platforme simultan din același document Firestore:
 
 ---
 
+## ══════════════════════════════════════════════
+## FLUX NOU AUTOMAT (din iun 2026) — UN SINGUR SCRIPT
+## ══════════════════════════════════════════════
+
+Dupa ce ai facut build-ul, ruleaza un singur script si gata:
+
+```powershell
+node scripts/publish_release.js --version 1.1.0 --build 5 --notes "Descriere fix-uri"
+```
+
+Scriptul face automat:
+- Upload APK + ZIP in Firebase Storage (cu path versionate, pastrand istoricul)
+- Generare download URL-uri cu token de acces
+- Actualizare Firestore `app_config/version_info` (latestVersion, latestBuildNumber, apkUrl, windowsExeUrl, releaseNotes)
+- Aplicatia detecteaza update-ul la urmatoarea pornire
+
+**Cerinte**: `firebase login` efectuat o singura data (deja facut). Nu trebuie nimic altceva.
+
+**Optiuni utile**:
+```powershell
+# Numai Android (nu ai facut build Windows):
+node scripts/publish_release.js --version 1.1.0 --build 5 --notes "..." --apk-only
+
+# Numai Windows:
+node scripts/publish_release.js --version 1.1.0 --build 5 --notes "..." --windows-only
+```
+
+**Daca scriptul da eroare de token** (rar, dupa luni de inactivitate):
+```
+firebase login
+```
+Reauthentificare, apoi ruleaza scriptul din nou.
+
+---
+
 ## Pas 0 — Incrementează versiunea (OBLIGATORIU, vezi CLAUDE.md)
 
 În `pubspec.yaml`:
@@ -173,6 +208,22 @@ temporar al sistemului — calea exactă e afișată în dialog.
 5. Butonul „Deschide folderul" trebuie să deschidă Explorer
 
 **După test, pune valorile reale înapoi.**
+
+---
+
+## Flux complet pentru un release nou (rezumat)
+
+```
+1. Incrementează versiunea în pubspec.yaml  (ex: 1.1.0+4 → 1.1.0+5)
+2. flutter build apk --release
+3. flutter clean && flutter pub get
+4. flutter build windows --release
+5. Compress-Archive build\windows\x64\runner\Release\* build\proventaris-windows-vX.Y.Z-buildN.zip -Force
+6. node scripts/publish_release.js --version X.Y.Z --build N --notes "Ce s-a schimbat"
+7. git commit -m "feat: versiune X.Y.Z+N - descriere"
+```
+
+Pasi 2-6 = ~25 minute total (build Android ~13 min, build Windows ~4 min, upload ~1-2 min).
 
 ---
 

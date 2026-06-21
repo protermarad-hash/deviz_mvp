@@ -39,6 +39,8 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
   final _fmtEur = NumberFormat('#,##0.00', 'ro_RO');
 
   bool _loading = true;
+  bool _syncing = false;
+  bool _deduplicating = false;
   List<DevizFiltreCta> _items = [];
 
   @override
@@ -137,7 +139,7 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
   Future<void> _delete(DevizFiltreCta deviz) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Șterge deviz'),
         content: Text(
           'Ești sigur că vrei să ștergi devizul '
@@ -146,32 +148,103 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Anulează'),
           ),
           FilledButton(
             style: FilledButton.styleFrom(
                 backgroundColor: Colors.red.shade700),
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogContext, true),
             child: const Text('Șterge'),
           ),
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
 
+    // Optimistic UI: elimină imediat din listă — UI răspunde instant
+    setState(() => _items.removeWhere((d) => d.id == deviz.id));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Deviz șters.')),
+    );
+
+    // Ștergere async în fundal — nu blochează UI.
+    _repo.delete(deviz.id).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la ștergere: $e')),
+        );
+        _load(); // restaurează starea corectă la eroare
+      }
+    });
+  }
+
+  Future<void> _forceSyncToCloud() async {
+    setState(() => _syncing = true);
     try {
-      await _repo.delete(deviz.id);
+      final count = await _repo.forceSyncLocalToCloud();
       if (!mounted) return;
-      setState(() => _items.removeWhere((d) => d.id == deviz.id));
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Deviz șters.')),
+        SnackBar(
+          content: Text(count > 0
+              ? '$count deviz(e) trimise la cloud cu succes.'
+              : 'Niciun deviz de trimis.'),
+        ),
       );
+      await _load();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Eroare la ștergere: $e')),
+        SnackBar(content: Text('Eroare la trimitere: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
+  }
+
+  Future<void> _deduplicate() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Curăță duplicate din cloud'),
+        content: const Text(
+          'Această acțiune va găsi devizele cu același număr în Firestore '
+          'și va șterge copiile mai vechi, păstrând cea mai recentă versiune.\n\n'
+          'Continuați?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Curăță'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _deduplicating = true);
+    try {
+      final count = await _repo.deduplicateFirestore();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(count > 0
+              ? '$count duplicat(e) șterse din cloud cu succes.'
+              : 'Nu s-au găsit duplicate în cloud.'),
+        ),
+      );
+      if (count > 0) await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la curățare duplicate: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _deduplicating = false);
     }
   }
 
@@ -210,6 +283,36 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
       appBar: AppBar(
         title: const Text('Devize Filtre CTA'),
         actions: [
+          if (_deduplicating)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            )
+          else
+            PopupMenuButton<String>(
+              tooltip: 'Acțiuni suplimentare',
+              onSelected: (v) {
+                if (v == 'deduplicate') _deduplicate();
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(
+                  value: 'deduplicate',
+                  child: ListTile(
+                    leading: Icon(Icons.cleaning_services_outlined),
+                    title: Text('Curăță duplicate din cloud'),
+                    subtitle: Text('Șterge devizele cu același număr'),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                ),
+              ],
+            ),
           HelpButton(content: AppHelp.devizeFiltreCta),
         ],
         bottom: PreferredSize(
@@ -225,23 +328,42 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: TextField(
-        controller: _searchCtrl,
-        textCapitalization: TextCapitalization.sentences,
-        decoration: InputDecoration(
-          hintText: 'Caută deviz (titlu, număr, client, an)…',
-          prefixIcon: const Icon(Icons.search),
-          suffixIcon: _searchCtrl.text.isNotEmpty
-              ? IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () => _searchCtrl.clear(),
-                )
-              : null,
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10)),
-          isDense: true,
-          filled: true,
-        ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _searchCtrl,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: InputDecoration(
+                hintText: 'Caută deviz (titlu, număr, client, an)…',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => _searchCtrl.clear(),
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                isDense: true,
+                filled: true,
+              ),
+            ),
+          ),
+          // Buton sincronizare forțată — trimite datele locale la cloud
+          const SizedBox(width: 4),
+          IconButton(
+            icon: _syncing
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.cloud_sync_outlined),
+            tooltip: 'Sincronizează la cloud (trimite datele locale)',
+            onPressed: (_loading || _syncing) ? null : _forceSyncToCloud,
+          ),
+        ],
       ),
     );
   }
@@ -267,19 +389,68 @@ class _DevizFiltreCtaPageState extends State<DevizFiltreCtaPage>
                     horizontal: 16, vertical: 8),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Text(
-                    'Firebase: '
-                    'init=${FirebaseBootstrap.isInitialized} '
-                    'online=${FirebaseBootstrap.isOnline}',
-                    style: const TextStyle(fontSize: 11),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Firebase: init=${FirebaseBootstrap.isInitialized} '
+                        'online=${FirebaseBootstrap.isOnline}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: FirebaseBootstrap.isInitialized
+                              ? Colors.grey.shade700
+                              : Colors.orange.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Cache local: ${DevizFiltreCtaRepository.lastLocalCount} doc.'
+                        '  |  Firestore: ${DevizFiltreCtaRepository.lastFirestoreCount < 0 ? "eroare/nefinalizat" : "${DevizFiltreCtaRepository.lastFirestoreCount} doc."}',
+                        style:
+                            const TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                      if (DevizFiltreCtaRepository.lastFirestoreError !=
+                          null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Eroare: ${DevizFiltreCtaRepository.lastFirestoreError}',
+                          style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.red.shade700),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Trage în jos pentru a reîncărca din cloud.',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ],
                   ),
                 ),
               ),
               FilledButton.icon(
-                onPressed: _load,
-                icon: const Icon(Icons.refresh),
+                onPressed: _loading ? null : _load,
+                icon: const Icon(Icons.refresh, size: 16),
                 label: const Text('Reîncarcă din cloud'),
               ),
+              const SizedBox(height: 8),
+              if (DevizFiltreCtaRepository.lastLocalCount > 0)
+                OutlinedButton.icon(
+                  onPressed: (_loading || _syncing) ? null : _forceSyncToCloud,
+                  icon: _syncing
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child:
+                              CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.cloud_upload_outlined, size: 16),
+                  label: Text(_syncing
+                      ? 'Se trimite la cloud…'
+                      : 'Trimite la cloud (${DevizFiltreCtaRepository.lastLocalCount} doc.)'),
+                ),
             ],
           ),
         ),

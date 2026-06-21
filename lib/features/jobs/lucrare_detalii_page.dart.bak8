@@ -4790,12 +4790,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Future<void> _onAddMaterial() async {
-    if (_materialsCatalog.isEmpty) {
-      _snack('Nu există materiale definite.');
-      return;
-    }
-
-    String? selectedMaterialId;
+    _MaterialOption? selectedMaterial;
+    final nameController = TextEditingController();
+    final umController = TextEditingController();
     final qtyController = TextEditingController(text: '1');
     final priceController = TextEditingController(text: '0');
 
@@ -4809,31 +4806,80 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                DropdownButtonFormField<String?>(
-                  initialValue: selectedMaterialId,
-                  decoration:
-                      const InputDecoration(labelText: 'Selectează material'),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      value: null,
-                      child: Text('Selectează material'),
-                    ),
-                    ..._materialsCatalog.map(
-                      (m) => DropdownMenuItem<String?>(
-                        value: m.id,
-                        child: Text(m.name),
-                      ),
-                    ),
-                  ],
-                  onChanged: (value) {
-                    setDialogState(() => selectedMaterialId = value);
-                    final selected =
-                        _materialsCatalog.where((m) => m.id == value).toList();
-                    if (selected.isNotEmpty) {
-                      priceController.text =
-                          selected.first.price.toStringAsFixed(2);
-                    }
+                // ── Autocomplete material — sugestii live din catalog ──
+                Autocomplete<_MaterialOption>(
+                  displayStringForOption: (m) => m.name,
+                  optionsBuilder: (textEditingValue) {
+                    final q = textEditingValue.text.toLowerCase().trim();
+                    if (q.isEmpty) return _materialsCatalog.take(8);
+                    return _materialsCatalog
+                        .where((m) => m.name.toLowerCase().contains(q))
+                        .take(10);
                   },
+                  onSelected: (m) {
+                    setDialogState(() {
+                      selectedMaterial = m;
+                      umController.text = m.um;
+                      priceController.text = m.price.toStringAsFixed(2);
+                    });
+                  },
+                  fieldViewBuilder:
+                      (ctx, autoCtrl, focusNode, onFieldSubmitted) {
+                    // Sincronizează controller-ul intern cu nameController
+                    autoCtrl.addListener(
+                        () => nameController.text = autoCtrl.text);
+                    return TextField(
+                      controller: autoCtrl,
+                      focusNode: focusNode,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Material',
+                        hintText:
+                            'Tastează pentru sugestii sau scriere liberă...',
+                      ),
+                      onChanged: (_) =>
+                          setDialogState(() => selectedMaterial = null),
+                    );
+                  },
+                  optionsViewBuilder: (ctx, onSelected, options) {
+                    final rows = options.toList(growable: false);
+                    return Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        elevation: 4,
+                        borderRadius: BorderRadius.circular(8),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxHeight: 240,
+                            minWidth: 380,
+                            maxWidth: 560,
+                          ),
+                          child: ListView.builder(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            itemCount: rows.length,
+                            itemBuilder: (_, i) {
+                              final m = rows[i];
+                              return ListTile(
+                                dense: true,
+                                title: Text(m.name),
+                                subtitle: Text(
+                                    'UM: ${m.um} • Preț: ${m.price.toStringAsFixed(2)}'),
+                                onTap: () => onSelected(m),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: umController,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration:
+                      const InputDecoration(labelText: 'Unitate măsură'),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -4868,26 +4914,22 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 child: const Text('Anulează')),
             FilledButton(
               onPressed: () {
-                if (selectedMaterialId == null ||
-                    selectedMaterialId!.trim().isEmpty) {
-                  return;
-                }
-                final selected = _materialsCatalog
-                    .where((m) => m.id == selectedMaterialId)
-                    .toList();
-                if (selected.isEmpty) return;
-                final qty =
-                    double.tryParse(qtyController.text.replaceAll(',', '.')) ??
-                        0;
+                final name = nameController.text.trim();
+                if (name.isEmpty) return;
+                final qty = double.tryParse(
+                        qtyController.text.replaceAll(',', '.')) ??
+                    0;
                 final price = double.tryParse(
                         priceController.text.replaceAll(',', '.')) ??
                     0;
-                final material = selected.first;
+                final um = umController.text.trim();
+                final matId = selectedMaterial?.id ??
+                    'mat-${DateTime.now().millisecondsSinceEpoch}';
                 Navigator.of(context).pop({
                   'id': 'job-mat-${DateTime.now().millisecondsSinceEpoch}',
-                  'materialId': material.id,
-                  'name': material.name,
-                  'um': material.um,
+                  'materialId': matId,
+                  'name': name,
+                  'um': um.isEmpty ? (selectedMaterial?.um ?? '') : um,
                   'qty': qty,
                   'price': price,
                   'total': qty * price,
@@ -4900,9 +4942,43 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       ),
     );
 
+    nameController.dispose();
+    umController.dispose();
     qtyController.dispose();
     priceController.dispose();
     if (created == null) return;
+
+    // Dacă materialul nu era în catalog, îl adaugă automat pentru viitoare sugestii
+    final savedName = '${created['name'] ?? ''}'.trim();
+    if (selectedMaterial == null && savedName.isNotEmpty) {
+      final existing = await MasterLocalStore.readMaterials();
+      final alreadyExists = existing.any(
+          (m) => m.name.toLowerCase() == savedName.toLowerCase());
+      if (!alreadyExists) {
+        final newMat = MasterMaterial(
+          id: '${created['materialId']}',
+          name: savedName,
+          unit: '${created['um'] ?? ''}',
+          price:
+              double.tryParse('${created['price'] ?? 0}'.replaceAll(',', '.')) ??
+                  0,
+          notes: '',
+        );
+        await MasterLocalStore.writeMaterials([...existing, newMat]);
+        // Actualizează catalogul în pagina curentă
+        setState(() {
+          _materialsCatalog = [
+            ..._materialsCatalog,
+            _MaterialOption(
+              id: newMat.id,
+              name: newMat.name,
+              um: newMat.unit,
+              price: newMat.price,
+            ),
+          ];
+        });
+      }
+    }
 
     final next = <Map<String, dynamic>>[..._materials, created];
     await _persistJobMaterials(next);
@@ -4919,15 +4995,20 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       return;
     }
     final row = _materials[index];
-    String? selectedMaterialId = '${row['materialId'] ?? ''}'.trim();
-    if (selectedMaterialId.isEmpty) {
-      final match = _materialsCatalog
-          .where((m) => m.name == '${row['name'] ?? ''}')
-          .toList();
-      if (match.isNotEmpty) {
-        selectedMaterialId = match.first.id;
-      }
+    final existingName = '${row['name'] ?? ''}'.trim();
+    // Caută în catalog după ID sau după nume
+    _MaterialOption? selectedMaterial;
+    final existingId = '${row['materialId'] ?? ''}'.trim();
+    if (existingId.isNotEmpty) {
+      selectedMaterial = _materialsCatalog
+          .where((m) => m.id == existingId)
+          .fold<_MaterialOption?>(null, (_, m) => m);
     }
+    selectedMaterial ??= _materialsCatalog
+        .where((m) => m.name.toLowerCase() == existingName.toLowerCase())
+        .fold<_MaterialOption?>(null, (_, m) => m);
+
+    final nameController = TextEditingController(text: existingName);
     final umController = TextEditingController(text: '${row['um'] ?? ''}');
     final qtyController =
         TextEditingController(text: _asDouble(row['qty']).toString());
@@ -4957,33 +5038,72 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  DropdownButtonFormField<String?>(
-                    initialValue: selectedMaterialId?.isEmpty == true
-                        ? null
-                        : selectedMaterialId,
-                    decoration: const InputDecoration(labelText: 'Material'),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Selectează material'),
-                      ),
-                      ..._materialsCatalog.map(
-                        (m) => DropdownMenuItem<String?>(
-                          value: m.id,
-                          child: Text(m.name),
+                  // ── Autocomplete material cu text pre-completat ────────
+                  Autocomplete<_MaterialOption>(
+                    initialValue: TextEditingValue(text: existingName),
+                    displayStringForOption: (m) => m.name,
+                    optionsBuilder: (textEditingValue) {
+                      final q = textEditingValue.text.toLowerCase().trim();
+                      if (q.isEmpty) return _materialsCatalog.take(8);
+                      return _materialsCatalog
+                          .where((m) => m.name.toLowerCase().contains(q))
+                          .take(10);
+                    },
+                    onSelected: (m) {
+                      setDialogState(() {
+                        selectedMaterial = m;
+                        nameController.text = m.name;
+                        umController.text = m.um;
+                        priceController.text = m.price.toStringAsFixed(2);
+                      });
+                    },
+                    fieldViewBuilder:
+                        (ctx, autoCtrl, focusNode, onFieldSubmitted) {
+                      autoCtrl.addListener(
+                          () => nameController.text = autoCtrl.text);
+                      return TextField(
+                        controller: autoCtrl,
+                        focusNode: focusNode,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: const InputDecoration(
+                          labelText: 'Material',
+                          hintText: 'Tastează pentru sugestii...',
                         ),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      setDialogState(() => selectedMaterialId = value);
-                      final selected = _materialsCatalog
-                          .where((m) => m.id == value)
-                          .toList();
-                      if (selected.isNotEmpty) {
-                        umController.text = selected.first.um;
-                        priceController.text =
-                            selected.first.price.toStringAsFixed(2);
-                      }
+                        onChanged: (_) =>
+                            setDialogState(() => selectedMaterial = null),
+                      );
+                    },
+                    optionsViewBuilder: (ctx, onSelected, options) {
+                      final rows = options.toList(growable: false);
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(8),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxHeight: 240,
+                              minWidth: 380,
+                              maxWidth: 560,
+                            ),
+                            child: ListView.builder(
+                              shrinkWrap: true,
+                              padding: EdgeInsets.zero,
+                              itemCount: rows.length,
+                              itemBuilder: (_, i) {
+                                final m = rows[i];
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(m.name),
+                                  subtitle: Text(
+                                      'UM: ${m.um} • Preț: ${m.price.toStringAsFixed(2)}'),
+                                  onTap: () => onSelected(m),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      );
                     },
                   ),
                   const SizedBox(height: 8),
@@ -5033,30 +5153,25 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               ),
               FilledButton(
                 onPressed: () {
+                  final name = nameController.text.trim();
+                  if (name.isEmpty) return;
                   final qty = double.tryParse(
                           qtyController.text.replaceAll(',', '.')) ??
                       0;
                   final price = double.tryParse(
                           priceController.text.replaceAll(',', '.')) ??
                       0;
-                  final selected = _materialsCatalog
-                      .where((m) => m.id == selectedMaterialId)
-                      .toList();
-                  final name = selected.isNotEmpty
-                      ? selected.first.name
-                      : '${row['name'] ?? '-'}';
+                  final matId = selectedMaterial?.id ??
+                      '${row['materialId'] ?? 'mat-${DateTime.now().millisecondsSinceEpoch}'}';
+                  final um = umController.text.trim().isEmpty
+                      ? (selectedMaterial?.um ?? '${row['um'] ?? ''}')
+                      : umController.text.trim();
                   Navigator.of(context).pop({
                     ...row,
-                    'id':
-                        '${row['id'] ?? 'job-mat-${DateTime.now().millisecondsSinceEpoch}'}',
-                    'materialId':
-                        selectedMaterialId ?? '${row['materialId'] ?? ''}',
+                    'id': '${row['id'] ?? 'job-mat-${DateTime.now().millisecondsSinceEpoch}'}',
+                    'materialId': matId,
                     'name': name,
-                    'um': umController.text.trim().isEmpty
-                        ? (selected.isNotEmpty
-                            ? selected.first.um
-                            : '${row['um'] ?? ''}')
-                        : umController.text.trim(),
+                    'um': um,
                     'qty': qty,
                     'price': price,
                     'total': qty * price,
@@ -5070,10 +5185,44 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       ),
     );
 
+    nameController.dispose();
     umController.dispose();
     qtyController.dispose();
     priceController.dispose();
     if (updated == null) return;
+
+    // Dacă materialul editat e nou (nu din catalog), adaugă-l în catalog
+    final savedName = '${updated['name'] ?? ''}'.trim();
+    if (selectedMaterial == null && savedName.isNotEmpty) {
+      final existing = await MasterLocalStore.readMaterials();
+      final alreadyExists = existing.any(
+          (m) => m.name.toLowerCase() == savedName.toLowerCase());
+      if (!alreadyExists) {
+        final newMat = MasterMaterial(
+          id: '${updated['materialId']}',
+          name: savedName,
+          unit: '${updated['um'] ?? ''}',
+          price: double.tryParse(
+                  '${updated['price'] ?? 0}'.replaceAll(',', '.')) ??
+              0,
+          notes: '',
+        );
+        await MasterLocalStore.writeMaterials([...existing, newMat]);
+        if (mounted) {
+          setState(() {
+            _materialsCatalog = [
+              ..._materialsCatalog,
+              _MaterialOption(
+                id: newMat.id,
+                name: newMat.name,
+                um: newMat.unit,
+                price: newMat.price,
+              ),
+            ];
+          });
+        }
+      }
+    }
 
     final next = [..._materials];
     next[index] = updated;
@@ -12474,21 +12623,18 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       text: job.notes.trim(),
     );
 
-    // Sursa primară = liniiPlanificate (copiate din ofertă la conversie).
-    // Fallback la _materials/_labor manuale NUMAI dacă liniiPlanificate e gol
-    // (lucrări vechi care nu au venit din conversie ofertă).
+    // Sursa EXCLUSIVĂ = liniiPlanificate (copiate din ofertă via import/conversie).
+    // _materials/_labor din tab Economic = urmărire internă, NU apar în Situația de Lucrări.
     final hasPlanificate = _jobSnapshot.liniiPlanificate.isNotEmpty;
-    final planMateriale = hasPlanificate
-        ? _jobSnapshot.liniiPlanificate.where((l) => l.categorie == 'material').toList()
-        : <JobLine>[];
-    final planManopera = hasPlanificate
-        ? _jobSnapshot.liniiPlanificate.where((l) => l.categorie == 'manopera').toList()
-        : <JobLine>[];
-    final matCount = hasPlanificate ? planMateriale.length : _materials.length;
-    final laborCount = hasPlanificate ? planManopera.length : _labor.length;
+    final planMateriale = _jobSnapshot.liniiPlanificate
+        .where((l) => l.categorie == 'material').toList();
+    final planManopera = _jobSnapshot.liniiPlanificate
+        .where((l) => l.categorie == 'manopera').toList();
+    final matCount = planMateriale.length;
+    final laborCount = planManopera.length;
 
-    bool includeMaterials = hasPlanificate ? planMateriale.isNotEmpty : _materials.isNotEmpty;
-    bool includeLabor = hasPlanificate ? planManopera.isNotEmpty : _labor.isNotEmpty;
+    bool includeMaterials = planMateriale.isNotEmpty;
+    bool includeLabor = planManopera.isNotEmpty;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -12520,6 +12666,24 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         Text(
                           'Date preluate din oferta ${_jobSnapshot.sourceOfferNumber}',
                           style: TextStyle(fontSize: 12, color: Colors.green[700]),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.warning_amber_outlined,
+                            size: 15, color: Colors.orange[700]),
+                        const SizedBox(width: 6),
+                        const Expanded(
+                          child: Text(
+                            'Nu există linii din ofertă importate. Accesează tab-ul Situație → "Importă linii din ofertă" înainte de generare.',
+                            style: TextStyle(fontSize: 12, color: Colors.orange),
+                          ),
                         ),
                       ],
                     ),
@@ -12648,40 +12812,25 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           _defaultVatPercent;
 
       final materialsForPdf = includeMaterials
-          ? (hasPlanificate
-              ? planMateriale.map((l) => <String, dynamic>{
-                    'name': l.denumire,
-                    'um': l.um,
-                    'qty': l.cantitateReala,
-                    'price': l.pretUnitarReal,
-                    'total': l.totalReal,
-                    'observatii': l.observatii,
-                  }).toList(growable: false)
-              : _materials.map((m) => <String, dynamic>{
-                    'name': '${m['name'] ?? ''}',
-                    'um': '${m['um'] ?? ''}',
-                    'qty': _asDouble(m['qty']),
-                    'price': _asDouble(m['price']),
-                    'total': _asDouble(m['total']),
-                  }).toList(growable: false))
+          ? planMateriale.map((l) => <String, dynamic>{
+                'name': l.denumire,
+                'um': l.um,
+                'qty': l.cantitateReala,
+                'price': l.pretUnitarReal,
+                'total': l.totalReal,
+                'observatii': l.observatii,
+              }).toList(growable: false)
           : <Map<String, dynamic>>[];
 
       final laborForPdf = includeLabor
-          ? (hasPlanificate
-              ? planManopera.map((l) => <String, dynamic>{
-                    'who': l.denumire,
-                    'um': l.um,
-                    'hours': l.cantitateReala,
-                    'rate': l.pretUnitarReal,
-                    'total': l.totalReal,
-                    'observatii': l.observatii,
-                  }).toList(growable: false)
-              : _labor.map((l) => <String, dynamic>{
-                    'who': '${l['who'] ?? ''}',
-                    'hours': _asDouble(l['hours']),
-                    'rate': _laborRateForRow(l),
-                    'total': _laborTotalLineCost(l),
-                  }).toList(growable: false))
+          ? planManopera.map((l) => <String, dynamic>{
+                'who': l.denumire,
+                'um': l.um,
+                'hours': l.cantitateReala,
+                'rate': l.pretUnitarReal,
+                'total': l.totalReal,
+                'observatii': l.observatii,
+              }).toList(growable: false)
           : <Map<String, dynamic>>[];
 
       final params = SituatieLucrariParams(
@@ -13711,29 +13860,366 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     _saveLiniiPlanificate(linii);
   }
 
+  void _updateLinieCantitateReala(String lineId, double value) {
+    final linii = List<JobLine>.from(_jobSnapshot.liniiPlanificate);
+    final idx = linii.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    linii[idx] = linii[idx].copyWith(cantitateReala: value);
+    _saveLiniiPlanificate(linii);
+  }
+
+  Future<void> _applyProgresGlobal(double percent) async {
+    final linii = _jobSnapshot.liniiPlanificate.map((l) {
+      final qty = double.parse(
+          (l.cantitateOferta * percent / 100).toStringAsFixed(4));
+      return l.copyWith(cantitateReala: qty);
+    }).toList();
+    final updated = _jobSnapshot.copyWith(
+      liniiPlanificate: linii,
+      progresGlobalPercent: percent,
+    );
+    try {
+      _jobSnapshot = await widget.repository.saveJob(updated);
+      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
+    } catch (e) {
+      debugPrint('[Executie] _applyProgresGlobal error: $e');
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleLiniaBifata(String lineId, bool checked) async {
+    final linii = List<JobLine>.from(_jobSnapshot.liniiPlanificate);
+    final idx = linii.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    final l = linii[idx];
+    linii[idx] = l.copyWith(
+      cantitateReala: checked ? l.cantitateOferta : 0.0,
+    );
+    _saveLiniiPlanificate(linii);
+  }
+
+  Widget _buildRepopulareCard(BuildContext context) {
+    final ofertaRef = _jobSnapshot.sourceOfferNumber.isNotEmpty
+        ? _jobSnapshot.sourceOfferNumber
+        : _jobSnapshot.sourceOfferId;
+    return Card(
+      color: Colors.orange[50],
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Colors.orange.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.orange[700], size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Linii planificate neimportate',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.orange[800],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Această lucrare a fost convertită din oferta $ofertaRef, '
+              'dar liniile planificate nu au fost importate încă. '
+              'Importă liniile pentru a folosi tracking-ul de execuție.',
+              style: TextStyle(fontSize: 13, color: Colors.orange[900]),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: Text('Re-populează din $ofertaRef'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.orange[700],
+              ),
+              onPressed: _repopulateFromOffer,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLiniiTracking(BuildContext context) {
+    final linii = _jobSnapshot.liniiPlanificate;
+    final totalExecutat = linii.fold(0.0, (s, l) => s + l.cantitateReala);
+    final totalPlanificat = linii.fold(0.0, (s, l) => s + l.cantitateOferta);
+    final liniiFinalizate = linii.where((l) => l.cantitateReala > 0).length;
+    final progresController = TextEditingController(
+      text: _jobSnapshot.progresGlobalPercent != null
+          ? _jobSnapshot.progresGlobalPercent!.toStringAsFixed(0)
+          : '',
+    );
+    return StatefulBuilder(builder: (ctx, setLocal) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Card sumar progres ──────────────────────────────────────────
+          Card(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.track_changes_outlined,
+                          size: 18,
+                          color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text('Tracking execuție',
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(
+                                  fontWeight: FontWeight.bold)),
+                      const Spacer(),
+                      Text(
+                          '$liniiFinalizate/${linii.length} linii completate',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: totalPlanificat > 0
+                        ? (totalExecutat / totalPlanificat).clamp(0.0, 1.0)
+                        : 0.0,
+                    backgroundColor: Theme.of(context)
+                        .colorScheme
+                        .outline
+                        .withValues(alpha: 0.2),
+                  ),
+                  const SizedBox(height: 12),
+                  // ── Override progres global ─────────────────────────
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: progresController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: false),
+                          decoration: const InputDecoration(
+                            labelText: 'Override progres global (%)',
+                            hintText: '0 – 100',
+                            isDense: true,
+                            border: OutlineInputBorder(),
+                            suffixText: '%',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: () {
+                          final val = double.tryParse(
+                              progresController.text.trim());
+                          if (val == null || val < 0 || val > 100) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                    content: Text(
+                                        'Valoare invalidă. Introdu 0–100.')));
+                            return;
+                          }
+                          _applyProgresGlobal(val);
+                        },
+                        child: const Text('Aplică'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          // ── Carduri per linie ──────────────────────────────────────────
+          ...linii.map((linie) {
+            final isBifata = linie.cantitateReala > 0;
+            final qtyCtrl = TextEditingController(
+              text: linie.cantitateReala > 0
+                  ? linie.cantitateReala.toStringAsFixed(2)
+                  : '',
+            );
+            final categorieIcon = switch (linie.categorie) {
+              'manopera' => Icons.engineering_outlined,
+              'transport' => Icons.local_shipping_outlined,
+              'utilaj' => Icons.construction_outlined,
+              _ => Icons.inventory_2_outlined,
+            };
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(
+                  color: isBifata
+                      ? Colors.green.withValues(alpha: 0.5)
+                      : Theme.of(context)
+                          .colorScheme
+                          .outline
+                          .withValues(alpha: 0.3),
+                ),
+              ),
+              color: isBifata
+                  ? Colors.green.withValues(alpha: 0.05)
+                  : null,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(categorieIcon,
+                            size: 16,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            linie.denumire,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 14),
+                          ),
+                        ),
+                        Checkbox(
+                          value: isBifata,
+                          onChanged: (checked) =>
+                              _toggleLiniaBifata(linie.id, checked ?? false),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Planificat: ${linie.cantitateOferta.toStringAsFixed(2)} ${linie.um}',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(
+                          width: 140,
+                          child: TextField(
+                            controller: qtyCtrl,
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                                    decimal: true),
+                            textCapitalization: TextCapitalization.none,
+                            decoration: InputDecoration(
+                              labelText: 'Executat',
+                              suffixText: linie.um,
+                              isDense: true,
+                              border: const OutlineInputBorder(),
+                            ),
+                            onSubmitted: (v) {
+                              final val = double.tryParse(
+                                  v.trim().replaceAll(',', '.'));
+                              if (val != null && val >= 0) {
+                                _updateLinieCantitateReala(linie.id, val);
+                              }
+                            },
+                            onEditingComplete: () {
+                              final val = double.tryParse(qtyCtrl.text
+                                  .trim()
+                                  .replaceAll(',', '.'));
+                              if (val != null && val >= 0) {
+                                _updateLinieCantitateReala(linie.id, val);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (linie.observatii.trim().isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Obs: ${linie.observatii.trim()}',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                  fontStyle: FontStyle.italic,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      );
+    });
+  }
+
   Future<void> _repopulateFromOffer() async {
     final sourceId = _jobSnapshot.sourceOfferId.trim();
     final sourceNumber = _jobSnapshot.sourceOfferNumber.trim();
-    if (sourceId.isEmpty && sourceNumber.isEmpty) return;
 
     // Încarcă ofertele locale și găsește oferta sursă.
     // Fallback după offerNumber când sourceOfferId lipsește (lucrări create cu versiune veche).
     final offers = await LocalOferteRepository().listOffers();
-    final source = offers.where((o) =>
-        (sourceId.isNotEmpty && o.id == sourceId) ||
-        (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
 
-    if (source == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(
-            'Oferta sursă (${_jobSnapshot.sourceOfferNumber}) nu a fost găsită local. '
-            'Deschide aplicația cu internet pentru a o sincroniza.')),
-      );
-      return;
+    OfferRecord? source;
+    if (sourceId.isNotEmpty || sourceNumber.isNotEmpty) {
+      source = offers.where((o) =>
+          (sourceId.isNotEmpty && o.id == sourceId) ||
+          (sourceId.isEmpty && o.offerNumber == sourceNumber)).firstOrNull;
     }
 
-    final candidateLinii = source.lines
+    // Dacă oferta sursă nu e găsită sau câmpurile sursă sunt goale → arată picker.
+    if (source == null) {
+      if (!mounted) return;
+      if (offers.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nu există oferte salvate local.')),
+        );
+        return;
+      }
+      // Picker manual — permite selecția oricărei oferte disponibile
+      final picked = await showDialog<OfferRecord>(
+        context: context,
+        builder: (ctx) => _OfferPickerDialog(offers: offers),
+      );
+      if (picked == null || !mounted) return;
+      source = picked;
+    }
+    // Captură non-nullabilă explicită înainte de closure-urile din builder:
+    // Dart narrowing prin flow analysis nu se propagă în lambdas async.
+    final OfferRecord offer = source;
+
+    final candidateLinii = offer.lines
         .where((l) => l.lineType != OfferLineType.text)
         .toList();
 
@@ -13757,7 +14243,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         title: Row(children: [
           const Icon(Icons.warning_amber_outlined, color: Colors.orange),
           const SizedBox(width: 8),
-          Text('Re-populare din ${source.offerNumber}'),
+          Text('Re-populare din ${offer.offerNumber}'),
         ]),
         content: SizedBox(
           width: 480,
@@ -13806,7 +14292,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${newLinii.length} linii importate din ${source.offerNumber}.')),
+      SnackBar(content: Text('${newLinii.length} linii importate din ${offer.offerNumber}.')),
     );
   }
 
@@ -13816,8 +14302,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final linii = job.liniiPlanificate;
     String fmtCurr(double v) => '${v.toStringAsFixed(2)} RON';
 
-    // Dacă lucrarea nu are linii din ofertă
+    // Dacă lucrarea nu are linii planificate — arată buton de import indiferent de câmpurile sursă.
+    // Acoperă și cazul JOB-uri vechi cu sourceOfferId/sourceOfferNumber gol în cache.
     if (linii.isEmpty) {
+      final hasKnownOffer = job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty;
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -13826,26 +14314,26 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 size: 48, color: Colors.grey[400]),
             const SizedBox(height: 12),
             Text(
-              (job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty)
-                  ? 'Oferta sursă nu conține linii de articole.'
-                  : 'Lucrarea nu are ofertă asociată.\nCreează oferta și transformă-o în lucrare pentru a vedea situația.',
+              hasKnownOffer
+                  ? 'Oferta sursă (${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "asociată"}) nu are linii importate încă.'
+                  : 'Liniile planificate nu au fost importate.\nPoți importa din orice ofertă disponibilă.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey[600]),
             ),
-            if (job.sourceOfferId.isNotEmpty || job.sourceOfferNumber.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                icon: const Icon(Icons.download_outlined, size: 18),
-                label: Text('Re-populează din ${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "oferta sursă"}'),
-                onPressed: _repopulateFromOffer,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Importă liniile din oferta originală în situația de lucrări.',
-                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                textAlign: TextAlign.center,
-              ),
-            ],
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: Text(hasKnownOffer
+                  ? 'Re-populează din ${job.sourceOfferNumber.isNotEmpty ? job.sourceOfferNumber : "oferta sursă"}'
+                  : 'Importă linii din ofertă'),
+              onPressed: _repopulateFromOffer,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Importă articolele din oferta originală în situația de lucrări.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       );
@@ -14563,117 +15051,123 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 ],
               ),
             ),
-            _section(
-              context,
-              'Materiale asociate',
-              _materials.isEmpty
-                  ? const Text('Nu există date.')
-                  : Column(
-                      children: List<Widget>.generate(_materials.length,
-                          (index) {
-                        final e = _materials[index];
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text((e['name'] ?? '-').toString()),
-                          subtitle: Text(
-                            _isTechnician
-                                ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
-                                : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
-                          ),
-                          trailing: Wrap(
-                            spacing: 4,
-                            children: [
-                              IconButton(
-                                tooltip: 'Editează',
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () => _onEditMaterial(index),
-                              ),
-                              if (!_isTechnician)
+            // ── Tracking execuție: nou (ofertă sursă) vs vechi (manual) ─
+            if (_jobSnapshot.liniiPlanificate.isNotEmpty)
+              _buildLiniiTracking(context)
+            else if (_jobSnapshot.sourceOfferId.isNotEmpty ||
+                _jobSnapshot.sourceOfferNumber.isNotEmpty)
+              // Lucrare convertită din ofertă, dar liniile nu au fost importate încă
+              _buildRepopulareCard(context)
+            else ...[
+              _section(
+                context,
+                'Materiale asociate',
+                _materials.isEmpty
+                    ? const Text('Nu există date.')
+                    : Column(
+                        children: List<Widget>.generate(_materials.length,
+                            (index) {
+                          final e = _materials[index];
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text((e['name'] ?? '-').toString()),
+                            subtitle: Text(
+                              _isTechnician
+                                  ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
+                                  : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
                                 IconButton(
-                                  tooltip: 'Șterge',
-                                  icon:
-                                      const Icon(Icons.delete_outline),
-                                  onPressed: () =>
-                                      _onDeleteMaterial(index),
+                                  tooltip: 'Editează',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () => _onEditMaterial(index),
                                 ),
-                            ],
-                          ),
-                        );
-                      }),
-                    ),
-              action: TextButton.icon(
-                onPressed: _onAddMaterial,
-                icon: const Icon(Icons.add),
-                label: const Text('Adaugă material'),
+                                if (!_isTechnician)
+                                  IconButton(
+                                    tooltip: 'Șterge',
+                                    icon: const Icon(Icons.delete_outline),
+                                    onPressed: () =>
+                                        _onDeleteMaterial(index),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ),
+                action: TextButton.icon(
+                  onPressed: _onAddMaterial,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Adaugă material'),
+                ),
               ),
-            ),
-            _section(
-              context,
-              'Manoperă / ore',
-              _labor.isEmpty
-                  ? const Text('Nu există date.')
-                  : Column(
-                      children:
-                          List<Widget>.generate(_labor.length, (index) {
-                        final e = _labor[index];
-                        final dateLabel = '${e['date'] ?? '-'}';
-                        final hoursLabel =
-                            _asDouble(e['hours']).toStringAsFixed(2);
-                        final rateValue = _laborRateForRow(e);
-                        final rateLabel = rateValue > 0
-                            ? rateValue.toStringAsFixed(2)
-                            : '0.00 (fallback)';
-                        final costOreLabel =
-                            _laborOreCost(e).toStringAsFixed(2);
-                        final costDiurnaLabel =
-                            _laborPerDiemCost(e).toStringAsFixed(2);
-                        final costCazareLabel =
-                            _laborLodgingCost(e).toStringAsFixed(2);
-                        final costTotalLabel =
-                            _laborTotalLineCost(e).toStringAsFixed(2);
-                        final notesLabel = '${e['notes'] ?? ''}'.trim();
-                        final tripDaysLabel =
-                            _formatDecimal(_laborTripDays(e));
-                        final periodLabel = _laborPeriodLabel(e);
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text((e['who'] ?? '-').toString()),
-                          subtitle: Text(
-                            _isTechnician
-                                ? (notesLabel.isEmpty
-                                    ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
-                                    : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
-                                : (notesLabel.isEmpty
-                                    ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
-                                    : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
-                          ),
-                          trailing: Wrap(
-                            spacing: 4,
-                            children: [
-                              IconButton(
-                                tooltip: 'Editează',
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () => _onEditLabor(index),
-                              ),
-                              if (!_isTechnician)
+              _section(
+                context,
+                'Manoperă / ore',
+                _labor.isEmpty
+                    ? const Text('Nu există date.')
+                    : Column(
+                        children:
+                            List<Widget>.generate(_labor.length, (index) {
+                          final e = _labor[index];
+                          final dateLabel = '${e['date'] ?? '-'}';
+                          final hoursLabel =
+                              _asDouble(e['hours']).toStringAsFixed(2);
+                          final rateValue = _laborRateForRow(e);
+                          final rateLabel = rateValue > 0
+                              ? rateValue.toStringAsFixed(2)
+                              : '0.00 (fallback)';
+                          final costOreLabel =
+                              _laborOreCost(e).toStringAsFixed(2);
+                          final costDiurnaLabel =
+                              _laborPerDiemCost(e).toStringAsFixed(2);
+                          final costCazareLabel =
+                              _laborLodgingCost(e).toStringAsFixed(2);
+                          final costTotalLabel =
+                              _laborTotalLineCost(e).toStringAsFixed(2);
+                          final notesLabel = '${e['notes'] ?? ''}'.trim();
+                          final tripDaysLabel =
+                              _formatDecimal(_laborTripDays(e));
+                          final periodLabel = _laborPeriodLabel(e);
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text((e['who'] ?? '-').toString()),
+                            subtitle: Text(
+                              _isTechnician
+                                  ? (notesLabel.isEmpty
+                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
+                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
+                                  : (notesLabel.isEmpty
+                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
+                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
+                            ),
+                            trailing: Wrap(
+                              spacing: 4,
+                              children: [
                                 IconButton(
-                                  tooltip: 'Șterge',
-                                  icon:
-                                      const Icon(Icons.delete_outline),
-                                  onPressed: () =>
-                                      _onDeleteLabor(index),
+                                  tooltip: 'Editează',
+                                  icon: const Icon(Icons.edit_outlined),
+                                  onPressed: () => _onEditLabor(index),
                                 ),
-                            ],
-                          ),
-                        );
-                      }),
-                    ),
-              action: TextButton.icon(
-                onPressed: _onAddLabor,
-                icon: const Icon(Icons.add),
-                label: const Text('Adaugă ore'),
+                                if (!_isTechnician)
+                                  IconButton(
+                                    tooltip: 'Șterge',
+                                    icon: const Icon(Icons.delete_outline),
+                                    onPressed: () => _onDeleteLabor(index),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ),
+                action: TextButton.icon(
+                  onPressed: _onAddLabor,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Adaugă ore'),
+                ),
               ),
-            ),
+            ],
             _section(
               context,
               'Echipamente furnizate de beneficiar',
@@ -16287,6 +16781,79 @@ class _MaterialOption {
         price: double.tryParse(
                 read(() => (raw as dynamic).price).replaceAll(',', '.')) ??
             0);
+  }
+}
+
+// ── Dialog selecție ofertă pentru import linii în Situație ───────────────────
+class _OfferPickerDialog extends StatefulWidget {
+  const _OfferPickerDialog({required this.offers});
+  final List<OfferRecord> offers;
+
+  @override
+  State<_OfferPickerDialog> createState() => _OfferPickerDialogState();
+}
+
+class _OfferPickerDialogState extends State<_OfferPickerDialog> {
+  String _search = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _search.isEmpty
+        ? widget.offers
+        : widget.offers.where((o) =>
+            o.offerNumber.toLowerCase().contains(_search.toLowerCase()) ||
+            o.title.toLowerCase().contains(_search.toLowerCase()) ||
+            o.clientName.toLowerCase().contains(_search.toLowerCase())).toList();
+
+    return AlertDialog(
+      title: const Text('Selectează oferta sursă'),
+      content: SizedBox(
+        width: 480,
+        height: 400,
+        child: Column(
+          children: [
+            TextField(
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'Caută după număr, titlu sau client...',
+                prefixIcon: Icon(Icons.search),
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => _search = v),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: filtered.isEmpty
+                  ? const Center(child: Text('Nicio ofertă găsită.'))
+                  : ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (ctx, i) {
+                        final o = filtered[i];
+                        return ListTile(
+                          dense: true,
+                          title: Text('${o.offerNumber} — ${o.title}',
+                              overflow: TextOverflow.ellipsis),
+                          subtitle: Text(o.clientName,
+                              overflow: TextOverflow.ellipsis),
+                          trailing: Text(
+                            '${o.lines.where((l) => l.lineType.name != 'text').length} art.',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          onTap: () => Navigator.of(ctx).pop(o),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Anulează'),
+        ),
+      ],
+    );
   }
 }
 

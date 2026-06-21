@@ -883,12 +883,15 @@ class _CrmPageState extends State<CrmPage>
             actions: [
               if (existing != null)
                 TextButton(
-                  onPressed: () async {
+                  onPressed: () {
                     Navigator.pop(ctx, false);
                     setState(() =>
                         _all.removeWhere((r) => r.id == existing.id));
-                    await _repo.deleteCrmRecord(existing.id);
-                    _load();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Lead șters.')));
+                    _repo.deleteCrmRecord(existing.id).catchError((e) {
+                      if (mounted) _load();
+                    });
                   },
                   style:
                       TextButton.styleFrom(foregroundColor: Colors.red),
@@ -951,8 +954,24 @@ class _CrmPageState extends State<CrmPage>
                 urmatoareActiune: actiuneCtrl.text.trim(),
                 note: noteCtrl.text.trim(),
               );
-      await _repo.upsertCrmRecord(r);
-      _load();
+      // Optimistic UI — actualizează lista imediat
+      setState(() {
+        final idx = _all.indexWhere((item) => item.id == r.id);
+        if (idx >= 0) {
+          _all = List.from(_all)..[idx] = r;
+        } else {
+          _all = [..._all, r];
+        }
+      });
+      _repo.upsertCrmRecord(r).then((_) {
+        if (mounted) _load();
+      }).catchError((e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Eroare salvare: $e')));
+          _load();
+        }
+      });
     } finally {
       titluCtrl.dispose();
       clientCtrl.dispose();

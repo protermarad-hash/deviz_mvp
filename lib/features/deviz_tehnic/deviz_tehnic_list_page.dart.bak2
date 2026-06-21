@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../clients/client_models.dart';
@@ -36,6 +37,7 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
   final _searchCtrl = TextEditingController();
 
   bool _loading = true;
+  bool _syncing = false;
   List<DevizTehnicRecord> _items = [];
   List<ClientRecord> _clients = [];
 
@@ -48,13 +50,25 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
   void initState() {
     super.initState();
     _searchCtrl.addListener(_refresh);
-    _load();
+    // Listener onlineNotifier: dacă pagina s-a deschis înainte ca Firebase să
+    // fie ready (sau înainte de conexiune), reîncarcă automat.
+    FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
+    Future.microtask(_load);
   }
 
   @override
   void dispose() {
+    FirebaseBootstrap.onlineNotifier.removeListener(_onOnlineChanged);
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  void _onOnlineChanged() {
+    // Reîncarcă automat când devenim online — DAR NUMAI dacă lista e goală
+    // (nu suprascriem date deja încărcate cu succes).
+    if (FirebaseBootstrap.onlineNotifier.value && _items.isEmpty && !_loading) {
+      _load();
+    }
   }
 
   void _refresh() => setState(() {});
@@ -177,6 +191,29 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
     }
   }
 
+  Future<void> _changeStatus(
+      DevizTehnicRecord d, DevizTehnicStatus newStatus) async {
+    try {
+      final updated = d.copyWith(
+        status: newStatus,
+        updatedAt: DateTime.now(),
+      );
+      await _devizRepo.save(updated);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Status schimbat în: ${newStatus.label}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Eroare: $e')));
+    }
+  }
+
   Future<void> _confirmDelete(DevizTehnicRecord d) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -200,16 +237,107 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
       ),
     );
     if (ok != true || !mounted) return;
-    try {
-      await _devizRepo.delete(d.id);
+
+    // Optimistic UI: elimină imediat din listă — UI răspunde instant
+    setState(() => _items.removeWhere((item) => item.id == d.id));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Deviz șters.')));
+
+    // Defer ștergerea DUPĂ ce frame-ul curent se randează complet
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _devizRepo.delete(d.id).catchError((e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Eroare la ștergere: $e')));
+          _load();
+        }
+      });
+    });
+  }
+
+  Future<void> _duplicateDevizTehnic(DevizTehnicRecord source) async {
+    final now = DateTime.now();
+    final numar = await _devizRepo.nextNumber(source.tipDocument);
+    if (!mounted) return;
+    final draft = DevizTehnicRecord(
+      id: 'dvz-dup-${now.microsecondsSinceEpoch}',
+      numar: numar,
+      titlu: source.titlu,
+      obiectiv: source.obiectiv,
+      clientId: source.clientId,
+      clientName: source.clientName,
+      clientCui: source.clientCui,
+      clientAddress: source.clientAddress,
+      clientPhone: source.clientPhone,
+      clientEmail: source.clientEmail,
+      contactPerson: source.contactPerson,
+      contactDepartment: source.contactDepartment,
+      dataEmiterii: now,
+      zileValabilitate: source.zileValabilitate,
+      articole: source.articole
+          .map((a) => a.copyWith())
+          .toList(growable: false),
+      regiePercent: source.regiePercent,
+      profitPercent: source.profitPercent,
+      tvaPercent: source.tvaPercent,
+      intocmitDe: source.intocmitDe,
+      note: source.note,
+      createdAt: now,
+      updatedAt: now,
+      createdByUserId: widget.currentUserId,
+      tipDocument: source.tipDocument,
+      status: DevizTehnicStatus.draft,
+      priceDisplay: source.priceDisplay,
+      registryEntryId: '',
+      registryNumber: '',
+    );
+    final result = await Navigator.of(context).push<DevizTehnicRecord>(
+      MaterialPageRoute(
+        builder: (_) => DevizTehnicFormPage(
+          existing: draft,
+          clients: _clients,
+          currentUserName: widget.currentUserName,
+          currentUserId: widget.currentUserId,
+          repository: _devizRepo,
+          appRepository: widget.repository,
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (result != null) {
       await _load();
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Deviz șters.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${source.tipDocument.label} ${source.numar.isNotEmpty ? source.numar : source.titlu} '
+            'duplicat ca ${result.numar}.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _forceSyncToCloud() async {
+    setState(() => _syncing = true);
+    try {
+      final count = await _devizRepo.forceSyncLocalToCloud();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(count > 0
+              ? '$count document(e) trimise la cloud cu succes.'
+              : 'Niciun document de trimis.'),
+        ),
+      );
+      await _load();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Eroare: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la trimitere: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _syncing = false);
     }
   }
 
@@ -286,6 +414,21 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                       child: const Text('Resetează'),
                     ),
                   ],
+                  // Buton sincronizare forțată — trimite datele locale la cloud.
+                  // Util pe PC (web) dacă datele au fost create offline și nu
+                  // au ajuns în Firestore (nu sunt vizibile pe alte dispozitive).
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: _syncing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cloud_sync_outlined),
+                    tooltip: 'Sincronizează la cloud (trimite datele locale)',
+                    onPressed: (_loading || _syncing) ? null : _forceSyncToCloud,
+                  ),
                 ],
               ),
             ),
@@ -359,19 +502,111 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
             // List
           Expanded(
             child: items.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
+                ? RefreshIndicator(
+                    onRefresh: _load,
+                    child: ListView(
                       children: [
-                        Icon(Icons.calculate_outlined,
-                            size: 48, color: cs.outline),
-                        const SizedBox(height: 12),
-                        Text(
-                          _searchCtrl.text.isNotEmpty
-                              ? 'Niciun deviz corespunde căutării.'
-                              : 'Niciun deviz tehnic salvat.\nApasă + pentru a crea primul.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: cs.outline),
+                        const SizedBox(height: 32),
+                        Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.calculate_outlined,
+                                  size: 48, color: cs.outline),
+                              const SizedBox(height: 12),
+                              Text(
+                                _searchCtrl.text.isNotEmpty ||
+                                        _filterTip.isNotEmpty ||
+                                        _filterStatus.isNotEmpty
+                                    ? 'Niciun deviz corespunde filtrelor active.'
+                                    : 'Niciun deviz tehnic găsit.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: cs.outline),
+                              ),
+                              // Info debug extins — diagnosticare cross-device
+                              if (_searchCtrl.text.isEmpty &&
+                                  _filterTip.isEmpty &&
+                                  _filterStatus.isEmpty) ...[
+                                const SizedBox(height: 16),
+                                Card(
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 24),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(12),
+                                    child: DefaultTextStyle(
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: cs.onSurfaceVariant),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            'Firebase: '
+                                            'init=${FirebaseBootstrap.isInitialized} '
+                                            'online=${FirebaseBootstrap.isOnline}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: FirebaseBootstrap.isInitialized
+                                                  ? cs.onSurfaceVariant
+                                                  : Colors.orange.shade700,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            'Cache local: ${DevizTehnicRepository.lastLocalCount} doc.'
+                                            '  |  Firestore: ${DevizTehnicRepository.lastFirestoreCount < 0 ? "eroare/nefinalizat" : "${DevizTehnicRepository.lastFirestoreCount} doc."}',
+                                          ),
+                                          if (DevizTehnicRepository.lastFirestoreError != null) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Eroare Firestore: ${DevizTehnicRepository.lastFirestoreError}',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.red.shade700,
+                                              ),
+                                              maxLines: 3,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                          const SizedBox(height: 4),
+                                          const Text(
+                                            'Trage în jos pentru a reîncărca din cloud.',
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                FilledButton.icon(
+                                  onPressed: _loading ? null : _load,
+                                  icon: const Icon(Icons.refresh, size: 16),
+                                  label: const Text('Reîncarcă din cloud'),
+                                ),
+                                const SizedBox(height: 8),
+                                // Buton forțare sync: publică documentele locale în Firestore
+                                if (DevizTehnicRepository.lastLocalCount > 0)
+                                  OutlinedButton.icon(
+                                    onPressed: (_loading || _syncing)
+                                        ? null
+                                        : _forceSyncToCloud,
+                                    icon: _syncing
+                                        ? const SizedBox(
+                                            width: 14,
+                                            height: 14,
+                                            child: CircularProgressIndicator(
+                                                strokeWidth: 2))
+                                        : const Icon(Icons.cloud_upload_outlined,
+                                            size: 16),
+                                    label: Text(_syncing
+                                        ? 'Se trimite la cloud…'
+                                        : 'Trimite la cloud (${DevizTehnicRepository.lastLocalCount} doc.)'),
+                                  ),
+                              ],
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -384,11 +619,25 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                       separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (ctx, i) {
                         final d = items[i];
+                        final statusColor = d.status.color;
                         return Card(
                           clipBehavior: Clip.antiAlias,
+                          // Chenar colorat după status (vizibil ca la programări)
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(
+                              color: statusColor.withValues(alpha: 0.5),
+                              width: 1.5,
+                            ),
+                          ),
                           child: InkWell(
                             onTap: () => _openForm(existing: d),
-                            child: Padding(
+                            child: Container(
+                              // Fundal colorat subtil după status
+                              decoration: BoxDecoration(
+                                color: statusColor.withValues(alpha: 0.06),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                               padding: const EdgeInsets.all(12),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -435,27 +684,27 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                         ),
                                       ],
                                       const SizedBox(width: 6),
-                                      // Badge status
+                                      // Badge status colorat
                                       Container(
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 6, vertical: 2),
                                         decoration: BoxDecoration(
-                                          color: d.status.color
-                                              .withValues(alpha: 0.15),
+                                          color: statusColor
+                                              .withValues(alpha: 0.18),
                                           borderRadius:
                                               BorderRadius.circular(4),
                                           border: Border.all(
-                                            color: d.status.color
-                                                .withValues(alpha: 0.4),
-                                            width: 0.5,
+                                            color: statusColor
+                                                .withValues(alpha: 0.5),
+                                            width: 1,
                                           ),
                                         ),
                                         child: Text(
                                           d.status.label,
                                           style: TextStyle(
                                             fontSize: 10,
-                                            color: d.status.color,
-                                            fontWeight: FontWeight.w600,
+                                            color: statusColor,
+                                            fontWeight: FontWeight.w700,
                                           ),
                                         ),
                                       ),
@@ -474,7 +723,7 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                   Text(
                                     d.titlu.isNotEmpty
                                         ? d.titlu
-                                        : '(fără titlu)',
+                                        : d.tipDocument.label,
                                     style: const TextStyle(
                                       fontSize: 15,
                                       fontWeight: FontWeight.bold,
@@ -528,22 +777,122 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                                             Icons.picture_as_pdf_outlined,
                                             size: 18),
                                         tooltip: 'Exportă PDF',
-                                        onPressed: () =>
-                                            _exportPdf(d),
+                                        onPressed: () => _exportPdf(d),
                                       ),
-                                      IconButton(
-                                        icon: const Icon(Icons.edit_outlined,
-                                            size: 18),
-                                        tooltip: 'Editează',
-                                        onPressed: () => _openForm(existing: d),
-                                      ),
-                                      IconButton(
-                                        icon: Icon(Icons.delete_outline,
-                                            size: 18, color: cs.error),
-                                        tooltip: 'Șterge',
-                                        onPressed: () => _confirmDelete(d),
+                                      SizedBox(
+                                        width: 36,
+                                        height: 36,
+                                        child: PopupMenuButton<String>(
+                                          padding: EdgeInsets.zero,
+                                          icon: const Icon(Icons.more_vert,
+                                              size: 20),
+                                          tooltip: 'Acțiuni',
+                                          onSelected: (value) {
+                                            switch (value) {
+                                              case 'open':
+                                                _openForm(existing: d);
+                                              case 'edit':
+                                                _openForm(existing: d);
+                                              case 'duplicate':
+                                                _duplicateDevizTehnic(d);
+                                              case 'delete':
+                                                _confirmDelete(d);
+                                            }
+                                          },
+                                          itemBuilder: (context) => [
+                                            const PopupMenuItem(
+                                              value: 'open',
+                                              child: ListTile(
+                                                leading: Icon(Icons
+                                                    .visibility_outlined),
+                                                title:
+                                                    Text('Deschide detaliu'),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                            const PopupMenuItem(
+                                              value: 'edit',
+                                              child: ListTile(
+                                                leading:
+                                                    Icon(Icons.edit_outlined),
+                                                title: Text('Editează'),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                            const PopupMenuItem(
+                                              value: 'duplicate',
+                                              child: ListTile(
+                                                leading: Icon(Icons
+                                                    .content_copy_outlined),
+                                                title: Text('Duplică'),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                            const PopupMenuItem(
+                                              value: 'delete',
+                                              child: ListTile(
+                                                leading: Icon(
+                                                    Icons.delete_outline,
+                                                    color: Colors.red),
+                                                title: Text('Șterge',
+                                                    style: TextStyle(
+                                                        color: Colors.red)),
+                                                dense: true,
+                                                contentPadding:
+                                                    EdgeInsets.zero,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ],
+                                  ),
+                                  // ── Butoane rapide schimbare status ──────────
+                                  const SizedBox(height: 6),
+                                  SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: Row(
+                                      children: DevizTehnicStatus.values
+                                          .where((s) => s != d.status)
+                                          .map(
+                                            (s) => Padding(
+                                              padding: const EdgeInsets.only(
+                                                  right: 6),
+                                              child: OutlinedButton(
+                                                style:
+                                                    OutlinedButton.styleFrom(
+                                                  foregroundColor: s.color,
+                                                  side: BorderSide(
+                                                      color: s.color
+                                                          .withValues(
+                                                              alpha: 0.5)),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                          horizontal: 10,
+                                                          vertical: 4),
+                                                  minimumSize:
+                                                      const Size(0, 28),
+                                                  tapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                  textStyle:
+                                                      const TextStyle(
+                                                          fontSize: 11),
+                                                ),
+                                                onPressed: () =>
+                                                    _changeStatus(d, s),
+                                                child: Text('→ ${s.label}'),
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                    ),
                                   ),
                                 ],
                               ),
