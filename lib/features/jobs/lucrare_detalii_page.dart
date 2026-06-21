@@ -70,6 +70,7 @@ import 'services/lucrare_persistence.dart';
 import 'services/lucrare_labor_calc.dart';
 import 'services/lucrare_ai_service.dart';
 import 'services/lucrare_pdf_builder.dart';
+import 'services/lucrare_document_actions.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -301,6 +302,13 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     materialLineTotal: _materialLineTotal,
     resolveDocumentTypeLabel: _resolveDocumentTypeLabel,
     resolveDocumentCanonicalType: _resolveDocumentCanonicalType,
+  );
+  late final LucrareRegistryService _registryService = LucrareRegistryService(
+    repository: widget.repository,
+    jobId: widget.job.id,
+    jobCode: widget.job.jobCode,
+    clientName: widget.clientName,
+    documentTypeLabelFromType: _documentTypeLabelFromType,
   );
 
   String get _teamKey => _keys.team;
@@ -9151,44 +9159,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   Future<Map<String, dynamic>> _registerDocumentForRegistry(
     Map<String, dynamic> rawRow,
-  ) async {
-    final row = Map<String, dynamic>.from(rawRow);
-    final normalizedType = RegistryStore.normalizeDocumentType(
-      row['type'] ?? row['tipDocument'],
-    );
-    if (normalizedType.isEmpty) {
-      return row;
-    }
-
-    final existingNumber =
-        '${row['numarDocument'] ?? row['number'] ?? ''}'.trim();
-    final allocatedNumber = await RegistryStore.allocateNumber(
-      type: normalizedType,
-      existingNumber: existingNumber,
-    );
-
-    final updated = <String, dynamic>{
-      ...row,
-      'type': normalizedType,
-      'tipDocument': _documentTypeLabelFromType(normalizedType),
-      'numarDocument': allocatedNumber,
-      'number': allocatedNumber,
-      'registryNumber': allocatedNumber,
-      'registeredAt': DateTime.now().toIso8601String(),
-    };
-
-    await _saveRegistryProjectionEntry(
-      type: normalizedType,
-      number: allocatedNumber,
-      title: '${updated['titlu'] ?? updated['title'] ?? ''}'.trim(),
-      documentDate:
-          '${updated['dataDocument'] ?? updated['date'] ?? ''}'.trim(),
-      status: '${updated['status'] ?? ''}'.trim(),
-      referenceId: '${updated['id'] ?? ''}'.trim(),
-      filePath: '${updated['pdfPath'] ?? updated['filePath'] ?? ''}'.trim(),
-    );
-    return updated;
-  }
+  ) =>
+      _registryService.registerDocumentForRegistry(rawRow);
 
   Future<void> _saveRegistryProjectionEntry({
     required String type,
@@ -9198,47 +9170,19 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     required String status,
     required String referenceId,
     required String filePath,
-  }) async {
-    final normalizedType = RegistryStore.normalizeDocumentType(type);
-    final registeredAt = DateTime.now();
-    final parsedDocumentDate = DateTime.tryParse(documentDate);
-    final jobReference = '${widget.job.id}'.trim().isEmpty
-        ? widget.job.jobCode
-        : '${widget.job.id}'.trim();
-    final stableId = referenceId.trim().isNotEmpty
-        ? referenceId.trim()
-        : 'job_${widget.job.jobCode}_${normalizedType}_${number.replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')}';
-    final entry = RegistryEntry(
-      id: stableId,
-      registryNumber: number,
-      registryType: RegistryType.iesire,
-      sequenceNumber: _extractRegistrySequence(number),
-      year: (parsedDocumentDate ?? registeredAt).year,
-      registeredAt: registeredAt,
-      documentNumber: number,
-      documentDate: parsedDocumentDate,
-      documentTitle: title,
-      documentCategory: RegistryStore.documentTypeLabelUi(normalizedType),
-      issuerName: '',
-      recipientName: widget.clientName,
-      clientId: '',
-      jobId: jobReference,
-      offerId: '',
-      estimateId: '',
-      contractId: '',
-      ticketId: '',
-      filePath: filePath,
-      fileName: '',
-      notes: '',
-      status: status,
-    );
-    await widget.repository.saveRegistryEntry(entry);
-  }
+  }) =>
+      _registryService.saveRegistryProjectionEntry(
+        type: type,
+        number: number,
+        title: title,
+        documentDate: documentDate,
+        status: status,
+        referenceId: referenceId,
+        filePath: filePath,
+      );
 
-  int _extractRegistrySequence(String number) {
-    final match = RegExp(r'(\d+)(?!.*\d)').firstMatch(number);
-    return int.tryParse(match?.group(1) ?? '') ?? 0;
-  }
+  int _extractRegistrySequence(String number) =>
+      _registryService.extractRegistrySequence(number);
 
   Uint8List? _decodeLogoBytes(String raw) {
     final value = raw.trim();
