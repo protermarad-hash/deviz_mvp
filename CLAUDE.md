@@ -816,6 +816,30 @@ La ORICE pagină cu listă:
 - Repository-uri: MAX 600 linii
 - Modele: MAX 300 linii
 
+### Reguli obligatorii la CREAREA oricărui fișier nou:
+
+- ÎNAINTE de a scrie un fișier nou, estimează câte linii va avea.
+- Dacă estimarea depășește limita pentru tipul respectiv →
+  PLANIFICĂ din start împărțirea în mai multe fișiere și
+  prezintă planul înainte de implementare.
+- NICIODATĂ nu crea un fișier nou care depășește limita
+  justificând că „se poate refactoriza ulterior".
+- Pentru pagini complexe (formulare mari, editoare, pagini cu
+  multe tab-uri): împarte din start în:
+  - `*_page.dart` — scheletul paginii + navigare (MAX 400 linii)
+  - `*_widgets.dart` — widget-uri UI reutilizabile
+  - `dialogs/` — fiecare dialog într-un fișier separat
+  - `services/` — logică business separată de UI
+- La orice feature nou cu mai mult de 3 componente vizuale
+  distincte: fișiere separate din start, nu un singur fișier monolitic.
+
+### Verificare obligatorie înainte de commit:
+```bash
+# Niciun fișier nou nu trebuie să depășească limita tipului său:
+find lib -name "*_page.dart" -newer .git/index | xargs wc -l
+find lib -name "*_widget*.dart" -newer .git/index | xargs wc -l
+```
+
 ---
 
 ## ❓ REGULA BUTON HELP — SISTEM INTELIGENT (iun 2026)
