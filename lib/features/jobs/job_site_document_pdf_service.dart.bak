@@ -75,9 +75,14 @@ class JobSiteDocumentPdfService {
     // Conținut specific fiecărui tip de document
     final contentWidgets = _buildContent(doc, linii);
 
+    // Titlu explicit per tip de document
+    final title = doc.documentType == JobSiteDocumentType.pif
+        ? 'PROCES-VERBAL DE PUNERE ÎN FUNCȚIUNE (P.I.F.)'
+        : 'PROCES-VERBAL DE MONTAJ ȘI EXECUȚIE LUCRĂRI';
+
     return ProTermPdfTemplate.generateDocument(
       branding: branding,
-      documentTitle: doc.documentType.label,
+      documentTitle: title,
       documentSubtitle:
           doc.documentSubtitle.trim().isNotEmpty ? doc.documentSubtitle : null,
       documentNumber: doc.documentNumber,
@@ -89,8 +94,10 @@ class JobSiteDocumentPdfService {
       jobCode: doc.projectName,
       jobTitle: doc.documentTitle,
       location: doc.location,
-      includePartiesSection: true,
-      includeJobInfoSection: true,
+      // Secțiunile părți/proiect sunt randate explicit în conținut (1. Date...),
+      // deci dezactivăm secțiunile automate ale template-ului pentru a evita duplicarea.
+      includePartiesSection: false,
+      includeJobInfoSection: false,
       includeSignatureSection: true,
       electronicSignatureBytes: sigBytes,
     );
@@ -178,12 +185,10 @@ class JobSiteDocumentPdfService {
   static List<pw.Widget> _buildContent(
       JobSiteDocumentRecord doc, List<JobLine> linii) {
     switch (doc.documentType) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return _contentPvMontaj(doc, linii);
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return _contentPifVentilatie(doc, linii);
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return _contentPifVrf(doc, linii);
+      case JobSiteDocumentType.pif:
+        return _contentPif(doc, linii);
     }
   }
 
@@ -224,274 +229,234 @@ class JobSiteDocumentPdfService {
       'specificațiile convenite și că nu există obiecții semnificative la momentul recepției.',
     ));
 
-    // Informații document
-    widgets.add(ProTermPdfTemplate.buildSection('Informații document', [
+    // 1. Date proiect
+    widgets.add(ProTermPdfTemplate.buildSection('1. Date proiect', [
       ProTermPdfTemplate.buildInfoRow(
-          'Număr document', _safe(doc.documentNumber)),
+          'Beneficiar', _safe(doc.beneficiaryRepresentative)),
       ProTermPdfTemplate.buildInfoRow(
-          'Dată document', _fmt(doc.documentDate)),
-      ProTermPdfTemplate.buildInfoRow('Status', _safe(doc.status)),
-      if (doc.functionalStatus.trim().isNotEmpty)
-        ProTermPdfTemplate.buildInfoRow(
-            'Status funcțional', doc.functionalStatus),
+          'Executant', _safe(doc.executorRepresentative)),
+      ProTermPdfTemplate.buildInfoRow('Proiect / Obiectiv', _safe(doc.projectName)),
+      ProTermPdfTemplate.buildInfoRow('Adresă / Locație', _safe(doc.location)),
     ]));
     widgets.add(pw.SizedBox(height: 8));
 
-    // Tabel linii planificate (cantități)
+    // 2. Participanți
+    widgets.add(ProTermPdfTemplate.buildSection('2. Participanți', [
+      ProTermPdfTemplate.buildInfoRow(
+          'Reprezentant Beneficiar', _safe(doc.beneficiaryRepresentative)),
+      ProTermPdfTemplate.buildInfoRow(
+          'Reprezentant Executant', _safe(doc.executorRepresentative)),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 3. Obiectul procesului-verbal
+    widgets.add(_redSection('3. Obiectul procesului-verbal', [
+      pw.Text(_safe(doc.observations), style: const pw.TextStyle(fontSize: 9)),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 4. Verificări efectuate
+    final verificariWidgets = <pw.Widget>[
+      pw.Text(_safe(doc.probesSummary), style: const pw.TextStyle(fontSize: 9)),
+    ];
+    if (doc.checkItems.isNotEmpty) {
+      verificariWidgets.add(pw.SizedBox(height: 6));
+      verificariWidgets.add(ProTermPdfTemplate.buildTable(
+        headers: ['Status', 'Verificare', 'Observații'],
+        rows: doc.checkItems
+            .map((item) => [
+                  item.value ? '✓' : '✗',
+                  item.label,
+                  item.notes.trim().isEmpty ? '-' : item.notes,
+                ])
+            .toList(),
+        columnWidths: [0.08, 0.60, 0.32],
+      ));
+    }
+    widgets.add(_redSection('4. Verificări efectuate', verificariWidgets));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 5. Constatări / Deficiențe
+    final constatariWidgets = <pw.Widget>[
+      pw.Text(_safe(doc.conclusions), style: const pw.TextStyle(fontSize: 9)),
+    ];
+    if (doc.remediationDeadline != null) {
+      constatariWidgets.add(pw.SizedBox(height: 6));
+      constatariWidgets.add(ProTermPdfTemplate.buildInfoRow(
+          'Termen remediere', _fmt(doc.remediationDeadline!)));
+    }
+    widgets.add(_redSection('5. Constatări / Deficiențe', constatariWidgets));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // Anexă — lista materiale / echipamente montate (poziții selectate)
+    final workLinesTable = _buildSelectedWorkLinesTable(
+      doc,
+      sectionTitle: 'Anexă — lista materiale / echipamente montate',
+      statusHeader: 'Stare Montaj',
+    );
+    if (workLinesTable != null) {
+      widgets.add(workLinesTable);
+      widgets.add(pw.SizedBox(height: 8));
+    }
+
+    // Tabel linii planificate (fallback cantități, dacă există)
     final liniiWidget = _buildLiniiTable(linii);
     if (liniiWidget != null) {
       widgets.add(liniiWidget);
       widgets.add(pw.SizedBox(height: 8));
     }
 
-    // Verificări tehnice ca tabel
-    if (doc.checkItems.isNotEmpty) {
-      final checkRows = doc.checkItems
-          .map((item) => [
-                item.value ? '✓' : '✗',
-                item.label,
-                item.notes.trim().isEmpty ? '-' : item.notes,
-              ])
-          .toList();
-      widgets.add(_redSection('Verificări tehnice', [
-        pw.SizedBox(height: 4),
-        ProTermPdfTemplate.buildTable(
-          headers: ['Status', 'Verificare', 'Observații'],
-          rows: checkRows,
-          columnWidths: [0.08, 0.60, 0.32],
-        ),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    // Măsurători
-    if (doc.measurements.isNotEmpty) {
-      final measRows = doc.measurements
-          .map((m) => [
-                m.label,
-                m.value.trim().isEmpty
-                    ? '-'
-                    : '${m.value} ${m.unit}'.trim(),
-                m.notes.trim().isEmpty ? '-' : m.notes,
-              ])
-          .toList();
-      widgets.add(_redSection('Măsurători și probe', [
-        pw.SizedBox(height: 4),
-        ProTermPdfTemplate.buildTable(
-          headers: ['Parametru', 'Valoare', 'Observații'],
-          rows: measRows,
-          columnWidths: [0.45, 0.25, 0.30],
-        ),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    _appendCommonSections(doc, widgets);
     _appendGarantieSection(widgets);
     _appendAnnexes(doc, widgets);
 
     return widgets;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // PIF VENTILAȚIE / RECUPERATOR
-  // ─────────────────────────────────────────────────────────────────────────
-
-  static List<pw.Widget> _contentPifVentilatie(
+  static List<pw.Widget> _contentPif(
       JobSiteDocumentRecord doc, List<JobLine> linii) {
     final widgets = <pw.Widget>[];
 
     widgets.add(_antetText(
-      'Prezentul Proces-Verbal de Punere în Funcțiune atestă că sistemul de ventilație / '
-      'recuperare de căldură menționat a fost instalat, reglat și testat conform specificațiilor '
-      'tehnice ale producătorului și normativelor în vigoare. Instalația a fost pusă în funcțiune '
-      'cu succes, parametrii de funcționare corespund valorilor proiectate, iar personalul '
-      'beneficiarului a fost instruit cu privire la utilizarea și întreținerea corectă a sistemului.',
+      'Prezentul Proces-Verbal de Punere în Funcțiune atestă că sistemul menționat a fost '
+      'instalat, reglat și testat în conformitate cu specificațiile tehnice ale producătorului, '
+      'prescripțiile normativelor în vigoare și proiectul de execuție aprobat. Probele tehnice '
+      'au fost efectuate cu rezultate conforme, parametrii de funcționare corespund valorilor '
+      'proiectate, iar utilizatorul a fost instruit cu privire la exploatarea corectă.',
     ));
 
-    widgets.add(ProTermPdfTemplate.buildSection('Date echipament', [
-      ProTermPdfTemplate.buildInfoRow('Număr PIF', _safe(doc.documentNumber)),
+    // 1. Date generale
+    widgets.add(ProTermPdfTemplate.buildSection('1. Date generale', [
       ProTermPdfTemplate.buildInfoRow(
-          'Dată punere în funcțiune', _fmt(doc.documentDate)),
+          'Beneficiar', _safe(doc.beneficiaryRepresentative)),
       ProTermPdfTemplate.buildInfoRow(
-          'Tip echipament', 'Ventilație / Recuperator de căldură'),
-      ProTermPdfTemplate.buildInfoRow(
-          'Status funcțional', _safe(doc.functionalStatus)),
+          'Executant', _safe(doc.executorRepresentative)),
+      ProTermPdfTemplate.buildInfoRow('Proiect / Obiectiv', _safe(doc.projectName)),
+      ProTermPdfTemplate.buildInfoRow('Adresă / Locație', _safe(doc.location)),
     ]));
     widgets.add(pw.SizedBox(height: 8));
 
-    // Linii planificate
-    final liniiWidget = _buildLiniiTable(linii);
-    if (liniiWidget != null) {
-      widgets.add(liniiWidget);
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    // Probe și verificări
-    if (doc.checkItems.isNotEmpty) {
-      final checkRows = doc.checkItems
-          .map((item) => [
-                item.value ? '✓' : '✗',
-                item.label,
-                item.notes.trim().isEmpty ? '-' : item.notes,
-              ])
-          .toList();
-      widgets.add(_redSection('Probe și verificări', [
-        pw.SizedBox(height: 4),
-        ProTermPdfTemplate.buildTable(
-          headers: ['Rezultat', 'Verificare', 'Observații'],
-          rows: checkRows,
-          columnWidths: [0.08, 0.60, 0.32],
-        ),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    // Măsurători debit/presiune
-    if (doc.measurements.isNotEmpty) {
-      final measRows = doc.measurements
-          .map((m) => [
-                m.label,
-                m.value.trim().isEmpty
-                    ? '-'
-                    : '${m.value} ${m.unit}'.trim(),
-                m.notes.trim().isEmpty ? '-' : m.notes,
-              ])
-          .toList();
-      widgets.add(_redSection('Măsurători debit / presiune', [
-        pw.SizedBox(height: 4),
-        ProTermPdfTemplate.buildTable(
-          headers: ['Parametru', 'Valoare', 'Observații'],
-          rows: measRows,
-          columnWidths: [0.45, 0.25, 0.30],
-        ),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    if (doc.probesSummary.trim().isNotEmpty) {
-      widgets.add(_redSection('Sumar probe ventilație', [
-        pw.Text(_safe(doc.probesSummary),
-            style: const pw.TextStyle(fontSize: 9)),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    _appendCommonSections(doc, widgets);
-    _appendGarantieSection(widgets);
-    _appendAnnexes(doc, widgets);
-
-    return widgets;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // PIF VRF / CLIMATIZARE
-  // ─────────────────────────────────────────────────────────────────────────
-
-  static List<pw.Widget> _contentPifVrf(
-      JobSiteDocumentRecord doc, List<JobLine> linii) {
-    final widgets = <pw.Widget>[];
-
-    widgets.add(_antetText(
-      'Prezentul Proces-Verbal de Punere în Funcțiune atestă că sistemul VRF / de climatizare '
-      'menționat a fost instalat, reglat și testat în conformitate cu specificațiile tehnice '
-      'ale producătorului, prescripțiile normativelor în vigoare și proiectul de execuție aprobat. '
-      'Probele tehnice au fost efectuate cu rezultate conforme, parametrii de funcționare '
-      'ai unităților interioare și exterioare corespund valorilor proiectate, sistemul de control '
-      'a fost configurat și testat, iar utilizatorul a fost instruit cu privire la exploatarea corectă.',
-    ));
-
-    widgets.add(ProTermPdfTemplate.buildSection('Date sistem VRF / Climatizare', [
-      ProTermPdfTemplate.buildInfoRow('Număr PIF', _safe(doc.documentNumber)),
+    // 2. Comisia de punere în funcțiune
+    widgets.add(
+        ProTermPdfTemplate.buildSection('2. Comisia de punere în funcțiune', [
       ProTermPdfTemplate.buildInfoRow(
-          'Dată punere în funcțiune', _fmt(doc.documentDate)),
-      ProTermPdfTemplate.buildInfoRow('Tip sistem', 'VRF / Climatizare'),
+          'Reprezentant Beneficiar', _safe(doc.beneficiaryRepresentative)),
       ProTermPdfTemplate.buildInfoRow(
-          'Status funcțional', _safe(doc.functionalStatus)),
-      if (doc.preparedForNextStep.trim().isNotEmpty)
+          'Reprezentant Executant', _safe(doc.executorRepresentative)),
+      if (doc.otherParticipants.trim().isNotEmpty)
         ProTermPdfTemplate.buildInfoRow(
-            'Pregătit pentru etapa următoare', doc.preparedForNextStep),
+            'Alți participanți', doc.otherParticipants),
     ]));
     widgets.add(pw.SizedBox(height: 8));
 
-    // Linii planificate
-    final liniiWidget = _buildLiniiTable(linii);
-    if (liniiWidget != null) {
-      widgets.add(liniiWidget);
-      widgets.add(pw.SizedBox(height: 8));
-    }
+    // 3. Obiectul probelor
+    widgets.add(_redSection('3. Obiectul probelor', [
+      pw.Text(_safe(doc.observations), style: const pw.TextStyle(fontSize: 9)),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
 
-    // Probe tehnice (grupate pe secțiuni)
+    // 4. Etape și teste / Probe și măsurători
+    final probeWidgets = <pw.Widget>[
+      pw.Text(_safe(doc.probesSummary), style: const pw.TextStyle(fontSize: 9)),
+    ];
     if (doc.checkItems.isNotEmpty) {
       final grouped = <String, List<JobSiteDocumentCheckItem>>{};
       for (final item in doc.checkItems) {
         grouped.putIfAbsent(item.sectionKey, () => []).add(item);
       }
       for (final entry in grouped.entries) {
-        final sectionTitle =
-            entry.key.trim().isEmpty ? 'Probe tehnice' : entry.key;
-        final rows = entry.value
-            .map((item) => [
-                  item.value ? '✓' : '✗',
-                  item.label,
-                  item.notes.trim().isEmpty ? '-' : item.notes,
-                ])
-            .toList();
-        widgets.add(_redSection(sectionTitle, [
-          pw.SizedBox(height: 4),
-          ProTermPdfTemplate.buildTable(
-            headers: ['Rezultat', 'Verificare', 'Observații'],
-            rows: rows,
-            columnWidths: [0.08, 0.60, 0.32],
-          ),
-        ]));
-        widgets.add(pw.SizedBox(height: 8));
+        probeWidgets.add(pw.SizedBox(height: 6));
+        probeWidgets.add(pw.Text(
+          entry.key.trim().isEmpty ? 'Verificări' : entry.key,
+          style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold),
+        ));
+        probeWidgets.add(pw.SizedBox(height: 2));
+        probeWidgets.add(ProTermPdfTemplate.buildTable(
+          headers: ['Rezultat', 'Verificare', 'Observații'],
+          rows: entry.value
+              .map((item) => [
+                    item.value ? '✓' : '✗',
+                    item.label,
+                    item.notes.trim().isEmpty ? '-' : item.notes,
+                  ])
+              .toList(),
+          columnWidths: [0.08, 0.60, 0.32],
+        ));
       }
     }
-
-    // Măsurători
     if (doc.measurements.isNotEmpty) {
-      final measRows = doc.measurements
-          .map((m) => [
-                m.label,
-                m.value.trim().isEmpty
-                    ? '-'
-                    : '${m.value} ${m.unit}'.trim(),
-                m.notes.trim().isEmpty ? '-' : m.notes,
-              ])
-          .toList();
-      widgets.add(_redSection('Măsurători sistem', [
-        pw.SizedBox(height: 4),
-        ProTermPdfTemplate.buildTable(
-          headers: ['Parametru', 'Valoare', 'Observații'],
-          rows: measRows,
-          columnWidths: [0.45, 0.25, 0.30],
-        ),
-      ]));
+      probeWidgets.add(pw.SizedBox(height: 6));
+      probeWidgets.add(pw.Text('Măsurători',
+          style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold)));
+      probeWidgets.add(pw.SizedBox(height: 2));
+      probeWidgets.add(ProTermPdfTemplate.buildTable(
+        headers: ['Parametru', 'Valoare', 'Observații'],
+        rows: doc.measurements
+            .map((m) => [
+                  m.label,
+                  m.value.trim().isEmpty ? '-' : '${m.value} ${m.unit}'.trim(),
+                  m.notes.trim().isEmpty ? '-' : m.notes,
+                ])
+            .toList(),
+        columnWidths: [0.45, 0.25, 0.30],
+      ));
+    }
+    widgets.add(
+        _redSection('4. Etape și teste / Probe și măsurători', probeWidgets));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 5. Instruirea personalului
+    widgets.add(ProTermPdfTemplate.buildSection('5. Instruirea personalului', [
+      ProTermPdfTemplate.buildInfoRow(
+          'Instruire personal beneficiar', doc.trainingProvided ? 'Da' : 'Nu'),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 6. Constatări / Observații
+    final constatariWidgets = <pw.Widget>[
+      pw.Text(_safe(doc.conclusions), style: const pw.TextStyle(fontSize: 9)),
+    ];
+    if (doc.functionalStatus.trim().isNotEmpty) {
+      constatariWidgets.add(pw.SizedBox(height: 6));
+      constatariWidgets.add(ProTermPdfTemplate.buildInfoRow(
+          'Status funcțional sistem', doc.functionalStatus));
+    }
+    if (doc.remediationDeadline != null) {
+      constatariWidgets.add(pw.SizedBox(height: 4));
+      constatariWidgets.add(ProTermPdfTemplate.buildInfoRow(
+          'Termen remediere', _fmt(doc.remediationDeadline!)));
+    }
+    widgets.add(_redSection('6. Constatări / Observații', constatariWidgets));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 7. Concluzii
+    widgets.add(_redSection('7. Concluzii', [
+      pw.Text(
+        'Pe baza verificărilor și probelor efectuate, sistemul este pus în funcțiune și poate fi '
+        'exploatat în regim normal, cu respectarea instrucțiunilor de utilizare și a programului de '
+        'mentenanță. Eventualele deficiențe constatate vor fi remediate în termenul stabilit.',
+        style: const pw.TextStyle(fontSize: 9),
+      ),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // Anexă — echipamente / materiale puse în funcțiune (poziții selectate)
+    final workLinesTable = _buildSelectedWorkLinesTable(
+      doc,
+      sectionTitle: 'Anexă — echipamente / materiale puse în funcțiune',
+      statusHeader: 'Status PIF',
+    );
+    if (workLinesTable != null) {
+      widgets.add(workLinesTable);
       widgets.add(pw.SizedBox(height: 8));
     }
 
-    if (doc.probesSummary.trim().isNotEmpty) {
-      widgets.add(_redSection('Sumar probe VRF', [
-        pw.Text(_safe(doc.probesSummary),
-            style: const pw.TextStyle(fontSize: 9)),
-      ]));
+    // Tabel linii planificate (fallback cantități, dacă există)
+    final liniiWidget = _buildLiniiTable(linii);
+    if (liniiWidget != null) {
+      widgets.add(liniiWidget);
       widgets.add(pw.SizedBox(height: 8));
     }
 
-    if (doc.trainingProvided) {
-      widgets.add(_redSection('Instruire utilizator', [
-        pw.Text(
-          'Instrucțiunile de utilizare au fost prezentate și explicate reprezentantului '
-          'beneficiarului. Utilizatorul a confirmat că a înțeles modul de operare, '
-          'procedurile de întreținere periodică și condițiile de garanție.',
-          style: const pw.TextStyle(fontSize: 9),
-        ),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    _appendCommonSections(doc, widgets);
     _appendGarantieSection(widgets);
     _appendAnnexes(doc, widgets);
 
@@ -508,7 +473,11 @@ class JobSiteDocumentPdfService {
     return parsed != null ? parsed.toStringAsFixed(2) : _wlText(raw);
   }
 
-  static pw.Widget? _buildSelectedWorkLinesTable(JobSiteDocumentRecord doc) {
+  static pw.Widget? _buildSelectedWorkLinesTable(
+    JobSiteDocumentRecord doc, {
+    required String sectionTitle,
+    required String statusHeader,
+  }) {
     if (doc.selectedWorkLines.isEmpty) return null;
     var index = 0;
     final rows = doc.selectedWorkLines.map((line) {
@@ -523,48 +492,14 @@ class JobSiteDocumentPdfService {
       ];
     }).toList();
 
-    return _redSection('Poziții lucrare verificate', [
+    return _redSection(sectionTitle, [
       pw.SizedBox(height: 4),
       ProTermPdfTemplate.buildTable(
-        headers: ['Nr', 'Descriere', 'UM', 'Cantitate', 'Status', 'Observații'],
+        headers: ['Nr', 'Denumire', 'UM', 'Cantitate', statusHeader, 'Observații'],
         rows: rows,
         columnWidths: [0.06, 0.36, 0.08, 0.13, 0.17, 0.20],
       ),
     ]);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Secțiuni comune (observații, concluzii, termen remediere)
-  // ─────────────────────────────────────────────────────────────────────────
-
-  static void _appendCommonSections(
-      JobSiteDocumentRecord doc, List<pw.Widget> out) {
-    final selectedWorkLinesWidget = _buildSelectedWorkLinesTable(doc);
-    if (selectedWorkLinesWidget != null) {
-      out.add(selectedWorkLinesWidget);
-      out.add(pw.SizedBox(height: 8));
-    }
-    if (doc.observations.trim().isNotEmpty) {
-      out.add(_redSection('Observații', [
-        pw.Text(_safe(doc.observations),
-            style: const pw.TextStyle(fontSize: 9)),
-      ]));
-      out.add(pw.SizedBox(height: 8));
-    }
-    if (doc.conclusions.trim().isNotEmpty) {
-      out.add(_redSection('Concluzii', [
-        pw.Text(_safe(doc.conclusions),
-            style: const pw.TextStyle(fontSize: 9)),
-      ]));
-      out.add(pw.SizedBox(height: 8));
-    }
-    if (doc.remediationDeadline != null) {
-      out.add(ProTermPdfTemplate.buildSection('Termen remediere', [
-        ProTermPdfTemplate.buildInfoRow(
-            'Termen stabilit', _fmt(doc.remediationDeadline!)),
-      ]));
-      out.add(pw.SizedBox(height: 8));
-    }
   }
 
   // ── Secțiune garanție standard ───────────────────────────────────────────────

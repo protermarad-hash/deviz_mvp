@@ -146,40 +146,6 @@ class JobSiteDocumentPdfService {
     );
   }
 
-  // ── Tabel linii planificate (cantități, fără prețuri) ───────────────────────
-
-  static pw.Widget? _buildLiniiTable(List<JobLine> linii) {
-    if (linii.isEmpty) return null;
-    final rows = linii.map((l) {
-      final obs = l.observatii.trim();
-      final denumire = obs.isEmpty ? l.denumire : '${l.denumire}\n($obs)';
-      return [
-        denumire,
-        l.um,
-        l.cantitateOferta > 0
-            ? l.cantitateOferta.toStringAsFixed(2)
-            : '-',
-        l.cantitateReala > 0
-            ? l.cantitateReala.toStringAsFixed(2)
-            : '-',
-      ];
-    }).toList();
-
-    return _redSection('Lucrări executate conform ofertei', [
-      pw.SizedBox(height: 4),
-      pw.Text(
-        'Cantitățile sunt preluate din situația de lucrări. Prețurile unitare nu sunt afișate în prezentul document.',
-        style: const pw.TextStyle(fontSize: 7.5, color: PdfColors.grey600),
-      ),
-      pw.SizedBox(height: 6),
-      ProTermPdfTemplate.buildTable(
-        headers: ['Denumire / Specificație', 'UM', 'Cantit. ofertată', 'Cantit. executată'],
-        rows: rows,
-        columnWidths: [0.50, 0.10, 0.20, 0.20],
-      ),
-    ]);
-  }
-
   // ── Conținut specific pe tip de document ───────────────────────────────────
 
   static List<pw.Widget> _buildContent(
@@ -299,15 +265,7 @@ class JobSiteDocumentPdfService {
       widgets.add(pw.SizedBox(height: 8));
     }
 
-    // Tabel linii planificate (fallback cantități, dacă există)
-    final liniiWidget = _buildLiniiTable(linii);
-    if (liniiWidget != null) {
-      widgets.add(liniiWidget);
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
     _appendGarantieSection(widgets);
-    _appendAnnexes(doc, widgets);
 
     return widgets;
   }
@@ -450,15 +408,7 @@ class JobSiteDocumentPdfService {
       widgets.add(pw.SizedBox(height: 8));
     }
 
-    // Tabel linii planificate (fallback cantități, dacă există)
-    final liniiWidget = _buildLiniiTable(linii);
-    if (liniiWidget != null) {
-      widgets.add(liniiWidget);
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
     _appendGarantieSection(widgets);
-    _appendAnnexes(doc, widgets);
 
     return widgets;
   }
@@ -520,52 +470,4 @@ class JobSiteDocumentPdfService {
     out.add(pw.SizedBox(height: 8));
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Anexe
-  // ─────────────────────────────────────────────────────────────────────────
-
-  static void _appendAnnexes(
-      JobSiteDocumentRecord doc, List<pw.Widget> out) {
-    if (doc.annexes.isEmpty) return;
-    for (final annex in doc.annexes) {
-      final annexWidgets = <pw.Widget>[];
-      if (annex.description.trim().isNotEmpty) {
-        annexWidgets.add(pw.Text(annex.description,
-            style: const pw.TextStyle(fontSize: 9)));
-        annexWidgets.add(pw.SizedBox(height: 4));
-      }
-      if (annex.items.isNotEmpty) {
-        final rows = annex.items.take(50).map((item) => [
-              item.label,
-              item.quantity.trim().isEmpty
-                  ? '-'
-                  : '${item.quantity} ${item.unit}'.trim(),
-              item.details.trim().isEmpty ? '-' : item.details,
-            ]).toList();
-        annexWidgets.add(ProTermPdfTemplate.buildTable(
-          headers: ['Descriere', 'Cantitate', 'Detalii'],
-          rows: rows,
-          columnWidths: [0.55, 0.20, 0.25],
-        ));
-        if (annex.items.length > 50) {
-          annexWidgets.add(pw.Padding(
-            padding: const pw.EdgeInsets.only(top: 4),
-            child: pw.Text(
-              '... și ${annex.items.length - 50} poziții suplimentare.',
-              style: pw.TextStyle(
-                  fontSize: 8, color: ProTermPdfTemplate.mediumText),
-            ),
-          ));
-        }
-      }
-      if (annex.summary.trim().isNotEmpty) {
-        annexWidgets.add(pw.SizedBox(height: 4));
-        annexWidgets.add(pw.Text(annex.summary,
-            style: const pw.TextStyle(fontSize: 9)));
-      }
-      out.add(
-          _redSection('Anexă: ${annex.title}', annexWidgets));
-      out.add(pw.SizedBox(height: 8));
-    }
-  }
 }
