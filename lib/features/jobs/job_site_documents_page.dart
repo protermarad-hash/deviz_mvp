@@ -1206,7 +1206,27 @@ class _JobSiteDocumentEditorDialogState
     _selectedWorkLines = document.selectedWorkLines
         .map((line) => Map<String, dynamic>.from(line))
         .toList(growable: true);
-    _availableWorkLines = _resolveWorkLinesForSelection();
+    _availableWorkLines = _resolveWorkLinesForSelection(widget.job);
+    // Plasă de siguranță: dacă `widget.job` a fost pasat fără liniiPlanificate
+    // (snapshot vechi / lucrare deschisă înainte de re-popularea liniilor),
+    // reîmprospătăm lucrarea din repository și recalculăm pozițiile.
+    if (_availableWorkLines.isEmpty) {
+      Future.microtask(_refreshWorkLinesFromRepository);
+    }
+  }
+
+  Future<void> _refreshWorkLinesFromRepository() async {
+    try {
+      final jobs = await widget.repository.listJobs();
+      final match = jobs.where((j) => j.id == widget.job.id);
+      if (match.isEmpty) return;
+      final refreshed = _resolveWorkLinesForSelection(match.first);
+      if (refreshed.isNotEmpty && mounted) {
+        setState(() => _availableWorkLines = refreshed);
+      }
+    } catch (_) {
+      // Best-effort: dacă reîmprospătarea eșuează, secțiunea rămâne ascunsă.
+    }
   }
 
   double _workLineDouble(dynamic raw) {
@@ -1214,12 +1234,12 @@ class _JobSiteDocumentEditorDialogState
     return double.tryParse('${raw ?? ''}'.trim().replaceAll(',', '.')) ?? 0;
   }
 
-  /// Construiește lista de poziții pentru selecție.
+  /// Construiește lista de poziții pentru selecție din lucrarea dată.
   /// Prioritate: `job.liniiPlanificate` (sursa unificată). Dacă e gol, fallback
   /// pe materialele și manopera lucrării. Întoarce listă goală dacă nu există
   /// nicio sursă — caz în care secțiunea de selecție se ascunde complet.
-  List<Map<String, dynamic>> _resolveWorkLinesForSelection() {
-    final lines = widget.job.liniiPlanificate;
+  List<Map<String, dynamic>> _resolveWorkLinesForSelection(JobRecord job) {
+    final lines = job.liniiPlanificate;
     if (lines.isNotEmpty) {
       return lines
           .where((l) => l.denumire.trim().isNotEmpty)
@@ -1241,7 +1261,7 @@ class _JobSiteDocumentEditorDialogState
           .toList(growable: false);
     }
     final fallback = <Map<String, dynamic>>[];
-    for (final m in widget.job.materials) {
+    for (final m in job.materials) {
       final name = '${m['name'] ?? m['denumire'] ?? ''}'.trim();
       if (name.isEmpty) continue;
       fallback.add(<String, dynamic>{
@@ -1254,7 +1274,7 @@ class _JobSiteDocumentEditorDialogState
         'observatii': '${m['observatii'] ?? m['notes'] ?? ''}',
       });
     }
-    for (final l in widget.job.laborEntries) {
+    for (final l in job.laborEntries) {
       final who = '${l['whoLabel'] ?? l['who'] ?? l['label'] ?? ''}'.trim();
       if (who.isEmpty) continue;
       fallback.add(<String, dynamic>{

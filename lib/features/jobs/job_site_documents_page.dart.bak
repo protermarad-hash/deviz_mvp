@@ -1154,8 +1154,17 @@ class _JobSiteDocumentEditorDialogState
   late String _status;
   late bool _trainingProvided;
   late List<JobSiteDocumentAnnex> _annexes;
+  late List<Map<String, dynamic>> _selectedWorkLines;
+  late List<Map<String, dynamic>> _availableWorkLines;
   bool _isImporting = false;
   bool _isRunningAi = false;
+
+  static const List<String> _lineStatusOptions = <String>[
+    'Instalat',
+    'Funcțional',
+    'De remediat',
+    'Neinstalat',
+  ];
 
   @override
   void initState() {
@@ -1194,6 +1203,217 @@ class _JobSiteDocumentEditorDialogState
     _status = document.status;
     _trainingProvided = document.trainingProvided;
     _annexes = document.annexes.map(_cloneAnnex).toList(growable: true);
+    _selectedWorkLines = document.selectedWorkLines
+        .map((line) => Map<String, dynamic>.from(line))
+        .toList(growable: true);
+    _availableWorkLines = _resolveWorkLinesForSelection();
+  }
+
+  double _workLineDouble(dynamic raw) {
+    if (raw is num) return raw.toDouble();
+    return double.tryParse('${raw ?? ''}'.trim().replaceAll(',', '.')) ?? 0;
+  }
+
+  /// Construiește lista de poziții pentru selecție.
+  /// Prioritate: `job.liniiPlanificate` (sursa unificată). Dacă e gol, fallback
+  /// pe materialele și manopera lucrării. Întoarce listă goală dacă nu există
+  /// nicio sursă — caz în care secțiunea de selecție se ascunde complet.
+  List<Map<String, dynamic>> _resolveWorkLinesForSelection() {
+    final lines = widget.job.liniiPlanificate;
+    if (lines.isNotEmpty) {
+      return lines
+          .where((l) => l.denumire.trim().isNotEmpty)
+          .map((l) {
+            final qty =
+                l.cantitateReala > 0 ? l.cantitateReala : l.cantitateOferta;
+            final price =
+                l.pretUnitarReal > 0 ? l.pretUnitarReal : l.pretUnitarOferta;
+            return <String, dynamic>{
+              'id': l.id,
+              'denumire': l.denumire.trim(),
+              'um': l.um,
+              'cantitate': qty,
+              'pretUnitar': price,
+              'categorie': l.categorie,
+              'observatii': l.observatii,
+            };
+          })
+          .toList(growable: false);
+    }
+    final fallback = <Map<String, dynamic>>[];
+    for (final m in widget.job.materials) {
+      final name = '${m['name'] ?? m['denumire'] ?? ''}'.trim();
+      if (name.isEmpty) continue;
+      fallback.add(<String, dynamic>{
+        'id': '${m['id'] ?? ''}',
+        'denumire': name,
+        'um': '${m['um'] ?? m['unit'] ?? ''}',
+        'cantitate': _workLineDouble(m['qty'] ?? m['cantitate']),
+        'pretUnitar': _workLineDouble(m['price'] ?? m['pret']),
+        'categorie': 'material',
+        'observatii': '${m['observatii'] ?? m['notes'] ?? ''}',
+      });
+    }
+    for (final l in widget.job.laborEntries) {
+      final who = '${l['whoLabel'] ?? l['who'] ?? l['label'] ?? ''}'.trim();
+      if (who.isEmpty) continue;
+      fallback.add(<String, dynamic>{
+        'id': '${l['id'] ?? ''}',
+        'denumire': who,
+        'um': 'ore',
+        'cantitate': _workLineDouble(l['hours'] ?? l['ore']),
+        'pretUnitar': 0.0,
+        'categorie': 'manopera',
+        'observatii': '${l['observatii'] ?? l['notes'] ?? ''}',
+      });
+    }
+    return fallback;
+  }
+
+  /// Ecran selecție poziții: bifare + status individual + observații.
+  /// Restaurează selecția anterioară (după `id`) la redeschidere.
+  Future<void> _showWorkLinesSelectionDialog() async {
+    final positions = _availableWorkLines;
+    if (positions.isEmpty) return;
+    final previousById = <String, Map<String, dynamic>>{
+      for (final line in _selectedWorkLines)
+        '${line['id'] ?? ''}': line,
+    };
+    final included = <bool>[];
+    final statuses = <String>[];
+    final obsControllers = <TextEditingController>[];
+    for (final p in positions) {
+      final prev = previousById['${p['id'] ?? ''}'];
+      included.add(_selectedWorkLines.isEmpty ? true : prev != null);
+      final prevStatus = '${prev?['status'] ?? ''}'.trim();
+      statuses.add(_lineStatusOptions.contains(prevStatus)
+          ? prevStatus
+          : _lineStatusOptions.first);
+      obsControllers.add(TextEditingController(
+        text: '${prev?['observatii'] ?? p['observatii'] ?? ''}'.trim(),
+      ));
+    }
+
+    final result = await showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Poziții lucrare'),
+          content: SizedBox(
+            width: 560,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Bifează pozițiile incluse, alege statusul și completează observațiile.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var i = 0; i < positions.length; i++)
+                          Card(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Checkbox(
+                                        value: included[i],
+                                        onChanged: (v) => setDialogState(
+                                            () => included[i] = v ?? false),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          '${positions[i]['denumire']} '
+                                          '(${_workLineDouble(positions[i]['cantitate']).toStringAsFixed(2)} ${positions[i]['um']})',
+                                          style: const TextStyle(
+                                              fontWeight: FontWeight.w600),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if (included[i]) ...[
+                                    DropdownButtonFormField<String>(
+                                      initialValue: statuses[i],
+                                      isDense: true,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Status',
+                                        isDense: true,
+                                      ),
+                                      items: _lineStatusOptions
+                                          .map((s) => DropdownMenuItem<String>(
+                                              value: s, child: Text(s)))
+                                          .toList(growable: false),
+                                      onChanged: (v) {
+                                        if (v == null) return;
+                                        setDialogState(() => statuses[i] = v);
+                                      },
+                                    ),
+                                    const SizedBox(height: 6),
+                                    TextField(
+                                      controller: obsControllers[i],
+                                      textCapitalization:
+                                          TextCapitalization.sentences,
+                                      decoration: const InputDecoration(
+                                        labelText: 'Observații',
+                                        isDense: true,
+                                      ),
+                                      minLines: 1,
+                                      maxLines: 2,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Anuleaza'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final selected = <Map<String, dynamic>>[];
+                for (var i = 0; i < positions.length; i++) {
+                  if (!included[i]) continue;
+                  selected.add(<String, dynamic>{
+                    ...positions[i],
+                    'status': statuses[i],
+                    'observatii': obsControllers[i].text.trim(),
+                  });
+                }
+                Navigator.of(context).pop(selected);
+              },
+              child: const Text('Salveaza selectia'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    for (final c in obsControllers) {
+      c.dispose();
+    }
+    if (result != null && mounted) {
+      setState(() => _selectedWorkLines = result);
+    }
   }
 
   @override
@@ -1716,6 +1936,7 @@ class _JobSiteDocumentEditorDialogState
       trainingProvided: _trainingProvided,
       preparedForNextStep: _preparedForNextStepController.text.trim(),
       annexes: _annexes,
+      selectedWorkLines: _selectedWorkLines,
       status: _status,
       updatedAt: DateTime.now(),
     );
@@ -2035,6 +2256,45 @@ class _JobSiteDocumentEditorDialogState
                     ),
                   ),
                 ),
+                if (_availableWorkLines.isNotEmpty)
+                  SizedBox(
+                    width: 732,
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Poziții lucrare',
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _selectedWorkLines.isEmpty
+                                ? 'Nicio poziție selectată. Apasă „Selectează poziții" pentru a alege pozițiile verificate și statusul lor.'
+                                : '${_selectedWorkLines.length} poziții selectate (din ${_availableWorkLines.length} disponibile).',
+                          ),
+                          if (_selectedWorkLines.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            ..._selectedWorkLines.map(
+                              (line) => Padding(
+                                padding: const EdgeInsets.only(bottom: 2),
+                                child: Text(
+                                  '• ${line['denumire']} — ${line['status'] ?? '-'}'
+                                  '${'${line['observatii'] ?? ''}'.trim().isEmpty ? '' : ' (${'${line['observatii']}'.trim()})'}',
+                                  style:
+                                      Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed: _showWorkLinesSelectionDialog,
+                            icon: const Icon(Icons.checklist_outlined),
+                            label: const Text('Selectează poziții'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
