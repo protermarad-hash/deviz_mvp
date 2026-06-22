@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../../core/pdf/pro_term_pdf_template.dart';
+import '../../../core/pdf_document_branding.dart';
 import '../job_document_type_utils.dart';
 import '../job_models.dart';
 import '../lucrare_detalii_models.dart';
@@ -480,6 +482,232 @@ class LucrarePdfBuilder {
             ? lucrareAsDouble(row['total'])
             : subtotal + vatTotal);
     final vatCanonical = percentLabel(vatPercent);
+
+    // ───────────────────────────────────────────────────────────────────────
+    // REDESIGN Deviz / Ofertă — stil vizual ProTerm (identic PV/PIF):
+    // header firmă + titlu, secțiuni cu headere roșii, tabele Materiale/
+    // Manoperă, bloc totaluri, condiții comerciale, semnături 2 coloane, footer.
+    // ───────────────────────────────────────────────────────────────────────
+    if (subtype == 'oferta' || subtype == 'deviz') {
+      final isOferta = subtype == 'oferta';
+      final branding = DocumentBrandingData(
+        companyName: companyName,
+        address: companyAddress,
+        phone: companyPhone,
+        email: companyEmail,
+        cui: companyCui,
+        tradeRegister: companyReg,
+        bank: '',
+        iban: '',
+        contactName: companyContact,
+        logoBytes: logoBytes,
+      );
+
+      // Linii structurate (Nr/Denumire/UM/Cantitate/Preț Unitar/Total).
+      // Preferă listele operaționale; dacă sunt goale, folosește liniiPlanificate.
+      List<List<String>> structuredRows(bool manopera) {
+        final rows = <List<String>>[];
+        final source = manopera ? laborSource : materialSource;
+        var idx = 0;
+        if (source.isNotEmpty) {
+          for (final e in source) {
+            final map = Map<String, dynamic>.from(e as Map);
+            final denumire = sanitizePdfText(manopera
+                ? '${map['who'] ?? map['denumire'] ?? map['name'] ?? '-'}'
+                : '${map['name'] ?? map['denumire'] ?? '-'}');
+            if (denumire.trim().isEmpty) continue;
+            final um = manopera
+                ? '${map['um'] ?? 'ore'}'
+                : '${map['um'] ?? '-'}';
+            final qty = manopera
+                ? lucrareAsDouble(map['hours'])
+                : lucrareAsDouble(map['qty']);
+            final price = manopera
+                ? laborCalc.laborRateForRow(map)
+                : lucrareAsDouble(map['price']);
+            final lineTotal = manopera
+                ? laborCalc.laborTotalLineCost(map)
+                : (lucrareAsDouble(map['total']) > 0
+                    ? lucrareAsDouble(map['total'])
+                    : materialLineTotal(map));
+            idx++;
+            rows.add([
+              '$idx',
+              denumire,
+              um,
+              fmtNum(qty),
+              fmtNum(price),
+              fmtNum(lineTotal),
+            ]);
+          }
+        } else {
+          final linii = job.liniiPlanificate.where((l) =>
+              l.denumire.trim().isNotEmpty &&
+              (manopera
+                  ? l.categorie.trim().toLowerCase() == 'manopera'
+                  : l.categorie.trim().toLowerCase() != 'manopera'));
+          for (final l in linii) {
+            final qty = lineQty(l);
+            final price = linePrice(l);
+            idx++;
+            rows.add([
+              '$idx',
+              sanitizePdfText(l.denumire.trim()),
+              l.um,
+              fmtNum(qty),
+              fmtNum(price),
+              fmtNum(qty * price),
+            ]);
+          }
+        }
+        return rows;
+      }
+
+      final materialRows = structuredRows(false);
+      final laborRows = structuredRows(true);
+      const tableHeaders = <String>[
+        'Nr',
+        'Denumire',
+        'UM',
+        'Cantitate',
+        'Preț Unitar',
+        'Total'
+      ];
+      const tableWidths = <double>[0.07, 0.40, 0.10, 0.13, 0.15, 0.15];
+      final vatLabel = vatCanonical == '-' ? 'TVA' : 'TVA ($vatCanonical%)';
+
+      // Regie/Profit — linie separată DOAR dacă documentul o stochează explicit.
+      final regieProfit = lucrareAsDouble(row['regieProfit']) > 0
+          ? lucrareAsDouble(row['regieProfit'])
+          : lucrareAsDouble(row['overheadProfit']);
+
+      final content = <pw.Widget>[];
+
+      if (isOferta) {
+        // Ofertă — listă comercială unică (fără separare materiale/manoperă).
+        final allRows = <List<String>>[];
+        var n = 0;
+        for (final r in [...materialRows, ...laborRows]) {
+          n++;
+          allRows.add(['$n', r[1], r[2], r[3], r[4], r[5]]);
+        }
+        if (allRows.isNotEmpty) {
+          content.add(ProTermPdfTemplate.buildSection('Structură comercială', [
+            ProTermPdfTemplate.buildTable(
+              headers: tableHeaders,
+              rows: allRows,
+              columnWidths: tableWidths,
+            ),
+          ]));
+          content.add(pw.SizedBox(height: 8));
+        }
+        content.add(ProTermPdfTemplate.buildSection('Totaluri', [
+          ProTermPdfTemplate.buildTable(
+            headers: const ['Denumire', 'Valoare'],
+            rows: <List<String>>[
+              ['Subtotal', fmtNum(subtotal)],
+              if (regieProfit > 0) ['Regie + Profit', fmtNum(regieProfit)],
+              [vatLabel, fmtNum(vatTotal)],
+              ['TOTAL GENERAL', fmtNum(grandTotal)],
+            ],
+            columnWidths: const [0.7, 0.3],
+          ),
+        ]));
+        content.add(pw.SizedBox(height: 8));
+        final exec = commercialValue('executionTerm');
+        final pay = commercialValue('paymentTerm');
+        final validRaw =
+            readDocField(row, const ['valabilitateOferta', 'offerValidity'])
+                .trim();
+        final valid =
+            validRaw.isNotEmpty ? validRaw : commercialValue('offerValidity');
+        content.add(ProTermPdfTemplate.buildSection('Condiții comerciale', [
+          ProTermPdfTemplate.buildTable(
+            headers: const ['Condiție', 'Valoare'],
+            rows: <List<String>>[
+              ['Termen execuție', exec.isEmpty ? '-' : exec],
+              ['Termen plată', pay.isEmpty ? '-' : pay],
+              ['Valabilitate ofertă', valid.isEmpty ? '-' : valid],
+            ],
+            columnWidths: const [0.5, 0.5],
+          ),
+        ]));
+        if (notes.trim().isNotEmpty) {
+          content.add(pw.SizedBox(height: 8));
+          content.add(ProTermPdfTemplate.buildSection('Observații', [
+            pw.Text(sanitizePdfText(notes),
+                style: const pw.TextStyle(fontSize: 9)),
+          ]));
+        }
+      } else {
+        // Deviz — structură tehnică: Materiale + Manoperă separate, cu total.
+        if (materialRows.isNotEmpty) {
+          content.add(ProTermPdfTemplate.buildSection('Materiale', [
+            ProTermPdfTemplate.buildTable(
+              headers: tableHeaders,
+              rows: materialRows,
+              columnWidths: tableWidths,
+              showTotal: true,
+              totalLabel: 'Total materiale',
+              totalValue: fmtNum(materialTotal),
+            ),
+          ]));
+          content.add(pw.SizedBox(height: 8));
+        }
+        if (laborRows.isNotEmpty) {
+          content.add(ProTermPdfTemplate.buildSection('Manoperă', [
+            ProTermPdfTemplate.buildTable(
+              headers: tableHeaders,
+              rows: laborRows,
+              columnWidths: tableWidths,
+              showTotal: true,
+              totalLabel: 'Total manoperă',
+              totalValue: fmtNum(laborTotal),
+            ),
+          ]));
+          content.add(pw.SizedBox(height: 8));
+        }
+        content.add(ProTermPdfTemplate.buildSection('Totaluri deviz', [
+          ProTermPdfTemplate.buildTable(
+            headers: const ['Denumire', 'Valoare'],
+            rows: <List<String>>[
+              ['Total materiale', fmtNum(materialTotal)],
+              ['Total manoperă', fmtNum(laborTotal)],
+              ['Subtotal', fmtNum(subtotal)],
+              if (regieProfit > 0) ['Regie + Profit', fmtNum(regieProfit)],
+              [vatLabel, fmtNum(vatTotal)],
+              ['TOTAL GENERAL', fmtNum(grandTotal)],
+            ],
+            columnWidths: const [0.7, 0.3],
+          ),
+        ]));
+        if (notes.trim().isNotEmpty) {
+          content.add(pw.SizedBox(height: 8));
+          content.add(
+              ProTermPdfTemplate.buildSection('Observații tehnice / comerciale', [
+            pw.Text(sanitizePdfText(notes),
+                style: const pw.TextStyle(fontSize: 9)),
+          ]));
+        }
+      }
+
+      return ProTermPdfTemplate.generateDocument(
+        branding: branding,
+        documentTitle: isOferta ? 'OFERTĂ' : 'DEVIZ',
+        documentSubtitle:
+            (title.trim().isEmpty || title.trim() == '-') ? null : title.trim(),
+        documentNumber: number.trim() == '-' ? '' : number.trim(),
+        documentDate: date.trim() == '-' ? '' : date.trim(),
+        contentWidgets: content,
+        clientName: clientName.trim().isEmpty ? null : clientName,
+        jobCode: job.jobCode,
+        jobTitle: job.title,
+        location: job.location,
+        includePartiesSection: true,
+        includeJobInfoSection: true,
+        includeSignatureSection: true,
+      );
+    }
 
     String fixLegacyVatLabel(String input) {
       if (input.trim().isEmpty) return input;
