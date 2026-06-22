@@ -53,6 +53,7 @@ import '../product_catalog/warranty_certificate_editor_dialog.dart';
 import '../product_catalog/warranty_certificate_pdf_service.dart';
 import '../registratura/registry_models.dart';
 import 'appointment_models.dart';
+import 'programari_models.dart';
 import 'programari_calendar_placement.dart';
 import 'dialogs/employee_pay_dialog.dart';
 import 'programare_kit_catalog_service.dart';
@@ -74,28 +75,6 @@ import '../hr/employee_financial_repository.dart';
 import '../../core/services/communication_service.dart';
 import '../../core/services/gps_checkin_service.dart';
 import '../stoc/stoc_repository.dart';
-
-class _JobsLookupBundle {
-  const _JobsLookupBundle({
-    required this.lookupItems,
-    required this.jobClientById,
-  });
-
-  final List<LookupItem> lookupItems;
-  final Map<String, String> jobClientById;
-}
-
-class _AppointmentColorPreset {
-  const _AppointmentColorPreset({
-    required this.label,
-    required this.value,
-  });
-
-  final String label;
-  final int value;
-
-  Color get color => Color(value);
-}
 
 enum _EmployeeScopeMode {
   mine,
@@ -183,15 +162,15 @@ class _ProgramariPageState extends State<ProgramariPage> {
     MapEntry<double, String>(1.0, 'Standard'),
     MapEntry<double, String>(1.16, 'Mare'),
   ];
-  static const List<_AppointmentColorPreset> _appointmentColorPresets =
-      <_AppointmentColorPreset>[
-    _AppointmentColorPreset(label: 'Urgent rosu', value: 0xFFD32F2F),
-    _AppointmentColorPreset(label: 'Prioritar portocaliu', value: 0xFFEF6C00),
-    _AppointmentColorPreset(label: 'Client albastru', value: 0xFF1565C0),
-    _AppointmentColorPreset(label: 'Instalare verde', value: 0xFF2E7D32),
-    _AppointmentColorPreset(label: 'Garantie turcoaz', value: 0xFF00897B),
-    _AppointmentColorPreset(label: 'VIP mov', value: 0xFF6A1B9A),
-    _AppointmentColorPreset(label: 'Neutru grafit', value: 0xFF455A64),
+  static const List<AppointmentColorPreset> _appointmentColorPresets =
+      <AppointmentColorPreset>[
+    AppointmentColorPreset(label: 'Urgent rosu', value: 0xFFD32F2F),
+    AppointmentColorPreset(label: 'Prioritar portocaliu', value: 0xFFEF6C00),
+    AppointmentColorPreset(label: 'Client albastru', value: 0xFF1565C0),
+    AppointmentColorPreset(label: 'Instalare verde', value: 0xFF2E7D32),
+    AppointmentColorPreset(label: 'Garantie turcoaz', value: 0xFF00897B),
+    AppointmentColorPreset(label: 'VIP mov', value: 0xFF6A1B9A),
+    AppointmentColorPreset(label: 'Neutru grafit', value: 0xFF455A64),
   ];
   static const List<MapEntry<String, String>> _statusOptions =
       <MapEntry<String, String>>[
@@ -639,7 +618,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
           : await MasterLocalStore.readTeams();
       if (!mounted) return;
       _setStateLogged('load secondary data', () {
-        final jobsBundle = results[0] as _JobsLookupBundle;
+        final jobsBundle = results[0] as JobsLookupBundle;
         _jobs = jobsBundle.lookupItems;
         _jobClientById = jobsBundle.jobClientById;
         _clients = results[1] as List<LookupItem>;
@@ -1169,7 +1148,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
   }
 
-  Future<_JobsLookupBundle> _listJobsLookupResolved() async {
+  Future<JobsLookupBundle> _listJobsLookupResolved() async {
     final cloud = _lucrariCloudRepository;
     if (cloud == null) {
       return _listJobsLookupFromLocal();
@@ -1186,7 +1165,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
       final jobClient = <String, String>{
         for (final job in cloudItems) job.id: job.clientId,
       };
-      return _JobsLookupBundle(
+      return JobsLookupBundle(
         lookupItems: lookup,
         jobClientById: jobClient,
       );
@@ -1211,13 +1190,13 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
   }
 
-  Future<_JobsLookupBundle> _listJobsLookupFromLocal() async {
+  Future<JobsLookupBundle> _listJobsLookupFromLocal() async {
     final lookup = await widget.repository.listJobsLookup();
     final localJobs = await widget.repository.listJobs();
     final jobClient = <String, String>{
       for (final job in localJobs) job.id: job.clientId,
     };
-    return _JobsLookupBundle(
+    return JobsLookupBundle(
       lookupItems: lookup,
       jobClientById: jobClient,
     );
