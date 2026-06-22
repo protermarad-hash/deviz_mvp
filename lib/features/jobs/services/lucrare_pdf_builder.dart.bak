@@ -416,47 +416,25 @@ class LucrarePdfBuilder {
       return details.join(' | ');
     }).toList(growable: false);
 
-    // Totaluri din liniiPlanificate — fallback consistent cu textul liniilor.
-    // BUG FIX: înainte, dacă listele operaționale (_materials/_labor) erau goale
-    // (cazul lucrărilor convertite din ofertă, unde datele stau DOAR în
-    // liniiPlanificate), totalurile rămâneau 0.00 deși liniile aveau prețuri
-    // reale. Textul liniilor folosea deja liniiPlanificate ca fallback, dar
-    // totalurile nu — de aici discrepanța preț afișat vs. total 0.
-    final liniiMaterialTotal = job.liniiPlanificate
-        .where((l) =>
-            l.denumire.trim().isNotEmpty &&
-            l.categorie.trim().toLowerCase() != 'manopera')
-        .fold<double>(0, (sum, l) => sum + lineQty(l) * linePrice(l));
-    final liniiLaborTotal = job.liniiPlanificate
-        .where((l) =>
-            l.denumire.trim().isNotEmpty &&
-            l.categorie.trim().toLowerCase() == 'manopera')
-        .fold<double>(0, (sum, l) => sum + lineQty(l) * linePrice(l));
-
     final materialTotal = lucrareAsDouble(row['materialTotal']) > 0
         ? lucrareAsDouble(row['materialTotal'])
-        : (materialSource.isNotEmpty
-            ? materialSource.fold<double>(
-                0,
-                (sum, e) =>
-                    sum +
-                    (lucrareAsDouble(e['total']) > 0
-                        ? lucrareAsDouble(e['total'])
-                        : materialLineTotal(
-                            Map<String, dynamic>.from(e as Map))),
-              )
-            : liniiMaterialTotal);
+        : materialSource.fold<double>(
+            0,
+            (sum, e) =>
+                sum +
+                (lucrareAsDouble(e['total']) > 0
+                    ? lucrareAsDouble(e['total'])
+                    : materialLineTotal(Map<String, dynamic>.from(e as Map))),
+          );
     final laborTotal = lucrareAsDouble(row['laborTotal']) > 0
         ? lucrareAsDouble(row['laborTotal'])
-        : (laborSource.isNotEmpty
-            ? laborSource.fold<double>(
-                0,
-                (sum, e) =>
-                    sum +
-                    laborCalc.laborTotalLineCost(
-                        Map<String, dynamic>.from(e as Map)),
-              )
-            : liniiLaborTotal);
+        : laborSource.fold<double>(
+            0,
+            (sum, e) =>
+                sum +
+                laborCalc
+                    .laborTotalLineCost(Map<String, dynamic>.from(e as Map)),
+          );
     final subtotal = lucrareAsDouble(row['subtotal']) > 0
         ? lucrareAsDouble(row['subtotal'])
         : materialTotal + laborTotal;

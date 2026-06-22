@@ -5881,14 +5881,35 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final now = DateTime.now();
     final nowIso = now.toIso8601String();
     final company = await _loadCompanyBrandingMap();
-    final materialTotal = _materials.fold<double>(
+    // Totaluri din listele operaționale (_materials/_labor). Pentru lucrările
+    // convertite din ofertă, acestea pot fi goale (datele stau în
+    // liniiPlanificate) → fallback pe liniiPlanificate ca să nu salvăm 0.00.
+    double lineQty(JobLine l) =>
+        l.cantitateReala > 0 ? l.cantitateReala : l.cantitateOferta;
+    double linePrice(JobLine l) =>
+        l.pretUnitarReal > 0 ? l.pretUnitarReal : l.pretUnitarOferta;
+    final materialTotalOperational = _materials.fold<double>(
       0,
       (sum, item) => sum + _materialLineTotal(item),
     );
-    final laborTotal = _labor.fold<double>(
+    final laborTotalOperational = _labor.fold<double>(
       0,
       (sum, item) => sum + _laborTotalLineCost(item),
     );
+    final materialTotal = materialTotalOperational > 0
+        ? materialTotalOperational
+        : _jobSnapshot.liniiPlanificate
+            .where((l) =>
+                l.denumire.trim().isNotEmpty &&
+                l.categorie.trim().toLowerCase() != 'manopera')
+            .fold<double>(0, (sum, l) => sum + lineQty(l) * linePrice(l));
+    final laborTotal = laborTotalOperational > 0
+        ? laborTotalOperational
+        : _jobSnapshot.liniiPlanificate
+            .where((l) =>
+                l.denumire.trim().isNotEmpty &&
+                l.categorie.trim().toLowerCase() == 'manopera')
+            .fold<double>(0, (sum, l) => sum + lineQty(l) * linePrice(l));
     const vatPercent = 19.0;
     final subtotal = materialTotal + laborTotal;
     final vatTotal = subtotal * vatPercent / 100;
