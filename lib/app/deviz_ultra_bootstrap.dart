@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 
@@ -30,8 +31,14 @@ class _DevizUltraBootstrapAppState extends State<DevizUltraBootstrapApp>
     WidgetsBinding.instance.addObserver(this);
     _session = AppSessionController.localOnly();
     _bootstrap = _initializeBootstrap();
+    // Pe Windows, Firestore (SDK C++) e lent → verificările dese de
+    // conectivitate + sync creează presiune inutilă. Rărim intervalul la 2 min.
+    // Pe Android păstrăm 30s (comportamentul actual).
+    final syncInterval = Platform.isWindows
+        ? const Duration(minutes: 2)
+        : const Duration(seconds: 30);
     _syncTimer = Timer.periodic(
-      const Duration(seconds: 30),
+      syncInterval,
       (_) async {
         // Re-verifică conectivitate înainte de sync.
         await FirebaseBootstrap.checkOnline();
