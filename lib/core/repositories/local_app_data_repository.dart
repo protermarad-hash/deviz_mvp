@@ -4051,15 +4051,13 @@ class LocalAppDataRepository implements AppDataRepository {
     _appointmentsMemCache = items;
     appointmentLastLocalCount = items.length;
     appointmentLastFilteredTodayCount = _countAppointmentsForToday(items);
-    appointmentLocalJsonBytesApprox = utf8.encode(
-      jsonEncode(items.map((item) => item.toMap()).toList()),
-    ).length;
+    // Encode O SINGURĂ DATĂ — refolosim string-ul pentru scriere + diagnostic.
+    // (înainte: 2× jsonEncode pe main thread, al doilea doar pentru contor)
+    final encoded = jsonEncode(items.map((item) => item.toMap()).toList());
+    appointmentLocalJsonBytesApprox = utf8.encode(encoded).length;
     // 2. Scriem pe disc ASINCRON — nu blochează UI-ul (fire-and-forget)
     SharedPreferences.getInstance().then((prefs) {
-      prefs.setString(
-        _appointmentsKey,
-        jsonEncode(items.map((item) => item.toMap()).toList()),
-      );
+      prefs.setString(_appointmentsKey, encoded);
     }).catchError((_) {});
   }
 
