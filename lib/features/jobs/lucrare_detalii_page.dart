@@ -13279,16 +13279,6 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               action: Wrap(
                 spacing: 4,
                 children: [
-                  TextButton.icon(
-                    onPressed: _onGenerateProcesVerbal,
-                    icon: const Icon(Icons.assignment_outlined),
-                    label: const Text('Genereaza PV'),
-                  ),
-                  TextButton.icon(
-                    onPressed: _onGeneratePif,
-                    icon: const Icon(Icons.settings_suggest_outlined),
-                    label: const Text('Genereaza PIF'),
-                  ),
                   if (!_isTechnician) ...[
                     const SizedBox(width: 8),
                     OutlinedButton.icon(
