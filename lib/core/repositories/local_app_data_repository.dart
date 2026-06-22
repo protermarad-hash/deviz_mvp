@@ -50,6 +50,10 @@ class LocalAppDataRepository implements AppDataRepository {
   static Future<void>? _partnersBackgroundUploadFuture;
   static Future<void>? _partnerWorkersBackgroundUploadFuture;
   static Future<void>? _partnerVehiclesBackgroundUploadFuture;
+  // Cache-first: împrospătare cloud în fundal (single-flight) pentru
+  // clienți/parteneri — evită blocarea UI pe Windows (Firestore SDK C++ lent).
+  static Future<void>? _clientsCloudRefreshFuture;
+  static Future<void>? _partnersCloudRefreshFuture;
 
   static const String _currentUserKey = 'ultra_current_user_v1';
   static const String _companySettingsKey = 'company_settings_v1';
@@ -2494,6 +2498,20 @@ class LocalAppDataRepository implements AppDataRepository {
       _lastClientsFallbackReason = 'cloud indisponibil';
       return localItems;
     }
+    // CACHE-FIRST: dacă avem deja date locale, le returnăm IMEDIAT (fără a
+    // aștepta Firestore) și împrospătăm din cloud în fundal. Evită blocarea
+    // UI pe Windows, unde Firestore (SDK C++) e mult mai lent decât pe Android.
+    // Merge-ul cloud rulează în `_listClientsCloudMerged` (NESCHIMBAT) și scrie
+    // cache-ul local pentru următoarea citire. NU se declanșează niciun notifier
+    // (evită reload storm). Datele cloud noi apar la următorul reload.
+    if (localItems.isNotEmpty) {
+      _refreshClientsFromCloudBackground(localItems);
+      _lastClientsDataSourceLabel = 'local_cache_then_cloud';
+      _lastClientsFallbackReason = '';
+      return localItems;
+    }
+    // Cache local gol (primă instalare / date șterse) → blocăm pe cloud ca să
+    // aducem tot istoricul, altfel utilizatorul nu vede nimic.
     try {
       if (_isClientsCloudAvailable) {
         final cloudItems = await _listClientsCloudMerged(localItems);
@@ -2567,6 +2585,29 @@ class LocalAppDataRepository implements AppDataRepository {
     return cloudItems;
   }
 
+  /// Împrospătare cloud în fundal pentru clienți (single-flight).
+  /// Reutilizează exact logica de merge din `_listClientsCloudMerged`, dar fără
+  /// a bloca apelantul și fără notifier (cache-ul local actualizat e citit la
+  /// următorul `listClients`). Erorile sunt înghițite — best-effort.
+  void _refreshClientsFromCloudBackground(List<ClientRecord> localItems) {
+    if (!_isClientsCloudAvailable) return;
+    if (_clientsCloudRefreshFuture != null) return; // deja rulează
+    final future = _listClientsCloudMerged(localItems).then(
+      (_) {},
+      onError: (Object error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+      },
+    );
+    _clientsCloudRefreshFuture = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_clientsCloudRefreshFuture, future)) {
+          _clientsCloudRefreshFuture = null;
+        }
+      }),
+    );
+  }
+
   Future<List<PartnerRecord>> _listPartnersCloudMerged(
     List<PartnerRecord> localItems,
   ) async {
@@ -2593,6 +2634,27 @@ class LocalAppDataRepository implements AppDataRepository {
     }
     await _writePartners(cloudItems);
     return cloudItems;
+  }
+
+  /// Împrospătare cloud în fundal pentru parteneri (single-flight).
+  /// Identic cu varianta pentru clienți — best-effort, fără blocare/notifier.
+  void _refreshPartnersFromCloudBackground(List<PartnerRecord> localItems) {
+    if (!_isPartnersCloudAvailable) return;
+    if (_partnersCloudRefreshFuture != null) return; // deja rulează
+    final future = _listPartnersCloudMerged(localItems).then(
+      (_) {},
+      onError: (Object error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+      },
+    );
+    _partnersCloudRefreshFuture = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_partnersCloudRefreshFuture, future)) {
+          _partnersCloudRefreshFuture = null;
+        }
+      }),
+    );
   }
 
   Future<List<PartnerWorkerRecord>> _listPartnerWorkersCloudMerged(
@@ -2803,6 +2865,14 @@ class LocalAppDataRepository implements AppDataRepository {
     if (!_isPartnersCloudAvailable) {
       _lastPartnersDataSourceLabel = 'local_cache';
       _lastPartnersFallbackReason = 'cloud indisponibil';
+      return localItems;
+    }
+    // CACHE-FIRST: returnăm local imediat + împrospătare cloud în fundal.
+    // (vezi explicația din listClients — identic, fără notifier / fără blocare UI)
+    if (localItems.isNotEmpty) {
+      _refreshPartnersFromCloudBackground(localItems);
+      _lastPartnersDataSourceLabel = 'local_cache_then_cloud';
+      _lastPartnersFallbackReason = '';
       return localItems;
     }
     try {
