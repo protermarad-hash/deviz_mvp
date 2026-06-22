@@ -2453,7 +2453,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         return true;
       case 'job_site_direct_pv_montaj':
         final pvMontaj = await _createAiJobSiteDocument(
-          JobSiteDocumentType.montajExecutie,
+          JobSiteDocumentType.pvMontaj,
           normalized,
         );
         await _appendJournal(
@@ -2472,7 +2472,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         return true;
       case 'job_site_direct_pif_ventilation':
         final pifVentilation = await _createAiJobSiteDocument(
-          JobSiteDocumentType.pifVentilatieRecuperator,
+          JobSiteDocumentType.pif,
           normalized,
         );
         await _appendJournal(
@@ -2491,7 +2491,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         return true;
       case 'job_site_direct_pif_vrf':
         final pifVrf = await _createAiJobSiteDocument(
-          JobSiteDocumentType.pifVrfClimatizare,
+          JobSiteDocumentType.pif,
           normalized,
         );
         await _appendJournal(

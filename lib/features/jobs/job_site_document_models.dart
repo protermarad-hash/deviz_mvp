@@ -1,58 +1,60 @@
 enum JobSiteDocumentType {
-  montajExecutie,
-  pifVentilatieRecuperator,
-  pifVrfClimatizare;
+  pvMontaj,
+  pif;
 
   String get storageValue {
     switch (this) {
-      case JobSiteDocumentType.montajExecutie:
-        return 'pv_montaj_executie';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'pv_pif_ventilatie_recuperator';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return 'pv_pif_vrf_climatizare';
+      case JobSiteDocumentType.pvMontaj:
+        return 'pv_montaj';
+      case JobSiteDocumentType.pif:
+        return 'pif';
     }
   }
 
   String get label {
     switch (this) {
-      case JobSiteDocumentType.montajExecutie:
-        return 'PV montaj / executie lucrari';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'PV PIF ventilatie / recuperator';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return 'PV PIF VRF / climatizare';
+      case JobSiteDocumentType.pvMontaj:
+        return 'PV Montaj / Execuție lucrări';
+      case JobSiteDocumentType.pif:
+        return 'PIF - Punere în Funcțiune';
     }
   }
 
   String get registryCategory {
     switch (this) {
-      case JobSiteDocumentType.montajExecutie:
-        return 'PV montaj executie lucrari';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'PV PIF ventilatie recuperator';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return 'PV PIF VRF climatizare';
+      case JobSiteDocumentType.pvMontaj:
+        return 'PV Montaj Executie Lucrari';
+      case JobSiteDocumentType.pif:
+        return 'PIF Punere In Functiune';
     }
   }
 
   String get shortCode {
     switch (this) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return 'PVM';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'PIFV';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return 'PIFVRF';
+      case JobSiteDocumentType.pif:
+        return 'PIF';
     }
   }
 
   static JobSiteDocumentType fromValue(String? raw) {
     final normalized = (raw ?? '').trim().toLowerCase();
-    for (final item in JobSiteDocumentType.values) {
-      if (item.storageValue == normalized) return item;
+    switch (normalized) {
+      // Valori noi
+      case 'pv_montaj':
+        return JobSiteDocumentType.pvMontaj;
+      case 'pif':
+        return JobSiteDocumentType.pif;
+      // Backward compat — valori vechi din Firestore
+      case 'pv_montaj_executie':
+        return JobSiteDocumentType.pvMontaj;
+      case 'pv_pif_ventilatie_recuperator':
+      case 'pv_pif_vrf_climatizare':
+        return JobSiteDocumentType.pif;
+      default:
+        return JobSiteDocumentType.pvMontaj;
     }
-    return JobSiteDocumentType.montajExecutie;
   }
 }
 
@@ -280,6 +282,7 @@ class JobSiteDocumentRecord {
     this.trainingProvided = false,
     this.preparedForNextStep = '',
     this.selectedWorkLines = const <Map<String, dynamic>>[],
+    this.otherParticipants = '',
   });
 
   final String id;
@@ -314,6 +317,7 @@ class JobSiteDocumentRecord {
   final bool trainingProvided;
   final String preparedForNextStep;
   final List<Map<String, dynamic>> selectedWorkLines;
+  final String otherParticipants;
 
   JobSiteDocumentRecord copyWith({
     String? id,
@@ -348,6 +352,7 @@ class JobSiteDocumentRecord {
     bool? trainingProvided,
     String? preparedForNextStep,
     List<Map<String, dynamic>>? selectedWorkLines,
+    String? otherParticipants,
   }) {
     return JobSiteDocumentRecord(
       id: id ?? this.id,
@@ -388,6 +393,7 @@ class JobSiteDocumentRecord {
       trainingProvided: trainingProvided ?? this.trainingProvided,
       preparedForNextStep: preparedForNextStep ?? this.preparedForNextStep,
       selectedWorkLines: selectedWorkLines ?? this.selectedWorkLines,
+      otherParticipants: otherParticipants ?? this.otherParticipants,
     );
   }
 
@@ -428,6 +434,7 @@ class JobSiteDocumentRecord {
         'selected_work_lines': selectedWorkLines
             .map((line) => Map<String, dynamic>.from(line))
             .toList(growable: false),
+        'other_participants': otherParticipants,
       };
 
   factory JobSiteDocumentRecord.fromMap(Map<String, dynamic> map) {
@@ -555,6 +562,10 @@ class JobSiteDocumentRecord {
             .map((item) => Map<String, dynamic>.from(item))
             .toList(growable: false);
       }(),
+      otherParticipants:
+          (map['other_participants'] ?? map['otherParticipants'] ?? '')
+              .toString()
+              .trim(),
     );
   }
 }

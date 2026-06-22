@@ -178,12 +178,10 @@ class JobSiteDocumentPdfService {
   static List<pw.Widget> _buildContent(
       JobSiteDocumentRecord doc, List<JobLine> linii) {
     switch (doc.documentType) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return _contentPvMontaj(doc, linii);
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return _contentPifVentilatie(doc, linii);
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return _contentPifVrf(doc, linii);
+      case JobSiteDocumentType.pif:
+        return _contentPif(doc, linii);
     }
   }
 
@@ -293,102 +291,7 @@ class JobSiteDocumentPdfService {
     return widgets;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // PIF VENTILAȚIE / RECUPERATOR
-  // ─────────────────────────────────────────────────────────────────────────
-
-  static List<pw.Widget> _contentPifVentilatie(
-      JobSiteDocumentRecord doc, List<JobLine> linii) {
-    final widgets = <pw.Widget>[];
-
-    widgets.add(_antetText(
-      'Prezentul Proces-Verbal de Punere în Funcțiune atestă că sistemul de ventilație / '
-      'recuperare de căldură menționat a fost instalat, reglat și testat conform specificațiilor '
-      'tehnice ale producătorului și normativelor în vigoare. Instalația a fost pusă în funcțiune '
-      'cu succes, parametrii de funcționare corespund valorilor proiectate, iar personalul '
-      'beneficiarului a fost instruit cu privire la utilizarea și întreținerea corectă a sistemului.',
-    ));
-
-    widgets.add(ProTermPdfTemplate.buildSection('Date echipament', [
-      ProTermPdfTemplate.buildInfoRow('Număr PIF', _safe(doc.documentNumber)),
-      ProTermPdfTemplate.buildInfoRow(
-          'Dată punere în funcțiune', _fmt(doc.documentDate)),
-      ProTermPdfTemplate.buildInfoRow(
-          'Tip echipament', 'Ventilație / Recuperator de căldură'),
-      ProTermPdfTemplate.buildInfoRow(
-          'Status funcțional', _safe(doc.functionalStatus)),
-    ]));
-    widgets.add(pw.SizedBox(height: 8));
-
-    // Linii planificate
-    final liniiWidget = _buildLiniiTable(linii);
-    if (liniiWidget != null) {
-      widgets.add(liniiWidget);
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    // Probe și verificări
-    if (doc.checkItems.isNotEmpty) {
-      final checkRows = doc.checkItems
-          .map((item) => [
-                item.value ? '✓' : '✗',
-                item.label,
-                item.notes.trim().isEmpty ? '-' : item.notes,
-              ])
-          .toList();
-      widgets.add(_redSection('Probe și verificări', [
-        pw.SizedBox(height: 4),
-        ProTermPdfTemplate.buildTable(
-          headers: ['Rezultat', 'Verificare', 'Observații'],
-          rows: checkRows,
-          columnWidths: [0.08, 0.60, 0.32],
-        ),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    // Măsurători debit/presiune
-    if (doc.measurements.isNotEmpty) {
-      final measRows = doc.measurements
-          .map((m) => [
-                m.label,
-                m.value.trim().isEmpty
-                    ? '-'
-                    : '${m.value} ${m.unit}'.trim(),
-                m.notes.trim().isEmpty ? '-' : m.notes,
-              ])
-          .toList();
-      widgets.add(_redSection('Măsurători debit / presiune', [
-        pw.SizedBox(height: 4),
-        ProTermPdfTemplate.buildTable(
-          headers: ['Parametru', 'Valoare', 'Observații'],
-          rows: measRows,
-          columnWidths: [0.45, 0.25, 0.30],
-        ),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    if (doc.probesSummary.trim().isNotEmpty) {
-      widgets.add(_redSection('Sumar probe ventilație', [
-        pw.Text(_safe(doc.probesSummary),
-            style: const pw.TextStyle(fontSize: 9)),
-      ]));
-      widgets.add(pw.SizedBox(height: 8));
-    }
-
-    _appendCommonSections(doc, widgets);
-    _appendGarantieSection(widgets);
-    _appendAnnexes(doc, widgets);
-
-    return widgets;
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // PIF VRF / CLIMATIZARE
-  // ─────────────────────────────────────────────────────────────────────────
-
-  static List<pw.Widget> _contentPifVrf(
+  static List<pw.Widget> _contentPif(
       JobSiteDocumentRecord doc, List<JobLine> linii) {
     final widgets = <pw.Widget>[];
 

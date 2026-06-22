@@ -174,7 +174,7 @@ class JobSiteDocumentTemplateService {
         fallback: defaultProbesSummary,
       ),
       remediationDeadline: null,
-      trainingProvided: documentType != JobSiteDocumentType.montajExecutie,
+      trainingProvided: documentType != JobSiteDocumentType.pvMontaj,
       preparedForNextStep: _preparedForNextStep(documentType),
     );
     return base.copyWith(
@@ -533,23 +533,17 @@ class JobSiteDocumentTemplateService {
     final airNetwork = _airNetworkSummaryAnnex(resources.materials);
 
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return <JobSiteDocumentAnnex>[
           materials,
           if (laborAnnex.items.isNotEmpty) laborAnnex,
           equipments,
         ];
-      case JobSiteDocumentType.pifVentilatieRecuperator:
+      case JobSiteDocumentType.pif:
         return <JobSiteDocumentAnnex>[
           commissionedEquipment,
           airMaterials,
           airNetwork,
-          if (laborAnnex.items.isNotEmpty) laborAnnex,
-        ];
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return <JobSiteDocumentAnnex>[
-          commissionedEquipment,
-          airMaterials,
           equipments,
           if (laborAnnex.items.isNotEmpty) laborAnnex,
         ];
@@ -641,11 +635,9 @@ class JobSiteDocumentTemplateService {
     final baseProject =
         job.title.trim().isNotEmpty ? job.title.trim() : job.jobCode;
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return 'Document montaj / executie - $baseProject';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'Document PIF - $baseProject';
-      case JobSiteDocumentType.pifVrfClimatizare:
+      case JobSiteDocumentType.pif:
         return 'Document PIF - $baseProject';
     }
   }
@@ -653,18 +645,14 @@ class JobSiteDocumentTemplateService {
   String _defaultSubtitle(JobRecord job, JobSiteDocumentType type) {
     final location = _buildLocation(job);
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return location.isEmpty
             ? 'Montaj / executie'
             : 'Montaj / executie | $location';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
+      case JobSiteDocumentType.pif:
         return location.isEmpty
-            ? 'PIF ventilatie / recuperator'
-            : 'PIF ventilatie / recuperator | $location';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return location.isEmpty
-            ? 'PIF VRF / climatizare'
-            : 'PIF VRF / climatizare | $location';
+            ? 'PIF - Punere in Functiune'
+            : 'PIF - Punere in Functiune | $location';
     }
   }
 
@@ -679,53 +667,45 @@ class JobSiteDocumentTemplateService {
 
   String _defaultObservations(JobSiteDocumentType type) {
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return 'S-au verificat vizual montajul, materialele si echipamentele instalate. Documentul ramane baza pentru etapa de PIF.';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'S-au verificat partea electrica, automatizarea, functionarea recuperatorului si reteaua de distributie aer.';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return 'S-au verificat pre-pornirea, traseele frigorifice, vacuumarea, probele de presiune si functionarea sistemului VRF.';
+      case JobSiteDocumentType.pif:
+        return 'S-au verificat partea electrica, automatizarea, probele functionale, masuratorile si functionarea sistemului pus in functiune.';
     }
   }
 
   String _defaultConclusions(JobSiteDocumentType type) {
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return 'Lucrarea de montaj / executie este pregatita pentru verificari finale si, dupa caz, pentru etapa de punere in functiune.';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'Instalatia de ventilatie cu recuperare este apta pentru exploatare, cu respectarea instructiunilor de utilizare si mentenanta.';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return 'Sistemul VRF / climatizare este pus in functiune si poate fi exploatat in regim normal dupa predarea catre beneficiar.';
+      case JobSiteDocumentType.pif:
+        return 'Sistemul este pus in functiune si poate fi exploatat in regim normal dupa predarea catre beneficiar, cu respectarea instructiunilor de utilizare si mentenanta.';
     }
   }
 
   String _defaultFunctionalStatus(JobSiteDocumentType type) {
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return 'pregatit pentru pif';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-      case JobSiteDocumentType.pifVrfClimatizare:
+      case JobSiteDocumentType.pif:
         return 'pus in functiune';
     }
   }
 
   String _defaultProbesSummary(JobSiteDocumentType type) {
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return 'Verificari vizuale si tehnice preliminare.';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-        return 'Verificari electrice, functionale si debite de aer.';
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return 'Probe de presiune, vacuumare si teste functionale VRF.';
+      case JobSiteDocumentType.pif:
+        return 'Verificari electrice, probe functionale si masuratori (debite, presiuni, temperaturi).';
     }
   }
 
   String _preparedForNextStep(JobSiteDocumentType type) {
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return 'pregatire etapa PIF';
-      case JobSiteDocumentType.pifVentilatieRecuperator:
-      case JobSiteDocumentType.pifVrfClimatizare:
+      case JobSiteDocumentType.pif:
         return 'predare beneficiar';
     }
   }
@@ -744,7 +724,7 @@ class JobSiteDocumentTemplateService {
     }
 
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return <JobSiteDocumentCheckItem>[
           ...build('montaj_fizic', <String>[
             'Materialele principale sunt montate conform situatiei din teren',
@@ -759,14 +739,18 @@ class JobSiteDocumentTemplateService {
             'Sunt semnalate eventuale remedieri sau completari',
           ]),
         ];
-      case JobSiteDocumentType.pifVentilatieRecuperator:
+      case JobSiteDocumentType.pif:
         return <JobSiteDocumentCheckItem>[
+          ...build('verificari_pre_pornire', <String>[
+            'Traseele si conexiunile au fost verificate',
+            'Sistemul este pregatit pentru pornire',
+          ]),
           ...build('verificari_electrice', <String>[
             'Alimentarea electrica a fost verificata',
             'Protectiile si conexiunile sunt conforme',
           ]),
-          ...build('verificari_functionale', <String>[
-            'Recuperatorul porneste si functioneaza stabil',
+          ...build('probe_functionale', <String>[
+            'Sistemul porneste si functioneaza stabil',
             'Comenzile si automatizarea raspund corect',
           ]),
           ...build('instruire_beneficiar', <String>[
@@ -774,28 +758,12 @@ class JobSiteDocumentTemplateService {
             'Beneficiarul a fost instruit privind mentenanta de baza',
           ]),
         ];
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return <JobSiteDocumentCheckItem>[
-          ...build('verificari_pre_pornire', <String>[
-            'Traseele frigorifice si electrice au fost verificate',
-            'Sistemul este pregatit pentru pornire',
-          ]),
-          ...build('probe_tehnice', <String>[
-            'Vacuumarea a fost executata',
-            'Proba de presiune a fost efectuata',
-            'Incarcarea agentului a fost verificata',
-          ]),
-          ...build('probe_functionale', <String>[
-            'Unitatile interioare si exterioare functioneaza corect',
-            'Controlerele si comenzile raspund corect',
-          ]),
-        ];
     }
   }
 
   List<JobSiteDocumentMeasurement> _measurementsFor(JobSiteDocumentType type) {
     switch (type) {
-      case JobSiteDocumentType.montajExecutie:
+      case JobSiteDocumentType.pvMontaj:
         return const <JobSiteDocumentMeasurement>[
           JobSiteDocumentMeasurement(
             id: 'montaj-materiale',
@@ -810,46 +778,31 @@ class JobSiteDocumentTemplateService {
             unit: 'pozitii',
           ),
         ];
-      case JobSiteDocumentType.pifVentilatieRecuperator:
+      case JobSiteDocumentType.pif:
         return const <JobSiteDocumentMeasurement>[
           JobSiteDocumentMeasurement(
-            id: 'vent-debit-suplare',
-            sectionKey: 'verificari_functionale',
-            label: 'Debit aer suplare',
+            id: 'pif-debit',
+            sectionKey: 'probe_functionale',
+            label: 'Debit aer / agent',
             unit: 'mc/h',
           ),
           JobSiteDocumentMeasurement(
-            id: 'vent-debit-extractie',
-            sectionKey: 'verificari_functionale',
-            label: 'Debit aer extractie',
-            unit: 'mc/h',
-          ),
-          JobSiteDocumentMeasurement(
-            id: 'vent-curent',
-            sectionKey: 'verificari_electrice',
-            label: 'Curent absorbit',
-            unit: 'A',
-          ),
-        ];
-      case JobSiteDocumentType.pifVrfClimatizare:
-        return const <JobSiteDocumentMeasurement>[
-          JobSiteDocumentMeasurement(
-            id: 'vrf-presiune',
-            sectionKey: 'probe_tehnice',
+            id: 'pif-presiune',
+            sectionKey: 'probe_functionale',
             label: 'Presiune proba',
             unit: 'bar',
           ),
           JobSiteDocumentMeasurement(
-            id: 'vrf-temperatura',
+            id: 'pif-temperatura',
             sectionKey: 'probe_functionale',
             label: 'Temperatura refulare',
             unit: 'C',
           ),
           JobSiteDocumentMeasurement(
-            id: 'vrf-agent',
-            sectionKey: 'probe_tehnice',
-            label: 'Cantitate agent',
-            unit: 'kg',
+            id: 'pif-curent',
+            sectionKey: 'verificari_electrice',
+            label: 'Curent absorbit',
+            unit: 'A',
           ),
         ];
     }

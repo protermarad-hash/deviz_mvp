@@ -498,12 +498,52 @@ class JobSiteDocumentPdfService {
     return widgets;
   }
 
+  // ── Tabel poziții lucrare verificate (selectate manual cu status) ───────────
+
+  static String _wlText(dynamic raw) => '${raw ?? ''}'.trim();
+
+  static String _wlQty(dynamic raw) {
+    if (raw is num) return raw.toStringAsFixed(2);
+    final parsed = double.tryParse('${raw ?? ''}'.replaceAll(',', '.'));
+    return parsed != null ? parsed.toStringAsFixed(2) : _wlText(raw);
+  }
+
+  static pw.Widget? _buildSelectedWorkLinesTable(JobSiteDocumentRecord doc) {
+    if (doc.selectedWorkLines.isEmpty) return null;
+    var index = 0;
+    final rows = doc.selectedWorkLines.map((line) {
+      index++;
+      return [
+        '$index',
+        _wlText(line['denumire']).isEmpty ? '-' : _wlText(line['denumire']),
+        _wlText(line['um']).isEmpty ? '-' : _wlText(line['um']),
+        _wlQty(line['cantitate']),
+        _wlText(line['status']).isEmpty ? '-' : _wlText(line['status']),
+        _wlText(line['observatii']).isEmpty ? '-' : _wlText(line['observatii']),
+      ];
+    }).toList();
+
+    return _redSection('Poziții lucrare verificate', [
+      pw.SizedBox(height: 4),
+      ProTermPdfTemplate.buildTable(
+        headers: ['Nr', 'Descriere', 'UM', 'Cantitate', 'Status', 'Observații'],
+        rows: rows,
+        columnWidths: [0.06, 0.36, 0.08, 0.13, 0.17, 0.20],
+      ),
+    ]);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Secțiuni comune (observații, concluzii, termen remediere)
   // ─────────────────────────────────────────────────────────────────────────
 
   static void _appendCommonSections(
       JobSiteDocumentRecord doc, List<pw.Widget> out) {
+    final selectedWorkLinesWidget = _buildSelectedWorkLinesTable(doc);
+    if (selectedWorkLinesWidget != null) {
+      out.add(selectedWorkLinesWidget);
+      out.add(pw.SizedBox(height: 8));
+    }
     if (doc.observations.trim().isNotEmpty) {
       out.add(_redSection('Observații', [
         pw.Text(_safe(doc.observations),
