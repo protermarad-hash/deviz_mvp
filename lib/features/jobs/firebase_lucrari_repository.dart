@@ -97,6 +97,9 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
       'source_offer_id': job.sourceOfferId,
       'source_offer_number': job.sourceOfferNumber,
       'source_offer_title': job.sourceOfferTitle,
+      'source_document_type': job.sourceDocumentType,
+      'linii_planificate':
+          job.liniiPlanificate.map((l) => l.toMap()).toList(growable: false),
       'created_by_user_id': job.createdByUserId,
       'created_by_user_email': job.createdByUserEmail,
       'partner_id': job.partnerId,
@@ -184,6 +187,11 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
       'source_offer_title':
           (raw['source_offer_title'] ?? raw['sourceOfferTitle'] ?? '')
               .toString(),
+      'source_document_type':
+          (raw['source_document_type'] ?? raw['sourceDocumentType'] ?? 'oferta')
+              .toString(),
+      'linii_planificate':
+          raw['linii_planificate'] ?? raw['liniiPlanificate'] ?? const [],
       'job_own_vehicles':
           raw['job_own_vehicles'] ?? raw['jobOwnVehicles'] ?? const [],
       'time_entries': raw['time_entries'] ?? raw['timeEntries'] ?? const [],

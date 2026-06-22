@@ -70,7 +70,7 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
       'notes': job.notes,
       'is_active': job.isActive,
       'created_at': job.createdAt.toIso8601String(),
-      'updated_at': DateTime.now().toIso8601String(),
+      'updated_at': job.updatedAt.toIso8601String(),
       'materials': job.materials,
       'materials_updated_at': job.materialsUpdatedAt?.toIso8601String(),
       'details_updated_at': job.detailsUpdatedAt?.toIso8601String(),
@@ -99,6 +99,11 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
       'source_offer_title': job.sourceOfferTitle,
       'created_by_user_id': job.createdByUserId,
       'created_by_user_email': job.createdByUserEmail,
+      'partner_id': job.partnerId,
+      'partner_name': job.partnerName,
+      'partner_profit_percent': job.partnerProfitPercent,
+      'partner_resources': job.partnerResources,
+      'profit_tax_percent': job.profitTaxPercent,
     };
   }
 
@@ -190,6 +195,16 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
       'created_by_user_email':
           (raw['created_by_user_email'] ?? raw['createdByUserEmail'] ?? '')
               .toString(),
+      'partner_id':
+          (raw['partner_id'] ?? raw['partnerId'] ?? '').toString(),
+      'partner_name':
+          (raw['partner_name'] ?? raw['partnerName'] ?? '').toString(),
+      'partner_profit_percent':
+          raw['partner_profit_percent'] ?? raw['partnerProfitPercent'],
+      'partner_resources':
+          raw['partner_resources'] ?? raw['partnerResources'],
+      'profit_tax_percent':
+          raw['profit_tax_percent'] ?? raw['profitTaxPercent'],
     };
   }
 }
