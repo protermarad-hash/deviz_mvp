@@ -147,7 +147,7 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
     final type = await showDialog<JobSiteDocumentType>(
       context: context,
       builder: (context) => _CreateDocumentDialog(
-        initialType: JobSiteDocumentType.montajExecutie,
+        initialType: JobSiteDocumentType.pvMontaj,
       ),
     );
     if (type == null) return;
@@ -338,7 +338,7 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
   JobSiteDocumentRecord _applyInstallationAnnexCarryForward(
     JobSiteDocumentRecord draft,
   ) {
-    if (draft.documentType == JobSiteDocumentType.montajExecutie) {
+    if (draft.documentType == JobSiteDocumentType.pvMontaj) {
       return draft;
     }
     final source = _latestInstallationDocument();
@@ -381,7 +381,7 @@ class _JobSiteDocumentsPageState extends State<JobSiteDocumentsPage> {
     final candidates = _documents
         .where(
           (item) =>
-              item.documentType == JobSiteDocumentType.montajExecutie &&
+              item.documentType == JobSiteDocumentType.pvMontaj &&
               item.annexes.any((annex) => annex.items.isNotEmpty),
         )
         .toList(growable: false)
@@ -870,7 +870,7 @@ class _JobSiteDocumentDraftTemplateDialogState
   @override
   void initState() {
     super.initState();
-    _selectedType = JobSiteDocumentType.montajExecutie;
+    _selectedType = JobSiteDocumentType.pvMontaj;
     _titleController = TextEditingController();
     _subtitleController = TextEditingController();
     _observationsController = TextEditingController();
@@ -1612,7 +1612,7 @@ class _JobSiteDocumentEditorDialogState
     final candidates = widget.allDocuments
         .where(
           (item) =>
-              item.documentType == JobSiteDocumentType.montajExecutie &&
+              item.documentType == JobSiteDocumentType.pvMontaj &&
               item.annexes.any((annex) => annex.items.isNotEmpty),
         )
         .toList(growable: false)
@@ -2002,7 +2002,7 @@ class _JobSiteDocumentEditorDialogState
                       ),
                       OutlinedButton.icon(
                         onPressed: widget.document.documentType ==
-                                JobSiteDocumentType.montajExecutie
+                                JobSiteDocumentType.pvMontaj
                             ? null
                             : _prefillAnnexesFromLatestInstallation,
                         icon: const Icon(

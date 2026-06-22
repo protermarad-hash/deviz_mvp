@@ -1148,6 +1148,7 @@ class _JobSiteDocumentEditorDialogState
   late TextEditingController _generatedPathController;
   late TextEditingController _generatedFileNameController;
   late TextEditingController _registryEntryController;
+  late TextEditingController _otherParticipantsController;
 
   late DateTime _documentDate;
   late DateTime? _remediationDeadline;
@@ -1159,12 +1160,13 @@ class _JobSiteDocumentEditorDialogState
   bool _isImporting = false;
   bool _isRunningAi = false;
 
-  static const List<String> _lineStatusOptions = <String>[
-    'Instalat',
-    'Funcțional',
-    'De remediat',
-    'Neinstalat',
-  ];
+  bool get _isPif =>
+      widget.document.documentType == JobSiteDocumentType.pif;
+
+  /// Opțiuni status poziții, diferite per tip de document.
+  List<String> get _lineStatusOptions => _isPif
+      ? const <String>['Funcționare OK', 'Instalat', 'De remediat', 'Neinstalat']
+      : const <String>['Instalat', 'Neinstalat', 'De remediat'];
 
   @override
   void initState() {
@@ -1198,6 +1200,8 @@ class _JobSiteDocumentEditorDialogState
         TextEditingController(text: document.generatedDocumentFileName);
     _registryEntryController =
         TextEditingController(text: document.registryEntryId);
+    _otherParticipantsController =
+        TextEditingController(text: document.otherParticipants);
     _documentDate = document.documentDate;
     _remediationDeadline = document.remediationDeadline;
     _status = document.status;
@@ -1453,6 +1457,7 @@ class _JobSiteDocumentEditorDialogState
     _generatedPathController.dispose();
     _generatedFileNameController.dispose();
     _registryEntryController.dispose();
+    _otherParticipantsController.dispose();
     super.dispose();
   }
 
@@ -1957,6 +1962,7 @@ class _JobSiteDocumentEditorDialogState
       preparedForNextStep: _preparedForNextStepController.text.trim(),
       annexes: _annexes,
       selectedWorkLines: _selectedWorkLines,
+      otherParticipants: _otherParticipantsController.text.trim(),
       status: _status,
       updatedAt: DateTime.now(),
     );
@@ -1969,10 +1975,31 @@ class _JobSiteDocumentEditorDialogState
     Navigator.of(context).pop(normalized);
   }
 
+  Widget _sectionHeader(String text) {
+    return SizedBox(
+      width: 732,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6, bottom: 2),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 13,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final statusOptions = <String>{'draft', 'semnat', 'arhivat'};
+    if (_status.trim().isNotEmpty) statusOptions.add(_status.trim());
     return AlertDialog(
-      title: Text(widget.isNew ? 'Document PV nou' : 'Editare document PV'),
+      title: Text(widget.isNew
+          ? (_isPif ? 'PIF nou' : 'PV Montaj nou')
+          : (_isPif ? 'Editare PIF' : 'Editare PV Montaj')),
       content: SizedBox(
         width: 860,
         child: Form(
@@ -2024,6 +2051,7 @@ class _JobSiteDocumentEditorDialogState
                     ],
                   ),
                 ),
+                _sectionHeader(_isPif ? '1. Date generale' : '1. Date proiect'),
                 SizedBox(
                   width: 260,
                   child: TextFormField(
@@ -2047,6 +2075,59 @@ class _JobSiteDocumentEditorDialogState
                   ),
                 ),
                 SizedBox(
+                  width: 220,
+                  child: InkWell(
+                    onTap: () => _pickDate(
+                      initial: _documentDate,
+                      onPicked: (value) =>
+                          setState(() => _documentDate = value),
+                    ),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Data document',
+                        suffixIcon: Icon(Icons.calendar_today),
+                      ),
+                      child: Text(_formatDate(_documentDate)),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _beneficiaryRepresentativeController,
+                    decoration:
+                        const InputDecoration(labelText: 'Beneficiar'),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _executorRepresentativeController,
+                    decoration:
+                        const InputDecoration(labelText: 'Executant'),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _projectNameController,
+                    decoration: const InputDecoration(
+                        labelText: 'Proiect / Obiectiv'),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _locationController,
+                    decoration:
+                        const InputDecoration(labelText: 'Adresă / Locație'),
+                  ),
+                ),
+                SizedBox(
                   width: 472,
                   child: TextFormField(
                     textCapitalization: TextCapitalization.sentences,
@@ -2066,85 +2147,99 @@ class _JobSiteDocumentEditorDialogState
                     ),
                   ),
                 ),
-                SizedBox(
-                  width: 220,
-                  child: InkWell(
-                    onTap: () => _pickDate(
-                      initial: _documentDate,
-                      onPicked: (value) =>
-                          setState(() => _documentDate = value),
-                    ),
-                    child: InputDecorator(
+                if (_isPif) ...[
+                  _sectionHeader('2. Comisia de punere în funcțiune'),
+                  SizedBox(
+                    width: 732,
+                    child: TextFormField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _otherParticipantsController,
+                      minLines: 1,
+                      maxLines: 3,
                       decoration: const InputDecoration(
-                        labelText: 'Data document',
-                        suffixIcon: Icon(Icons.calendar_today),
+                        labelText:
+                            'Alți participanți / Reprezentant service autorizat',
+                        helperText:
+                            'Reprezentant beneficiar și executant sunt completați la „Date generale".',
                       ),
-                      child: Text(_formatDate(_documentDate)),
+                    ),
+                  ),
+                ],
+                _sectionHeader(_isPif
+                    ? '3. Obiectul probelor'
+                    : '2. Obiectul procesului-verbal'),
+                SizedBox(
+                  width: 732,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _observationsController,
+                    minLines: 3,
+                    maxLines: 5,
+                    decoration: InputDecoration(
+                      labelText: 'Constatări / Obiectul documentului',
+                      hintText: _isPif
+                          ? 'Verificarea funcționării și performanțelor sistemului...'
+                          : 'Se atestă finalizarea lucrărilor de montaj fizic...',
                     ),
                   ),
                 ),
+                _sectionHeader(_isPif
+                    ? '4. Etape și teste / Probe și măsurători'
+                    : '3. Verificări efectuate'),
                 SizedBox(
-                  width: 220,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _status,
-                    decoration: const InputDecoration(labelText: 'Status'),
-                    items: const [
-                      DropdownMenuItem(value: 'draft', child: Text('draft')),
-                      DropdownMenuItem(
-                        value: 'in_review',
-                        child: Text('in_review'),
+                  width: 732,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _probesSummaryController,
+                    minLines: 2,
+                    maxLines: 5,
+                    decoration: InputDecoration(
+                      labelText:
+                          _isPif ? 'Probe / Măsurători' : 'Verificări efectuate',
+                      hintText: _isPif
+                          ? 'Verificări pre-pornire, electrice, probe funcționale, măsurători...'
+                          : 'Verificări generale vizuale, verificări tehnice preliminare...',
+                    ),
+                  ),
+                ),
+                if (_isPif) ...[
+                  _sectionHeader('5. Instruire + Status funcțional'),
+                  SizedBox(
+                    width: 360,
+                    child: SwitchListTile(
+                      value: _trainingProvided,
+                      onChanged: (value) =>
+                          setState(() => _trainingProvided = value),
+                      title:
+                          const Text('Instruire personal beneficiar efectuată'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                  SizedBox(
+                    width: 360,
+                    child: TextFormField(
+                      textCapitalization: TextCapitalization.sentences,
+                      controller: _functionalStatusController,
+                      decoration: const InputDecoration(
+                        labelText: 'Status funcțional sistem',
+                        hintText:
+                            'pus în funcțiune / cu deficiențe / nefuncțional',
                       ),
-                      DropdownMenuItem(value: 'final', child: Text('final')),
-                    ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() => _status = value);
-                    },
-                  ),
-                ),
-                SizedBox(
-                  width: 360,
-                  child: TextFormField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _beneficiaryRepresentativeController,
-                    decoration: const InputDecoration(
-                      labelText: 'Reprezentant beneficiar',
                     ),
                   ),
-                ),
+                ],
+                _sectionHeader(_isPif
+                    ? '6. Constatări / Deficiențe'
+                    : '4. Constatări / Deficiențe'),
                 SizedBox(
-                  width: 360,
+                  width: 732,
                   child: TextFormField(
                     textCapitalization: TextCapitalization.sentences,
-                    controller: _executorRepresentativeController,
+                    controller: _conclusionsController,
+                    minLines: 3,
+                    maxLines: 5,
                     decoration: const InputDecoration(
-                      labelText: 'Reprezentant executant',
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: 360,
-                  child: TextFormField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _projectNameController,
-                    decoration: const InputDecoration(labelText: 'Proiect'),
-                  ),
-                ),
-                SizedBox(
-                  width: 360,
-                  child: TextFormField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _locationController,
-                    decoration: const InputDecoration(labelText: 'Locatie'),
-                  ),
-                ),
-                SizedBox(
-                  width: 240,
-                  child: TextFormField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _functionalStatusController,
-                    decoration:
-                        const InputDecoration(labelText: 'Status functional'),
+                        labelText: 'Concluzii / Deficiențe constatate'),
                   ),
                 ),
                 SizedBox(
@@ -2164,48 +2259,24 @@ class _JobSiteDocumentEditorDialogState
                     ),
                   ),
                 ),
+                _sectionHeader('Status document'),
                 SizedBox(
                   width: 220,
-                  child: SwitchListTile(
-                    value: _trainingProvided,
-                    onChanged: (value) =>
-                        setState(() => _trainingProvided = value),
-                    title: const Text('Instruire beneficiar'),
-                    contentPadding: EdgeInsets.zero,
+                  child: DropdownButtonFormField<String>(
+                    initialValue:
+                        statusOptions.contains(_status) ? _status : 'draft',
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: statusOptions
+                        .map((s) => DropdownMenuItem<String>(
+                            value: s, child: Text(s)))
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _status = value);
+                    },
                   ),
                 ),
-                SizedBox(
-                  width: 732,
-                  child: TextFormField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _observationsController,
-                    minLines: 3,
-                    maxLines: 5,
-                    decoration:
-                        const InputDecoration(labelText: 'Observatii tehnice'),
-                  ),
-                ),
-                SizedBox(
-                  width: 732,
-                  child: TextFormField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _conclusionsController,
-                    minLines: 3,
-                    maxLines: 5,
-                    decoration: const InputDecoration(labelText: 'Concluzii'),
-                  ),
-                ),
-                SizedBox(
-                  width: 732,
-                  child: TextFormField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _probesSummaryController,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration:
-                        const InputDecoration(labelText: 'Probe / masuratori'),
-                  ),
-                ),
+                _sectionHeader('Avansat / Tehnic'),
                 SizedBox(
                   width: 732,
                   child: TextFormField(
@@ -2276,7 +2347,9 @@ class _JobSiteDocumentEditorDialogState
                     ),
                   ),
                 ),
-                if (_availableWorkLines.isNotEmpty)
+                if (_availableWorkLines.isNotEmpty) ...[
+                  _sectionHeader(
+                      _isPif ? '7. Poziții lucrare' : '5. Poziții lucrare'),
                   SizedBox(
                     width: 732,
                     child: InputDecorator(
@@ -2315,6 +2388,7 @@ class _JobSiteDocumentEditorDialogState
                       ),
                     ),
                   ),
+                ],
               ],
             ),
           ),
