@@ -54,6 +54,7 @@ import '../product_catalog/warranty_certificate_pdf_service.dart';
 import '../registratura/registry_models.dart';
 import 'appointment_models.dart';
 import 'programari_models.dart';
+import 'programari_utils.dart';
 import 'programari_calendar_placement.dart';
 import 'dialogs/employee_pay_dialog.dart';
 import 'programare_kit_catalog_service.dart';
@@ -3755,7 +3756,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
       final kitUsage = _buildMaterialUsageFromTemplate(
         item: item,
         templateId: selectedKitId,
-        linearMetersUsed: _asDouble(linearMetersController.text),
+        linearMetersUsed: asDouble(linearMetersController.text),
         notes: notesController.text,
       );
       // Combină liniile din kit cu produsele suplimentare
@@ -3814,7 +3815,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                             extraLines = extraLinesForKit(selectedKitId);
                             final sel = selectedTemplate();
                             if (sel != null &&
-                                _asDouble(linearMetersController.text) <= 0 &&
+                                asDouble(linearMetersController.text) <= 0 &&
                                 sel.defaultLinearMeters > 0) {
                               linearMetersController.text =
                                   sel.defaultLinearMeters.toStringAsFixed(2);
@@ -4523,18 +4524,18 @@ class _ProgramariPageState extends State<ProgramariPage> {
             seedAppointment.materialUsage.kitTemplateId.trim() ==
                 selectedMaterialKitTemplateId.trim()) {
           return seedAppointment.materialUsage.copyWith(
-            linearMetersUsed: _asDouble(materialKitLinearMetersController.text),
+            linearMetersUsed: asDouble(materialKitLinearMetersController.text),
             notes: materialUsageNotesController.text.trim(),
           );
         }
         return AppointmentMaterialUsage(
           kitTemplateId: selectedMaterialKitTemplateId.trim(),
           kitTemplateName: '',
-          linearMetersUsed: _asDouble(materialKitLinearMetersController.text),
+          linearMetersUsed: asDouble(materialKitLinearMetersController.text),
           notes: materialUsageNotesController.text.trim(),
         );
       }
-      final meters = _asDouble(materialKitLinearMetersController.text);
+      final meters = asDouble(materialKitLinearMetersController.text);
       final lines = template.components
           .map((component) {
             final quantity = component.resolvedQuantity(meters);
@@ -5664,7 +5665,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                   final selectedTemplate =
                                       findSelectedMaterialKit();
                                   if (selectedTemplate != null &&
-                                      _asDouble(materialKitLinearMetersController.text) <=
+                                      asDouble(materialKitLinearMetersController.text) <=
                                           0 &&
                                       selectedTemplate.defaultLinearMeters > 0) {
                                     materialKitLinearMetersController.text =
@@ -5872,7 +5873,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                     },
                                   );
                                   final totalCosturi = costMat + costAng;
-                                  final incasare = _asDouble(
+                                  final incasare = asDouble(
                                     adminCollectedAmountController.text,
                                   );
                                   final profit = incasare - totalCosturi;
@@ -6392,7 +6393,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                                     active: true,
                                                   ),
                                                 );
-                                                final oldAmount = _asDouble(
+                                                final oldAmount = asDouble(
                                                   employeePayControllers[empId]
                                                           ?.text ??
                                                       '',
@@ -6466,7 +6467,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                                     MainAxisAlignment.end,
                                                 children: [
                                                   Text(
-                                                    'Total angajați: ${selectedAssignedEmployeeIds.fold<double>(0, (acc, empId) { final ctrl = employeePayControllers[empId]; return acc + _asDouble(ctrl?.text ?? ''); }).toStringAsFixed(2)} RON',
+                                                    'Total angajați: ${selectedAssignedEmployeeIds.fold<double>(0, (acc, empId) { final ctrl = employeePayControllers[empId]; return acc + asDouble(ctrl?.text ?? ''); }).toStringAsFixed(2)} RON',
                                                     style: Theme.of(context)
                                                         .textTheme
                                                         .titleSmall,
@@ -6646,14 +6647,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
                       interventionPriceCurrency:
                           selectedInterventionPriceCurrency,
                       adminCollectedAmount:
-                          _asDouble(adminCollectedAmountController.text),
+                          asDouble(adminCollectedAmountController.text),
                       adminCollectedCurrency: selectedAdminCollectedCurrency,
                       adminFinancialStatus: selectedAdminFinancialStatus,
                       adminDueDate: selectedAdminDueDate,
                       adminFinancialNotes:
                           adminFinancialNotesController.text.trim(),
                       materialUsage: buildMaterialUsage(),
-                      executingPartnerCommission: _asDouble(
+                      executingPartnerCommission: asDouble(
                         executingPartnerCommissionController.text,
                       ),
                       executingPartnerCommissionCurrency:
@@ -6665,7 +6666,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                       executingPartnerPaymentNotes:
                           executingPartnerPaymentNotesController.text.trim(),
                       forPartnerInvoiceAmount:
-                          _asDouble(forPartnerInvoiceController.text),
+                          asDouble(forPartnerInvoiceController.text),
                       forPartnerInvoiceCurrency:
                           selectedForPartnerInvoiceCurrency,
                       forPartnerReceiveStatus: selectedForPartnerReceiveStatus,
@@ -6678,7 +6679,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                     for (final empId in enforcedAssignedEmployeeIds) {
                       final ctrl = employeePayControllers[empId];
                       if (ctrl != null) {
-                        final amount = _asDouble(ctrl.text);
+                        final amount = asDouble(ctrl.text);
                         if (amount > 0) employeePayData[empId] = amount;
                       }
                     }
@@ -12040,8 +12041,4 @@ class _ProgramariPageState extends State<ProgramariPage> {
       ),
     );
   }
-}
-
-double _asDouble(String raw) {
-  return double.tryParse(raw.trim().replaceAll(',', '.')) ?? 0;
 }
