@@ -279,6 +279,7 @@ class JobSiteDocumentRecord {
     this.remediationDeadline,
     this.trainingProvided = false,
     this.preparedForNextStep = '',
+    this.selectedWorkLines = const <Map<String, dynamic>>[],
   });
 
   final String id;
@@ -312,6 +313,7 @@ class JobSiteDocumentRecord {
   final DateTime? remediationDeadline;
   final bool trainingProvided;
   final String preparedForNextStep;
+  final List<Map<String, dynamic>> selectedWorkLines;
 
   JobSiteDocumentRecord copyWith({
     String? id,
@@ -345,6 +347,7 @@ class JobSiteDocumentRecord {
     DateTime? remediationDeadline,
     bool? trainingProvided,
     String? preparedForNextStep,
+    List<Map<String, dynamic>>? selectedWorkLines,
   }) {
     return JobSiteDocumentRecord(
       id: id ?? this.id,
@@ -384,6 +387,7 @@ class JobSiteDocumentRecord {
       remediationDeadline: remediationDeadline ?? this.remediationDeadline,
       trainingProvided: trainingProvided ?? this.trainingProvided,
       preparedForNextStep: preparedForNextStep ?? this.preparedForNextStep,
+      selectedWorkLines: selectedWorkLines ?? this.selectedWorkLines,
     );
   }
 
@@ -421,6 +425,9 @@ class JobSiteDocumentRecord {
         'remediation_deadline': remediationDeadline?.toIso8601String(),
         'training_provided': trainingProvided,
         'prepared_for_next_step': preparedForNextStep,
+        'selected_work_lines': selectedWorkLines
+            .map((line) => Map<String, dynamic>.from(line))
+            .toList(growable: false),
       };
 
   factory JobSiteDocumentRecord.fromMap(Map<String, dynamic> map) {
@@ -540,6 +547,14 @@ class JobSiteDocumentRecord {
               '')
           .toString()
           .trim(),
+      selectedWorkLines: () {
+        final raw = map['selected_work_lines'] ?? map['selectedWorkLines'];
+        if (raw is! List) return const <Map<String, dynamic>>[];
+        return raw
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList(growable: false);
+      }(),
     );
   }
 }
