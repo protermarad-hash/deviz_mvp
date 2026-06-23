@@ -43,8 +43,13 @@ class JobSiteDocumentPdfService {
     final profile = await repository.loadCompanyProfile();
     final branding = DocumentBrandingData.fromCompanyProfile(profile);
     final bytes = await _buildPdfBytes(document, branding, liniiPlanificate ?? []);
+    // Timestamp la nume pentru a forta un fisier NOU la fiecare generare —
+    // altfel vizualizatorul PDF de pe Windows arata versiunea veche din cache
+    // (acelasi nume suprascris). Format: yyyyMMdd_HHmmss.
+    final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
     final fileName = '${document.documentType.shortCode}'
         '_${document.documentNumber.isEmpty ? document.id : document.documentNumber}'
+        '_$ts'
         '.pdf';
     return PdfSaveService.savePdf(
       repository: repository,
