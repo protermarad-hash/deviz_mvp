@@ -51,7 +51,13 @@ class NotificationRuntimeService {
   bool get _isAndroid =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
   bool get _isIos => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+  bool get _isWindows =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+  // FCM (push prin server) e disponibil doar pe Android/iOS.
+  // firebase_messaging NU are implementare pe Windows desktop.
   bool get _supportsPush => _isAndroid || _isIos;
+  // Notificarile locale (on-device, fara server) functioneaza si pe Windows.
+  bool get _supportsLocalNotifications => _isAndroid || _isIos || _isWindows;
 
   Future<void> initialize({
     required String userId,
@@ -59,9 +65,12 @@ class NotificationRuntimeService {
     NotificationTapHandler? onTap,
   }) async {
     _tapHandler = onTap ?? _tapHandler;
-    if (!_supportsPush) return;
+    // Initializeaza plugin-ul de notificari locale pe orice platforma suportata
+    // (inclusiv Windows), apoi inregistreaza token FCM doar unde e disponibil.
+    if (!_supportsLocalNotifications) return;
     await _ensureInitialized();
     if (userId.trim().isEmpty) return;
+    if (!_supportsPush) return;
 
     final permission = await _messaging.requestPermission(
       alert: true,
@@ -79,8 +88,10 @@ class NotificationRuntimeService {
         userId: userId.trim(),
         userEmail: userEmail.trim(),
         token: token.trim(),
-        platform: _isAndroid ? 'android' : 'ios',
-        deviceLabel: _isAndroid ? 'android_device' : 'ios_device',
+        platform: _isWindows ? 'windows' : (_isAndroid ? 'android' : 'ios'),
+        deviceLabel: _isWindows
+            ? 'windows_device'
+            : (_isAndroid ? 'android_device' : 'ios_device'),
       );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_currentTokenKey, token.trim());
@@ -110,10 +121,16 @@ class NotificationRuntimeService {
     );
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwinInit = DarwinInitializationSettings();
+    const windowsInit = WindowsInitializationSettings(
+      appName: 'ProVentaris',
+      appUserModelId: 'ProTerm.ProVentaris',
+      guid: 'a8b9c0d1-e2f3-4a5b-6c7d-8e9f0a1b2c3d',
+    );
     await _localNotifications.initialize(
       const InitializationSettings(
         android: androidInit,
         iOS: darwinInit,
+        windows: windowsInit,
       ),
       onDidReceiveNotificationResponse: (response) async {
         await _handlePayload(response.payload);
@@ -126,30 +143,37 @@ class NotificationRuntimeService {
           ?.createNotificationChannel(_androidChannel!);
     }
 
-    FirebaseMessaging.onMessage.listen((message) async {
-      await _showForegroundNotification(message);
-    });
-    FirebaseMessaging.onMessageOpenedApp.listen((message) async {
-      await _handleRemoteMessageTap(message);
-    });
-    final initialMessage = await _messaging.getInitialMessage();
-    if (initialMessage != null) {
-      await _handleRemoteMessageTap(initialMessage);
+    // Listenerele FCM ruleaza doar pe platformele cu push (Android/iOS).
+    // Pe Windows firebase_messaging nu e implementat, deci le sarim ca sa
+    // nu arunce MissingPluginException — notificarile locale raman active.
+    if (_supportsPush) {
+      FirebaseMessaging.onMessage.listen((message) async {
+        await _showForegroundNotification(message);
+      });
+      FirebaseMessaging.onMessageOpenedApp.listen((message) async {
+        await _handleRemoteMessageTap(message);
+      });
+      final initialMessage = await _messaging.getInitialMessage();
+      if (initialMessage != null) {
+        await _handleRemoteMessageTap(initialMessage);
+      }
+      _messaging.onTokenRefresh.listen((token) async {
+        final prefs = await SharedPreferences.getInstance();
+        final userId = prefs.getString(_currentUserIdKey) ?? '';
+        final userEmail = prefs.getString(_currentUserEmailKey) ?? '';
+        if (userId.trim().isEmpty) return;
+        await _service.registerDeviceToken(
+          userId: userId.trim(),
+          userEmail: userEmail.trim(),
+          token: token.trim(),
+          platform: _isWindows ? 'windows' : (_isAndroid ? 'android' : 'ios'),
+          deviceLabel: _isWindows
+              ? 'windows_device'
+              : (_isAndroid ? 'android_device' : 'ios_device'),
+        );
+        await prefs.setString(_currentTokenKey, token.trim());
+      });
     }
-    _messaging.onTokenRefresh.listen((token) async {
-      final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getString(_currentUserIdKey) ?? '';
-      final userEmail = prefs.getString(_currentUserEmailKey) ?? '';
-      if (userId.trim().isEmpty) return;
-      await _service.registerDeviceToken(
-        userId: userId.trim(),
-        userEmail: userEmail.trim(),
-        token: token.trim(),
-        platform: _isAndroid ? 'android' : 'ios',
-        deviceLabel: _isAndroid ? 'android_device' : 'ios_device',
-      );
-      await prefs.setString(_currentTokenKey, token.trim());
-    });
     _initialized = true;
   }
 
@@ -176,6 +200,7 @@ class NotificationRuntimeService {
           priority: Priority.high,
         ),
         iOS: const DarwinNotificationDetails(),
+        windows: const WindowsNotificationDetails(),
       ),
       payload: payload,
     );
@@ -202,7 +227,7 @@ class NotificationRuntimeService {
     required String body,
     Map<String, dynamic> data = const <String, dynamic>{},
   }) async {
-    if (!_supportsPush) return;
+    if (!_supportsLocalNotifications) return;
     await _ensureInitialized();
     await _localNotifications.show(
       title.hashCode ^ body.hashCode,
@@ -218,6 +243,7 @@ class NotificationRuntimeService {
           priority: Priority.high,
         ),
         iOS: const DarwinNotificationDetails(),
+        windows: const WindowsNotificationDetails(),
       ),
       payload: data.isEmpty ? null : jsonEncode(data),
     );
