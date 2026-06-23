@@ -76,9 +76,15 @@ class JobSiteDocumentPdfService {
     final contentWidgets = _buildContent(doc, linii);
 
     // Titlu explicit per tip de document
-    final title = doc.documentType == JobSiteDocumentType.pif
-        ? 'PROCES-VERBAL DE PUNERE ÎN FUNCȚIUNE (P.I.F.)'
-        : 'PROCES-VERBAL DE MONTAJ ȘI EXECUȚIE LUCRĂRI';
+    final String title;
+    switch (doc.documentType) {
+      case JobSiteDocumentType.pif:
+        title = 'PROCES-VERBAL DE PUNERE ÎN FUNCȚIUNE (P.I.F.)';
+      case JobSiteDocumentType.pvReceptieServicii:
+        title = 'PROCES-VERBAL DE RECEPȚIE SERVICII';
+      case JobSiteDocumentType.pvMontaj:
+        title = 'PROCES-VERBAL DE MONTAJ ȘI EXECUȚIE LUCRĂRI';
+    }
 
     return ProTermPdfTemplate.generateDocument(
       branding: branding,
@@ -155,7 +161,71 @@ class JobSiteDocumentPdfService {
         return _contentPvMontaj(doc, linii);
       case JobSiteDocumentType.pif:
         return _contentPif(doc, linii);
+      case JobSiteDocumentType.pvReceptieServicii:
+        return _contentReceptieServicii(doc);
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PV RECEPȚIE SERVICII — document simplu de confirmare servicii efectuate
+  // ─────────────────────────────────────────────────────────────────────────
+
+  static List<pw.Widget> _contentReceptieServicii(JobSiteDocumentRecord doc) {
+    final widgets = <pw.Widget>[];
+
+    // 1. Date proiect
+    widgets.add(_redSection('1. Date proiect', [
+      ProTermPdfTemplate.buildInfoRow(
+          'Beneficiar', _safe(doc.beneficiaryRepresentative)),
+      ProTermPdfTemplate.buildInfoRow(
+          'Executant', _safe(doc.executorRepresentative)),
+      ProTermPdfTemplate.buildInfoRow(
+          'Proiect / Obiectiv', _safe(doc.projectName)),
+      ProTermPdfTemplate.buildInfoRow('Adresă / Locație', _safe(doc.location)),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 2. Servicii efectuate
+    widgets.add(_redSection('2. Servicii efectuate', [
+      pw.Text(_safe(doc.observations), style: const pw.TextStyle(fontSize: 9)),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 3. Perioada de execuție — tabel 2 coloane
+    widgets.add(_redSection('3. Perioada de execuție', [
+      ProTermPdfTemplate.buildTable(
+        headers: ['Dată început', 'Dată sfârșit'],
+        rows: [
+          [_safe(doc.servicePeriodStart), _safe(doc.servicePeriodEnd)],
+        ],
+        columnWidths: [0.5, 0.5],
+      ),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    // 4. Constatări / Observații — se omite complet dacă e gol
+    if (doc.conclusions.trim().isNotEmpty) {
+      widgets.add(_redSection('4. Constatări / Observații', [
+        pw.Text(doc.conclusions.trim(),
+            style: const pw.TextStyle(fontSize: 9)),
+      ]));
+      widgets.add(pw.SizedBox(height: 8));
+    }
+
+    // 5. Concluzii — text standard fix
+    widgets.add(_redSection('5. Concluzii', [
+      pw.Text(
+        'Serviciile au fost efectuate conform ofertei/comenzii acceptate de '
+        'beneficiar, în perioada menționată, respectând standardele de calitate '
+        'convenite. Beneficiarul confirmă recepția lucrărilor fără obiecții '
+        'semnificative.',
+        style: const pw.TextStyle(fontSize: 9),
+        textAlign: pw.TextAlign.justify,
+      ),
+    ]));
+    widgets.add(pw.SizedBox(height: 8));
+
+    return widgets;
   }
 
   // ── Text standard pentru fiecare tip ────────────────────────────────────────
