@@ -1,6 +1,7 @@
 enum JobSiteDocumentType {
   pvMontaj,
-  pif;
+  pif,
+  pvReceptieServicii;
 
   String get storageValue {
     switch (this) {
@@ -8,6 +9,8 @@ enum JobSiteDocumentType {
         return 'pv_montaj';
       case JobSiteDocumentType.pif:
         return 'pif';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return 'pv_receptie_servicii';
     }
   }
 
@@ -17,6 +20,8 @@ enum JobSiteDocumentType {
         return 'PV Montaj / Execuție lucrări';
       case JobSiteDocumentType.pif:
         return 'PIF - Punere în Funcțiune';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return 'PV Recepție Servicii';
     }
   }
 
@@ -26,6 +31,8 @@ enum JobSiteDocumentType {
         return 'PV Montaj Executie Lucrari';
       case JobSiteDocumentType.pif:
         return 'PIF Punere In Functiune';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return 'PV Receptie Servicii';
     }
   }
 
@@ -35,6 +42,8 @@ enum JobSiteDocumentType {
         return 'PVM';
       case JobSiteDocumentType.pif:
         return 'PIF';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return 'PVS';
     }
   }
 
@@ -46,6 +55,8 @@ enum JobSiteDocumentType {
         return JobSiteDocumentType.pvMontaj;
       case 'pif':
         return JobSiteDocumentType.pif;
+      case 'pv_receptie_servicii':
+        return JobSiteDocumentType.pvReceptieServicii;
       // Backward compat — valori vechi din Firestore
       case 'pv_montaj_executie':
         return JobSiteDocumentType.pvMontaj;
@@ -283,6 +294,8 @@ class JobSiteDocumentRecord {
     this.preparedForNextStep = '',
     this.selectedWorkLines = const <Map<String, dynamic>>[],
     this.otherParticipants = '',
+    this.servicePeriodStart = '',
+    this.servicePeriodEnd = '',
   });
 
   final String id;
@@ -318,6 +331,8 @@ class JobSiteDocumentRecord {
   final String preparedForNextStep;
   final List<Map<String, dynamic>> selectedWorkLines;
   final String otherParticipants;
+  final String servicePeriodStart;
+  final String servicePeriodEnd;
 
   JobSiteDocumentRecord copyWith({
     String? id,
@@ -353,6 +368,8 @@ class JobSiteDocumentRecord {
     String? preparedForNextStep,
     List<Map<String, dynamic>>? selectedWorkLines,
     String? otherParticipants,
+    String? servicePeriodStart,
+    String? servicePeriodEnd,
   }) {
     return JobSiteDocumentRecord(
       id: id ?? this.id,
@@ -394,6 +411,8 @@ class JobSiteDocumentRecord {
       preparedForNextStep: preparedForNextStep ?? this.preparedForNextStep,
       selectedWorkLines: selectedWorkLines ?? this.selectedWorkLines,
       otherParticipants: otherParticipants ?? this.otherParticipants,
+      servicePeriodStart: servicePeriodStart ?? this.servicePeriodStart,
+      servicePeriodEnd: servicePeriodEnd ?? this.servicePeriodEnd,
     );
   }
 
@@ -435,6 +454,8 @@ class JobSiteDocumentRecord {
             .map((line) => Map<String, dynamic>.from(line))
             .toList(growable: false),
         'other_participants': otherParticipants,
+        'service_period_start': servicePeriodStart,
+        'service_period_end': servicePeriodEnd,
       };
 
   factory JobSiteDocumentRecord.fromMap(Map<String, dynamic> map) {
@@ -564,6 +585,14 @@ class JobSiteDocumentRecord {
       }(),
       otherParticipants:
           (map['other_participants'] ?? map['otherParticipants'] ?? '')
+              .toString()
+              .trim(),
+      servicePeriodStart:
+          (map['service_period_start'] ?? map['servicePeriodStart'] ?? '')
+              .toString()
+              .trim(),
+      servicePeriodEnd:
+          (map['service_period_end'] ?? map['servicePeriodEnd'] ?? '')
               .toString()
               .trim(),
     );
