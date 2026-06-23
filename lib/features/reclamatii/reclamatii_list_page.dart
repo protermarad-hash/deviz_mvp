@@ -14,6 +14,8 @@ import '../../core/widgets/client_autocomplete_field.dart';
 import '../../core/widgets/partner_autocomplete_field.dart';
 import '../clients/client_models.dart';
 import '../partners/partner_models.dart';
+import '../notifications/notification_models.dart';
+import '../notifications/notification_service.dart';
 import 'complaint_models.dart';
 import 'complaint_detail_page.dart';
 import 'repair_report_models.dart';
@@ -424,6 +426,8 @@ class _NewComplaintDialogState extends State<_NewComplaintDialog> {
 // ── Pagina principală reclamații ──────────────────────────────────────────────
 class _ReclamatiiListPageState extends State<ReclamatiiListPage> {
   final TextEditingController _searchController = TextEditingController();
+  final NotificationCenterService _notificationService =
+      NotificationCenterService();
   bool _loading = true;
   bool _searchVisible = false;
 
@@ -602,10 +606,46 @@ class _ReclamatiiListPageState extends State<ReclamatiiListPage> {
       ),
     );
     if (result != null && mounted) {
+      // Notificare reclamatie noua (fire-and-forget, best-effort).
+      _notifyComplaintCreated(result);
       await _load();
       if (!mounted) return;
       _openDetail(result);
     }
+  }
+
+  /// Trimite notificarea de reclamatie nou creata. Oglindeste logica din
+  /// reclamatii_page.dart `_notifyComplaintSaved` (cazul previous == null).
+  void _notifyComplaintCreated(ComplaintRecord saved) {
+    final complaintLabel = saved.complaintNumber.trim().isEmpty
+        ? 'Reclamatie'
+        : saved.complaintNumber.trim();
+    final message =
+        '$complaintLabel | Status: ${saved.status.label} | Beneficiar: ${saved.beneficiaryName.trim().isEmpty ? '-' : saved.beneficiaryName.trim()} | Problema: ${saved.problemDescription.trim().isEmpty ? '-' : saved.problemDescription.trim()}';
+    _notificationService
+        .dispatchEvent(
+          NotificationDispatchRequest(
+            eventType: NotificationEventType.complaintCreated,
+            title: 'Reclamatie noua',
+            message: message,
+            sourceModule: 'reclamatii',
+            sourceEntityId: saved.id,
+            sourceLabel: complaintLabel,
+            recipientTeamIds: saved.assignedTeamId.trim().isEmpty
+                ? const <String>[]
+                : <String>[saved.assignedTeamId.trim()],
+            recipientEmployeeIds: saved.assignedEmployeeId.trim().isEmpty
+                ? const <String>[]
+                : <String>[saved.assignedEmployeeId.trim()],
+            recipientRoleKeys: const <String>['admin', 'office'],
+            metadata: <String, dynamic>{
+              'complaint_status': saved.status.value,
+              'job_id': saved.jobId,
+              'appointment_id': saved.appointmentId,
+            },
+          ),
+        )
+        .catchError((_) {});
   }
 
   void _openDetail(ComplaintRecord complaint) {
