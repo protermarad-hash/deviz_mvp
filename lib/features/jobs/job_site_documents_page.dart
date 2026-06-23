@@ -1149,6 +1149,8 @@ class _JobSiteDocumentEditorDialogState
   late TextEditingController _generatedFileNameController;
   late TextEditingController _registryEntryController;
   late TextEditingController _otherParticipantsController;
+  late TextEditingController _servicePeriodStartController;
+  late TextEditingController _servicePeriodEndController;
 
   late DateTime _documentDate;
   late DateTime? _remediationDeadline;
@@ -1162,6 +1164,10 @@ class _JobSiteDocumentEditorDialogState
 
   bool get _isPif =>
       widget.document.documentType == JobSiteDocumentType.pif;
+
+  bool get _isReceptieServicii =>
+      widget.document.documentType ==
+          JobSiteDocumentType.pvReceptieServicii;
 
   /// Opțiuni status poziții, diferite per tip de document.
   List<String> get _lineStatusOptions => _isPif
@@ -1202,6 +1208,10 @@ class _JobSiteDocumentEditorDialogState
         TextEditingController(text: document.registryEntryId);
     _otherParticipantsController =
         TextEditingController(text: document.otherParticipants);
+    _servicePeriodStartController =
+        TextEditingController(text: document.servicePeriodStart);
+    _servicePeriodEndController =
+        TextEditingController(text: document.servicePeriodEnd);
     _documentDate = document.documentDate;
     _remediationDeadline = document.remediationDeadline;
     _status = document.status;
@@ -1458,6 +1468,8 @@ class _JobSiteDocumentEditorDialogState
     _generatedFileNameController.dispose();
     _registryEntryController.dispose();
     _otherParticipantsController.dispose();
+    _servicePeriodStartController.dispose();
+    _servicePeriodEndController.dispose();
     super.dispose();
   }
 
@@ -1963,6 +1975,8 @@ class _JobSiteDocumentEditorDialogState
       annexes: _annexes,
       selectedWorkLines: _selectedWorkLines,
       otherParticipants: _otherParticipantsController.text.trim(),
+      servicePeriodStart: _servicePeriodStartController.text.trim(),
+      servicePeriodEnd: _servicePeriodEndController.text.trim(),
       status: _status,
       updatedAt: DateTime.now(),
     );
@@ -1992,8 +2006,189 @@ class _JobSiteDocumentEditorDialogState
     );
   }
 
+  /// Formular dedicat „PV Recepție Servicii" — document simplu de confirmare,
+  /// fără selecție de poziții lucrare. Toate câmpurile sunt liber editabile
+  /// (inclusiv Proiect / Obiectiv pre-completat din titlul lucrării).
+  Widget _buildReceptieServiciiDialog(BuildContext context) {
+    final statusOptions = <String>{'draft', 'semnat', 'arhivat'};
+    if (_status.trim().isNotEmpty) statusOptions.add(_status.trim());
+    return AlertDialog(
+      title: Text(widget.isNew
+          ? 'PV Recepție Servicii nou'
+          : 'Editare PV Recepție Servicii'),
+      content: SizedBox(
+        width: 860,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                // ── Date document (număr + dată) ──────────────────────────
+                SizedBox(
+                  width: 220,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _documentNumberController,
+                    decoration:
+                        const InputDecoration(labelText: 'Număr document'),
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Completeaza numarul documentului.'
+                        : null,
+                  ),
+                ),
+                SizedBox(
+                  width: 220,
+                  child: InkWell(
+                    onTap: () => _pickDate(
+                      initial: _documentDate,
+                      onPicked: (value) =>
+                          setState(() => _documentDate = value),
+                    ),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Data document',
+                        suffixIcon: Icon(Icons.calendar_today),
+                      ),
+                      child: Text(_formatDate(_documentDate)),
+                    ),
+                  ),
+                ),
+                // ── Secțiunea 1 — Date proiect ────────────────────────────
+                _sectionHeader('1. Date proiect'),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _beneficiaryRepresentativeController,
+                    decoration: const InputDecoration(labelText: 'Beneficiar'),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _executorRepresentativeController,
+                    decoration: const InputDecoration(labelText: 'Executant'),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _projectNameController,
+                    decoration: const InputDecoration(
+                        labelText: 'Proiect / Obiectiv'),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _locationController,
+                    decoration:
+                        const InputDecoration(labelText: 'Adresă / Locație'),
+                  ),
+                ),
+                // ── Secțiunea 2 — Servicii efectuate ──────────────────────
+                _sectionHeader('2. Servicii efectuate'),
+                SizedBox(
+                  width: 732,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _observationsController,
+                    minLines: 3,
+                    maxLines: 8,
+                    decoration: const InputDecoration(
+                      labelText: 'Servicii efectuate',
+                      hintText:
+                          'Descriere servicii efectuate (tip serviciu, număr unități, locații)...',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ),
+                // ── Secțiunea 3 — Perioada de execuție ────────────────────
+                _sectionHeader('3. Perioada de execuție'),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _servicePeriodStartController,
+                    decoration: const InputDecoration(
+                      labelText: 'Dată început',
+                      hintText: 'ex. 15.06.2026',
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 360,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _servicePeriodEndController,
+                    decoration: const InputDecoration(
+                      labelText: 'Dată sfârșit',
+                      hintText: 'ex. 22.06.2026',
+                    ),
+                  ),
+                ),
+                // ── Secțiunea 4 — Constatări / Observații ─────────────────
+                _sectionHeader('4. Constatări / Observații'),
+                SizedBox(
+                  width: 732,
+                  child: TextFormField(
+                    textCapitalization: TextCapitalization.sentences,
+                    controller: _conclusionsController,
+                    minLines: 2,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      labelText: 'Constatări / Observații (opțional)',
+                      hintText: 'Observații suplimentare (opțional)...',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ),
+                // ── Secțiunea 5 — Status document ─────────────────────────
+                _sectionHeader('5. Status document'),
+                SizedBox(
+                  width: 220,
+                  child: DropdownButtonFormField<String>(
+                    initialValue:
+                        statusOptions.contains(_status) ? _status : 'draft',
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: statusOptions
+                        .map((s) => DropdownMenuItem<String>(
+                            value: s, child: Text(s)))
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _status = value);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Renunță'),
+        ),
+        FilledButton(
+          onPressed: _save,
+          child: const Text('Salveaza'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_isReceptieServicii) {
+      return _buildReceptieServiciiDialog(context);
+    }
     final statusOptions = <String>{'draft', 'semnat', 'arhivat'};
     if (_status.trim().isNotEmpty) statusOptions.add(_status.trim());
     return AlertDialog(

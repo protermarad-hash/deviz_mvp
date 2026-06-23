@@ -547,6 +547,9 @@ class JobSiteDocumentTemplateService {
           equipments,
           if (laborAnnex.items.isNotEmpty) laborAnnex,
         ];
+      case JobSiteDocumentType.pvReceptieServicii:
+        // Document simplu de confirmare — fără anexe generate automat.
+        return const <JobSiteDocumentAnnex>[];
     }
   }
 
@@ -639,6 +642,8 @@ class JobSiteDocumentTemplateService {
         return 'Document montaj / executie - $baseProject';
       case JobSiteDocumentType.pif:
         return 'Document PIF - $baseProject';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return 'Proces-verbal receptie servicii - $baseProject';
     }
   }
 
@@ -653,6 +658,10 @@ class JobSiteDocumentTemplateService {
         return location.isEmpty
             ? 'PIF - Punere in Functiune'
             : 'PIF - Punere in Functiune | $location';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return location.isEmpty
+            ? 'Receptie servicii'
+            : 'Receptie servicii | $location';
     }
   }
 
@@ -671,6 +680,9 @@ class JobSiteDocumentTemplateService {
         return 'S-au verificat vizual montajul, materialele si echipamentele instalate. Documentul ramane baza pentru etapa de PIF.';
       case JobSiteDocumentType.pif:
         return 'S-au verificat partea electrica, automatizarea, probele functionale, masuratorile si functionarea sistemului pus in functiune.';
+      case JobSiteDocumentType.pvReceptieServicii:
+        // Lasat gol — utilizatorul descrie liber serviciile efectuate.
+        return '';
     }
   }
 
@@ -680,6 +692,9 @@ class JobSiteDocumentTemplateService {
         return 'Lucrarea de montaj / executie este pregatita pentru verificari finale si, dupa caz, pentru etapa de punere in functiune.';
       case JobSiteDocumentType.pif:
         return 'Sistemul este pus in functiune si poate fi exploatat in regim normal dupa predarea catre beneficiar, cu respectarea instructiunilor de utilizare si mentenanta.';
+      case JobSiteDocumentType.pvReceptieServicii:
+        // Lasat gol — constatari / observatii optionale completate manual.
+        return '';
     }
   }
 
@@ -689,6 +704,8 @@ class JobSiteDocumentTemplateService {
         return 'pregatit pentru pif';
       case JobSiteDocumentType.pif:
         return 'pus in functiune';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return '';
     }
   }
 
@@ -698,6 +715,8 @@ class JobSiteDocumentTemplateService {
         return 'Verificari vizuale si tehnice preliminare.';
       case JobSiteDocumentType.pif:
         return 'Verificari electrice, probe functionale si masuratori (debite, presiuni, temperaturi).';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return '';
     }
   }
 
@@ -707,6 +726,8 @@ class JobSiteDocumentTemplateService {
         return 'pregatire etapa PIF';
       case JobSiteDocumentType.pif:
         return 'predare beneficiar';
+      case JobSiteDocumentType.pvReceptieServicii:
+        return '';
     }
   }
 
@@ -758,6 +779,8 @@ class JobSiteDocumentTemplateService {
             'Beneficiarul a fost instruit privind mentenanta de baza',
           ]),
         ];
+      case JobSiteDocumentType.pvReceptieServicii:
+        return const <JobSiteDocumentCheckItem>[];
     }
   }
 
@@ -805,6 +828,8 @@ class JobSiteDocumentTemplateService {
             unit: 'A',
           ),
         ];
+      case JobSiteDocumentType.pvReceptieServicii:
+        return const <JobSiteDocumentMeasurement>[];
     }
   }
 
