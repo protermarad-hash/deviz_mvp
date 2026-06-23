@@ -56,6 +56,7 @@ import 'programari_models.dart';
 import 'programari_utils.dart';
 import 'programari_calendar_placement.dart';
 import 'dialogs/client_partner_dialogs.dart';
+import 'dialogs/document_dialogs.dart';
 import 'dialogs/employee_pay_dialog.dart';
 import 'programare_kit_catalog_service.dart';
 import 'programare_kit_models.dart';
@@ -1804,37 +1805,13 @@ class _ProgramariPageState extends State<ProgramariPage> {
     required String title,
     required String initialValue,
     String? helperText,
-  }) async {
-    final controller = TextEditingController(text: initialValue);
-    return showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          textCapitalization: TextCapitalization.sentences,
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(
-            labelText: 'Eticheta document',
-            helperText: helperText,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Renunta'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final value = controller.text.trim();
-              Navigator.of(dialogContext).pop(value);
-            },
-            child: const Text('Salveaza'),
-          ),
-        ],
-      ),
-    );
-  }
+  }) =>
+      promptLinkedDocumentLabel(
+        context,
+        title: title,
+        initialValue: initialValue,
+        helperText: helperText,
+      );
 
   Future<void> _openLinkedDocumentsManagerForAppointment(
     Appointment appointment,
