@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'deviz_theme_controller.dart';
@@ -53,6 +54,7 @@ import '../features/users/local_users_admin_page.dart';
 import '../features/vehicles/vehicles_page.dart';
 import '../features/hr/employee_financial_page.dart';
 import '../features/dashboard/financial_dashboard_page.dart';
+import '../features/dashboard/pipeline_dashboard_page.dart';
 import '../features/stoc/stoc_page.dart';
 import '../features/echipamente/echipamente_page.dart';
 import '../features/crm/crm_page.dart';
@@ -103,7 +105,7 @@ const List<_ShellSectionDef> _kShellSections = [
     id: 'financiar',
     label: 'FINANCIAR',
     icon: Icons.bar_chart_outlined,
-    itemIds: ['dashboard_financiar', 'obiective', 'analiza'],
+    itemIds: ['dashboard_financiar', 'pipeline_dashboard', 'obiective', 'analiza'],
   ),
   _ShellSectionDef(
     id: 'comercial',
@@ -224,6 +226,7 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
   Future<void>? _sectionBadgesLoadFuture;
   DateTime? _lastSectionBadgesLoadedAt;
   DateTime? _lastBackPress;
+  String _appVersionLabel = '';
 
   List<ShellDestination> _allDestinations() {
     final allRoles = UserRole.values.toSet();
@@ -388,7 +391,8 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         label: 'Financiar parteneri',
         icon: Icons.account_balance_wallet_outlined,
         allowedRoles: {UserRole.admin, UserRole.birou},
-        builder: (_) => const PartnerFinancialDashboardPage(),
+        builder: (_) => PartnerFinancialDashboardPage(
+              appRepository: widget.appDataRepository),
       ),
       ShellDestination(
         id: 'catalog_produse',
@@ -506,6 +510,13 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         builder: (_) => const FinancialDashboardPage(),
       ),
       ShellDestination(
+        id: 'pipeline_dashboard',
+        label: 'Pipeline Vânzări',
+        icon: Icons.account_tree_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => const PipelineDashboardPage(),
+      ),
+      ShellDestination(
         id: 'obiective',
         label: 'Obiective lunare',
         icon: Icons.flag_outlined,
@@ -613,10 +624,25 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
     _isOnline = FirebaseBootstrap.isOnline;
     FirebaseBootstrap.onlineNotifier.addListener(_onOnlineStatusChanged);
     _initShell();
+    Future.microtask(_loadAppVersion);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _configureNotificationRuntime();
       _scheduleSectionBadgesLoad();
     });
+  }
+
+  // Versiune aplicație — afișată discret în Drawer sub numele companiei,
+  // ca utilizatorul să poată identifica exact ce build are instalat.
+  Future<void> _loadAppVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() {
+        _appVersionLabel = 'v${info.version}+${info.buildNumber}';
+      });
+    } catch (_) {
+      // best-effort — fără versiune afișată dacă citirea eșuează
+    }
   }
 
   // Un singur SharedPreferences.getInstance() + totul în paralel
@@ -754,7 +780,9 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         // Alertă locală o singură dată per sesiune (folosim un flag de sesiune)
         _showCrmAlertIfNeeded(crmPending.length);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[RoleReadyShell] încărcare badge-uri CRM eșuată: $e');
+    }
   }
 
   static bool _crmAlertShownThisSession = false;
@@ -1352,6 +1380,17 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
                             fontSize: compact ? 11 : 12,
                           ),
                         ),
+                        if (_appVersionLabel.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            _appVersionLabel,
+                            style: TextStyle(
+                              color: scheme.onSurfaceVariant
+                                  .withValues(alpha: 0.6),
+                              fontSize: compact ? 9 : 10,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
