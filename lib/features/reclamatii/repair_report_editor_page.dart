@@ -12,6 +12,7 @@ import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
 import 'complaint_document_template_service.dart';
 import '../field_photos/field_photos_page.dart';
+import '../mentenanta/interventii/fgas_gwp_catalog.dart';
 import '../programari/appointment_models.dart';
 import 'complaint_models.dart';
 import 'repair_report_pdf_service.dart';
@@ -81,6 +82,8 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
   late final TextEditingController _materialeDetailedController;
   late final TextEditingController _traseulPieselorController;
   String _pvType = 'constatare';
+  bool _agentManualMode = false;
+  static const String _altAgentSentinel = '__alt_agent__';
   late RepairReportResolutionStatus _resolutionStatus;
   late DateTime _interventionDate;
   late String _reportId;
@@ -130,6 +133,8 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
         TextEditingController(text: seed.agentFrigorific);
     _cantitateRecuperataController =
         TextEditingController(text: seed.cantitateRecuperata);
+    _agentManualMode = seed.agentFrigorific.trim().isNotEmpty &&
+        FGasGwpCatalog.getGwp(seed.agentFrigorific) == null;
     _coduriEroareController = TextEditingController(text: seed.coduriEroare);
     _stareTestController = TextEditingController(text: seed.stareTest);
     _motivulInterventeiController =
@@ -966,6 +971,87 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     }
   }
 
+  double _parseKg(String raw) {
+    final cleaned =
+        raw.replaceAll(',', '.').replaceAll(RegExp(r'[^0-9.]'), '');
+    return double.tryParse(cleaned) ?? 0;
+  }
+
+  /// Câmp agent frigorific cu dropdown din catalogul unificat (FGasGwpCatalog →
+  /// AgfrRefrigerantData) + afișaj readonly GWP și tone CO₂ (din cant. recuperată).
+  Widget _buildAgentFGasField() {
+    final agent = _agentFrigorificController.text;
+    final gwp = FGasGwpCatalog.getGwp(agent);
+    final cant = _parseKg(_cantitateRecuperataController.text);
+    final tone = gwp != null ? gwp * cant / 1000.0 : 0.0;
+
+    String? dropdownValue;
+    if (_agentManualMode) {
+      dropdownValue = _altAgentSentinel;
+    } else {
+      final t = agent.trim().toUpperCase();
+      for (final a in FGasGwpCatalog.agentiDisponibili) {
+        if (a.toUpperCase() == t) {
+          dropdownValue = a;
+          break;
+        }
+      }
+    }
+
+    return SizedBox(
+      width: 300,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButtonFormField<String>(
+            initialValue: dropdownValue,
+            isExpanded: true,
+            decoration:
+                const InputDecoration(labelText: 'Agent frigorific'),
+            items: [
+              ...FGasGwpCatalog.agentiDisponibili.map((a) => DropdownMenuItem(
+                    value: a,
+                    child: Text('$a (GWP ${FGasGwpCatalog.getGwp(a) ?? 0})'),
+                  )),
+              const DropdownMenuItem(
+                  value: _altAgentSentinel, child: Text('Alt agent…')),
+            ],
+            onChanged: (v) => setState(() {
+              if (v == _altAgentSentinel) {
+                _agentManualMode = true;
+              } else if (v != null) {
+                _agentManualMode = false;
+                _agentFrigorificController.text = v;
+              }
+            }),
+          ),
+          if (_agentManualMode)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: TextField(
+                controller: _agentFrigorificController,
+                textCapitalization: TextCapitalization.characters,
+                onChanged: (_) => setState(() {}),
+                decoration:
+                    const InputDecoration(labelText: 'Denumire agent (manual)'),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              gwp != null
+                  ? 'GWP: $gwp | Tone CO₂: ${tone.toStringAsFixed(3)} t'
+                  : 'GWP: necunoscut',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: gwp != null ? Colors.green.shade700 : Colors.grey),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _section(String title, List<Widget> children) {
     return Card(
       margin: EdgeInsets.zero,
@@ -1289,20 +1375,13 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
                     spacing: 12,
                     runSpacing: 12,
                     children: [
-                      SizedBox(
-                        width: 240,
-                        child: TextField(
-                          textCapitalization: TextCapitalization.sentences,
-                          controller: _agentFrigorificController,
-                          decoration: const InputDecoration(
-                              labelText: 'Agent frigorific (ex: R410A, R32)'),
-                        ),
-                      ),
+                      _buildAgentFGasField(),
                       SizedBox(
                         width: 240,
                         child: TextField(
                           textCapitalization: TextCapitalization.sentences,
                           controller: _cantitateRecuperataController,
+                          onChanged: (_) => setState(() {}),
                           decoration: const InputDecoration(
                               labelText: 'Cantitate recuperata (ex: 7,22 kg)'),
                         ),
