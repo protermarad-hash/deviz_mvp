@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/repositories/app_data_repository.dart';
+import 'contract/contract_detail_page.dart';
 import 'contract/contract_editor_dialog.dart';
 import 'contract/contract_pdf_service.dart';
 import 'firebase_mentenanta_repository.dart';
@@ -129,6 +130,19 @@ class _MentenantaPageState extends State<MentenantaPage> {
         _contracte.insert(0, result);
       }
     });
+  }
+
+  Future<void> _openDetail(ContractMentenanta c) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ContractDetailPage(
+          contract: c,
+          repository: widget.repository,
+        ),
+      ),
+    );
+    // La revenire reîncarcă (intervențiile sau statusul pot fi schimbate).
+    if (mounted) _load();
   }
 
   Future<void> _generatePdf(ContractMentenanta c) async {
@@ -323,7 +337,7 @@ class _MentenantaPageState extends State<MentenantaPage> {
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () => _openEditor(existing: c),
+        onTap: () => _openDetail(c),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(
