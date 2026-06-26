@@ -13,6 +13,7 @@ import '../../core/repositories/app_data_repository.dart';
 import 'complaint_document_template_service.dart';
 import '../field_photos/field_photos_page.dart';
 import '../mentenanta/interventii/fgas_gwp_catalog.dart';
+import 'log_fgas_reclamatie_pdf_service.dart';
 import '../programari/appointment_models.dart';
 import 'complaint_models.dart';
 import 'repair_report_pdf_service.dart';
@@ -70,6 +71,7 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
   late final TextEditingController _reprezentantBeneficiarController;
   late final TextEditingController _agentFrigorificController;
   late final TextEditingController _cantitateRecuperataController;
+  late final TextEditingController _cantitateAdaugataController;
   late final TextEditingController _coduriEroareController;
   late final TextEditingController _stareTestController;
   late final TextEditingController _motivulInterventeiController;
@@ -84,6 +86,8 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
   String _pvType = 'constatare';
   bool _agentManualMode = false;
   static const String _altAgentSentinel = '__alt_agent__';
+  bool _logFGasGenerat = false;
+  String _logFGasPath = '';
   late RepairReportResolutionStatus _resolutionStatus;
   late DateTime _interventionDate;
   late String _reportId;
@@ -133,6 +137,10 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
         TextEditingController(text: seed.agentFrigorific);
     _cantitateRecuperataController =
         TextEditingController(text: seed.cantitateRecuperata);
+    _cantitateAdaugataController =
+        TextEditingController(text: seed.cantitateAdaugata);
+    _logFGasGenerat = seed.logFGasGenerat;
+    _logFGasPath = seed.logFGasPath;
     _agentManualMode = seed.agentFrigorific.trim().isNotEmpty &&
         FGasGwpCatalog.getGwp(seed.agentFrigorific) == null;
     _coduriEroareController = TextEditingController(text: seed.coduriEroare);
@@ -215,6 +223,7 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     _reprezentantBeneficiarController.dispose();
     _agentFrigorificController.dispose();
     _cantitateRecuperataController.dispose();
+    _cantitateAdaugataController.dispose();
     _coduriEroareController.dispose();
     _stareTestController.dispose();
     _motivulInterventeiController.dispose();
@@ -407,6 +416,9 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
       reprezentantBeneficiar: _reprezentantBeneficiarController.text.trim(),
       agentFrigorific: _agentFrigorificController.text.trim(),
       cantitateRecuperata: _cantitateRecuperataController.text.trim(),
+      cantitateAdaugata: _cantitateAdaugataController.text.trim(),
+      logFGasGenerat: _logFGasGenerat,
+      logFGasPath: _logFGasPath,
       coduriEroare: _coduriEroareController.text.trim(),
       stareTest: _stareTestController.text.trim(),
       motivulInterventiei: _motivulInterventeiController.text.trim(),
@@ -457,6 +469,7 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     _reprezentantBeneficiarController.text = report.reprezentantBeneficiar;
     _agentFrigorificController.text = report.agentFrigorific;
     _cantitateRecuperataController.text = report.cantitateRecuperata;
+    _cantitateAdaugataController.text = report.cantitateAdaugata;
     _coduriEroareController.text = report.coduriEroare;
     _stareTestController.text = report.stareTest;
     _motivulInterventeiController.text = report.motivulInterventiei;
@@ -830,6 +843,42 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
     }
   }
 
+  Future<void> _generateLogFGas() async {
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      var report = await _persistDraft();
+      final path = await LogFGasReclamatiePdfService.export(
+        repository: widget.repository,
+        report: report,
+      );
+      report = report.copyWith(logFGasGenerat: true, logFGasPath: path);
+      await widget.repository.saveRepairReport(report);
+      if (!mounted) return;
+      setState(() {
+        _logFGasGenerat = true;
+        _logFGasPath = path;
+        _saving = false;
+      });
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Log F-Gas generat.')),
+      );
+      await _showGeneratedPdfActions(path);
+    } on PdfSaveCanceledException {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Salvarea documentului a fost anulata.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      messenger.showSnackBar(
+        SnackBar(content: Text('Nu am putut genera Log F-Gas: $error')),
+      );
+    }
+  }
+
   Future<void> _showGeneratedPdfActions(String filePath) async {
     if (!mounted) return;
     await showModalBottomSheet<void>(
@@ -982,8 +1031,11 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
   Widget _buildAgentFGasField() {
     final agent = _agentFrigorificController.text;
     final gwp = FGasGwpCatalog.getGwp(agent);
-    final cant = _parseKg(_cantitateRecuperataController.text);
-    final tone = gwp != null ? gwp * cant / 1000.0 : 0.0;
+    final recuperat = _parseKg(_cantitateRecuperataController.text);
+    final adaugat = _parseKg(_cantitateAdaugataController.text);
+    final neta = (adaugat - recuperat).clamp(0.0, double.infinity);
+    final tone = gwp != null ? gwp * neta / 1000.0 : 0.0;
+    final depaseste = tone >= FGasGwpCatalog.pragRaportareTone;
 
     String? dropdownValue;
     if (_agentManualMode) {
@@ -1038,13 +1090,46 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
             ),
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              gwp != null
-                  ? 'GWP: $gwp | Tone CO₂: ${tone.toStringAsFixed(3)} t'
-                  : 'GWP: necunoscut',
-              style: TextStyle(
-                  fontSize: 12,
-                  color: gwp != null ? Colors.green.shade700 : Colors.grey),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                    'Cantitate netă în sistem: ${neta.toStringAsFixed(2)} kg',
+                    style: const TextStyle(fontSize: 12)),
+                Text(
+                  gwp != null
+                      ? 'GWP: $gwp | Tone CO₂: ${tone.toStringAsFixed(3)} t'
+                      : 'GWP: necunoscut',
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: depaseste
+                          ? Colors.red
+                          : (gwp != null
+                              ? Colors.green.shade700
+                              : Colors.grey)),
+                ),
+                if (depaseste)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            size: 15, color: Colors.red),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            'Depășește pragul (5 t CO₂ eq.)',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.red.shade700,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
@@ -1100,6 +1185,14 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
             onPressed: _saving ? null : () => _generatePdf(share: true),
             icon: const Icon(Icons.share_outlined),
           ),
+          if (_agentFrigorificController.text.trim().isNotEmpty)
+            IconButton(
+              tooltip:
+                  _logFGasGenerat ? 'Log F-Gas (generat)' : 'Generează Log F-Gas',
+              onPressed: _saving ? null : _generateLogFGas,
+              icon: Icon(Icons.air,
+                  color: _logFGasGenerat ? Colors.green : null),
+            ),
         ],
       ),
       body: SafeArea(
@@ -1384,6 +1477,16 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
                           onChanged: (_) => setState(() {}),
                           decoration: const InputDecoration(
                               labelText: 'Cantitate recuperata (ex: 7,22 kg)'),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 240,
+                        child: TextField(
+                          textCapitalization: TextCapitalization.sentences,
+                          controller: _cantitateAdaugataController,
+                          onChanged: (_) => setState(() {}),
+                          decoration: const InputDecoration(
+                              labelText: 'Cantitate adăugată (ex: 5,00 kg)'),
                         ),
                       ),
                       SizedBox(
