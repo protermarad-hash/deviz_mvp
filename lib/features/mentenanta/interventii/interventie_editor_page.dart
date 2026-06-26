@@ -3,8 +3,12 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
 import '../mentenanta_models.dart';
+import 'fgas_gwp_catalog.dart';
 import 'firebase_interventie_repository.dart';
 import 'interventie_models.dart';
+
+/// Valoarea sentinelă din dropdown-ul de agent pentru opțiunea „Alt agent".
+const String _altAgentValue = '__alt__';
 
 /// Editor pentru o intervenție de service legată de un contract de mentenanță.
 ///
@@ -82,6 +86,10 @@ class _InterventieEditorPageState extends State<InterventieEditorPage> {
             text: prev != null && prev.cantitateRecuperata > 0
                 ? prev.cantitateRecuperata.toString()
                 : ''),
+        // Agent introdus manual dacă există dar nu e în catalog.
+        useManualAgent: prev != null &&
+            prev.agentFrigorific.trim().isNotEmpty &&
+            FGasGwpCatalog.getGwp(prev.agentFrigorific) == null,
       ));
     }
 
@@ -141,6 +149,7 @@ class _InterventieEditorPageState extends State<InterventieEditorPage> {
               status: r.status,
               observatii: r.observatii.text.trim(),
               agentFrigorific: r.agentFrigorific.text.trim(),
+              gwp: r.gwp,
               cantitateAdaugata: _parse(r.cantitateAdaugata.text),
               cantitateRecuperata: _parse(r.cantitateRecuperata.text),
               necesitaLogFGas: r.necesitaLogFGas,
@@ -352,40 +361,154 @@ class _InterventieEditorPageState extends State<InterventieEditorPage> {
           ),
           if (row.necesitaLogFGas) ...[
             const SizedBox(height: 8),
-            TextField(
-              controller: row.agentFrigorific,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                  labelText: 'Agent frigorific (ex: R32, R410A)',
-                  isDense: true),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: row.cantitateAdaugata,
-                    keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true),
-                    decoration: const InputDecoration(
-                        labelText: 'Adăugat (kg)', isDense: true),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: row.cantitateRecuperata,
-                    keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true),
-                    decoration: const InputDecoration(
-                        labelText: 'Recuperat (kg)', isDense: true),
-                  ),
-                ),
-              ],
-            ),
+            _buildFGasSection(row),
           ],
         ],
       ],
+    );
+  }
+
+  // ── Secțiune F-Gas cu calcul GWP live ───────────────────────────────────────
+
+  Widget _buildFGasSection(_EchipRow row) {
+    final added = _parse(row.cantitateAdaugata.text);
+    final recovered = _parse(row.cantitateRecuperata.text);
+    final neta = (added - recovered).clamp(0.0, double.infinity);
+    final gwp = row.gwp;
+    final tone = gwp * neta / 1000.0;
+    final depaseste = tone >= FGasGwpCatalog.pragRaportareTone;
+
+    // Valoarea curentă din dropdown (sau sentinelul „Alt agent").
+    String? dropdownValue;
+    if (row.useManualAgent) {
+      dropdownValue = _altAgentValue;
+    } else {
+      final txt = row.agentFrigorific.text.trim().toUpperCase();
+      for (final a in FGasGwpCatalog.agentiDisponibili) {
+        if (a.toUpperCase() == txt) {
+          dropdownValue = a;
+          break;
+        }
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.blue.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Agent frigorific (F-Gas)',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            initialValue: dropdownValue,
+            isExpanded: true,
+            decoration: const InputDecoration(
+                labelText: 'Agent frigorific', isDense: true),
+            items: [
+              ...FGasGwpCatalog.agentiDisponibili.map((a) => DropdownMenuItem(
+                    value: a,
+                    child: Text('$a  (GWP ${FGasGwpCatalog.getGwp(a) ?? 0})'),
+                  )),
+              const DropdownMenuItem(
+                  value: _altAgentValue, child: Text('Alt agent…')),
+            ],
+            onChanged: (v) {
+              setState(() {
+                if (v == _altAgentValue) {
+                  row.useManualAgent = true;
+                } else if (v != null) {
+                  row.useManualAgent = false;
+                  row.agentFrigorific.text = v;
+                }
+              });
+            },
+          ),
+          if (row.useManualAgent) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: row.agentFrigorific,
+              textCapitalization: TextCapitalization.characters,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                  labelText: 'Denumire agent (manual)', isDense: true),
+            ),
+          ],
+          const SizedBox(height: 8),
+          // GWP readonly, derivat din agent.
+          InputDecorator(
+            decoration: const InputDecoration(
+                labelText: 'GWP (kg CO₂ eq./kg)', isDense: true),
+            child: Text(gwp > 0 ? '$gwp' : 'necunoscut',
+                style: TextStyle(
+                    color: gwp > 0 ? null : Colors.grey,
+                    fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: row.cantitateAdaugata,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                      labelText: 'Adăugat (kg)', isDense: true),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: row.cantitateRecuperata,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                      labelText: 'Recuperat (kg)', isDense: true),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text('Cantitate netă în sistem: ${neta.toStringAsFixed(2)} kg',
+              style: const TextStyle(fontSize: 13)),
+          Row(
+            children: [
+              Text('Tone CO₂ echiv.: ${tone.toStringAsFixed(3)} t',
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: depaseste ? Colors.red : null)),
+            ],
+          ),
+          if (depaseste)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded,
+                      size: 16, color: Colors.red),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      'Depășește pragul de raportare (5 t CO₂ eq.)',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.red.shade700,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -403,6 +526,7 @@ class _EchipRow {
     required this.agentFrigorific,
     required this.cantitateAdaugata,
     required this.cantitateRecuperata,
+    this.useManualAgent = false,
   });
 
   final String echipamentId;
@@ -415,6 +539,12 @@ class _EchipRow {
   final TextEditingController agentFrigorific;
   final TextEditingController cantitateAdaugata;
   final TextEditingController cantitateRecuperata;
+
+  /// True dacă agentul e introdus manual (nu din dropdown-ul catalogului).
+  bool useManualAgent;
+
+  /// GWP derivat live din agentul curent (0 dacă necunoscut).
+  int get gwp => FGasGwpCatalog.getGwp(agentFrigorific.text) ?? 0;
 
   void dispose() {
     observatii.dispose();
