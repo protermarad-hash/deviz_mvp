@@ -84,6 +84,9 @@ class RepairReportRecord {
     // Câmpuri noi template PV Constatare Tehnică (adiționale, backward compatible)
     this.agentFrigorific = '',
     this.cantitateRecuperata = '',
+    this.cantitateAdaugata = '',
+    this.logFGasGenerat = false,
+    this.logFGasPath = '',
     this.coduriEroare = '',
     this.stareTest = '',
     this.reprezentantBeneficiar = '',
@@ -142,6 +145,9 @@ class RepairReportRecord {
   // Câmpuri template PV Constatare Tehnică
   final String agentFrigorific;
   final String cantitateRecuperata;
+  final String cantitateAdaugata;
+  final bool logFGasGenerat;
+  final String logFGasPath;
   final String coduriEroare;
   final String stareTest;
   final String reprezentantBeneficiar;
@@ -199,6 +205,9 @@ class RepairReportRecord {
     List<String>? photoCaptions,
     String? agentFrigorific,
     String? cantitateRecuperata,
+    String? cantitateAdaugata,
+    bool? logFGasGenerat,
+    String? logFGasPath,
     String? coduriEroare,
     String? stareTest,
     String? reprezentantBeneficiar,
@@ -258,6 +267,9 @@ class RepairReportRecord {
       photoCaptions: photoCaptions ?? this.photoCaptions,
       agentFrigorific: agentFrigorific ?? this.agentFrigorific,
       cantitateRecuperata: cantitateRecuperata ?? this.cantitateRecuperata,
+      cantitateAdaugata: cantitateAdaugata ?? this.cantitateAdaugata,
+      logFGasGenerat: logFGasGenerat ?? this.logFGasGenerat,
+      logFGasPath: logFGasPath ?? this.logFGasPath,
       coduriEroare: coduriEroare ?? this.coduriEroare,
       stareTest: stareTest ?? this.stareTest,
       reprezentantBeneficiar: reprezentantBeneficiar ?? this.reprezentantBeneficiar,
@@ -318,6 +330,9 @@ class RepairReportRecord {
       'photo_captions': photoCaptions,
       'agent_frigorific': agentFrigorific,
       'cantitate_recuperata': cantitateRecuperata,
+      'cantitate_adaugata': cantitateAdaugata,
+      'log_fgas_generat': logFGasGenerat,
+      'log_fgas_path': logFGasPath,
       'coduri_eroare': coduriEroare,
       'stare_test': stareTest,
       'reprezentant_beneficiar': reprezentantBeneficiar,
@@ -416,6 +431,9 @@ class RepairReportRecord {
       photoCaptions: List<String>.from((map['photo_captions'] ?? map['photoCaptions'] ?? const <String>[]) as List),
       agentFrigorific: pick(const <String>['agent_frigorific']),
       cantitateRecuperata: pick(const <String>['cantitate_recuperata']),
+      cantitateAdaugata: pick(const <String>['cantitate_adaugata']),
+      logFGasGenerat: map['log_fgas_generat'] == true,
+      logFGasPath: pick(const <String>['log_fgas_path']),
       coduriEroare: pick(const <String>['coduri_eroare']),
       stareTest: pick(const <String>['stare_test']),
       reprezentantBeneficiar: pick(const <String>['reprezentant_beneficiar']),
