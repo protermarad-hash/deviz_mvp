@@ -12,6 +12,7 @@ import 'complaint_quick_offer_tab.dart';
 import 'repair_report_editor_page.dart';
 import 'repair_report_models.dart';
 import 'repair_report_pdf_service.dart';
+import 'log_fgas_reclamatie_pdf_service.dart';
 import '../../core/pdf_actions_helper.dart';
 
 class ComplaintDetailPage extends StatefulWidget {
@@ -535,6 +536,39 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage>
     }
   }
 
+  Future<void> _generateLogFGas(RepairReportRecord report) async {
+    if (_generatingPdf) return;
+    setState(() => _generatingPdf = true);
+    try {
+      final path = await LogFGasReclamatiePdfService.export(
+        repository: widget.repository,
+        report: report,
+      );
+      final updated =
+          report.copyWith(logFGasGenerat: true, logFGasPath: path);
+      await widget.repository.saveRepairReport(updated);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Log F-Gas generat.')),
+      );
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title:
+            'Log F-Gas ${report.reportNumber.isEmpty ? report.id : report.reportNumber}',
+      );
+      if (mounted) _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare generare Log F-Gas: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _generatingPdf = false);
+    }
+  }
+
   Future<void> _deletePv(RepairReportRecord report) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -645,7 +679,10 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage>
                   ),
                 ],
                 const SizedBox(height: 8),
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     OutlinedButton.icon(
                       onPressed: _generatingPdf ? null : () => _generatePvPdf(report),
@@ -654,7 +691,19 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage>
                           : const Icon(Icons.picture_as_pdf_outlined, size: 16),
                       label: const Text('PDF', style: TextStyle(fontSize: 12)),
                     ),
-                    const SizedBox(width: 8),
+                    if (report.agentFrigorific.trim().isNotEmpty)
+                      OutlinedButton.icon(
+                        onPressed:
+                            _generatingPdf ? null : () => _generateLogFGas(report),
+                        icon: Icon(
+                          report.logFGasGenerat
+                              ? Icons.check_circle_outline
+                              : Icons.air,
+                          size: 16,
+                          color: report.logFGasGenerat ? Colors.green : null,
+                        ),
+                        label: const Text('F-Gas', style: TextStyle(fontSize: 12)),
+                      ),
                     OutlinedButton.icon(
                       onPressed: () async {
                         await Navigator.of(context).push(
@@ -671,7 +720,6 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage>
                       icon: const Icon(Icons.edit_outlined, size: 16),
                       label: const Text('Editează', style: TextStyle(fontSize: 12)),
                     ),
-                    const Spacer(),
                     if (_canManage)
                       IconButton(
                         icon: const Icon(Icons.delete_outline, size: 18),
