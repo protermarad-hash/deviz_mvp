@@ -114,8 +114,7 @@ class FirebaseInterventieRepository implements InterventieRepository {
 
   // ── Numerotare automată IS-YYYY-NNNN ─────────────────────────────────────────
 
-  Future<String> nextNumber() async {
-    final year = DateTime.now().year;
+  Future<String> nextNumber(int year) async {
     final prefix = 'IS-$year-';
     final nums = <int>[];
 

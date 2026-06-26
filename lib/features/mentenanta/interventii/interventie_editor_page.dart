@@ -91,7 +91,7 @@ class _InterventieEditorPageState extends State<InterventieEditorPage> {
   }
 
   Future<void> _assignNumber() async {
-    final next = await widget.repository.nextNumber();
+    final next = await widget.repository.nextNumber(DateTime.now().year);
     if (!mounted || _numarController.text.trim().isNotEmpty) return;
     setState(() => _numarController.text = next);
   }
