@@ -8002,7 +8002,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                               icon: const Icon(Icons.receipt_long_outlined),
                               label: const Text('Bon consum SmartBill'),
                             ),
-                          if (_canManageAppointmentFinancials)
+                          if (_canManageAppointmentFinancials &&
+                              _normalizeStatusValue(item.status) ==
+                                  'finalizata')
                             FilledButton.tonalIcon(
                               onPressed: () async {
                                 Navigator.of(dialogContext).pop();
@@ -8012,7 +8014,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                               label: const Text('Încasează'),
                             ),
                           if (_canManageAppointmentFinancials &&
-                              item.executingPartnerId.trim().isNotEmpty)
+                              item.executingPartnerId.trim().isNotEmpty &&
+                              _normalizeStatusValue(item.status) ==
+                                  'finalizata')
                             FilledButton.tonalIcon(
                               onPressed: () async {
                                 Navigator.of(dialogContext).pop();
@@ -11201,7 +11205,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                         _appointmentColorChip(item),
                                         _linkedDocumentsChip(item),
                                         _buildFinancialStatusBadge(item),
-                                        if (_canManageAppointmentFinancials)
+                                        if (_canManageAppointmentFinancials &&
+                                            _normalizeStatusValue(
+                                                  item.status,
+                                                ) ==
+                                                'finalizata')
                                           ActionChip(
                                             avatar: const Icon(
                                               Icons.payments_outlined,
@@ -11211,7 +11219,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                             onPressed: () => _showQuickCollectionDialog(item),
                                           ),
                                         if (_canManageAppointmentFinancials &&
-                                            item.executingPartnerId.trim().isNotEmpty)
+                                            item.executingPartnerId.trim().isNotEmpty &&
+                                            _normalizeStatusValue(
+                                                  item.status,
+                                                ) ==
+                                                'finalizata')
                                           ActionChip(
                                             avatar: const Icon(
                                               Icons.send_outlined,
