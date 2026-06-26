@@ -7,6 +7,8 @@ import '../../../core/repositories/app_data_repository.dart';
 import '../interventii/firebase_interventie_repository.dart';
 import '../interventii/interventie_editor_page.dart';
 import '../interventii/interventie_models.dart';
+import '../interventii/log_fgas_pdf_service.dart';
+import '../interventii/pv_interventie_pdf_service.dart';
 import '../mentenanta_models.dart';
 import 'contract_pdf_service.dart';
 import '../oferta/oferta_mentenanta_pdf_service.dart';
@@ -124,6 +126,55 @@ class _ContractDetailPageState extends State<ContractDetailPage> {
         _load();
       }
     });
+  }
+
+  void _replace(InterventieService updated) {
+    final idx = _interventii.indexWhere((x) => x.id == updated.id);
+    if (idx >= 0) _interventii[idx] = updated;
+  }
+
+  // ── Acțiuni PDF intervenție (PV + Log F-Gas) ─────────────────────────────────
+
+  Future<void> _generatePv(InterventieService i) async {
+    try {
+      final path = await PvInterventiePdfService.export(
+        repository: widget.repository,
+        contract: widget.contract,
+        interventie: i,
+      );
+      final updated =
+          i.copyWith(pvGenerat: true, pvPath: path, updatedAt: DateTime.now());
+      _repo.saveInterventie(updated).catchError((_) => updated);
+      if (!mounted) return;
+      setState(() => _replace(updated));
+      await PdfActionsHelper.showPdfActions(context,
+          filePath: path, title: 'PV intervenție ${i.numar}');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Eroare generare PV: $e')));
+    }
+  }
+
+  Future<void> _generateFGas(InterventieService i) async {
+    try {
+      final path = await LogFGasPdfService.export(
+        repository: widget.repository,
+        contract: widget.contract,
+        interventie: i,
+      );
+      final updated = i.copyWith(
+          logFGasGenerat: true, logFGasPath: path, updatedAt: DateTime.now());
+      _repo.saveInterventie(updated).catchError((_) => updated);
+      if (!mounted) return;
+      setState(() => _replace(updated));
+      await PdfActionsHelper.showPdfActions(context,
+          filePath: path, title: 'Log F-Gas ${i.numar}');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Eroare generare F-Gas: $e')));
+    }
   }
 
   // ── Acțiuni PDF contract ─────────────────────────────────────────────────────
@@ -376,6 +427,35 @@ class _ContractDetailPageState extends State<ContractDetailPage> {
                 Text('${i.echipamenteLucrate.length} echip.',
                     style:
                         TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 4,
+              children: [
+                TextButton.icon(
+                  onPressed: () => _generatePv(i),
+                  icon: Icon(
+                    i.pvGenerat
+                        ? Icons.check_circle_outline
+                        : Icons.picture_as_pdf_outlined,
+                    size: 16,
+                    color: i.pvGenerat ? Colors.green : null,
+                  ),
+                  label: const Text('PDF PV'),
+                ),
+                if (i.areEchipamenteFGas)
+                  TextButton.icon(
+                    onPressed: () => _generateFGas(i),
+                    icon: Icon(
+                      i.logFGasGenerat
+                          ? Icons.check_circle_outline
+                          : Icons.ac_unit_outlined,
+                      size: 16,
+                      color: i.logFGasGenerat ? Colors.green : null,
+                    ),
+                    label: const Text('PDF F-Gas'),
+                  ),
               ],
             ),
           ],
