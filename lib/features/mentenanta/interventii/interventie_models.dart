@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+import 'fgas_gwp_catalog.dart';
+
 // ── Tip intervenție ───────────────────────────────────────────────────────────
 
 enum TipInterventie {
@@ -121,6 +123,7 @@ class EchipamentInterventie {
     this.status = StatusEchipamentInterventie.efectuat,
     this.observatii = '',
     this.agentFrigorific = '',
+    this.gwp = 0,
     this.cantitateAdaugata = 0,
     this.cantitateRecuperata = 0,
     this.necesitaLogFGas = false,
@@ -132,12 +135,31 @@ class EchipamentInterventie {
   final StatusEchipamentInterventie status;
   final String observatii;
   final String agentFrigorific;
+
+  /// GWP-ul agentului frigorific — auto-completat din [FGasGwpCatalog] la
+  /// selectarea agentului (kg CO₂ echiv. per kg agent).
+  final int gwp;
   final double cantitateAdaugata;
   final double cantitateRecuperata;
 
   /// Copiat din [EchipamentMentenanta.necesitaLogFGas] la momentul intervenției
   /// — controlează afișarea câmpurilor F-Gas și includerea în Log F-Gas.
   final bool necesitaLogFGas;
+
+  /// Tone CO₂ echivalent pentru cantitatea netă adăugată în sistem.
+  double get toneCO2 => FGasGwpCatalog.calcToneCO2(
+        cantitateAdaugata: cantitateAdaugata,
+        cantitateRecuperata: cantitateRecuperata,
+        gwp: gwp,
+      );
+
+  /// Cantitatea netă rămasă în sistem (adăugat − recuperat, ≥ 0).
+  double get cantitateNeta =>
+      (cantitateAdaugata - cantitateRecuperata).clamp(0.0, double.infinity);
+
+  /// True dacă echipamentul singur depășește pragul de raportare (5 t CO₂ eq.).
+  bool get depasesteFragRaportare =>
+      toneCO2 >= FGasGwpCatalog.pragRaportareTone;
 
   EchipamentInterventie copyWith({
     String? echipamentId,
@@ -146,6 +168,7 @@ class EchipamentInterventie {
     StatusEchipamentInterventie? status,
     String? observatii,
     String? agentFrigorific,
+    int? gwp,
     double? cantitateAdaugata,
     double? cantitateRecuperata,
     bool? necesitaLogFGas,
@@ -157,6 +180,7 @@ class EchipamentInterventie {
       status: status ?? this.status,
       observatii: observatii ?? this.observatii,
       agentFrigorific: agentFrigorific ?? this.agentFrigorific,
+      gwp: gwp ?? this.gwp,
       cantitateAdaugata: cantitateAdaugata ?? this.cantitateAdaugata,
       cantitateRecuperata: cantitateRecuperata ?? this.cantitateRecuperata,
       necesitaLogFGas: necesitaLogFGas ?? this.necesitaLogFGas,
@@ -171,6 +195,7 @@ class EchipamentInterventie {
       'status': status.storageValue,
       'observatii': observatii,
       'agent_frigorific': agentFrigorific,
+      'gwp': gwp,
       'cantitate_adaugata': cantitateAdaugata,
       'cantitate_recuperata': cantitateRecuperata,
       'necesita_log_fgas': necesitaLogFGas,
@@ -185,6 +210,7 @@ class EchipamentInterventie {
       status: StatusEchipamentInterventie.fromValue(map['status']?.toString()),
       observatii: (map['observatii'] ?? '').toString(),
       agentFrigorific: (map['agent_frigorific'] ?? '').toString(),
+      gwp: _toInt(map['gwp']),
       cantitateAdaugata: _toDouble(map['cantitate_adaugata']),
       cantitateRecuperata: _toDouble(map['cantitate_recuperata']),
       necesitaLogFGas: map['necesita_log_fgas'] == true,
@@ -229,10 +255,23 @@ class InterventieService {
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  /// Câte echipamente din intervenție necesită Log F-Gas (controlează vizibilitatea
-  /// butonului „PDF F-Gas").
-  bool get areEchipamenteFGas =>
-      echipamenteLucrate.any((e) => e.necesitaLogFGas);
+  /// True dacă intervenția necesită un Log F-Gas: cel puțin un echipament marcat
+  /// F-Gas ȘI cu operație efectivă de agent (adăugat sau recuperat > 0).
+  /// Controlează vizibilitatea butonului „F-Gas PDF".
+  bool get necesitaLogFGas => echipamenteLucrate.any((e) =>
+      e.necesitaLogFGas &&
+      (e.cantitateAdaugata > 0 || e.cantitateRecuperata > 0));
+
+  /// Echipamentele care intră efectiv în Log F-Gas.
+  List<EchipamentInterventie> get echipamenteFGas => echipamenteLucrate
+      .where((e) =>
+          e.necesitaLogFGas &&
+          (e.cantitateAdaugata > 0 || e.cantitateRecuperata > 0))
+      .toList(growable: false);
+
+  /// Total tone CO₂ echivalent pe toată intervenția.
+  double get totalToneCO2 =>
+      echipamenteLucrate.fold<double>(0, (sum, e) => sum + e.toneCO2);
 
   InterventieService copyWith({
     String? id,
@@ -325,6 +364,13 @@ class InterventieService {
 }
 
 // ── Helpers de parsare ────────────────────────────────────────────────────────
+
+int _toInt(dynamic value, {int fallback = 0}) {
+  if (value is int) return value;
+  if (value is double) return value.round();
+  if (value is String) return int.tryParse(value) ?? fallback;
+  return fallback;
+}
 
 double _toDouble(dynamic value, {double fallback = 0}) {
   if (value is double) return value;

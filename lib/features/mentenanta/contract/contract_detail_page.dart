@@ -444,7 +444,7 @@ class _ContractDetailPageState extends State<ContractDetailPage> {
                   ),
                   label: const Text('PDF PV'),
                 ),
-                if (i.areEchipamenteFGas)
+                if (i.necesitaLogFGas)
                   TextButton.icon(
                     onPressed: () => _generateFGas(i),
                     icon: Icon(
