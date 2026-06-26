@@ -44,6 +44,7 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
 
   List<ClientRecord> _clienti = const [];
   bool _saving = false;
+  bool _loadingClients = true;
 
   @override
   void initState() {
@@ -79,7 +80,14 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
     try {
       final list = await widget.repository.listClients();
       if (mounted) setState(() => _clienti = list);
-    } catch (_) {/* best-effort */}
+    } catch (e) {
+      debugPrint('loadClients error: $e');
+      if (mounted) {
+        _toast('Nu s-au putut încărca clienții. Verifică conexiunea.');
+      }
+    } finally {
+      if (mounted) setState(() => _loadingClients = false);
+    }
   }
 
   Future<void> _generateNumber() async {
@@ -184,8 +192,11 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
   }
 
   void _toast(String msg) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      duration: const Duration(seconds: 4),
+      backgroundColor: Colors.red.shade700,
+    ));
   }
 
   @override
@@ -201,15 +212,25 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
             onPressed: () => Navigator.pop(context),
           ),
           actions: [
-            TextButton(
-              onPressed: _saving ? null : _save,
-              child: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Salvează',
-                      style: TextStyle(color: Colors.white)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: FilledButton(
+                onPressed: _saving ? null : _save,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFC62828),
+                  foregroundColor: Colors.white,
+                ),
+                child: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Text('Salvează',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold)),
+              ),
             ),
           ],
         ),
@@ -238,6 +259,22 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
                 _clientName = c.name;
               }),
             ),
+            if (_loadingClients)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                    SizedBox(width: 8),
+                    Text('Se încarcă lista de clienți...',
+                        style:
+                            TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
+              ),
             const SizedBox(height: 12),
             TextField(
               controller: _titluCtrl,
@@ -326,6 +363,30 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
               ..._buildEchipamenteGrouped(),
             const SizedBox(height: 16),
             _buildTotals(),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFC62828),
+                  foregroundColor: Colors.white,
+                ),
+                icon: _saving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.save_outlined),
+                label: Text(
+                  _saving ? 'Se salvează...' : 'Salvează contractul',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
           ],
         ),
       ),
