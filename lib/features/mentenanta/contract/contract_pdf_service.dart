@@ -34,6 +34,13 @@ class ContractPdfService {
   static final NumberFormat _money = NumberFormat('#,##0.00', 'ro_RO');
   static final DateFormat _dateFmt = DateFormat('dd.MM.yyyy');
 
+  /// Prag de siguranță pentru logo. Headerul se redesenează pe FIECARE pagină
+  /// (callback `header:`) și MultiPage face mai multe treceri de layout — un
+  /// logo prea mare se re-decodează de multe ori și poate epuiza memoria.
+  /// Dacă logoul depășește pragul, este omis din contract (documentul se
+  /// generează oricum, fără logo).
+  static const int _maxLogoBytes = 300 * 1024;
+
   static Future<String> export({
     required AppDataRepository repository,
     required ContractMentenanta contract,
@@ -90,13 +97,17 @@ class ContractPdfService {
     final footerTitle =
         'CONTRACT PRESTĂRI SERVICII ${contract.numar}'.trim();
 
+    // Branding sigur pentru header: dacă logoul e prea mare sau invalid,
+    // îl omitem ca să nu fie re-decodat pe fiecare pagină → risc OOM.
+    final headerBranding = _safeBrandingForHeader(branding);
+
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.symmetric(horizontal: 28, vertical: 22),
         header: (_) => pw.Column(children: [
           ProTermPdfTemplate.buildHeader(
-            branding: branding,
+            branding: headerBranding,
             documentTitle: 'CONTRACT DE PRESTĂRI SERVICII',
             documentNumber: contract.numar,
             documentDate: dateStr,
@@ -120,6 +131,35 @@ class ContractPdfService {
     return doc.save();
   }
 
+  /// Returnează un branding cu logoul păstrat doar dacă este valid și sub prag.
+  /// Altfel logoul este eliminat (header fără logo), pentru a evita re-decodarea
+  /// repetată a unei imagini mari pe fiecare pagină (cauză de Out of Memory).
+  static DocumentBrandingData _safeBrandingForHeader(
+    DocumentBrandingData b,
+  ) {
+    final logo = b.logoBytes;
+    if (logo == null || logo.lengthInBytes <= _maxLogoBytes) {
+      return b;
+    }
+    return DocumentBrandingData(
+      companyName: b.companyName,
+      address: b.address,
+      city: b.city,
+      county: b.county,
+      phone: b.phone,
+      email: b.email,
+      contactEmail: b.contactEmail,
+      website: b.website,
+      cui: b.cui,
+      tradeRegister: b.tradeRegister,
+      bank: b.bank,
+      iban: b.iban,
+      contactName: b.contactName,
+      currency: b.currency,
+      logoBytes: null,
+    );
+  }
+
   // ── PAGINA 1 — Contractul ─────────────────────────────────────────────────
 
   static List<pw.Widget> _contractContent(
@@ -128,69 +168,76 @@ class ContractPdfService {
     ClientRecord? client,
     String dateStr,
   ) {
+    // IMPORTANT: secțiunile sunt emise ca widget-uri INDIVIDUALE (header roșu +
+    // paragrafe/bullet-uri separate), NU împachetate într-un pw.Container cu
+    // bordură. Un Container/Column decorat este ATOMIC pentru pw.MultiPage —
+    // nu poate fi împărțit între pagini. Dacă o secțiune cu text juridic lung
+    // (5, 6, 7, 8) depășește înălțimea unei pagini, MultiPage intră în buclă de
+    // layout și consumă memoria exponențial → "Out of Memory". Emise plat,
+    // MultiPage poate insera page-break între orice paragraf.
     final w = <pw.Widget>[];
 
     // 1. Părți contractante
-    w.add(_section('1. PĂRȚI CONTRACTANTE', [
-      _partiesRow(branding, contract, client),
-    ]));
+    w.add(_sectionHeader('1. PĂRȚI CONTRACTANTE'));
+    w.add(_partiesRow(branding, contract, client));
     w.add(_gap());
 
     // 2. Obiectul contractului
-    w.add(_section('2. OBIECTUL CONTRACTULUI', [_para(ContractClauze.obiect)]));
+    w.add(_sectionHeader('2. OBIECTUL CONTRACTULUI'));
+    w.add(_para(ContractClauze.obiect));
     w.add(_gap());
 
     // 3. Durata contractului
     final interv = contract.interventiiPlanificate;
-    w.add(_section('3. DURATA CONTRACTULUI', [
-      _para('Prezentul contract se încheie pe o perioadă de 12 luni, începând '
-          'cu ${_dateFmt.format(contract.dataStart)} și până la '
-          '${_dateFmt.format(contract.dataEnd)}.'),
-      _para(ContractClauze.durataPrelungire),
-      _para('Număr intervenții planificate: $interv/an.'),
-    ]));
+    w.add(_sectionHeader('3. DURATA CONTRACTULUI'));
+    w.add(_para(
+        'Prezentul contract se încheie pe o perioadă de 12 luni, începând '
+        'cu ${_dateFmt.format(contract.dataStart)} și până la '
+        '${_dateFmt.format(contract.dataEnd)}.'));
+    w.add(_para(ContractClauze.durataPrelungire));
+    w.add(_para('Număr intervenții planificate: $interv/an.'));
     w.add(_gap());
 
     // 4. Prețul și modalitatea de plată
-    w.add(_section('4. PREȚUL ȘI MODALITATEA DE PLATĂ', [
-      _totaluri(contract),
-      pw.SizedBox(height: 6),
-      _para(ContractClauze.plata),
-    ]));
+    w.add(_sectionHeader('4. PREȚUL ȘI MODALITATEA DE PLATĂ'));
+    w.add(_totaluri(contract));
+    w.add(pw.SizedBox(height: 6));
+    w.add(_para(ContractClauze.plata));
     w.add(_gap());
 
     // 5. Obligațiile Prestatorului
-    w.add(_section(
-        '5. OBLIGAȚIILE PRESTATORULUI', _bullets(ContractClauze.obligatiiPrestator)));
+    w.add(_sectionHeader('5. OBLIGAȚIILE PRESTATORULUI'));
+    w.addAll(_bullets(ContractClauze.obligatiiPrestator));
     w.add(_gap());
 
     // 6. Obligațiile Beneficiarului
-    w.add(_section('6. OBLIGAȚIILE BENEFICIARULUI',
-        _bullets(ContractClauze.obligatiiBeneficiar)));
+    w.add(_sectionHeader('6. OBLIGAȚIILE BENEFICIARULUI'));
+    w.addAll(_bullets(ContractClauze.obligatiiBeneficiar));
     w.add(_gap());
 
     // 7. Clauze speciale echipamente vechi
-    w.add(_section('7. CLAUZE SPECIALE ECHIPAMENTE VECHI',
-        ContractClauze.clauzeSpeciale.map(_para).toList()));
+    w.add(_sectionHeader('7. CLAUZE SPECIALE ECHIPAMENTE VECHI'));
+    w.addAll(ContractClauze.clauzeSpeciale.map(_para));
     w.add(_gap());
 
     // 8. Răspundere și forță majoră
-    w.add(_section('8. RĂSPUNDERE ȘI FORȚĂ MAJORĂ',
-        ContractClauze.raspundere.map(_para).toList()));
+    w.add(_sectionHeader('8. RĂSPUNDERE ȘI FORȚĂ MAJORĂ'));
+    w.addAll(ContractClauze.raspundere.map(_para));
     w.add(_gap());
 
     // 9. Confidențialitate și GDPR
-    w.add(_section('9. CONFIDENȚIALITATE ȘI GDPR',
-        [_para(ContractClauze.confidentialitate)]));
+    w.add(_sectionHeader('9. CONFIDENȚIALITATE ȘI GDPR'));
+    w.add(_para(ContractClauze.confidentialitate));
     w.add(_gap());
 
     // 10. Litigii
-    w.add(_section('10. LITIGII', [_para(ContractClauze.litigii)]));
+    w.add(_sectionHeader('10. LITIGII'));
+    w.add(_para(ContractClauze.litigii));
     w.add(_gap());
 
     // 11. Dispoziții finale
-    w.add(_section(
-        '11. DISPOZIȚII FINALE', [_para(ContractClauze.dispozitiiFinale)]));
+    w.add(_sectionHeader('11. DISPOZIȚII FINALE'));
+    w.add(_para(ContractClauze.dispozitiiFinale));
     w.add(pw.SizedBox(height: 16));
 
     // Semnături (identic cu PV/PIF)
@@ -470,41 +517,24 @@ class ContractPdfService {
 
   static pw.Widget _gap() => pw.SizedBox(height: 8);
 
-  /// Secțiune cu header roșu full-width (stil PV/PIF).
-  static pw.Widget _section(String title, List<pw.Widget> children) {
+  /// Bară de titlu secțiune (header roșu full-width, stil PV/PIF).
+  /// Emisă ca widget INDEPENDENT — conținutul secțiunii urmează ca paragrafe
+  /// separate, ca MultiPage să poată insera page-break oriunde. NU împacheta
+  /// conținutul secțiunii într-un Container cu bordură (devine atomic → OOM).
+  static pw.Widget _sectionHeader(String title) {
     return pw.Container(
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: _borderGray, width: 0.5),
-        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      width: double.infinity,
+      margin: const pw.EdgeInsets.only(bottom: 4),
+      padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: const pw.BoxDecoration(
+        color: _primaryRed,
+        borderRadius: pw.BorderRadius.all(pw.Radius.circular(4)),
       ),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Container(
-            width: double.infinity,
-            padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-            decoration: const pw.BoxDecoration(
-              color: _primaryRed,
-              borderRadius: pw.BorderRadius.only(
-                topLeft: pw.Radius.circular(4),
-                topRight: pw.Radius.circular(4),
-              ),
-            ),
-            child: pw.Text(title,
-                style: pw.TextStyle(
-                    color: PdfColors.white,
-                    fontWeight: pw.FontWeight.bold,
-                    fontSize: 9)),
-          ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.all(8),
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: children,
-            ),
-          ),
-        ],
-      ),
+      child: pw.Text(title,
+          style: pw.TextStyle(
+              color: PdfColors.white,
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 9)),
     );
   }
 
