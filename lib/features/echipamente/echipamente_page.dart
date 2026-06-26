@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/help/help_module_button.dart';
+import '../mentenanta/interventii/fgas_gwp_catalog.dart';
 import 'echipament_instalat_models.dart';
 import 'echipamente_repository.dart';
 
@@ -481,9 +482,30 @@ class _EchipamentePageState extends State<EchipamentePage>
                           child: TextField(
                               textCapitalization: TextCapitalization.sentences,
                               controller: agentCtrl,
+                              onChanged: (_) => setSt(() {}),
                               decoration: const InputDecoration(
                                   labelText: 'Agent frigorific'))),
                     ]),
+                    if (agentCtrl.text.trim().isNotEmpty)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Builder(builder: (_) {
+                            final gwp = FGasGwpCatalog.getGwp(agentCtrl.text);
+                            return Text(
+                              gwp != null
+                                  ? 'GWP: $gwp kg CO₂eq/kg'
+                                  : 'GWP: necunoscut',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: gwp != null
+                                      ? Colors.green.shade700
+                                      : Colors.grey),
+                            );
+                          }),
+                        ),
+                      ),
                     const SizedBox(height: 8),
                     Row(children: [
                       Expanded(
