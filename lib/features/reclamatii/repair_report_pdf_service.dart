@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -366,7 +367,8 @@ class RepairReportPdfService {
         ? report.id
         : report.reportNumber.trim();
     final safe = number.replaceAll(RegExp(r'[^A-Za-z0-9_\-]+'), '_');
-    return 'proces_verbal_interventie_$safe.pdf';
+    final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    return 'proces_verbal_interventie_${safe}_$ts.pdf';
   }
 
   static pw.Widget _section(
