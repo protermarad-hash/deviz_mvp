@@ -272,6 +272,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
   String _teamFilter = '';
   String _jobFilter = '';
   String _documentFilter = ''; // '' | 'cu_documente' | 'fara_documente'
+  // Căutare după datele clientului (nume, adresă, telefon, cod intern/extern)
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
   Map<String, int> _photoCountByEntityId = const <String, int>{};
   _EmployeeScopeMode _employeeScopeMode = _EmployeeScopeMode.all;
   _ProgramariViewMode _viewMode = _ProgramariViewMode.calendar;
@@ -477,6 +480,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
     _realtimeSyncDebounce?.cancel();
     _appointmentsRealtimeSubscription?.cancel();
     _pageScrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -1602,6 +1606,54 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
   }
 
+  // Normalizează text pentru căutare: lowercase + elimină diacriticele.
+  String _normalizeSearchText(String raw) {
+    return raw
+        .trim()
+        .toLowerCase()
+        .replaceAll('ă', 'a')
+        .replaceAll('â', 'a')
+        .replaceAll('î', 'i')
+        .replaceAll('ș', 's')
+        .replaceAll('ş', 's')
+        .replaceAll('ț', 't')
+        .replaceAll('ţ', 't');
+  }
+
+  // Verifică dacă programarea conține textul căutat în oricare câmp client
+  // (nume, adresă, telefon, cod intern, cod extern) — OR logic.
+  bool _appointmentMatchesSearch(Appointment item, String normalizedQuery) {
+    if (normalizedQuery.isEmpty) return true;
+    final parts = <String>[
+      item.clientName,
+      item.location,
+      item.contactPhone,
+      ...item.clientPhoneNumbers,
+    ];
+    final record = _clientRecordByIdMap[item.clientId.trim()];
+    if (record != null) {
+      parts.addAll(<String>[
+        record.name,
+        record.address,
+        record.city,
+        record.county,
+        record.phone,
+        record.phone2,
+        record.phone3,
+        ...record.phoneNumbers,
+        record.clientCode,
+        record.externalClientCode,
+      ]);
+    }
+    for (final part in parts) {
+      if (part.trim().isEmpty) continue;
+      if (_normalizeSearchText(part).contains(normalizedQuery)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   String _statusLabel(String raw) {
     final key = _normalizeStatusValue(raw);
     for (final option in _statusOptions) {
@@ -2650,10 +2702,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
   // se schimbă _items, _statusFilter, _teamFilter, _jobFilter, _employeeScopeMode
   // sau _currentAuthUser.
   void _updateFilteredCache() {
+    final normalizedQuery = _normalizeSearchText(_searchQuery);
     final scopedBase = _items.where(_isVisibleForCurrentUser);
     final scoped =
         _isEmployeeRole ? scopedBase.where(_matchesEmployeeScope) : scopedBase;
     _cachedFilteredItems = scoped.where((item) {
+      if (!_appointmentMatchesSearch(item, normalizedQuery)) {
+        return false;
+      }
       if (_statusFilter.isNotEmpty &&
           _normalizeStatusValue(item.status) != _statusFilter) {
         return false;
@@ -7138,6 +7194,41 @@ class _ProgramariPageState extends State<ProgramariPage> {
     );
   }
 
+  Widget _buildClientSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: TextField(
+        controller: _searchController,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: InputDecoration(
+          isDense: true,
+          prefixIcon: const Icon(Icons.search),
+          hintText: 'Caută după client, telefon, cod...',
+          suffixIcon: _searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear),
+                  tooltip: 'Șterge căutarea',
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() {
+                      _searchQuery = '';
+                      _updateFilteredCache();
+                    });
+                  },
+                )
+              : null,
+          border: const OutlineInputBorder(),
+        ),
+        onChanged: (value) {
+          setState(() {
+            _searchQuery = value;
+            _updateFilteredCache();
+          });
+        },
+      ),
+    );
+  }
+
   Widget _buildMainToolbar({required bool showPanelButton}) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
@@ -11082,6 +11173,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
               firstChild: const SizedBox(width: double.infinity, height: 0),
               secondChild: _buildMainToolbar(showPanelButton: !showInlineSidePanel),
             ),
+            _buildClientSearchBar(),
             Expanded(
               child: _viewMode == _ProgramariViewMode.calendar
                   ? _buildCalendarView(items)
