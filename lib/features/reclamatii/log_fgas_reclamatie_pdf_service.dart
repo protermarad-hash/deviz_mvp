@@ -28,6 +28,32 @@ class LogFGasReclamatiePdfService {
   static const _borderGray = PdfColor(0.8, 0.8, 0.8);
   static const _mediumText = PdfColor(0.3804, 0.3804, 0.3804);
 
+  /// Elimină duplicarea adresei: dacă orașul/județul sunt deja conținute în
+  /// adresă (ex: „Str. X, Arad" + city „Arad"), le golește ca să nu apară de
+  /// două ori în antetul PDF („Arad, Arad").
+  static DocumentBrandingData _dedupAddress(DocumentBrandingData b) {
+    final addr = b.address.toLowerCase();
+    String keep(String s) =>
+        (s.trim().isNotEmpty && addr.contains(s.trim().toLowerCase())) ? '' : s;
+    return DocumentBrandingData(
+      companyName: b.companyName,
+      address: b.address,
+      city: keep(b.city),
+      county: keep(b.county),
+      phone: b.phone,
+      email: b.email,
+      contactEmail: b.contactEmail,
+      website: b.website,
+      cui: b.cui,
+      tradeRegister: b.tradeRegister,
+      bank: b.bank,
+      iban: b.iban,
+      contactName: b.contactName,
+      currency: b.currency,
+      logoBytes: b.logoBytes,
+    );
+  }
+
   /// Parsează o cantitate dintr-un câmp text liber (ex: „7,22 kg" → 7.22).
   static double _parseKg(String raw) {
     final cleaned =
@@ -43,7 +69,8 @@ class LogFGasReclamatiePdfService {
   }) async {
     await PdfFontHelper.initialize();
     final profile = await repository.loadCompanyProfile();
-    final branding = DocumentBrandingData.fromCompanyProfile(profile);
+    final branding =
+        _dedupAddress(DocumentBrandingData.fromCompanyProfile(profile));
     final bytes = await _buildPdfBytes(report, branding);
 
     final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
@@ -142,7 +169,7 @@ class LogFGasReclamatiePdfService {
     );
   }
 
-  // ── Tabel F-Gas (un rând) cu GWP + Tone CO₂ ─────────────────────────────────
+  // ── Tabel F-Gas (un rând) cu GWP + Tone CO2 ─────────────────────────────────
 
   static pw.Widget _buildFGasTable(RepairReportRecord report) {
     final fmt = NumberFormat('#,##0.00', 'ro_RO');
@@ -202,7 +229,7 @@ class LogFGasReclamatiePdfService {
               h('Cant. recup.\n(kg)'),
               h('Cant. adăug.\n(kg)'),
               h('Cant. netă\n(kg)'),
-              h('Tone CO₂\nechiv.'),
+              h('Tone CO2\nechiv.'),
             ]),
             pw.TableRow(children: [
               cell('1', style: r, align: pw.Alignment.center),
@@ -231,7 +258,7 @@ class LogFGasReclamatiePdfService {
               border: pw.Border.all(color: _primaryRed, width: 0.5),
             ),
             child: pw.Text(
-              '⚠️ Depășește pragul de raportare (5 t CO₂ eq.) — verificări '
+              'Depășește pragul de raportare (5 t CO2 eq.) — verificări '
               'periodice de etanșeitate obligatorii conform Reg. UE 517/2014.',
               style: pw.TextStyle(
                   fontSize: 8,

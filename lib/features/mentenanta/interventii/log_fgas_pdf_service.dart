@@ -36,7 +36,8 @@ class LogFGasPdfService {
   }) async {
     await PdfFontHelper.initialize();
     final profile = await repository.loadCompanyProfile();
-    final branding = DocumentBrandingData.fromCompanyProfile(profile);
+    final branding =
+        _dedupAddress(DocumentBrandingData.fromCompanyProfile(profile));
     final bytes = await _buildPdfBytes(contract, interventie, branding);
 
     final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
@@ -51,6 +52,31 @@ class LogFGasPdfService {
       fileName: fileName,
       category: PdfDocumentCategory.other,
       forceSaveAs: saveAs,
+    );
+  }
+
+  /// Elimină duplicarea adresei: dacă orașul/județul sunt deja conținute în
+  /// adresă, le golește ca să nu apară de două ori în antetul PDF („Arad, Arad").
+  static DocumentBrandingData _dedupAddress(DocumentBrandingData b) {
+    final addr = b.address.toLowerCase();
+    String keep(String s) =>
+        (s.trim().isNotEmpty && addr.contains(s.trim().toLowerCase())) ? '' : s;
+    return DocumentBrandingData(
+      companyName: b.companyName,
+      address: b.address,
+      city: keep(b.city),
+      county: keep(b.county),
+      phone: b.phone,
+      email: b.email,
+      contactEmail: b.contactEmail,
+      website: b.website,
+      cui: b.cui,
+      tradeRegister: b.tradeRegister,
+      bank: b.bank,
+      iban: b.iban,
+      contactName: b.contactName,
+      currency: b.currency,
+      logoBytes: b.logoBytes,
     );
   }
 
