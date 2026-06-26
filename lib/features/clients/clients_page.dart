@@ -8,6 +8,7 @@ import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import '../../core/widgets/anaf_company_autofill_section.dart';
 import '../../core/widgets/app_viewport_guard.dart';
+import '../../core/widgets/client_duplicate_check.dart';
 import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
 import '../jobs/job_models.dart';
 import '../oferte/oferte_page.dart';
@@ -1186,6 +1187,34 @@ class _ClientsPageState extends State<ClientsPage> {
                       });
                       return;
                     }
+                    // ── Detecție duplicat unificată (DOAR la creare nou) ──
+                    if (current == null) {
+                      final phonesNew = [
+                        phone.text.trim(),
+                        phone2.text.trim(),
+                        phone3.text.trim(),
+                      ].where((p) => p.isNotEmpty).toList();
+                      final dup = findClientDuplicate(
+                        existing: _items,
+                        name: name.text.trim(),
+                        phones: phonesNew,
+                        email: email.text.trim(),
+                        externalCode: externalClientCode.text.trim(),
+                      );
+                      if (dup != null && dialogCtx.mounted) {
+                        final action =
+                            await showClientDuplicateDialog(dialogCtx, dup);
+                        if (action != ClientDuplicateAction.saveAnyway) {
+                          if (action ==
+                                  ClientDuplicateAction.goToExisting &&
+                              dialogCtx.mounted) {
+                            Navigator.of(dialogCtx).pop(false);
+                            await _openClientProfile(dup.existing);
+                          }
+                          return;
+                        }
+                      }
+                    }
                     final now = DateTime.now();
                     final item = ClientRecord(
                       id: current?.id ?? now.microsecondsSinceEpoch.toString(),
@@ -1220,14 +1249,14 @@ class _ClientsPageState extends State<ClientsPage> {
                       createdAt: current?.createdAt ?? now,
                       updatedAt: now,
                     );
-                    // ── Detecție duplicate după NUME ──────────────────────
+                    // ── Detecție duplicate după NUME (doar la editare) ────
                     final nameValue = name.text.trim();
-                    {
+                    if (current != null) {
                       ClientRecord? dupByName;
                       for (final c in _items) {
                         if (c.name.trim().toLowerCase() ==
                                 nameValue.toLowerCase() &&
-                            c.id != (current?.id ?? '')) {
+                            c.id != current.id) {
                           dupByName = c;
                           break;
                         }

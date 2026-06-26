@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/anaf_company_autofill_section.dart';
+import '../../core/widgets/client_duplicate_check.dart';
 import '../../features/clients/client_models.dart';
 
 /// Bottom sheet complet pentru adăugarea unui client/partener/beneficiar.
@@ -84,11 +85,36 @@ class _QuickAddClientSheetState extends State<QuickAddClientSheet> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isSaving = true);
     try {
-      final clientCode = await widget.repository.nextClientCode();
       final phones = _telefoaneCtrl
           .map((c) => c.text.trim())
           .where((t) => t.isNotEmpty)
           .toList();
+
+      // ── Detecție duplicat (DOAR la creare client nou) ──
+      final existing = await widget.repository.listClients();
+      if (!mounted) return;
+      final duplicate = findClientDuplicate(
+        existing: existing,
+        name: _numeCtrl.text.trim(),
+        phones: phones,
+        email: _emailCtrl.text.trim(),
+      );
+      if (duplicate != null) {
+        final action = await showClientDuplicateDialog(context, duplicate);
+        if (!mounted) return;
+        if (action != ClientDuplicateAction.saveAnyway) {
+          // "Mergi la clientul existent" → selectează clientul existent
+          if (action == ClientDuplicateAction.goToExisting) {
+            Navigator.pop(context);
+            widget.onCreated(duplicate.existing);
+          } else {
+            setState(() => _isSaving = false);
+          }
+          return;
+        }
+      }
+
+      final clientCode = await widget.repository.nextClientCode();
 
       final newClient = ClientRecord(
         id: 'client-${const Uuid().v4().replaceAll('-', '')}',

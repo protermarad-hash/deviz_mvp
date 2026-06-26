@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/anaf_company_autofill_section.dart';
+import '../../core/widgets/client_duplicate_check.dart';
 import 'client_models.dart';
 
 /// Dialog rapid pentru adăugarea unui client nou direct din module
@@ -92,38 +93,29 @@ class _AddClientQuickDialogContentState
       return;
     }
 
-    // ── Detecție duplicate după NUME ──────────────────────────────────────
-    if (widget.existingClients.isNotEmpty) {
-      final nameLow = name.toLowerCase();
-      final similar = widget.existingClients.where(
-        (c) => c.name.trim().toLowerCase() == nameLow,
-      ).toList();
-      if (similar.isNotEmpty && mounted) {
-        final existing = similar.first;
-        final proceed = await showDialog<bool>(
-          context: context,
-          builder: (alertCtx) => AlertDialog(
-            title: const Text('Client similar existent'),
-            content: Text(
-              'Există deja un client cu același nume:\n\n'
-              '• ${existing.name}'
-              '${existing.city.trim().isNotEmpty ? " · ${existing.city.trim()}" : ""}'
-              '${existing.cui.trim().isNotEmpty ? " · CUI: ${existing.cui.trim()}" : ""}\n\n'
-              'Doriți să adăugați un client nou oricum?',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(alertCtx).pop(false),
-                child: const Text('Anulează'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(alertCtx).pop(true),
-                child: const Text('Adaugă oricum'),
-              ),
-            ],
-          ),
-        );
-        if (proceed != true) return;
+    // ── Detecție duplicat unificată (nume, telefon, email, cod extern) ─────
+    final existingList = widget.existingClients.isNotEmpty
+        ? widget.existingClients
+        : await widget.repository.listClients();
+    if (!mounted) return;
+    final dup = findClientDuplicate(
+      existing: existingList,
+      name: name,
+      phones: _phoneControllers
+          .map((c) => c.text.trim())
+          .where((p) => p.isNotEmpty)
+          .toList(),
+      email: _emailController.text.trim(),
+    );
+    if (dup != null && mounted) {
+      final action = await showClientDuplicateDialog(context, dup);
+      if (!mounted) return;
+      if (action != ClientDuplicateAction.saveAnyway) {
+        // "Mergi la clientul existent" → întoarce clientul existent (selectat)
+        if (action == ClientDuplicateAction.goToExisting) {
+          Navigator.of(context).pop(dup.existing);
+        }
+        return;
       }
     }
 

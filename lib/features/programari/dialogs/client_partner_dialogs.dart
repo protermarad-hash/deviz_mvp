@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/repositories/app_data_repository.dart';
 import '../../../core/widgets/anaf_company_autofill_section.dart';
+import '../../../core/widgets/client_duplicate_check.dart';
 import '../../clients/client_models.dart';
 import '../../partners/partner_models.dart';
 
@@ -259,6 +260,31 @@ Future<ClientRecord?> openQuickCreateClientDialog(
                       formError = 'Completeaza codul clientului.';
                     });
                     return;
+                  }
+
+                  // ── Detecție duplicat (DOAR la creare client nou) ──
+                  final existingClients = await repository.listClients();
+                  if (!dialogContext.mounted) return;
+                  final dup = findClientDuplicate(
+                    existing: existingClients,
+                    name: trimmedName,
+                    phones: [phoneController.text.trim()]
+                        .where((p) => p.isNotEmpty)
+                        .toList(),
+                    email: emailController.text.trim(),
+                    externalCode: externalClientCodeController.text.trim(),
+                  );
+                  if (dup != null && dialogContext.mounted) {
+                    final action =
+                        await showClientDuplicateDialog(dialogContext, dup);
+                    if (!dialogContext.mounted) return;
+                    if (action != ClientDuplicateAction.saveAnyway) {
+                      // "Mergi la clientul existent" → returnează clientul existent
+                      if (action == ClientDuplicateAction.goToExisting) {
+                        Navigator.of(dialogContext).pop(dup.existing);
+                      }
+                      return;
+                    }
                   }
 
                   final now = DateTime.now();

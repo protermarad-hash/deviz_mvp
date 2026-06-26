@@ -20,6 +20,7 @@ import '../../core/pdf_document_branding.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/widgets/client_duplicate_check.dart';
 import '../../core/widgets/client_autocomplete_field.dart';
 import '../ai_assistant/ai_assistant_action_catalog.dart';
 import '../ai_assistant/ai_assistant_models.dart';
@@ -1357,19 +1358,46 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
       ),
     );
     if (client == null) return;
-    await widget.repository.saveClient(client);
+    // ── Detecție duplicat (DOAR la creare client nou) ──
+    var effectiveClient = client;
+    final existingClients = await widget.repository.listClients();
+    if (!mounted) return;
+    final dup = findClientDuplicate(
+      existing: existingClients,
+      name: client.name,
+      phones: client.allPhoneNumbers,
+      email: client.email,
+    );
+    if (dup != null) {
+      final action = await showClientDuplicateDialog(context, dup);
+      if (!mounted) return;
+      if (action == null) return;
+      if (action == ClientDuplicateAction.goToExisting) {
+        // Leagă lead-ul de clientul existent, fără a crea unul nou
+        effectiveClient = dup.existing;
+      } else {
+        await widget.repository.saveClient(client);
+      }
+    } else {
+      await widget.repository.saveClient(client);
+    }
     if (seed != null) {
       await _service.saveLead(
         seed.copyWith(
-          clientId: client.id,
-          clientName: client.name,
-          contactName: client.contactPerson.trim().isEmpty
+          clientId: effectiveClient.id,
+          clientName: effectiveClient.name,
+          contactName: effectiveClient.contactPerson.trim().isEmpty
               ? seed.contactName
-              : client.contactPerson,
-          phone: client.phone.trim().isEmpty ? seed.phone : client.phone,
-          email: client.email.trim().isEmpty ? seed.email : client.email,
-          address:
-              client.address.trim().isEmpty ? seed.address : client.address,
+              : effectiveClient.contactPerson,
+          phone: effectiveClient.phone.trim().isEmpty
+              ? seed.phone
+              : effectiveClient.phone,
+          email: effectiveClient.email.trim().isEmpty
+              ? seed.email
+              : effectiveClient.email,
+          address: effectiveClient.address.trim().isEmpty
+              ? seed.address
+              : effectiveClient.address,
         ),
       );
     }
