@@ -306,6 +306,10 @@ class _ContractDetailPageState extends State<ContractDetailPage> {
                     '${_dateFmt.format(c.dataStart)} – ${_dateFmt.format(c.dataEnd)}',
                     style:
                         TextStyle(fontSize: 13, color: Colors.grey.shade700)),
+                const Spacer(),
+                Text('${_fmt.format(c.totalCuTVA)} RON',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 14)),
               ],
             ),
           ],
