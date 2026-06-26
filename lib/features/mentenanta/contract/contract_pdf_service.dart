@@ -285,18 +285,24 @@ class ContractPdfService {
         'Email: ${client.email}',
     ];
 
-    return pw.Container(
-      decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: _borderGray, width: 0.5),
-      ),
-      child: pw.Row(
-        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-        children: [
-          pw.Expanded(child: _partyCol('PRESTATOR', prestator)),
-          pw.Container(width: 0.5, color: _borderGray),
-          pw.Expanded(child: _partyCol('BENEFICIAR', benef)),
-        ],
-      ),
+    // pw.Table (nu pw.Row cu CrossAxisAlignment.stretch): un Row cu `stretch`
+    // plasat direct în lista build: a unui MultiPage primește înălțime
+    // nemărginită → copiii (în special divider-ul fără înălțime) cer înălțime
+    // Infinity → "Widget won't fit ... height (Infinity)". Tabelul are înălțime
+    // finită, egalizează automat cele două celule și păstrează caseta +
+    // divider-ul vertical prin TableBorder.
+    return pw.Table(
+      border: pw.TableBorder.all(color: _borderGray, width: 0.5),
+      columnWidths: const {
+        0: pw.FlexColumnWidth(1),
+        1: pw.FlexColumnWidth(1),
+      },
+      children: [
+        pw.TableRow(children: [
+          _partyCol('PRESTATOR', prestator),
+          _partyCol('BENEFICIAR', benef),
+        ]),
+      ],
     );
   }
 
