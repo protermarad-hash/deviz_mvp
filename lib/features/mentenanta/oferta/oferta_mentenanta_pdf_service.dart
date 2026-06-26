@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:intl/intl.dart';
@@ -41,6 +42,17 @@ class OfertaMentenantaPdfService {
       profile = const CompanyProfile();
     }
 
+    // Logo firmă (base64) — același mecanism ca în lucrare_pdf_builder.dart.
+    Uint8List? logoBytes;
+    final logoRaw = profile.logoBase64.trim();
+    if (logoRaw.isNotEmpty) {
+      try {
+        logoBytes = base64Decode(logoRaw);
+      } catch (_) {
+        logoBytes = null;
+      }
+    }
+
     final doc = pw.Document(theme: PdfFontHelper.theme);
     final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final dateFmt = DateFormat('dd.MM.yyyy');
@@ -53,11 +65,16 @@ class OfertaMentenantaPdfService {
     // ── Header firmă ─────────────────────────────────────────────
     pw.Widget buildHeader() {
       final lines = <String>[];
-      if (profile.address.isNotEmpty) lines.add(profile.address);
-      final loc = [profile.city, profile.county]
-          .where((s) => s.isNotEmpty)
-          .join(', ');
-      if (loc.isNotEmpty) lines.add(loc);
+      final address = profile.address.trim();
+      if (address.isNotEmpty) lines.add(address);
+      // Adaugă oraș/județ DOAR dacă nu sunt deja conținute în adresă
+      // (evită duplicarea „Arad, Arad" sub adresa completă).
+      final addressLower = address.toLowerCase();
+      final locParts = [profile.city, profile.county]
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty && !addressLower.contains(s.toLowerCase()))
+          .toList();
+      if (locParts.isNotEmpty) lines.add(locParts.join(', '));
       if (profile.cui.isNotEmpty) lines.add('CUI: ${profile.cui}');
       if (profile.phone.isNotEmpty) lines.add('Tel: ${profile.phone}');
 
@@ -70,6 +87,14 @@ class OfertaMentenantaPdfService {
         child: pw.Row(
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
+            if (logoBytes != null)
+              pw.Container(
+                width: 56,
+                height: 56,
+                margin: const pw.EdgeInsets.only(right: 10),
+                child: pw.Image(pw.MemoryImage(logoBytes),
+                    fit: pw.BoxFit.contain),
+              ),
             pw.Expanded(
               child: pw.Column(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -169,15 +194,19 @@ class OfertaMentenantaPdfService {
       ]);
     }
 
-    pw.TableRow categoryRow(CategorieMentenanta cat) {
-      return pw.TableRow(
-        decoration: const pw.BoxDecoration(color: _lightGray),
-        children: [
-          cell('── SISTEM ${cat.label.toUpperCase()} ──',
-              style: ts(size: 8, b: true, color: _primaryRed),
-              bg: _lightGray),
-          for (var i = 0; i < 9; i++) cell('', bg: _lightGray),
-        ],
+    // Banner categorie pe TOATĂ lățimea tabelului (nu într-o singură coloană
+    // îngustă — altfel textul se rupea literă cu literă).
+    pw.Widget categoryBanner(CategorieMentenanta cat) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        decoration: pw.BoxDecoration(
+          color: _lightGray,
+          border: pw.Border.all(color: PdfColors.grey400, width: 0.5),
+        ),
+        alignment: pw.Alignment.center,
+        child: pw.Text('── SISTEM ${cat.label.toUpperCase()} ──',
+            style: ts(size: 8.5, b: true, color: _primaryRed)),
       );
     }
 
@@ -217,23 +246,34 @@ class OfertaMentenantaPdfService {
       );
     }
 
-    pw.Widget buildTable() {
-      final rows = <pw.TableRow>[headerRow()];
+    // Întoarce o listă de widget-uri (header tabel + banner categorie + tabel
+    // per categorie). Astfel banner-ul se întinde pe toată lățimea, iar
+    // MultiPage poate sparge fiecare tabel între pagini la nevoie.
+    List<pw.Widget> buildTableWidgets() {
+      final widgets = <pw.Widget>[
+        pw.Table(
+          columnWidths: colWidths,
+          border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+          children: [headerRow()],
+        ),
+      ];
       final grupate = contract.echipamenteGrupate;
       grupate.forEach((cat, items) {
-        rows.add(categoryRow(cat));
+        widgets.add(categoryBanner(cat));
+        final rows = <pw.TableRow>[];
         for (final e in items) {
           rows.add(dataRow(e));
         }
         final subtotal =
             items.fold<double>(0, (s, e) => s + e.valoareTotala);
         rows.add(subtotalRow(cat, subtotal));
+        widgets.add(pw.Table(
+          columnWidths: colWidths,
+          border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+          children: rows,
+        ));
       });
-      return pw.Table(
-        columnWidths: colWidths,
-        border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
-        children: rows,
-      );
+      return widgets;
     }
 
     // ── Totaluri ─────────────────────────────────────────────────
@@ -331,7 +371,7 @@ class OfertaMentenantaPdfService {
         build: (ctx) => [
           buildHeader(),
           buildSubtitle(),
-          buildTable(),
+          ...buildTableWidgets(),
           buildTotals(),
           buildNote(),
         ],
