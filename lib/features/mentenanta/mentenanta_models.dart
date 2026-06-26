@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 // ── Categorie echipament mentenanță ───────────────────────────────────────────
@@ -77,6 +78,7 @@ enum CategorieMentenanta {
 
 enum ContractMentenantaStatus {
   oferta,
+  acceptata,
   activ,
   expirat,
   anulat;
@@ -85,6 +87,8 @@ enum ContractMentenantaStatus {
     switch (this) {
       case ContractMentenantaStatus.oferta:
         return 'Ofertă';
+      case ContractMentenantaStatus.acceptata:
+        return 'Acceptată';
       case ContractMentenantaStatus.activ:
         return 'Activ';
       case ContractMentenantaStatus.expirat:
@@ -94,10 +98,28 @@ enum ContractMentenantaStatus {
     }
   }
 
+  /// Culoarea de status pentru chip-uri și borduri în UI.
+  Color get color {
+    switch (this) {
+      case ContractMentenantaStatus.oferta:
+        return Colors.orange;
+      case ContractMentenantaStatus.acceptata:
+        return Colors.blue;
+      case ContractMentenantaStatus.activ:
+        return Colors.green;
+      case ContractMentenantaStatus.expirat:
+        return Colors.red;
+      case ContractMentenantaStatus.anulat:
+        return Colors.grey;
+    }
+  }
+
   String get storageValue {
     switch (this) {
       case ContractMentenantaStatus.oferta:
         return 'oferta';
+      case ContractMentenantaStatus.acceptata:
+        return 'acceptata';
       case ContractMentenantaStatus.activ:
         return 'activ';
       case ContractMentenantaStatus.expirat:
@@ -109,6 +131,8 @@ enum ContractMentenantaStatus {
 
   static ContractMentenantaStatus fromValue(String? raw) {
     switch (raw) {
+      case 'acceptata':
+        return ContractMentenantaStatus.acceptata;
       case 'activ':
         return ContractMentenantaStatus.activ;
       case 'expirat':

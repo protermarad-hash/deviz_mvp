@@ -59,10 +59,7 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
     _dataStart = e?.dataStart ?? now;
     _dataEnd = e?.dataEnd ?? DateTime(now.year + 1, now.month, now.day);
     _interventii = e?.interventiiPlanificate ?? 1;
-    _status = (e?.status == ContractMentenantaStatus.oferta ||
-            e?.status == ContractMentenantaStatus.activ)
-        ? e!.status
-        : (e?.status ?? ContractMentenantaStatus.oferta);
+    _status = e?.status ?? ContractMentenantaStatus.oferta;
     _echipamente = List<EchipamentMentenanta>.from(e?.echipamente ?? const []);
     Future.microtask(_loadClients);
     if (e == null) Future.microtask(_generateNumber);
@@ -322,7 +319,10 @@ class _ContractEditorDialogState extends State<ContractEditorDialog> {
                         labelText: 'Status', border: OutlineInputBorder()),
                     items: const [
                       ContractMentenantaStatus.oferta,
+                      ContractMentenantaStatus.acceptata,
                       ContractMentenantaStatus.activ,
+                      ContractMentenantaStatus.expirat,
+                      ContractMentenantaStatus.anulat,
                     ]
                         .map((s) => DropdownMenuItem(
                             value: s, child: Text(s.label)))

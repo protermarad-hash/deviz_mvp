@@ -5,6 +5,7 @@ import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/repositories/app_data_repository.dart';
 import 'contract/contract_editor_dialog.dart';
+import 'contract/contract_pdf_service.dart';
 import 'firebase_mentenanta_repository.dart';
 import 'mentenanta_models.dart';
 import 'oferta/oferta_mentenanta_pdf_service.dart';
@@ -19,7 +20,7 @@ class MentenantaPage extends StatefulWidget {
   State<MentenantaPage> createState() => _MentenantaPageState();
 }
 
-enum _FiltruContract { toate, active, oferte, expirate }
+enum _FiltruContract { toate, oferte, acceptate, active, expirate }
 
 class _MentenantaPageState extends State<MentenantaPage> {
   final FirebaseMentenantaRepository _repo = FirebaseMentenantaRepository();
@@ -71,14 +72,18 @@ class _MentenantaPageState extends State<MentenantaPage> {
     switch (_filtru) {
       case _FiltruContract.toate:
         return _contracte;
+      case _FiltruContract.oferte:
+        return _contracte
+            .where((c) => c.status == ContractMentenantaStatus.oferta)
+            .toList();
+      case _FiltruContract.acceptate:
+        return _contracte
+            .where((c) => c.status == ContractMentenantaStatus.acceptata)
+            .toList();
       case _FiltruContract.active:
         return _contracte
             .where((c) =>
                 c.status == ContractMentenantaStatus.activ && !isExpirat(c))
-            .toList();
-      case _FiltruContract.oferte:
-        return _contracte
-            .where((c) => c.status == ContractMentenantaStatus.oferta)
             .toList();
       case _FiltruContract.expirate:
         return _contracte.where(isExpirat).toList();
@@ -87,21 +92,12 @@ class _MentenantaPageState extends State<MentenantaPage> {
 
   Color _statusColor(ContractMentenanta c) {
     final now = DateTime.now();
-    if (c.status == ContractMentenantaStatus.expirat ||
-        (c.status == ContractMentenantaStatus.activ &&
-            c.dataEnd.isBefore(now))) {
+    // Contract activ cu data sfârșit trecută = vizual expirat (roșu).
+    if (c.status == ContractMentenantaStatus.activ &&
+        c.dataEnd.isBefore(now)) {
       return Colors.red;
     }
-    switch (c.status) {
-      case ContractMentenantaStatus.oferta:
-        return Colors.orange;
-      case ContractMentenantaStatus.activ:
-        return Colors.green;
-      case ContractMentenantaStatus.anulat:
-        return Colors.grey;
-      case ContractMentenantaStatus.expirat:
-        return Colors.red;
-    }
+    return c.status.color;
   }
 
   String _statusLabel(ContractMentenanta c) {
@@ -153,6 +149,45 @@ class _MentenantaPageState extends State<MentenantaPage> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Eroare generare PDF: $e')));
     }
+  }
+
+  Future<void> _generateContractPdf(ContractMentenanta c) async {
+    try {
+      final path = await ContractPdfService.export(
+        repository: widget.repository,
+        contract: c,
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Contract mentenanță ${c.numar}',
+        shareSubject: 'Contract prestări servicii ${c.numar}',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Eroare generare contract: $e')));
+    }
+  }
+
+  /// Schimbă statusul contractului (optimistic UI + salvare best-effort).
+  void _changeStatus(ContractMentenanta c, ContractMentenantaStatus status) {
+    final updated = c.copyWith(status: status, updatedAt: DateTime.now());
+    setState(() {
+      final idx = _contracte.indexWhere((x) => x.id == c.id);
+      if (idx >= 0) _contracte[idx] = updated;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Status actualizat: ${status.label}.')));
+    _repo.saveContract(updated).catchError((e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Eroare salvare status: $e')));
+        _load();
+      }
+      return updated;
+    });
   }
 
   Future<void> _delete(ContractMentenanta c) async {
@@ -248,8 +283,9 @@ class _MentenantaPageState extends State<MentenantaPage> {
       child: Row(
         children: [
           chip('Toate', _FiltruContract.toate),
-          chip('Active', _FiltruContract.active),
           chip('Oferte', _FiltruContract.oferte),
+          chip('Acceptate', _FiltruContract.acceptate),
+          chip('Active', _FiltruContract.active),
           chip('Expirate', _FiltruContract.expirate),
         ],
       ),
@@ -377,15 +413,32 @@ class _MentenantaPageState extends State<MentenantaPage> {
           case 'pdf':
             _generatePdf(c);
             break;
+          case 'contract':
+            _generateContractPdf(c);
+            break;
+          case 'accept':
+            _changeStatus(c, ContractMentenantaStatus.acceptata);
+            break;
+          case 'activate':
+            _changeStatus(c, ContractMentenantaStatus.activ);
+            break;
           case 'delete':
             _delete(c);
             break;
         }
       },
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'edit', child: Text('Editează')),
-        PopupMenuItem(value: 'pdf', child: Text('Generează Ofertă PDF')),
-        PopupMenuItem(value: 'delete', child: Text('Șterge')),
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'edit', child: Text('Editează')),
+        const PopupMenuItem(value: 'pdf', child: Text('Generează Ofertă PDF')),
+        const PopupMenuItem(
+            value: 'contract', child: Text('Generează Contract PDF')),
+        if (c.status == ContractMentenantaStatus.oferta)
+          const PopupMenuItem(
+              value: 'accept', child: Text('Marchează ca Acceptat')),
+        if (c.status == ContractMentenantaStatus.acceptata)
+          const PopupMenuItem(
+              value: 'activate', child: Text('Activează contract')),
+        const PopupMenuItem(value: 'delete', child: Text('Șterge')),
       ],
     );
   }
