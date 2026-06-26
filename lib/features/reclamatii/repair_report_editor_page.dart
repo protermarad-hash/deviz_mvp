@@ -1192,12 +1192,7 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
                     decoration:
                         const InputDecoration(labelText: 'Adresa / locatie'),
                   ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              _section(
-                'Interventie',
-                [
+                  const SizedBox(height: 12),
                   Wrap(
                     spacing: 12,
                     runSpacing: 12,
@@ -1222,49 +1217,6 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _complaintDescriptionController,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Descriere reclamatie',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _findingsController,
-                    maxLines: 4,
-                    decoration: const InputDecoration(labelText: 'Constatare'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _workPerformedController,
-                    maxLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Lucrari efectuate',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _materialsUsedController,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Materiale / piese folosite',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    textCapitalization: TextCapitalization.sentences,
-                    controller: _recommendationsController,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                      labelText: 'Recomandari / observatii',
-                    ),
                   ),
                 ],
               ),
