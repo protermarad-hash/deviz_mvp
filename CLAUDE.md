@@ -799,6 +799,48 @@ NICIODATĂ SnackBar simplu cu calea fișierului.
 
 ---
 
+## 📝 REGULĂ UX DOCUMENTE — AUTO-COMPLETARE CÂMPURI (OBLIGATORIE)
+
+La orice document nou creat în aplicație (PV, PIF, Log F-Gas, ofertă, deviz,
+contract, sau orice alt document viitor), câmpurile trebuie auto-completate din
+sursele disponibile:
+
+**Tehnician / Persoana de contact:**
+- Din userul curent logat: `FirebaseAuth.instance.currentUser`
+  (`.displayName ?? .email`)
+- Fallback: `CompanyProfile.contactName`
+  (NOTĂ: câmpul real e `contactName`, NU `contactPerson` — `contactPerson` nu
+  există pe `CompanyProfile` și dă eroare de compilare)
+
+**Date client (nume, adresă, telefon, email):**
+- Din `ClientRecord` asociat documentului (via `clientId` / `beneficiaryClientId`)
+- Fallback: din datele reclamației/programării/lucrării curente
+
+**Date firmă (nume, CUI, adresă, telefon, email, IBAN, bancă):**
+- Din `CompanyProfile` (`loadCompanyProfile` din repository)
+- NICIODATĂ hardcodate în cod
+
+**Autorizații / certificate (F-Gas, alte autorizații):**
+- Din `CompanyProfile` câmpurile dedicate
+  (`agfrCompanyAuthorizationNumber` etc.)
+
+**Locație / adresă obiectiv:**
+- Din reclamație/programare/lucrare curentă (câmpul `location`)
+- Fallback: adresa clientului din `ClientRecord` (`address`, `city`, `county`)
+
+**Regulă generală:**
+- Câmpurile auto-completate sunt ÎNTOTDEAUNA editabile manual
+- Auto-completarea se face în `initState()` la crearea documentului
+  (sincron pentru `FirebaseAuth.currentUser`; async best-effort via
+  `Future.microtask` pentru `loadCompanyProfile` / `listClients`)
+- Dacă valoarea există deja (document editat) → NU suprascrie
+- Dacă sursa lipsește → câmp gol, nu crash, nu valoare inventată
+
+**Implementare de referință:** `repair_report_editor_page.dart` →
+`_autofillMissingFields()` + `_autofillFromRepository()` (iun 2026)
+
+---
+
 ## 👁️ REGULA VIZIBILITATE LISTE
 
 La ORICE pagină cu listă:
