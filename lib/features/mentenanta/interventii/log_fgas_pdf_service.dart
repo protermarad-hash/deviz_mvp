@@ -38,7 +38,8 @@ class LogFGasPdfService {
     final profile = await repository.loadCompanyProfile();
     final branding =
         _dedupAddress(DocumentBrandingData.fromCompanyProfile(profile));
-    final bytes = await _buildPdfBytes(contract, interventie, branding);
+    final bytes = await _buildPdfBytes(contract, interventie, branding,
+        profile.agfrCompanyAuthorizationNumber);
 
     final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
     final numarSafe =
@@ -84,6 +85,7 @@ class LogFGasPdfService {
     ContractMentenanta contract,
     InterventieService interventie,
     DocumentBrandingData branding,
+    String agfrAuthorization,
   ) async {
     final dateStr = _dateFmt.format(interventie.dataInterventie);
     // Doar echipamentele care necesită Log F-Gas.
@@ -102,7 +104,11 @@ class LogFGasPdfService {
               : branding.companyName),
       ProTermPdfTemplate.buildInfoRow(
           'CUI', branding.cui.isEmpty ? 'RO11355602' : branding.cui),
-      ProTermPdfTemplate.buildInfoRow('Autorizație F-Gas', '____________________'),
+      ProTermPdfTemplate.buildInfoRow(
+          'Autorizație F-Gas',
+          agfrAuthorization.trim().isEmpty
+              ? '____________________'
+              : agfrAuthorization.trim()),
       ProTermPdfTemplate.buildInfoRow('Tehnician',
           interventie.tehnician.trim().isEmpty ? '-' : interventie.tehnician),
       ProTermPdfTemplate.buildInfoRow('Data', dateStr),

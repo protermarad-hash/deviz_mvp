@@ -71,7 +71,8 @@ class LogFGasReclamatiePdfService {
     final profile = await repository.loadCompanyProfile();
     final branding =
         _dedupAddress(DocumentBrandingData.fromCompanyProfile(profile));
-    final bytes = await _buildPdfBytes(report, branding);
+    final bytes = await _buildPdfBytes(
+        report, branding, profile.agfrCompanyAuthorizationNumber);
 
     final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
     final numarSafe = (report.reportNumber.isEmpty ? report.id : report.reportNumber)
@@ -90,6 +91,7 @@ class LogFGasReclamatiePdfService {
   static Future<Uint8List> _buildPdfBytes(
     RepairReportRecord report,
     DocumentBrandingData branding,
+    String agfrAuthorization,
   ) async {
     final dateStr = _dateFmt.format(report.interventionDate);
     final tehnicianNume =
@@ -112,7 +114,10 @@ class LogFGasReclamatiePdfService {
       ProTermPdfTemplate.buildInfoRow(
           'CUI', branding.cui.isEmpty ? 'RO11355602' : branding.cui),
       ProTermPdfTemplate.buildInfoRow(
-          'Autorizație F-Gas', '____________________'),
+          'Autorizație F-Gas',
+          agfrAuthorization.trim().isEmpty
+              ? '____________________'
+              : agfrAuthorization.trim()),
       ProTermPdfTemplate.buildInfoRow('Tehnician', tehnicianNume),
       ProTermPdfTemplate.buildInfoRow('Data', dateStr),
     ]));
