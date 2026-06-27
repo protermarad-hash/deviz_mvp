@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
@@ -175,6 +176,61 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
       _assignAutomaticNumber();
     }
     _applySavedTemplateOnStart();
+    _autofillMissingFields();
+  }
+
+  /// Auto-completează câmpuri goale din sursele existente (user logat, profil
+  /// firmă, client din reclamație). Nu suprascrie valori deja completate.
+  void _autofillMissingFields() {
+    // FIX 1 — Tehnician din userul curent logat (sincron).
+    if (_technicianController.text.trim().isEmpty) {
+      final user = FirebaseAuth.instance.currentUser;
+      final fromUser = (user?.displayName?.trim().isNotEmpty ?? false)
+          ? user!.displayName!.trim()
+          : (user?.email?.trim() ?? '');
+      if (fromUser.isNotEmpty) {
+        _technicianController.text = fromUser;
+      }
+    }
+    // Restul (profil firmă + adresă client) necesită încărcare async.
+    Future.microtask(_autofillFromRepository);
+  }
+
+  Future<void> _autofillFromRepository() async {
+    // FIX 1 (fallback) — tehnician din profilul firmei (persoană contact).
+    if (_technicianController.text.trim().isEmpty) {
+      try {
+        final profile = await widget.repository.loadCompanyProfile();
+        if (mounted &&
+            _technicianController.text.trim().isEmpty &&
+            profile.contactName.trim().isNotEmpty) {
+          setState(
+              () => _technicianController.text = profile.contactName.trim());
+        }
+      } catch (_) {}
+    }
+    // FIX 2 — adresa clientului din reclamație (beneficiarul real).
+    if (_locationController.text.trim().isEmpty) {
+      final clientId = widget.complaint.beneficiaryClientId.trim();
+      if (clientId.isNotEmpty) {
+        try {
+          final clients = await widget.repository.listClients();
+          final match = clients.where((c) => c.id == clientId).toList();
+          if (match.isNotEmpty) {
+            final c = match.first;
+            final addr = [c.address, c.city, c.county]
+                .map((s) => s.trim())
+                .where((s) => s.isNotEmpty)
+                .join(', ');
+            if (mounted &&
+                _locationController.text.trim().isEmpty &&
+                addr.isNotEmpty) {
+              setState(() => _locationController.text = addr);
+            }
+          }
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> _assignAutomaticNumber() async {
