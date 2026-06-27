@@ -150,18 +150,31 @@ class _EmployeePayDialogState extends State<EmployeePayDialog> {
           notes: notesCtrl.text.trim(),
         );
       } else {
-        entry = EmployeePayEntry.create(
-          employeeId: employee!.id,
-          employeeName: employee.name,
-          appointmentId: widget.item.id,
-          appointmentTitle: widget.appointmentTitle,
-          appointmentDate: widget.appointmentDate,
-          jobId: widget.item.jobId,
-          jobTitle: widget.jobTitle,
-          amountDue: amount,
-          notes: notesCtrl.text.trim(),
-          createdBy: widget.currentUserId ?? '',
-        );
+        // BUG 1 (calea 2) — înainte de create() verifică dacă angajatul are
+        // deja o intrare pe această programare (local cache = _entries, toate
+        // pentru widget.item.id). Dacă da, folosește copyWith în loc de un id nou.
+        final existingForEmployee = _entries
+            .where((e) => e.employeeId == employee!.id)
+            .firstOrNull;
+        if (existingForEmployee != null) {
+          entry = existingForEmployee.copyWith(
+            amountDue: amount,
+            notes: notesCtrl.text.trim(),
+          );
+        } else {
+          entry = EmployeePayEntry.create(
+            employeeId: employee!.id,
+            employeeName: employee.name,
+            appointmentId: widget.item.id,
+            appointmentTitle: widget.appointmentTitle,
+            appointmentDate: widget.appointmentDate,
+            jobId: widget.item.jobId,
+            jobTitle: widget.jobTitle,
+            amountDue: amount,
+            notes: notesCtrl.text.trim(),
+            createdBy: widget.currentUserId ?? '',
+          );
+        }
       }
       await widget.onSaveEntry(entry);
       final updated = List<EmployeePayEntry>.from(_entries);

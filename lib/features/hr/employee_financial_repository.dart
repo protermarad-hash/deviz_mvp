@@ -53,7 +53,26 @@ class EmployeeFinancialRepository {
     if (index >= 0) {
       items[index] = entry;
     } else {
-      items.add(entry);
+      // BUG 1 — dedup: dacă există deja o intrare pentru aceeași pereche
+      // appointmentId + employeeId (cu alt id), o actualizăm pe aceea în loc
+      // să inserăm un duplicat. Păstrăm id-ul existent.
+      final dupIndex = (entry.appointmentId.isNotEmpty &&
+              entry.employeeId.isNotEmpty)
+          ? items.indexWhere((e) =>
+              e.appointmentId == entry.appointmentId &&
+              e.employeeId == entry.employeeId)
+          : -1;
+      if (dupIndex >= 0) {
+        entry = items[dupIndex].copyWith(
+          amountDue: entry.amountDue,
+          notes: entry.notes,
+          currency: entry.currency,
+          employeeName: entry.employeeName,
+        );
+        items[dupIndex] = entry;
+      } else {
+        items.add(entry);
+      }
     }
     await _writeLocalPayEntries(items);
 
@@ -68,6 +87,23 @@ class EmployeeFinancialRepository {
     }
 
     await _rebuildSummary(entry.employeeId, entry.employeeName);
+  }
+
+  /// Caută în cache-ul local o intrare existentă pentru perechea
+  /// appointmentId + employeeId. Returnează null dacă nu există.
+  /// Folosit pentru a preveni duplicarea intrărilor de plată.
+  Future<EmployeePayEntry?> findEntryByAppointmentAndEmployee(
+    String appointmentId,
+    String employeeId,
+  ) async {
+    if (appointmentId.isEmpty || employeeId.isEmpty) return null;
+    final local = await _readLocalPayEntries();
+    for (final e in local) {
+      if (e.appointmentId == appointmentId && e.employeeId == employeeId) {
+        return e;
+      }
+    }
+    return null;
   }
 
   Future<void> deletePayEntry(String entryId) async {
