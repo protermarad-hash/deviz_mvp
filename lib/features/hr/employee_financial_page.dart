@@ -4,12 +4,30 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/repositories/app_data_repository.dart';
 import '../master/master_local_store.dart';
+import '../programari/programari_page.dart';
 import 'employee_financial_models.dart';
 import 'employee_financial_repository.dart';
 
 class EmployeeFinancialPage extends StatefulWidget {
-  const EmployeeFinancialPage({super.key});
+  const EmployeeFinancialPage({
+    super.key,
+    this.repository,
+    this.fieldAuthRoleKey,
+    this.fieldAuthUserEmail,
+    this.fieldAuthUserId,
+    this.fieldAuthTeamId,
+  });
+
+  /// Opțional — necesar pentru navigarea directă la o programare specifică
+  /// din lista de costuri expandată. Dacă lipsește, drill-down-ul afișează
+  /// un dialog cu detaliile programării (fallback).
+  final AppDataRepository? repository;
+  final String? fieldAuthRoleKey;
+  final String? fieldAuthUserEmail;
+  final String? fieldAuthUserId;
+  final String? fieldAuthTeamId;
 
   @override
   State<EmployeeFinancialPage> createState() => _EmployeeFinancialPageState();
@@ -397,6 +415,16 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
                     due: dueByEmployee[emp.id] ?? 0,
                     paid: paidByEmployee[emp.id] ?? 0,
                     range: range,
+                    entries: (entriesInPeriod
+                        .where((e) => e.employeeId == emp.id)
+                        .toList()
+                      ..sort((a, b) {
+                        final da = DateTime.tryParse(a.appointmentDate) ??
+                            a.createdAt;
+                        final db = DateTime.tryParse(b.appointmentDate) ??
+                            b.createdAt;
+                        return db.compareTo(da);
+                      })),
                   ),
                   const SizedBox(height: 8),
                 ],
@@ -467,45 +495,276 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
     required double due,
     required double paid,
     required DateTimeRange range,
+    required List<EmployeePayEntry> entries,
   }) {
     final balance = due - paid;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.person_outline),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(emp.name,
-                      style:
-                          const TextStyle(fontWeight: FontWeight.bold)),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: () => _showPaymentDialog(context, employee: emp),
-                  icon: const Icon(Icons.payments_outlined, size: 16),
-                  label: const Text('Plătește'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                _infoChip('De plătit', due, Colors.orange),
-                const SizedBox(width: 12),
-                _infoChip('Plătit', paid, Colors.green),
-                const SizedBox(width: 12),
-                _infoChip('Sold', balance,
-                    balance > 0.01 ? Colors.red : Colors.grey),
-              ],
-            ),
-          ],
+
+    final header = Row(
+      children: [
+        const Icon(Icons.person_outline),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(emp.name,
+              style: const TextStyle(fontWeight: FontWeight.bold)),
         ),
+        FilledButton.tonalIcon(
+          onPressed: () => _showPaymentDialog(context, employee: emp),
+          icon: const Icon(Icons.payments_outlined, size: 16),
+          label: const Text('Plătește'),
+        ),
+      ],
+    );
+
+    final chipsRow = Row(
+      children: [
+        _infoChip('De plătit', due, Colors.orange),
+        const SizedBox(width: 12),
+        _infoChip('Plătit', paid, Colors.green),
+        const SizedBox(width: 12),
+        _infoChip(
+            'Sold', balance, balance > 0.01 ? Colors.red : Colors.grey),
+      ],
+    );
+
+    // Fără intrări detaliate → card simplu, ne-expandabil (ca înainte).
+    if (entries.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              header,
+              const SizedBox(height: 8),
+              chipsRow,
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Cu intrări → card expandabil cu defalcarea per programare.
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+        childrenPadding: const EdgeInsets.only(bottom: 4),
+        title: header,
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: chipsRow,
+        ),
+        children: [
+          const Divider(height: 1),
+          for (final entry in entries) _buildPayEntryTile(entry),
+        ],
       ),
     );
+  }
+
+  Widget _buildPayEntryTile(EmployeePayEntry entry) {
+    final dt = DateTime.tryParse(entry.appointmentDate);
+    final dateStr = dt != null
+        ? '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}'
+        : entry.appointmentDate;
+    final title = entry.appointmentTitle.trim().isNotEmpty
+        ? entry.appointmentTitle.trim()
+        : (entry.jobTitle.trim().isNotEmpty
+            ? entry.jobTitle.trim()
+            : 'Programare');
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.event_outlined, size: 20),
+      title: Text(title, style: const TextStyle(fontSize: 14)),
+      subtitle: Text(
+        '$dateStr · ${entry.amountDue.toStringAsFixed(2)} ${entry.currency}'
+        '${entry.notes.trim().isNotEmpty ? '\n${entry.notes.trim()}' : ''}',
+        style: const TextStyle(fontSize: 12),
+      ),
+      isThreeLine: entry.notes.trim().isNotEmpty,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined, size: 20),
+            tooltip: 'Editează suma',
+            onPressed: () => _showEditPayEntryDialog(entry),
+          ),
+          IconButton(
+            icon: const Icon(Icons.arrow_forward_ios, size: 14),
+            tooltip: 'Deschide programarea',
+            onPressed: () => _openAppointment(entry),
+          ),
+        ],
+      ),
+      onTap: () => _openAppointment(entry),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX 2 — Navigare la programarea specifică
+  // ─────────────────────────────────────────────────────────────────────────
+
+  void _openAppointment(EmployeePayEntry entry) {
+    final apptId = entry.appointmentId.trim();
+    final repo = widget.repository;
+    // Navigare directă dacă avem repository (pattern din role_ready_shell).
+    if (repo != null && apptId.isNotEmpty) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ProgramariPage(
+            repository: repo,
+            fieldAuthRoleKey: widget.fieldAuthRoleKey,
+            fieldAuthUserEmail: widget.fieldAuthUserEmail,
+            fieldAuthUserId: widget.fieldAuthUserId,
+            fieldAuthTeamId: widget.fieldAuthTeamId,
+            initialFocusAppointmentId: apptId,
+          ),
+        ),
+      );
+      return;
+    }
+    // Fallback — fără repository sau fără id: dialog cu detaliile programării.
+    _showAppointmentDetailDialog(entry);
+  }
+
+  void _showAppointmentDetailDialog(EmployeePayEntry entry) {
+    final dt = DateTime.tryParse(entry.appointmentDate);
+    final dateStr = dt != null
+        ? '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}'
+        : entry.appointmentDate;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          entry.appointmentTitle.trim().isNotEmpty
+              ? entry.appointmentTitle.trim()
+              : 'Detalii programare',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (dateStr.isNotEmpty) Text('Data: $dateStr'),
+            const SizedBox(height: 4),
+            Text(
+                'Sumă: ${entry.amountDue.toStringAsFixed(2)} ${entry.currency}'),
+            if (entry.jobTitle.trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text('Lucrare: ${entry.jobTitle.trim()}'),
+            ],
+            if (entry.notes.trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text('Note: ${entry.notes.trim()}'),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Închide'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX 3 — Editare rapidă sumă/note pentru o intrare de cost
+  // ─────────────────────────────────────────────────────────────────────────
+
+  Future<void> _showEditPayEntryDialog(EmployeePayEntry entry) async {
+    final amountCtrl =
+        TextEditingController(text: entry.amountDue.toStringAsFixed(2));
+    final notesCtrl = TextEditingController(text: entry.notes);
+    final messenger = ScaffoldMessenger.of(context);
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Editează cost programare'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (entry.appointmentTitle.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    entry.appointmentTitle.trim(),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              TextField(
+                controller: amountCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Sumă datorată (RON) *',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: notesCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Observații',
+                  border: OutlineInputBorder(),
+                ),
+                textCapitalization: TextCapitalization.sentences,
+                maxLines: 2,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (amountCtrl.text.trim().isEmpty) return;
+              Navigator.of(ctx).pop(true);
+            },
+            child: const Text('Salvează'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true || !mounted) return;
+    final newAmount =
+        double.tryParse(amountCtrl.text.trim().replaceAll(',', '.'));
+    if (newAmount == null || newAmount < 0) return;
+
+    final updated = entry.copyWith(
+      amountDue: newAmount,
+      notes: notesCtrl.text.trim(),
+    );
+
+    // Optimistic UI — actualizează lista locală imediat.
+    setState(() {
+      _payEntries = _payEntries
+          .map((e) => e.id == updated.id ? updated : e)
+          .toList();
+    });
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Cost programare actualizat.')),
+    );
+
+    _repo.savePayEntry(updated).catchError((e) {
+      if (!mounted) return;
+      // Rollback la eroare.
+      setState(() {
+        _payEntries =
+            _payEntries.map((x) => x.id == entry.id ? entry : x).toList();
+      });
+      messenger.showSnackBar(
+        SnackBar(content: Text('Eroare la salvare: $e')),
+      );
+    });
   }
 
   Widget _infoChip(String label, double value, Color color) {

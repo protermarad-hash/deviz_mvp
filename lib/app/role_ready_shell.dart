@@ -502,7 +502,13 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         label: 'Financiar angajați',
         icon: Icons.account_balance_wallet_outlined,
         allowedRoles: {UserRole.admin, UserRole.birou},
-        builder: (_) => const EmployeeFinancialPage(),
+        builder: (_) => EmployeeFinancialPage(
+          repository: widget.appDataRepository,
+          fieldAuthRoleKey: widget.fieldAuthRoleKey,
+          fieldAuthUserEmail: widget.fieldAuthUserLabel,
+          fieldAuthUserId: widget.fieldAuthUserId,
+          fieldAuthTeamId: widget.fieldAuthTeamId,
+        ),
       ),
       ShellDestination(
         id: 'dashboard_financiar',
