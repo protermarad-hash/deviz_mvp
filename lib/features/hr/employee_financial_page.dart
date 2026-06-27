@@ -225,6 +225,50 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
     }
   }
 
+  Future<void> _deduplicateEntries() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Deduplică intrări'),
+        content: const Text(
+          'Elimină plățile dublate pentru aceeași programare și același '
+          'angajat, păstrând cea mai recentă. Acțiunea nu poate fi anulată.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Anulează'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Deduplică'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    try {
+      final removed = await _repo.deduplicatePayEntries();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            removed > 0
+                ? '$removed intrări dublate eliminate.'
+                : 'Nicio intrare dublată găsită.',
+          ),
+        ),
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Eroare la deduplicare: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -246,6 +290,23 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
             icon: const Icon(Icons.refresh),
             tooltip: 'Reîncarcă',
             onPressed: _loading ? null : _load,
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Mai multe',
+            onSelected: (value) {
+              if (value == 'dedup') _deduplicateEntries();
+            },
+            itemBuilder: (ctx) => const [
+              PopupMenuItem(
+                value: 'dedup',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.cleaning_services_outlined),
+                  title: Text('Deduplică intrări'),
+                  subtitle: Text('Elimină plățile dublate per programare'),
+                ),
+              ),
+            ],
           ),
         ],
         bottom: TabBar(

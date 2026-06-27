@@ -245,6 +245,32 @@ class EmployeeFinancialRepository {
     return deleted;
   }
 
+  /// BUG 3 — deduplică intrările existente: grupează pe appointmentId+employeeId
+  /// și păstrează cea mai recentă (după createdAt), ștergând restul prin
+  /// deletePayEntry (care curăță și queue + Firestore + sumar).
+  /// Returnează numărul de duplicate șterse.
+  Future<int> deduplicatePayEntries() async {
+    final all = await _readLocalPayEntries();
+    final byKey = <String, List<EmployeePayEntry>>{};
+    for (final e in all) {
+      if (e.appointmentId.isEmpty || e.employeeId.isEmpty) continue;
+      byKey
+          .putIfAbsent('${e.appointmentId}|${e.employeeId}', () => [])
+          .add(e);
+    }
+    int deleted = 0;
+    for (final group in byKey.values) {
+      if (group.length < 2) continue;
+      // Cea mai recentă rămâne; restul se șterg.
+      group.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      for (final dup in group.skip(1)) {
+        await deletePayEntry(dup.id);
+        deleted++;
+      }
+    }
+    return deleted;
+  }
+
   Future<List<EmployeePayEntry>> listAllPayEntries({
     DateTime? from,
     DateTime? to,
