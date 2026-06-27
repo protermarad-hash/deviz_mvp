@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import 'employee_financial_models.dart';
 
@@ -261,11 +262,28 @@ class EmployeeFinancialRepository {
       lastFirestoreCount = cloud.length;
       lastFirestoreError = null;
 
-      final all = [...cloud];
+      // BUG 2 — preferă versiunea locală când are un upsert în coadă (a fost
+      // modificată offline și încă nu a ajuns confirmat în cloud). Altfel
+      // cloud-ul (versiunea veche) ar suprascrie modificarea offline.
+      final pendingIds = await OfflineSyncRuntime.instance
+          .pendingUpsertEntityIds(CloudEntityType.employeePayEntries);
+      final localById = {for (final e in local) e.id: e};
+      final resolvedCloud = cloud.map((c) {
+        if (pendingIds.contains(c.id) && localById.containsKey(c.id)) {
+          return localById[c.id]!;
+        }
+        return c;
+      }).toList();
+
       final knownIds = cloud.map((e) => e.id).toSet();
-      for (final e in local) {
-        if (!knownIds.contains(e.id)) all.add(e);
+      final localOnly =
+          local.where((e) => !knownIds.contains(e.id)).toList();
+      // Re-queue intrările local-only pentru siguranță.
+      for (final e in localOnly) {
+        await OfflineSyncRuntime.instance
+            .queueEmployeePayEntryUpsert(e.toMap());
       }
+      final all = [...resolvedCloud, ...localOnly];
       await _writeLocalPayEntries(all);
       return _sortPayEntries(_filterByPeriod(all, from, to));
     } catch (err) {
