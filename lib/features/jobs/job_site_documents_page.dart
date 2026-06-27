@@ -2,6 +2,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1226,6 +1227,54 @@ class _JobSiteDocumentEditorDialogState
     // reîmprospătăm lucrarea din repository și recalculăm pozițiile.
     if (_availableWorkLines.isEmpty) {
       Future.microtask(_refreshWorkLinesFromRepository);
+    }
+    _autoFill();
+  }
+
+  /// Auto-completare reprezentanți goi din userul logat / profil firmă / client.
+  /// Nu suprascrie valori deja completate.
+  void _autoFill() {
+    if (_executorRepresentativeController.text.trim().isEmpty) {
+      final user = FirebaseAuth.instance.currentUser;
+      final fromUser = (user?.displayName?.trim().isNotEmpty ?? false)
+          ? user!.displayName!.trim()
+          : (user?.email?.trim() ?? '');
+      if (fromUser.isNotEmpty) {
+        _executorRepresentativeController.text = fromUser;
+      }
+    }
+    Future.microtask(_autoFillAsync);
+  }
+
+  Future<void> _autoFillAsync() async {
+    // Reprezentant executant (firma noastră) — fallback profil firmă.
+    if (_executorRepresentativeController.text.trim().isEmpty) {
+      try {
+        final profile = await widget.repository.loadCompanyProfile();
+        if (mounted &&
+            _executorRepresentativeController.text.trim().isEmpty &&
+            profile.contactName.trim().isNotEmpty) {
+          setState(() => _executorRepresentativeController.text =
+              profile.contactName.trim());
+        }
+      } catch (_) {}
+    }
+    // Reprezentant beneficiar din ClientRecord.contactPerson (via job.clientId).
+    if (_beneficiaryRepresentativeController.text.trim().isEmpty) {
+      final clientId = widget.job.clientId.trim();
+      if (clientId.isNotEmpty) {
+        try {
+          final clients = await widget.repository.listClients();
+          final match = clients.where((c) => c.id == clientId).toList();
+          if (match.isNotEmpty &&
+              mounted &&
+              _beneficiaryRepresentativeController.text.trim().isEmpty &&
+              match.first.contactPerson.trim().isNotEmpty) {
+            setState(() => _beneficiaryRepresentativeController.text =
+                match.first.contactPerson.trim());
+          }
+        } catch (_) {}
+      }
     }
   }
 
