@@ -137,8 +137,56 @@ class _WarrantyInterventionReportEditorPageState
     _recommendationsController =
         TextEditingController(text: seed.recommendations);
     _hydrateReadableDefaults();
+    _autoFill();
     if (widget.currentReport == null && seed.documentNumber.trim().isEmpty) {
       _assignAutomaticNumber();
+    }
+  }
+
+  /// Auto-completare câmpuri goale din userul logat / profil firmă / client.
+  /// Nu suprascrie valori deja completate.
+  void _autoFill() {
+    if (_technicianController.text.trim().isEmpty) {
+      final user = FirebaseAuth.instance.currentUser;
+      final fromUser = (user?.displayName?.trim().isNotEmpty ?? false)
+          ? user!.displayName!.trim()
+          : (user?.email?.trim() ?? '');
+      if (fromUser.isNotEmpty) {
+        _technicianController.text = fromUser;
+      }
+    }
+    Future.microtask(_autoFillAsync);
+  }
+
+  Future<void> _autoFillAsync() async {
+    // Tehnician fallback din profilul firmei.
+    if (_technicianController.text.trim().isEmpty) {
+      try {
+        final profile = await widget.repository.loadCompanyProfile();
+        if (mounted &&
+            _technicianController.text.trim().isEmpty &&
+            profile.contactName.trim().isNotEmpty) {
+          setState(
+              () => _technicianController.text = profile.contactName.trim());
+        }
+      } catch (_) {}
+    }
+    // Reprezentant beneficiar din ClientRecord.contactPerson.
+    if (_beneficiaryRepresentativeController.text.trim().isEmpty) {
+      final clientId = widget.complaint.beneficiaryClientId.trim();
+      if (clientId.isNotEmpty) {
+        try {
+          final clients = await widget.repository.listClients();
+          final match = clients.where((c) => c.id == clientId).toList();
+          if (match.isNotEmpty &&
+              mounted &&
+              _beneficiaryRepresentativeController.text.trim().isEmpty &&
+              match.first.contactPerson.trim().isNotEmpty) {
+            setState(() => _beneficiaryRepresentativeController.text =
+                match.first.contactPerson.trim());
+          }
+        } catch (_) {}
+      }
     }
   }
 
