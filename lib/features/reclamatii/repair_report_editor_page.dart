@@ -209,24 +209,32 @@ class _RepairReportEditorPageState extends State<RepairReportEditorPage> {
         }
       } catch (_) {}
     }
-    // FIX 2 — adresa clientului din reclamație (beneficiarul real).
-    if (_locationController.text.trim().isEmpty) {
+    // FIX 2 — adresa + reprezentantul clientului din reclamație (beneficiarul real).
+    final needLocation = _locationController.text.trim().isEmpty;
+    final needReprezentant =
+        _reprezentantBeneficiarController.text.trim().isEmpty;
+    if (needLocation || needReprezentant) {
       final clientId = widget.complaint.beneficiaryClientId.trim();
       if (clientId.isNotEmpty) {
         try {
           final clients = await widget.repository.listClients();
           final match = clients.where((c) => c.id == clientId).toList();
-          if (match.isNotEmpty) {
+          if (match.isNotEmpty && mounted) {
             final c = match.first;
             final addr = [c.address, c.city, c.county]
                 .map((s) => s.trim())
                 .where((s) => s.isNotEmpty)
                 .join(', ');
-            if (mounted &&
-                _locationController.text.trim().isEmpty &&
-                addr.isNotEmpty) {
-              setState(() => _locationController.text = addr);
-            }
+            setState(() {
+              if (_locationController.text.trim().isEmpty && addr.isNotEmpty) {
+                _locationController.text = addr;
+              }
+              if (_reprezentantBeneficiarController.text.trim().isEmpty &&
+                  c.contactPerson.trim().isNotEmpty) {
+                _reprezentantBeneficiarController.text =
+                    c.contactPerson.trim();
+              }
+            });
           }
         } catch (_) {}
       }
