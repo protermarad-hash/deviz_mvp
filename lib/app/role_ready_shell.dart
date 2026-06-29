@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -1479,17 +1480,25 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
     final scheme = Theme.of(context).colorScheme;
     final brand = Theme.of(context).extension<AppBrandTheme>();
     final destinationById = {for (final d in destinations) d.id: d};
+    // Pre-calculează indexul O(1) per item — evită destinations.indexOf()
+    // care era O(n) per item => O(n²) total la fiecare rebuild al meniului.
+    final indexById = {
+      for (int i = 0; i < destinations.length; i++) destinations[i].id: i,
+    };
 
     Widget buildDestItem(ShellDestination item) {
-      final flatIndex = destinations.indexOf(item);
+      final flatIndex = indexById[item.id] ?? -1;
       final selected = flatIndex == _selectedIndex;
-      final selectedGradient = brand == null
-          ? null
-          : LinearGradient(
+      // Gradientul se construiește DOAR pentru itemul selectat — înainte se
+      // crea un LinearGradient + listă de culori pentru fiecare item, la
+      // fiecare build, chiar dacă nu era selectat.
+      final selectedGradient = (selected && brand != null)
+          ? LinearGradient(
               colors: brand.shellAccentGradient.colors
                   .map((c) => c.withValues(alpha: compact ? 0.12 : 0.16))
                   .toList(growable: false),
-            );
+            )
+          : null;
       return Padding(
         padding: EdgeInsets.symmetric(vertical: compact ? 1 : 2),
         child: Tooltip(
@@ -1563,7 +1572,7 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
 
       final isExpanded = _expandedSections[sectionDef.id] ?? true;
       final hasSectionSelected = sectionItems
-          .any((item) => destinations.indexOf(item) == _selectedIndex);
+          .any((item) => (indexById[item.id] ?? -1) == _selectedIndex);
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1664,17 +1673,35 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
       children: [
         _buildNavigationHeader(context, profile, compact: compact),
         Expanded(
-          child: Scrollbar(
-            controller: _navigationScrollController,
-            thumbVisibility: !compact,
-            child: ListView(
+          // RepaintBoundary izolează repaint-ul listei de restul shell-ului
+          // (lista se reconstruiește la fiecare setState din shell).
+          child: RepaintBoundary(
+            child: Scrollbar(
               controller: _navigationScrollController,
-              primary: false,
-              padding: EdgeInsets.symmetric(
-                horizontal: compact ? 6 : 8,
-                vertical: compact ? 0 : 8,
+              thumbVisibility: !compact,
+              // ScrollConfiguration: scroll fluid pe Windows (touch + mouse +
+              // trackpad) și pe Android. Scrollbar-ul îl gestionăm noi mai sus,
+              // deci dezactivăm scrollbar-ul implicit.
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  physics: const ClampingScrollPhysics(),
+                  scrollbars: false,
+                  dragDevices: const {
+                    PointerDeviceKind.touch,
+                    PointerDeviceKind.mouse,
+                    PointerDeviceKind.trackpad,
+                  },
+                ),
+                child: ListView(
+                  controller: _navigationScrollController,
+                  primary: false,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: compact ? 6 : 8,
+                    vertical: compact ? 0 : 8,
+                  ),
+                  children: listChildren,
+                ),
               ),
-              children: listChildren,
             ),
           ),
         ),
