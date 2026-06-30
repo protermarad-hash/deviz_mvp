@@ -256,10 +256,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
   List<MasterEmployee> _masterEmployees = const <MasterEmployee>[];
   List<MasterTeam> _masterTeams = const <MasterTeam>[];
 
-  // Catalog servicii prestate (preț precompletat la câmpul Titlu din editor)
+  // Catalog servicii prestate (preț precompletat la câmpul Titlu din editor).
+  // ValueNotifier: dialogul editorului (showDialog cu StatefulBuilder propriu)
+  // NU primește setState-ul paginii părinte. Folosim un ValueListenableBuilder
+  // în dialog ca lista să se actualizeze și dacă se încarcă DUPĂ deschidere.
   final FirebaseServiciuPrestatRepository _serviciuRepo =
       FirebaseServiciuPrestatRepository();
-  List<ServiciuPrestat> _serviciiPrestate = const <ServiciuPrestat>[];
+  final ValueNotifier<List<ServiciuPrestat>> _serviciiPrestateNotifier =
+      ValueNotifier<List<ServiciuPrestat>>(const <ServiciuPrestat>[]);
 
   // ── Maps O(1) pentru lookup rapid în build() ──────────────────────────────
   // Înlocuiesc bucle O(n) care rulau pentru fiecare card din listă.
@@ -418,7 +422,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
     try {
       final list = await _serviciuRepo.listServicii();
       if (!mounted) return;
-      setState(() => _serviciiPrestate = list);
+      _serviciiPrestateNotifier.value = list;
     } catch (e) {
       _programariLog('load servicii prestate failed: $e');
     }
@@ -504,6 +508,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
     _appointmentsRealtimeSubscription?.cancel();
     _pageScrollController.dispose();
     _searchController.dispose();
+    _serviciiPrestateNotifier.dispose();
     super.dispose();
   }
 
@@ -4262,25 +4267,30 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         title: 'Programare',
                         helper: 'Datele principale ale interventiei.',
                         children: [
-                          ServiciuAutocompleteField(
-                            controller: titleController,
-                            servicii: _serviciiPrestate,
-                            labelText: 'Titlu programare',
-                            helperText:
-                                'Scrie liber sau alege un serviciu din catalog (cu pret).',
-                            onServiceSelected: (serviciu) {
-                              // Titlul e setat automat de Autocomplete (= denumire).
-                              // Prețul se precompletează DOAR pentru rolurile cu
-                              // acces la preț (același gard ca al câmpului Preț).
-                              if (_canEditInterventionPrice &&
-                                  serviciu.pretSugerat > 0) {
-                                setDialogState(() {
-                                  interventionPriceController.text =
-                                      serviciu.pretSugerat.toStringAsFixed(2);
-                                  selectedInterventionPriceCurrency =
-                                      serviciu.moneda;
-                                });
-                              }
+                          ValueListenableBuilder<List<ServiciuPrestat>>(
+                            valueListenable: _serviciiPrestateNotifier,
+                            builder: (context, serviciiList, _) {
+                              return ServiciuAutocompleteField(
+                                controller: titleController,
+                                servicii: serviciiList,
+                                labelText: 'Titlu programare',
+                                helperText:
+                                    'Scrie liber sau alege un serviciu din catalog (cu pret).',
+                                onServiceSelected: (serviciu) {
+                                  // Titlul e setat automat de Autocomplete (= denumire).
+                                  // Prețul se precompletează DOAR pentru rolurile cu
+                                  // acces la preț (același gard ca al câmpului Preț).
+                                  if (_canEditInterventionPrice &&
+                                      serviciu.pretSugerat > 0) {
+                                    setDialogState(() {
+                                      interventionPriceController.text =
+                                          serviciu.pretSugerat.toStringAsFixed(2);
+                                      selectedInterventionPriceCurrency =
+                                          serviciu.moneda;
+                                    });
+                                  }
+                                },
+                              );
                             },
                           ),
                           const SizedBox(height: 12),
