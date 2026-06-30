@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+import 'clauza_catalog_repository.dart';
 import 'offer_acceptance_models.dart';
 
 /// Dialog pentru editarea clauzelor formularului de acceptare ofertă.
@@ -34,6 +35,11 @@ class _OfferAcceptanceClausesDialogState
   late List<OfferAcceptanceClause> _clauses;
   final _uuid = const Uuid();
   int? _editingIndex;
+
+  // Id-urile clauzelor adăugate manual în această sesiune. La finalizarea
+  // editării lor (cu titlu+conținut reale) le persistăm în catalogul custom,
+  // ca să fie disponibile (nebifate) la ofertele viitoare.
+  final Set<String> _newlyAddedIds = <String>{};
 
   // Controllere pentru editarea unei clauze
   final _titleController = TextEditingController();
@@ -69,6 +75,13 @@ class _OfferAcceptanceClausesDialogState
       _clauses[_editingIndex!] = updated;
       _editingIndex = null;
     });
+    // Dacă e o clauză nouă adăugată manual (cu titlu real), o salvăm în
+    // catalogul custom persistent — nebifată implicit pentru ofertele viitoare.
+    if (_newlyAddedIds.contains(updated.id) && updated.title.trim().isNotEmpty) {
+      ClauzaCatalogRepository.instance
+          .saveClauzaCustom(updated.copyWith(enabled: false))
+          .catchError((_) {});
+    }
   }
 
   void _cancelEdit() {
@@ -90,6 +103,7 @@ class _OfferAcceptanceClausesDialogState
       content: 'Descrieți clauza aici...',
       sortOrder: _clauses.length + 1,
     );
+    _newlyAddedIds.add(newClause.id);
     setState(() {
       _clauses.add(newClause);
     });
