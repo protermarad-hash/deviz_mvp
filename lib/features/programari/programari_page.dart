@@ -3958,21 +3958,24 @@ class _ProgramariPageState extends State<ProgramariPage> {
       });
     }
 
-    // Selector rapid de slot: setează ora de start la începutul slotului,
-    // păstrând data și durata curentă (ajutor rapid, NU restricționează ora).
+    // Selector rapid de slot: precompletează intervalul COMPLET al slotului
+    // (ex: 09:00–12:00 pentru slotul 09-12, deci 3 ore). Utilizatorul poate
+    // micșora apoi manual durata din câmpurile de oră — selectorul doar
+    // precompletează, NU restricționează ora sau durata.
     void applySlotQuickSelect(StateSetter setDialogState, ProgramareSlot slot) {
       setDialogState(() {
-        final existingDuration = selectedEnd.difference(selectedStart);
-        final duration = existingDuration > Duration.zero
-            ? existingDuration
-            : const Duration(hours: 1);
         selectedStart = DateTime(
           selectedStart.year,
           selectedStart.month,
           selectedStart.day,
           slot.startHour,
         );
-        selectedEnd = selectedStart.add(duration);
+        selectedEnd = DateTime(
+          selectedStart.year,
+          selectedStart.month,
+          selectedStart.day,
+          slot.endHour,
+        );
       });
     }
 
