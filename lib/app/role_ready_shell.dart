@@ -36,6 +36,7 @@ import '../features/hr_payroll_run/hr_payroll_page.dart';
 import '../features/oferte/oferte_page.dart';
 import '../features/deviz_tehnic/oferte_devize_modul_page.dart';
 import '../features/mentenanta/mentenanta_page.dart';
+import '../features/programari/servicii/servicii_prestate_page.dart';
 import '../features/placeholders/placeholder_page.dart';
 import '../features/programari/programari_page.dart';
 import '../features/programari/programare_kituri_page.dart';
@@ -121,6 +122,7 @@ const List<_ShellSectionDef> _kShellSections = [
     icon: Icons.construction_outlined,
     itemIds: [
       'programari',
+      'servicii_prestate',
       'documente',
       'lucrari',
       'mentenanta',
@@ -545,6 +547,13 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         icon: Icons.handyman,
         allowedRoles: {UserRole.admin},
         builder: (_) => MentenantaPage(repository: widget.appDataRepository),
+      ),
+      ShellDestination(
+        id: 'servicii_prestate',
+        label: 'Servicii Prestate',
+        icon: Icons.design_services_outlined,
+        allowedRoles: {UserRole.admin},
+        builder: (_) => const ServiciiPrestatePage(),
       ),
       ShellDestination(
         id: 'crm',
