@@ -10609,6 +10609,67 @@ class _ProgramariPageState extends State<ProgramariPage> {
     return widgets;
   }
 
+  /// Marcaje vizuale pentru sloturi: linii orizontale mai groase la limitele
+  /// sloturilor (9/12/15/18/21) + etichetă mică „09-12" în colțul fiecărei
+  /// benzi. DOAR vizual — IgnorePointer, deasupra grilei normale, sub programări.
+  List<Widget> _calendarSlotMarkers({
+    required int startHour,
+    required int endHour,
+    required double hourHeight,
+  }) {
+    final widgets = <Widget>[];
+    // Linii de separare la limitele sloturilor
+    for (final hour in kProgramareSlotBoundaries) {
+      if (hour < startHour || hour > endHour) continue;
+      widgets.add(
+        Positioned(
+          top: (hour - startHour) * hourHeight,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: Container(
+              height: 2,
+              color: const Color(0xFF757575).withValues(alpha: 0.65),
+            ),
+          ),
+        ),
+      );
+    }
+    // Etichetă slot în colțul de sus al fiecărei benzi vizibile
+    for (final slot in kProgramareSloturi) {
+      final topHour = slot.startHour < startHour ? startHour : slot.startHour;
+      final bottomHour = slot.endHour > endHour ? endHour : slot.endHour;
+      if (bottomHour <= topHour) continue;
+      widgets.add(
+        Positioned(
+          top: (topHour - startHour) * hourHeight + 3,
+          left: 4,
+          child: IgnorePointer(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: slot.backgroundColor,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: const Color(0xFF757575).withValues(alpha: 0.35),
+                ),
+              ),
+              child: Text(
+                slot.rangeLabel,
+                style: const TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF424242),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return widgets;
+  }
+
   Widget _calendarDayColumn({
     required DateTime day,
     required int startHour,
@@ -10837,6 +10898,13 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           ),
                         ),
                       ),
+                    // Linii de separare sloturi + etichete (deasupra grilei,
+                    // sub programări)
+                    ..._calendarSlotMarkers(
+                      startHour: startHour,
+                      endHour: endHour,
+                      hourHeight: hourHeight,
+                    ),
                     for (final placement in placements)
                       _calendarBlock(
                         placement,
