@@ -4278,16 +4278,25 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                     'Scrie liber sau alege un serviciu din catalog (cu pret).',
                                 onServiceSelected: (serviciu) {
                                   // Titlul e setat automat de Autocomplete (= denumire).
-                                  // Prețul se precompletează în „Suma incasata /
-                                  // de incasat" (tab Financiar, admin-only), NU în
-                                  // „Preț intervenție" (vizibil echipei de teren).
-                                  if (_canManageAppointmentFinancials &&
-                                      serviciu.pretSugerat > 0) {
-                                    setDialogState(() {
+                                  if (serviciu.pretSugerat <= 0) return;
+                                  setDialogState(() {
+                                    // ÎNTOTDEAUNA în „Suma incasata / de incasat"
+                                    // (tab Financiar, admin-only).
+                                    if (_canManageAppointmentFinancials) {
                                       adminCollectedAmountController.text =
                                           serviciu.pretSugerat.toStringAsFixed(2);
-                                    });
-                                  }
+                                    }
+                                    // DOAR dacă serviciul e marcat „Vizibil la
+                                    // Execuție" → și în „Preț intervenție", ca
+                                    // echipa de teren să vadă prețul. Altfel câmpul
+                                    // rămâne neschimbat.
+                                    if (serviciu.vizibilLaExecutie) {
+                                      interventionPriceController.text =
+                                          serviciu.pretSugerat.toStringAsFixed(2);
+                                      selectedInterventionPriceCurrency =
+                                          serviciu.moneda;
+                                    }
+                                  });
                                 },
                               );
                             },

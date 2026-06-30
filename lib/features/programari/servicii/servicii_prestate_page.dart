@@ -63,6 +63,7 @@ class _ServiciiPrestatePageState extends State<ServiciiPrestatePage> {
           : '',
     );
     String moneda = existing?.moneda ?? 'RON';
+    bool vizibilLaExecutie = existing?.vizibilLaExecutie ?? false;
     String? formError;
 
     final saved = await showDialog<bool>(
@@ -118,6 +119,17 @@ class _ServiciiPrestatePageState extends State<ServiciiPrestatePage> {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 4),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: vizibilLaExecutie,
+                      onChanged: (v) =>
+                          setDialogState(() => vizibilLaExecutie = v),
+                      title: const Text('Vizibil și la Execuție'),
+                      subtitle: const Text(
+                        'Echipa de teren vede prețul (se precompletează și la „Preț intervenție").',
+                      ),
+                    ),
                     if (formError != null) ...[
                       const SizedBox(height: 8),
                       Text(
@@ -169,11 +181,17 @@ class _ServiciiPrestatePageState extends State<ServiciiPrestatePage> {
 
     final now = DateTime.now();
     final toSave = existing == null
-        ? ServiciuPrestat.nou(denumire: denumire, pretSugerat: pret, moneda: moneda)
+        ? ServiciuPrestat.nou(
+            denumire: denumire,
+            pretSugerat: pret,
+            moneda: moneda,
+            vizibilLaExecutie: vizibilLaExecutie,
+          )
         : existing.copyWith(
             denumire: denumire,
             pretSugerat: pret,
             moneda: moneda,
+            vizibilLaExecutie: vizibilLaExecutie,
             updatedAt: now,
           );
 

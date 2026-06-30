@@ -12,6 +12,7 @@ class ServiciuPrestat {
     this.pretSugerat = 0,
     this.moneda = 'RON',
     this.activ = true,
+    this.vizibilLaExecutie = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -21,6 +22,11 @@ class ServiciuPrestat {
   final double pretSugerat;
   final String moneda;
   final bool activ;
+
+  /// Dacă true, prețul serviciului se precompletează ȘI în câmpul „Preț
+  /// intervenție" (tab Execuție, vizibil echipei de teren). Default false:
+  /// prețul merge doar în câmpul admin „Suma incasata / de incasat".
+  final bool vizibilLaExecutie;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -29,6 +35,7 @@ class ServiciuPrestat {
     required String denumire,
     double pretSugerat = 0,
     String moneda = 'RON',
+    bool vizibilLaExecutie = false,
   }) {
     final now = DateTime.now();
     return ServiciuPrestat(
@@ -37,6 +44,7 @@ class ServiciuPrestat {
       pretSugerat: pretSugerat,
       moneda: moneda,
       activ: true,
+      vizibilLaExecutie: vizibilLaExecutie,
       createdAt: now,
       updatedAt: now,
     );
@@ -48,6 +56,7 @@ class ServiciuPrestat {
     double? pretSugerat,
     String? moneda,
     bool? activ,
+    bool? vizibilLaExecutie,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -57,6 +66,7 @@ class ServiciuPrestat {
       pretSugerat: pretSugerat ?? this.pretSugerat,
       moneda: moneda ?? this.moneda,
       activ: activ ?? this.activ,
+      vizibilLaExecutie: vizibilLaExecutie ?? this.vizibilLaExecutie,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -69,6 +79,7 @@ class ServiciuPrestat {
       'pret_sugerat': pretSugerat,
       'moneda': moneda,
       'activ': activ,
+      'vizibil_la_executie': vizibilLaExecutie,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -84,6 +95,8 @@ class ServiciuPrestat {
           ? 'RON'
           : (map['moneda'] ?? 'RON').toString(),
       activ: map['activ'] is bool ? map['activ'] as bool : (map['activ'] != false),
+      vizibilLaExecutie: map['vizibil_la_executie'] == true ||
+          map['vizibilLaExecutie'] == true,
       createdAt: _toDate(map['created_at']) ?? now,
       updatedAt: _toDate(map['updated_at']) ?? now,
     );
