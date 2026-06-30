@@ -3936,6 +3936,24 @@ class _ProgramariPageState extends State<ProgramariPage> {
       });
     }
 
+    // Selector rapid de slot: setează ora de start la începutul slotului,
+    // păstrând data și durata curentă (ajutor rapid, NU restricționează ora).
+    void applySlotQuickSelect(StateSetter setDialogState, ProgramareSlot slot) {
+      setDialogState(() {
+        final existingDuration = selectedEnd.difference(selectedStart);
+        final duration = existingDuration > Duration.zero
+            ? existingDuration
+            : const Duration(hours: 1);
+        selectedStart = DateTime(
+          selectedStart.year,
+          selectedStart.month,
+          selectedStart.day,
+          slot.startHour,
+        );
+        selectedEnd = selectedStart.add(duration);
+      });
+    }
+
     final teamEntries = <MapEntry<String, String>>[
       ..._teams.map((team) => MapEntry<String, String>(team.id, team.name)),
       ..._masterTeams
@@ -4227,6 +4245,35 @@ class _ProgramariPageState extends State<ProgramariPage> {
                               helperText:
                                   'Un nume scurt si usor de recunoscut in lista si calendar.',
                             ),
+                          ),
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Slot rapid (optional)',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final slot in kProgramareSloturi)
+                                ChoiceChip(
+                                  label: Text(slot.rangeLabel),
+                                  selected:
+                                      slot.containsHour(selectedStart.hour),
+                                  backgroundColor: slot.backgroundColor,
+                                  onSelected: (_) => applySlotQuickSelect(
+                                    setDialogState,
+                                    slot,
+                                  ),
+                                ),
+                            ],
                           ),
                           const SizedBox(height: 12),
                           Row(
