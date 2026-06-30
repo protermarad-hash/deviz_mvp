@@ -29,6 +29,7 @@ import '../ai_assistant/ai_assistant_sheet.dart';
 import '../reclamatii/signature_capture_page.dart';
 import 'deviz_articol_template_models.dart';
 import 'deviz_articol_template_repository.dart';
+import 'clauza_catalog_repository.dart';
 import 'offer_acceptance_clauses_dialog.dart';
 import 'offer_acceptance_models.dart';
 import 'offer_currency_converter.dart';
@@ -852,7 +853,20 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   Future<void> _openAcceptanceClausesEditor() async {
-    final current = _resolvedAcceptanceClauses();
+    final base = _resolvedAcceptanceClauses();
+    // Adaugă clauzele custom din catalog care nu există deja pe ofertă
+    // (după titlu, case-insensitive), TOATE nebifate (enabled=false) — devin
+    // disponibile pentru selectare rapidă fără retastare.
+    final existingTitles =
+        base.map((c) => c.title.toLowerCase().trim()).toSet();
+    final catalog = await ClauzaCatalogRepository.instance.listClauzeCustom();
+    if (!mounted) return;
+    var nextOrder = base.fold<int>(0, (m, c) => c.sortOrder > m ? c.sortOrder : m);
+    final extra = catalog
+        .where((c) => !existingTitles.contains(c.title.toLowerCase().trim()))
+        .map((c) => c.copyWith(enabled: false, sortOrder: ++nextOrder))
+        .toList();
+    final current = [...base, ...extra];
     final updated = await OfferAcceptanceClausesDialog.show(context, current);
     if (updated == null || !mounted) return;
     final next = _offer.copyWith(acceptanceClauses: updated);
