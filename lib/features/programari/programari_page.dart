@@ -30,6 +30,7 @@ import '../../core/widgets/adaptive_side_panel_layout.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../../core/widgets/client_autocomplete_field.dart';
 import '../../core/widgets/partner_autocomplete_field.dart';
+import '../../core/widgets/serviciu_autocomplete_field.dart';
 import '../field_photos/field_photo_capture_service.dart';
 import '../field_photos/field_photos_page.dart';
 import '../jobs/job_site_documents_page.dart';
@@ -56,6 +57,8 @@ import 'programari_models.dart';
 import 'programari_utils.dart';
 import 'programari_calendar_placement.dart';
 import 'programari_slots.dart';
+import 'servicii/serviciu_prestat_models.dart';
+import 'servicii/firebase_serviciu_prestat_repository.dart';
 import 'dialogs/client_partner_dialogs.dart';
 import 'dialogs/document_dialogs.dart';
 import 'dialogs/employee_pay_dialog.dart';
@@ -253,6 +256,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
   List<MasterEmployee> _masterEmployees = const <MasterEmployee>[];
   List<MasterTeam> _masterTeams = const <MasterTeam>[];
 
+  // Catalog servicii prestate (preț precompletat la câmpul Titlu din editor)
+  final FirebaseServiciuPrestatRepository _serviciuRepo =
+      FirebaseServiciuPrestatRepository();
+  List<ServiciuPrestat> _serviciiPrestate = const <ServiciuPrestat>[];
+
   // ── Maps O(1) pentru lookup rapid în build() ──────────────────────────────
   // Înlocuiesc bucle O(n) care rulau pentru fiecare card din listă.
   // Reconstruite în _loadSecondaryDataAsync() la fiecare refresh de date.
@@ -400,6 +408,20 @@ class _ProgramariPageState extends State<ProgramariPage> {
     );
     // Pornește listener real-time Firestore pentru sync cross-device
     Future.microtask(_maybeStartRealtimeListener);
+    // Încarcă catalogul de servicii prestate (best-effort, offline-first)
+    Future.microtask(_loadServiciiPrestate);
+  }
+
+  /// Încarcă catalogul de servicii pentru autocomplete-ul câmpului Titlu.
+  /// Best-effort: dacă eșuează, autocomplete-ul rămâne gol (titlu liber).
+  Future<void> _loadServiciiPrestate() async {
+    try {
+      final list = await _serviciuRepo.listServicii();
+      if (!mounted) return;
+      setState(() => _serviciiPrestate = list);
+    } catch (e) {
+      _programariLog('load servicii prestate failed: $e');
+    }
   }
 
   /// Apelat când starea online/offline se schimbă.
@@ -4237,14 +4259,26 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         title: 'Programare',
                         helper: 'Datele principale ale interventiei.',
                         children: [
-                          TextField(
+                          ServiciuAutocompleteField(
                             controller: titleController,
-                            textCapitalization: TextCapitalization.sentences,
-                            decoration: const InputDecoration(
-                              labelText: 'Titlu programare',
-                              helperText:
-                                  'Un nume scurt si usor de recunoscut in lista si calendar.',
-                            ),
+                            servicii: _serviciiPrestate,
+                            labelText: 'Titlu programare',
+                            helperText:
+                                'Scrie liber sau alege un serviciu din catalog (cu pret).',
+                            onServiceSelected: (serviciu) {
+                              // Titlul e setat automat de Autocomplete (= denumire).
+                              // Prețul se precompletează DOAR pentru rolurile cu
+                              // acces la preț (același gard ca al câmpului Preț).
+                              if (_canEditInterventionPrice &&
+                                  serviciu.pretSugerat > 0) {
+                                setDialogState(() {
+                                  interventionPriceController.text =
+                                      serviciu.pretSugerat.toStringAsFixed(2);
+                                  selectedInterventionPriceCurrency =
+                                      serviciu.moneda;
+                                });
+                              }
+                            },
                           ),
                           const SizedBox(height: 12),
                           Align(
