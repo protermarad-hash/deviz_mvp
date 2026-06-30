@@ -110,4 +110,5 @@ class FirebaseCollections {
   static const String obiectiveLunare = 'obiective_lunare';
   static const String mentenantaContracte = 'mentenanta_contracte';
   static const String mentenantaInterventii = 'mentenanta_interventii';
+  static const String serviciiPrestate = 'servicii_prestate';
 }
