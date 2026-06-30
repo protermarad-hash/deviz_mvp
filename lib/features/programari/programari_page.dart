@@ -4278,15 +4278,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                     'Scrie liber sau alege un serviciu din catalog (cu pret).',
                                 onServiceSelected: (serviciu) {
                                   // Titlul e setat automat de Autocomplete (= denumire).
-                                  // Prețul se precompletează DOAR pentru rolurile cu
-                                  // acces la preț (același gard ca al câmpului Preț).
-                                  if (_canEditInterventionPrice &&
+                                  // Prețul se precompletează în „Suma incasata /
+                                  // de incasat" (tab Financiar, admin-only), NU în
+                                  // „Preț intervenție" (vizibil echipei de teren).
+                                  if (_canManageAppointmentFinancials &&
                                       serviciu.pretSugerat > 0) {
                                     setDialogState(() {
-                                      interventionPriceController.text =
+                                      adminCollectedAmountController.text =
                                           serviciu.pretSugerat.toStringAsFixed(2);
-                                      selectedInterventionPriceCurrency =
-                                          serviciu.moneda;
                                     });
                                   }
                                 },
