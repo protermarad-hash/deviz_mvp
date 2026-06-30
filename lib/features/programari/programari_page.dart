@@ -55,6 +55,7 @@ import 'appointment_models.dart';
 import 'programari_models.dart';
 import 'programari_utils.dart';
 import 'programari_calendar_placement.dart';
+import 'programari_slots.dart';
 import 'dialogs/client_partner_dialogs.dart';
 import 'dialogs/document_dialogs.dart';
 import 'dialogs/employee_pay_dialog.dart';
@@ -10576,6 +10577,38 @@ class _ProgramariPageState extends State<ProgramariPage> {
     );
   }
 
+  /// Benzi colorate de fundal pentru sloturile orare (09-12, 12-15, 15-18,
+  /// 18-21). DOAR vizual — sub programări, fără interacțiune. Fiecare slot e
+  /// limitat la intervalul vizibil [startHour, endHour) al coloanei.
+  List<Widget> _calendarSlotBackgrounds({
+    required int startHour,
+    required int endHour,
+    required double hourHeight,
+  }) {
+    final widgets = <Widget>[];
+    for (final slot in kProgramareSloturi) {
+      final topHour = slot.startHour < startHour ? startHour : slot.startHour;
+      final bottomHour = slot.endHour > endHour ? endHour : slot.endHour;
+      if (bottomHour <= topHour) continue; // slot în afara intervalului vizibil
+      final top = (topHour - startHour) * hourHeight;
+      final height = (bottomHour - topHour) * hourHeight;
+      widgets.add(
+        Positioned(
+          top: top,
+          left: 0,
+          right: 0,
+          height: height,
+          child: IgnorePointer(
+            child: ColoredBox(
+              color: slot.backgroundColor.withValues(alpha: 0.35),
+            ),
+          ),
+        ),
+      );
+    }
+    return widgets;
+  }
+
   Widget _calendarDayColumn({
     required DateTime day,
     required int startHour,
@@ -10766,6 +10799,12 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           ),
                         ),
                       ),
+                    // Benzi colorate per slot orar (sub programări, fără interacțiune)
+                    ..._calendarSlotBackgrounds(
+                      startHour: startHour,
+                      endHour: endHour,
+                      hourHeight: hourHeight,
+                    ),
                     if (_canCreateOperationalAppointments)
                       for (var hour = startHour; hour < endHour; hour++)
                         Positioned(
