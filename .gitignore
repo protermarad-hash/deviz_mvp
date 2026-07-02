@@ -71,3 +71,10 @@ snapshot_baza_*/
 # Windows build artifacts (generate automat)
 windows/x64/
 x64/Release/
+
+# Config build separat client Costel Costea — NU în git (date Firebase izolate)
+android/app/google-services-costel.json
+lib/firebase_options_costel.dart
+android/app/google-services.bak.json
+build/proventaris-costel.apk
+build/proventaris-windows-costel.zip

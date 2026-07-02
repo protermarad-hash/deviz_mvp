@@ -5,14 +5,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../firebase_options.dart';
+import '../../core/cloud/firebase_options_loader.dart';
 import 'notification_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   try {
     await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
+      options: resolveFirebaseOptions(),
     );
   } catch (e) {
     debugPrint('[NotificationRuntime] init Firebase în background handler eșuat: $e');
