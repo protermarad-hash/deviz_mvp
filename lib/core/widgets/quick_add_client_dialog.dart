@@ -56,6 +56,9 @@ class _QuickAddClientSheetState extends State<QuickAddClientSheet> {
   // Observații
   final _noteCtrl = TextEditingController();
 
+  // Cod extern (opțional) — doar codul; sursa rămâne needitată aici
+  final _externalCodeCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -78,6 +81,7 @@ class _QuickAddClientSheetState extends State<QuickAddClientSheet> {
     _orasCtrl.dispose();
     _judetCtrl.dispose();
     _noteCtrl.dispose();
+    _externalCodeCtrl.dispose();
     super.dispose();
   }
 
@@ -119,7 +123,7 @@ class _QuickAddClientSheetState extends State<QuickAddClientSheet> {
       final newClient = ClientRecord(
         id: 'client-${const Uuid().v4().replaceAll('-', '')}',
         clientCode: clientCode,
-        externalClientCode: '',
+        externalClientCode: _externalCodeCtrl.text.trim(),
         externalClientSource: '',
         type: _tipClient,
         name: _numeCtrl.text.trim(),
@@ -439,6 +443,16 @@ class _QuickAddClientSheetState extends State<QuickAddClientSheet> {
                       decoration:
                           _dec('Note / observații', Icons.note_outlined),
                       maxLines: 3,
+                    ),
+                    const SizedBox(height: 16),
+
+                    // ── COD EXTERN (opțional) ───────────────────────────────
+                    _sectionTitle('Cod extern (opțional)'),
+                    TextFormField(
+                      controller: _externalCodeCtrl,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: _dec(
+                          'Cod client extern', Icons.tag_outlined),
                     ),
                     const SizedBox(height: 24),
 

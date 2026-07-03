@@ -13,12 +13,20 @@ class FieldAuthService extends ChangeNotifier {
   FieldAuthSession? _session;
   FieldAuthUser? _currentUser;
   bool _loading = false;
+  bool _restoring = false;
   String? _lastError;
 
   FieldAuthSession? get session => _session;
   FieldAuthUser? get currentUser => _currentUser;
   bool get isAuthenticated => _session != null;
   bool get isLoading => _loading;
+
+  /// True DOAR în timpul restaurării sesiunii la pornirea aplicației
+  /// (înainte ca ecranul de login să fi fost afișat vreodată).
+  /// NU este true în timpul unei încercări de login — acolo FieldLoginPage
+  /// rămâne montat și își gestionează singur spinner-ul local pe buton,
+  /// ca să nu-și piardă controllerele de email/parolă la eșec.
+  bool get isRestoringSession => _restoring;
   String? get lastError => _lastError;
 
   FieldUserRole? get role => _session?.role;
@@ -36,6 +44,7 @@ class FieldAuthService extends ChangeNotifier {
 
   Future<void> restoreSession() async {
     _loading = true;
+    _restoring = true;
     _lastError = null;
     notifyListeners();
     try {
@@ -46,6 +55,7 @@ class FieldAuthService extends ChangeNotifier {
       _lastError = 'Nu am putut restaura sesiunea.';
     } finally {
       _loading = false;
+      _restoring = false;
       notifyListeners();
     }
   }

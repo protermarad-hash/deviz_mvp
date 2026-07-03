@@ -31,7 +31,12 @@ class _FieldAuthGateState extends State<FieldAuthGate> {
     return AnimatedBuilder(
       animation: widget.authService,
       builder: (context, _) {
-        if (widget.authService.isLoading && !widget.authService.isAuthenticated) {
+        // Ecranul full-screen de încărcare apare DOAR la restaurarea sesiunii
+        // la pornire (înainte de primul login). În timpul unei încercări de
+        // login, FieldLoginPage rămâne montat și afișează spinner local pe
+        // buton — altfel s-ar distruge controllerele de email/parolă la eșec.
+        if (widget.authService.isRestoringSession &&
+            !widget.authService.isAuthenticated) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );

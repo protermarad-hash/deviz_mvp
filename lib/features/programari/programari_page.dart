@@ -30,6 +30,7 @@ import '../../core/widgets/adaptive_side_panel_layout.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../../core/widgets/client_autocomplete_field.dart';
 import '../../core/widgets/partner_autocomplete_field.dart';
+import '../../core/widgets/quick_add_client_dialog.dart';
 import '../../core/widgets/serviciu_autocomplete_field.dart';
 import '../field_photos/field_photo_capture_service.dart';
 import '../field_photos/field_photos_page.dart';
@@ -2618,7 +2619,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
   }
 
   Future<ClientRecord?> _openQuickCreateClientDialog() =>
-      openQuickCreateClientDialog(context, widget.repository);
+      showQuickAddClientDialog(context, repository: widget.repository);
 
   Future<PartnerRecord?> _openQuickCreatePartnerDialog() =>
       openQuickCreatePartnerDialog(context, widget.repository);
@@ -4510,41 +4511,30 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                   }
                                 });
                               },
-                              onCreateNew: () async {
-                                final created =
-                                    await _openQuickCreateClientDialog();
-                                if (created == null || !mounted) return;
-                                final nextClients =
-                                    await _listClientsLookupResolved();
-                                if (!mounted) return;
+                              repository: widget.repository,
+                              tipEntitate: 'Beneficiar',
+                              onClientAdded: (newClient) {
+                                // Actualizează page state
                                 setState(() {
-                                  _clients = nextClients;
                                   _clientRecords = <ClientRecord>[
                                     ..._clientRecords.where(
-                                      (item) => item.id != created.id,
+                                      (item) => item.id != newClient.id,
                                     ),
-                                    created,
+                                    newClient,
                                   ];
                                   _clientRecordByIdMap = {
                                     for (final c in _clientRecords)
                                       if (c.id.trim().isNotEmpty) c.id: c,
                                   };
                                 });
+                                // Actualizează dialog state
                                 setDialogState(() {
-                                  selectedClientId = created.id;
+                                  selectedClientId = newClient.id;
                                   clientManuallyChanged = true;
                                   beneficiarKey = ValueKey(
-                                    'benef_${created.id}',
+                                    'benef_${newClient.id}',
                                   );
                                 });
-                                if (!mounted) return;
-                                ScaffoldMessenger.of(this.context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      'Client creat și selectat: ${created.name.trim().isEmpty ? created.id : created.name.trim()}',
-                                    ),
-                                  ),
-                                );
                               },
                             ),
                             const SizedBox(height: 12),
@@ -8388,67 +8378,102 @@ class _ProgramariPageState extends State<ProgramariPage> {
               ),
             ),
           ),
+          // Grid compact doar cu iconițe (tooltip pe fiecare) în locul
+          // OverflowBar-ului implicit, care cu 5-8 butoane icon+text
+          // trecea pe layout vertical și acoperea cardul de informații.
+          // Lățime fixă ~210px → maxim 4 iconițe/rând (grid 2 rânduri).
+          // „Închide" rămâne buton text separat, sub grid, ca acțiune de
+          // închidere distinctă și clară.
           actions: [
-            if (item.complaintId.trim().isNotEmpty)
-              TextButton.icon(
-                onPressed: () async {
-                  Navigator.of(dialogContext).pop();
-                  await _openRepairReportForAppointment(item);
-                },
-                icon: const Icon(Icons.description_outlined),
-                label: const Text('Proces verbal'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Center(
+                    child: SizedBox(
+                      width: 210,
+                      child: Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          if (item.complaintId.trim().isNotEmpty)
+                            IconButton(
+                              tooltip: 'Proces verbal',
+                              icon: const Icon(Icons.description_outlined),
+                              onPressed: () async {
+                                Navigator.of(dialogContext).pop();
+                                await _openRepairReportForAppointment(item);
+                              },
+                            ),
+                          IconButton(
+                            tooltip: 'Materiale',
+                            icon: const Icon(Icons.inventory_2_outlined),
+                            onPressed: () async {
+                              Navigator.of(dialogContext).pop();
+                              await _openEmployeeMaterialUsageDialog(item);
+                            },
+                          ),
+                          IconButton(
+                            tooltip: 'Poze teren',
+                            icon: const Icon(Icons.photo_camera_outlined),
+                            onPressed: () async {
+                              Navigator.of(dialogContext).pop();
+                              await _openFieldPhotosForAppointment(item);
+                            },
+                          ),
+                          IconButton(
+                            tooltip: 'GPS',
+                            icon: const Icon(Icons.location_on_outlined),
+                            onPressed: () async {
+                              Navigator.of(dialogContext).pop();
+                              await _handleGpsCheckin(item);
+                            },
+                          ),
+                          if (_canCreateAdministrativeAppointments)
+                            IconButton(
+                              tooltip: 'Editează',
+                              icon: const Icon(Icons.edit_outlined),
+                              onPressed: () async {
+                                Navigator.of(dialogContext).pop();
+                                await _openEditor(appointment: item);
+                              },
+                            ),
+                          IconButton(
+                            tooltip: 'Istoric',
+                            icon: const Icon(Icons.history_outlined),
+                            onPressed: () => _openAppointmentHistoryDialog(
+                              dialogContext,
+                              item,
+                            ),
+                          ),
+                          if (_canCreateAdministrativeAppointments)
+                            IconButton(
+                              tooltip: 'Șterge',
+                              icon: Icon(
+                                Icons.delete_outline,
+                                color:
+                                    Theme.of(dialogContext).colorScheme.error,
+                              ),
+                              onPressed: () async {
+                                Navigator.of(dialogContext).pop();
+                                await _confirmAndDeleteAppointment(item);
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text('Închide'),
+                    ),
+                  ),
+                ],
               ),
-            TextButton.icon(
-              onPressed: () async {
-                Navigator.of(dialogContext).pop();
-                await _openEmployeeMaterialUsageDialog(item);
-              },
-              icon: const Icon(Icons.inventory_2_outlined),
-              label: const Text('Materiale'),
-            ),
-            TextButton.icon(
-              onPressed: () async {
-                Navigator.of(dialogContext).pop();
-                await _openFieldPhotosForAppointment(item);
-              },
-              icon: const Icon(Icons.photo_camera_outlined),
-              label: const Text('Poze teren'),
-            ),
-            TextButton.icon(
-              onPressed: () async {
-                Navigator.of(dialogContext).pop();
-                await _handleGpsCheckin(item);
-              },
-              icon: const Icon(Icons.location_on_outlined),
-              label: const Text('GPS'),
-            ),
-            if (_canCreateAdministrativeAppointments)
-              TextButton.icon(
-                onPressed: () async {
-                  Navigator.of(dialogContext).pop();
-                  await _openEditor(appointment: item);
-                },
-                icon: const Icon(Icons.edit_outlined),
-                label: const Text('Editeaza'),
-              ),
-            TextButton.icon(
-              onPressed: () =>
-                  _openAppointmentHistoryDialog(dialogContext, item),
-              icon: const Icon(Icons.history_outlined),
-              label: const Text('Istoric'),
-            ),
-            if (_canCreateAdministrativeAppointments)
-              TextButton.icon(
-                onPressed: () async {
-                  Navigator.of(dialogContext).pop();
-                  await _confirmAndDeleteAppointment(item);
-                },
-                icon: const Icon(Icons.delete_outline),
-                label: const Text('Sterge'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Închide'),
             ),
           ],
         );
