@@ -39,15 +39,31 @@ $apkOut = "build\proventaris-costel-v$version-build$buildNumber.apk"
 $zipOut = "build\proventaris-windows-costel-v$version-build$buildNumber.zip"
 
 # 1. Build APK Android (flavor costel + Firebase costel pe partea Dart)
-Write-Host "[1/4] flutter build apk --flavor costel (CLIENT=costel)..."
+Write-Host "[1/6] flutter build apk --flavor costel (CLIENT=costel)..."
 flutter build apk --release --flavor costel --dart-define=CLIENT=costel
 
 # 2. Build Windows (Windows nu are flavors Android; doar dart-define)
-Write-Host "[2/4] flutter build windows (CLIENT=costel)..."
+#
+#    ⚠️ OBLIGATORIU: curata cache-ul de build Windows INAINTE de compilare.
+#    build\windows\ este folder COMUN intre PRO TERM si Costel (Windows nu
+#    are product flavors ca Android), iar Flutter NU invalideaza cache-ul
+#    Dart la schimbarea --dart-define. Fara curatare, un build Windows
+#    reutilizeaza silentios app.so-ul clientului compilat anterior ->
+#    artefact contaminat cu Firebase-ul gresit.
+#    INCIDENT 2026-07-03: PRO TERM Windows a iesit cu cod Costel (app.so
+#    identic la hash) pentru ca s-a compilat dupa un build Costel fara
+#    curatare. Descoperit prin hash-compare chiar inainte de livrare.
+#    NU elimina acest pas crezand ca e doar intarziere - previne
+#    livrarea catre client a aplicatiei conectate la baza de date gresita.
+Write-Host "[2/6] Curatare cache Windows (build\windows + .dart_tool\flutter_build)..."
+Remove-Item -Recurse -Force "build\windows" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force ".dart_tool\flutter_build" -ErrorAction SilentlyContinue
+
+Write-Host "[3/6] flutter build windows (CLIENT=costel)..."
 flutter build windows --release --dart-define=CLIENT=costel
 
 # 3. ZIP build Windows (nume versionat)
-Write-Host "[3/4] Arhivare build Windows -> $zipOut ..."
+Write-Host "[4/6] Arhivare build Windows -> $zipOut ..."
 Compress-Archive -Path "build\windows\x64\runner\Release\*" `
     -DestinationPath $zipOut -Force
 
@@ -59,9 +75,30 @@ if (-not (Test-Path $apkSrc)) {
     exit 1
 }
 Copy-Item $apkSrc $apkOut -Force
-Write-Host "[4/4] APK copiat -> $apkOut"
+Write-Host "[5/6] APK copiat -> $apkOut"
+
+# 5. Organizare artefacte finale in foldere separate per client.
+#    Strat suplimentar de siguranta vizuala: nicio confuzie despre ce
+#    fisier apartine carui client, nici macar la o privire rapida pe disc.
+#    COPIERE (nu mutare) - artefactele raman si la locatia originala de
+#    mai sus, ca sa nu rupem fluxul existent (ex: publish_release_costel.js
+#    citeste din build\proventaris-costel-*.apk / *.zip).
+#    NU sterge artefacte vechi din build\releases\ - istoric pastrat.
+$relApkDir = "build\releases\costel\android"
+$relWinDir = "build\releases\costel\windows"
+New-Item -ItemType Directory -Force -Path $relApkDir | Out-Null
+New-Item -ItemType Directory -Force -Path $relWinDir | Out-Null
+$relApk = Join-Path $relApkDir "proventaris-costel-v$version-build$buildNumber.apk"
+$relZip = Join-Path $relWinDir "proventaris-windows-costel-v$version-build$buildNumber.zip"
+Copy-Item $apkOut $relApk -Force
+Copy-Item $zipOut $relZip -Force
+Write-Host "[6/6] Artefacte organizate in build\releases\costel\ :"
+Write-Host "      $relApk"
+Write-Host "      $relZip"
 
 Write-Host ""
 Write-Host "BUILD COSTEL FINALIZAT! (v$version+$buildNumber)" -ForegroundColor Green
 Write-Host "APK:     $apkOut"
 Write-Host "Windows: $zipOut"
+Write-Host "Releases: $relApk"
+Write-Host "          $relZip"
