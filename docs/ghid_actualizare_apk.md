@@ -73,10 +73,14 @@ version: 1.1.0+3
 ```bash
 flutter clean
 flutter pub get
-flutter build apk --release
+flutter build apk --release --flavor proterm
 ```
 
-Fișierul generat: `build/app/outputs/flutter-apk/app-release.apk`
+Fișierul generat: `build/app/outputs/flutter-apk/app-proterm-release.apk`
+
+> ⚠️ De la introducerea flavorurilor (proterm / costel), `--flavor proterm`
+> este OBLIGATORIU pentru build-ul PRO TERM. Comanda fără flavor eșuează.
+> Build-ul Costel se face cu `scripts/build_costel.ps1` (flavor costel).
 
 (Vezi și `docs/android_release_checklist.md` pentru semnare/keystore.)
 
@@ -215,7 +219,7 @@ temporar al sistemului — calea exactă e afișată în dialog.
 
 ```
 1. Incrementează versiunea în pubspec.yaml  (ex: 1.1.0+4 → 1.1.0+5)
-2. flutter build apk --release
+2. flutter build apk --release --flavor proterm
 3. flutter clean && flutter pub get
 4. flutter build windows --release
 5. Compress-Archive build\windows\x64\runner\Release\* build\proventaris-windows-vX.Y.Z-buildN.zip -Force

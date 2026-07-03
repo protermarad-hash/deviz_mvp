@@ -49,17 +49,22 @@ Output:
 Android debug build:
 
 ```bash
-flutter build apk --debug
+flutter build apk --debug --flavor proterm
 ```
 
 Output:
-- `build/app/outputs/flutter-apk/app-debug.apk`
+- `build/app/outputs/flutter-apk/app-proterm-debug.apk`
 
 Android release build:
 
 ```bash
-flutter build apk --release
+flutter build apk --release --flavor proterm
 ```
+
+> Note: Android builds require a product flavor (`proterm` or `costel`).
+> `--flavor proterm` is the standard PRO TERM build; the Costel client build
+> uses `scripts/build_costel.ps1` (`--flavor costel`). Windows builds do not
+> use flavors.
 
 ## Offline sync behavior
 

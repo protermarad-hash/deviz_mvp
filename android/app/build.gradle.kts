@@ -35,6 +35,26 @@ android {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
+    // ── Product flavors — identitate de pachet separată per client ────────────
+    // proterm → ro.proterm.proventaris          (PRO TERM SRL, devizpro-ultra-pilot)
+    // costel  → ro.proterm.proventaris.costel   (Costel Costea, proventaris-costel-costea)
+    // Fiecare flavor are propriul google-services.json:
+    //   proterm → android/app/google-services.json (root)
+    //   costel  → android/app/src/costel/google-services.json
+    // Package-uri diferite ⇒ cele două aplicații coexistă pe același device
+    // (fără suprascriere / coliziune de date).
+    flavorDimensions += "client"
+    productFlavors {
+        create("proterm") {
+            dimension = "client"
+            applicationId = "ro.proterm.proventaris"
+        }
+        create("costel") {
+            dimension = "client"
+            applicationId = "ro.proterm.proventaris.costel"
+        }
+    }
+
     signingConfigs {
         if (keystorePropertiesFile.exists()) {
             create("release") {
@@ -47,7 +67,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "ro.proterm.proventaris"
+        // applicationId este definit per flavor (proterm / costel) — vezi productFlavors.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

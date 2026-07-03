@@ -108,10 +108,13 @@ Verifica ca iconita apare in:
 ```bash
 flutter clean
 flutter pub get
-flutter build apk --release
+flutter build apk --release --flavor proterm
 ```
 
-Fisierul generat: `build/app/outputs/flutter-apk/app-release.apk`
+Fisierul generat: `build/app/outputs/flutter-apk/app-proterm-release.apk`
+
+> ⚠️ `--flavor proterm` este OBLIGATORIU (flavors proterm / costel).
+> Build-ul fara flavor esueaza.
 
 **Trimite APK-ul direct pe telefon via:**
 - USB + adb: `adb install build/app/outputs/flutter-apk/app-release.apk`

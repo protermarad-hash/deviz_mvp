@@ -74,6 +74,7 @@ x64/Release/
 
 # Config build separat client Costel Costea — NU în git (date Firebase izolate)
 android/app/google-services-costel.json
+android/app/src/costel/google-services.json
 lib/firebase_options_costel.dart
 android/app/google-services.bak.json
 build/proventaris-costel.apk

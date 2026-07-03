@@ -42,8 +42,10 @@ Acesta este un proiect **Flutter** pregătit pentru **Android** și **Windows**,
 ## Build final
 ### Android APK
 ```bash
-flutter build apk --release
+flutter build apk --release --flavor proterm
 ```
+> `--flavor proterm` este obligatoriu (flavors proterm / costel). Build-ul
+> Costel: `scripts/build_costel.ps1`.
 
 ### Windows EXE
 ```bash

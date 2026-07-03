@@ -250,7 +250,12 @@ async function main() {
     process.exit(1);
   }
 
-  const apkPath = path.join('build', 'app', 'outputs', 'flutter-apk', 'app-release.apk');
+  // Cu product flavors, build-ul PRO TERM (--flavor proterm) genereaza
+  // app-proterm-release.apk. Fallback la vechiul app-release.apk pentru
+  // build-uri mai vechi fara flavor.
+  const apkFlavorPath = path.join('build', 'app', 'outputs', 'flutter-apk', 'app-proterm-release.apk');
+  const apkLegacyPath = path.join('build', 'app', 'outputs', 'flutter-apk', 'app-release.apk');
+  const apkPath = fs.existsSync(apkFlavorPath) ? apkFlavorPath : apkLegacyPath;
   const zipPath = path.join('build', `proventaris-windows-v${version}-build${buildNumber}.zip`);
 
   const doApk     = !windowsOnly && fs.existsSync(apkPath);
