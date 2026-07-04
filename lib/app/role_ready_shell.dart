@@ -10,6 +10,7 @@ import 'deviz_theme_controller.dart';
 import '../core/app_theme_preset.dart';
 import '../core/cloud/firebase_bootstrap.dart';
 import '../core/auth/app_role_policy.dart';
+import '../core/build_info.dart';
 import '../core/auth_models.dart';
 import '../core/auth_session.dart';
 import '../core/company_profile.dart';
@@ -64,6 +65,7 @@ import '../features/crm/crm_page.dart';
 import '../features/crm/crm_repository.dart';
 import '../features/obiective/obiective_page.dart';
 import '../features/analiza/analiza_page.dart';
+import '../features/user_management/user_management_page.dart';
 
 typedef ShellPageBuilder = Widget Function(BuildContext context);
 
@@ -172,6 +174,7 @@ const List<_ShellSectionDef> _kShellSections = [
       'help_admin',
       'roluri',
       'utilizatori',
+      'gestionare_utilizatori',
       'backup_restore',
       'migrare_poze',
     ],
@@ -622,10 +625,17 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
       ),
       ShellDestination(
         id: 'utilizatori',
-        label: 'Utilizatori',
+        label: 'Utilizatori (offline/local)',
         icon: Icons.manage_accounts_outlined,
         allowedRoles: {UserRole.admin},
         builder: (_) => const LocalUsersAdminPage(),
+      ),
+      ShellDestination(
+        id: 'gestionare_utilizatori',
+        label: 'Conturi Firebase (login)',
+        icon: Icons.admin_panel_settings_outlined,
+        allowedRoles: {UserRole.admin},
+        builder: (_) => const UserManagementPage(),
       ),
       ShellDestination(
         id: 'migrare_poze',
@@ -663,7 +673,7 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
       final info = await PackageInfo.fromPlatform();
       if (!mounted) return;
       setState(() {
-        _appVersionLabel = 'v${info.version}+${info.buildNumber}';
+        _appVersionLabel = 'v${info.version}+${info.buildNumber} · $kBuildTag';
       });
     } catch (_) {
       // best-effort — fără versiune afișată dacă citirea eșuează
