@@ -97,7 +97,8 @@ class AppRolePolicy {
     if (role == null || role == UserRole.admin) return true;
     if (role == UserRole.birou) {
       return destinationId != 'utilizatori' &&
-          destinationId != 'backup_restore';
+          destinationId != 'backup_restore' &&
+          destinationId != 'gestionare_utilizatori';
     }
     if (role == UserRole.sefEchipa) {
       const allowed = <String>{

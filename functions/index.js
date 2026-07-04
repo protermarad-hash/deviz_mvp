@@ -383,6 +383,145 @@ exports.sendEmailServerTestEmail = onCall(
   },
 );
 
+// ---------------------------------------------------------------------------
+// GESTIONARE UTILIZATORI (creare user + resetare parola) — strict admin only.
+// NU folosesc resolveActorContext aici: acela are un fallback legacy periculos
+// (request.auth lipsa -> isAdmin:true). Pentru creare useri/parole folosesc
+// requireStrictAdmin(), care NU are niciun fallback.
+// ---------------------------------------------------------------------------
+
+exports.createTenantUser = onCall(
+  { region: 'europe-west1' },
+  async (request) => {
+    // 1. Autentificare + rol admin strict (arunca daca lipseste auth SAU rolul).
+    await requireStrictAdmin(request);
+
+    // 2. Validare input.
+    const data = request.data || {};
+    const email = (data.email || '').toString().trim().toLowerCase();
+    const password = (data.password || '').toString();
+    const name = (data.name || '').toString().trim();
+    const role = normalizeTenantUserRole(data.role);
+    const phone = (data.phone || '').toString().trim();
+
+    if (!email) {
+      throw new HttpsError('invalid-argument', 'Adresa de email este obligatorie.');
+    }
+    if (!isValidEmailFormat(email)) {
+      throw new HttpsError('invalid-argument', 'Adresa de email nu are un format valid.');
+    }
+    if (!password) {
+      throw new HttpsError('invalid-argument', 'Parola este obligatorie.');
+    }
+    if (password.length < 6) {
+      throw new HttpsError('invalid-argument', 'Parola trebuie sa aiba minim 6 caractere.');
+    }
+    if (!name) {
+      throw new HttpsError('invalid-argument', 'Numele este obligatoriu.');
+    }
+    if (!role) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Rolul este obligatoriu si trebuie sa fie unul dintre: admin, office, team_lead, employee.',
+      );
+    }
+
+    // 3. Creare cont Firebase Auth.
+    let userRecord;
+    try {
+      userRecord = await admin.auth().createUser({
+        email,
+        password,
+        displayName: name,
+      });
+    } catch (error) {
+      if (error && error.code === 'auth/email-already-exists') {
+        throw new HttpsError(
+          'already-exists',
+          `Exista deja un utilizator cu adresa ${email}.`,
+        );
+      }
+      throw new HttpsError(
+        'internal',
+        `Nu am putut crea utilizatorul in Firebase Auth: ${normalizeError(error)}`,
+      );
+    }
+
+    const uid = userRecord.uid;
+
+    // 4. Document users/{uid} — EXACT structura folosita azi (vezi
+    //    field_firebase_auth_adapter.dart -> newPayload): updatedAt = ISO string.
+    const userDoc = {
+      id: uid,
+      name,
+      email,
+      role,
+      active: true,
+      firebase_uid: uid,
+      employee_id: '',
+      teamId: '',
+      phone,
+      updatedAt: new Date().toISOString(),
+    };
+    await db.collection(COLLECTIONS.users).doc(uid).set(userDoc, { merge: true });
+
+    logger.info('Tenant user created', { uid, email, role });
+
+    // 6. Rezultat.
+    return { ok: true, uid, email };
+  },
+);
+
+exports.adminSetUserPassword = onCall(
+  { region: 'europe-west1' },
+  async (request) => {
+    // 1. Autentificare + rol admin strict.
+    await requireStrictAdmin(request);
+
+    // 2. Validare input.
+    const data = request.data || {};
+    const targetUid = (data.targetUid || '').toString().trim();
+    const newPassword = (data.newPassword || '').toString();
+
+    if (!targetUid) {
+      throw new HttpsError('invalid-argument', 'targetUid este obligatoriu.');
+    }
+    if (!newPassword) {
+      throw new HttpsError('invalid-argument', 'Parola noua este obligatorie.');
+    }
+    if (newPassword.length < 6) {
+      throw new HttpsError('invalid-argument', 'Parola trebuie sa aiba minim 6 caractere.');
+    }
+
+    // 3. Actualizare parola in Firebase Auth. Fara restrictie pe targetUid:
+    //    adminul poate schimba orice parola din proiectul lui, inclusiv a sa.
+    try {
+      await admin.auth().updateUser(targetUid, { password: newPassword });
+    } catch (error) {
+      if (error && error.code === 'auth/user-not-found') {
+        throw new HttpsError('not-found', 'Utilizatorul nu a fost gasit.');
+      }
+      throw new HttpsError(
+        'internal',
+        `Nu am putut actualiza parola: ${normalizeError(error)}`,
+      );
+    }
+
+    // 4. Actualizare updatedAt pe users/{targetUid} — best-effort (audit).
+    try {
+      await db.collection(COLLECTIONS.users).doc(targetUid).set(
+        { updatedAt: new Date().toISOString() },
+        { merge: true },
+      );
+    } catch (_) {}
+
+    logger.info('Tenant user password updated', { targetUid });
+
+    // 5. Rezultat.
+    return { ok: true };
+  },
+);
+
 exports.processNotificationEmailQueue = onDocumentWritten(
   {
     document: `${COLLECTIONS.emailQueue}/{queueId}`,
@@ -1181,6 +1320,53 @@ async function resolveActorContext(request, { requireAdmin = false } = {}) {
     isAdmin,
     companyId,
   };
+}
+
+// Verificare STRICTA de admin — fara niciun fallback legacy.
+// Spre deosebire de resolveActorContext, aici request.auth lipsa =>
+// 'unauthenticated', NU acces implicit. Folosit la creare useri / parole.
+async function requireStrictAdmin(request) {
+  const auth = request && request.auth ? request.auth : null;
+  const uid = auth ? (auth.uid || '').toString().trim() : '';
+  if (!auth || !uid) {
+    throw new HttpsError(
+      'unauthenticated',
+      'Autentificare necesara. Trebuie sa fii logat ca administrator.',
+    );
+  }
+  const token = auth.token || {};
+  const email = (token.email || '').toString().trim().toLowerCase();
+  const userProfile = await loadAuthUserProfile({ uid, email });
+  const role = (userProfile.role || token.role || '').toString().trim().toLowerCase();
+  if (role !== 'admin') {
+    throw new HttpsError(
+      'permission-denied',
+      'Doar administratorul poate gestiona utilizatorii.',
+    );
+  }
+  return { uid, email, role };
+}
+
+// Rolurile acceptate la creare user, normalizate la valoarea stocata pe care
+// FieldUserRole.fromValue() o citeste corect (team_lead, nu teamLead).
+const VALID_TENANT_USER_ROLES = {
+  admin: 'admin',
+  office: 'office',
+  employee: 'employee',
+  team_lead: 'team_lead',
+  teamlead: 'team_lead',
+};
+
+function normalizeTenantUserRole(rawRole) {
+  const value = (rawRole || '').toString().trim().toLowerCase();
+  if (!value) return '';
+  return VALID_TENANT_USER_ROLES[value] || '';
+}
+
+function isValidEmailFormat(email) {
+  const value = (email || '').toString().trim();
+  if (!value) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 async function loadAuthUserProfile({ uid, email }) {
