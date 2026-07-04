@@ -17,7 +17,13 @@ class FieldFirebaseAuthAdapter {
   CollectionReference<Map<String, dynamic>> get _usersCollection =>
       _firestore.collection(FirebaseCollections.users);
 
-  static const String _forcedAdminEmail = 'proterm.arad@gmail.com';
+  /// Cont admin garantat prin politică — expus public pentru a putea fi
+  /// folosit și ca plasă de siguranță pe calea de restore a sesiunii
+  /// (când profilul din cloud nu poate fi confirmat temporar).
+  static const String forcedAdminEmail = 'proterm.arad@gmail.com';
+
+  // Alias intern păstrat pentru lizibilitatea logicii existente.
+  static const String _forcedAdminEmail = forcedAdminEmail;
 
   Future<FieldAuthSession?> signIn({
     required String email,
