@@ -34,13 +34,22 @@ if ($pubspec -match '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)') {
 }
 Write-Host "Versiune detectata din pubspec.yaml: v$version+$buildNumber"
 
-# Nume artefacte versionate (distincte per build, nu se suprascriu)
-$apkOut = "build\proventaris-costel-v$version-build$buildNumber.apk"
-$zipOut = "build\proventaris-windows-costel-v$version-build$buildNumber.zip"
+# Build tag vizibil pe ecran (kBuildTag din lib/core/build_info.dart), cu
+# momentul build-ului. Regula permanenta: orice build e identificabil vizual.
+$buildTag = "rel-" + (Get-Date -Format "yyyyMMdd-HHmm")
+Write-Host "Build tag: $buildTag"
+
+# Foldere dedicate (structura fixa build\releases\{client}\{platforma}\)
+$relApkDir = "build\releases\costel\android"
+$relWinDir = "build\releases\costel\windows"
+New-Item -ItemType Directory -Force -Path $relApkDir | Out-Null
+New-Item -ItemType Directory -Force -Path $relWinDir | Out-Null
+$relApk = Join-Path $relApkDir "proventaris-costel-v$version-build$buildNumber.apk"
+$relZip = Join-Path $relWinDir "proventaris-windows-costel-v$version-build$buildNumber.zip"
 
 # 1. Build APK Android (flavor costel + Firebase costel pe partea Dart)
-Write-Host "[1/6] flutter build apk --flavor costel (CLIENT=costel)..."
-flutter build apk --release --flavor costel --dart-define=CLIENT=costel
+Write-Host "[1/6] flutter build apk --flavor costel (CLIENT=costel, BUILD_TAG=$buildTag)..."
+flutter build apk --release --flavor costel --dart-define=CLIENT=costel --dart-define=BUILD_TAG=$buildTag
 
 # 2. Build Windows (Windows nu are flavors Android; doar dart-define)
 #
@@ -59,46 +68,33 @@ Write-Host "[2/6] Curatare cache Windows (build\windows + .dart_tool\flutter_bui
 Remove-Item -Recurse -Force "build\windows" -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force ".dart_tool\flutter_build" -ErrorAction SilentlyContinue
 
-Write-Host "[3/6] flutter build windows (CLIENT=costel)..."
-flutter build windows --release --dart-define=CLIENT=costel
+Write-Host "[3/6] flutter build windows (CLIENT=costel, BUILD_TAG=$buildTag)..."
+flutter build windows --release --dart-define=CLIENT=costel --dart-define=BUILD_TAG=$buildTag
 
-# 3. ZIP build Windows (nume versionat)
-Write-Host "[4/6] Arhivare build Windows -> $zipOut ..."
+# 3. ZIP build Windows DIRECT in folderul dedicat (nume versionat)
+Write-Host "[4/6] Arhivare build Windows -> $relZip ..."
 Compress-Archive -Path "build\windows\x64\runner\Release\*" `
-    -DestinationPath $zipOut -Force
+    -DestinationPath $relZip -Force
 
-# 4. Copiere APK cu nume clar versionat
-#    Cu flavors, Flutter genereaza app-costel-release.apk
+# 4. Copiere APK din output-ul implicit Flutter in folderul dedicat.
+#    Cu flavors, Flutter genereaza app-costel-release.apk.
 $apkSrc = "build\app\outputs\flutter-apk\app-costel-release.apk"
 if (-not (Test-Path $apkSrc)) {
     Write-Host "EROARE: nu gasesc $apkSrc" -ForegroundColor Red
     exit 1
 }
-Copy-Item $apkSrc $apkOut -Force
-Write-Host "[5/6] APK copiat -> $apkOut"
+Copy-Item $apkSrc $relApk -Force
+Write-Host "[5/6] APK copiat -> $relApk"
 
-# 5. Organizare artefacte finale in foldere separate per client.
-#    Strat suplimentar de siguranta vizuala: nicio confuzie despre ce
-#    fisier apartine carui client, nici macar la o privire rapida pe disc.
-#    COPIERE (nu mutare) - artefactele raman si la locatia originala de
-#    mai sus, ca sa nu rupem fluxul existent (ex: publish_release_costel.js
-#    citeste din build\proventaris-costel-*.apk / *.zip).
-#    NU sterge artefacte vechi din build\releases\ - istoric pastrat.
-$relApkDir = "build\releases\costel\android"
-$relWinDir = "build\releases\costel\windows"
-New-Item -ItemType Directory -Force -Path $relApkDir | Out-Null
-New-Item -ItemType Directory -Force -Path $relWinDir | Out-Null
-$relApk = Join-Path $relApkDir "proventaris-costel-v$version-build$buildNumber.apk"
-$relZip = Join-Path $relWinDir "proventaris-windows-costel-v$version-build$buildNumber.zip"
-Copy-Item $apkOut $relApk -Force
-Copy-Item $zipOut $relZip -Force
-Write-Host "[6/6] Artefacte organizate in build\releases\costel\ :"
+# 5. Curatare output implicit Flutter (conventie: NICIUN artefact livrabil nu
+#    ramane in build\app\outputs\... - sursa unica de adevar e build\releases\).
+Remove-Item $apkSrc -Force -ErrorAction SilentlyContinue
+Write-Host "[6/6] Sters output implicit Flutter: $apkSrc"
+Write-Host "      Artefacte finale (sursa unica) in build\releases\costel\ :"
 Write-Host "      $relApk"
 Write-Host "      $relZip"
 
 Write-Host ""
-Write-Host "BUILD COSTEL FINALIZAT! (v$version+$buildNumber)" -ForegroundColor Green
-Write-Host "APK:     $apkOut"
-Write-Host "Windows: $zipOut"
-Write-Host "Releases: $relApk"
-Write-Host "          $relZip"
+Write-Host "BUILD COSTEL FINALIZAT! (v$version+$buildNumber - $buildTag)" -ForegroundColor Green
+Write-Host "APK:     $relApk"
+Write-Host "Windows: $relZip"

@@ -250,13 +250,20 @@ async function main() {
     process.exit(1);
   }
 
-  // Cu product flavors, build-ul PRO TERM (--flavor proterm) genereaza
-  // app-proterm-release.apk. Fallback la vechiul app-release.apk pentru
-  // build-uri mai vechi fara flavor.
+  // Conventie build (vezi CLAUDE.md "CONVENTII DE BUILD"): artefactele
+  // livrabile stau in build/releases/{client}/{platforma}/ cu nume versionat.
+  // Scriptul de build sterge output-ul implicit Flutter dupa copiere, asa ca
+  // sursa PRIORITARA de publicare este folderul dedicat. Pastram fallback la
+  // caile vechi (output implicit / build/) pentru build-uri anterioare.
+  const apkReleaseDir = path.join('build', 'releases', 'proterm', 'android', `app-proterm-v${version}-build${buildNumber}.apk`);
   const apkFlavorPath = path.join('build', 'app', 'outputs', 'flutter-apk', 'app-proterm-release.apk');
   const apkLegacyPath = path.join('build', 'app', 'outputs', 'flutter-apk', 'app-release.apk');
-  const apkPath = fs.existsSync(apkFlavorPath) ? apkFlavorPath : apkLegacyPath;
-  const zipPath = path.join('build', `proventaris-windows-v${version}-build${buildNumber}.zip`);
+  const apkPath = fs.existsSync(apkReleaseDir)
+    ? apkReleaseDir
+    : (fs.existsSync(apkFlavorPath) ? apkFlavorPath : apkLegacyPath);
+  const zipReleaseDir = path.join('build', 'releases', 'proterm', 'windows', `proventaris-windows-v${version}-build${buildNumber}.zip`);
+  const zipLegacyPath = path.join('build', `proventaris-windows-v${version}-build${buildNumber}.zip`);
+  const zipPath = fs.existsSync(zipReleaseDir) ? zipReleaseDir : zipLegacyPath;
 
   const doApk     = !windowsOnly && fs.existsSync(apkPath);
   const doWindows = !apkOnly     && fs.existsSync(zipPath);

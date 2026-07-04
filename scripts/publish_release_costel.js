@@ -263,11 +263,16 @@ async function main() {
     process.exit(1);
   }
 
-  // Artefacte Costel — convenția versionată din scripts/build_costel.ps1:
-  //   APK: build/proventaris-costel-v{version}-build{buildNumber}.apk
-  //   ZIP: build/proventaris-windows-costel-v{version}-build{buildNumber}.zip
-  const apkPath = path.join('build', `proventaris-costel-v${version}-build${buildNumber}.apk`);
-  const zipPath = path.join('build', `proventaris-windows-costel-v${version}-build${buildNumber}.zip`);
+  // Artefacte Costel — convenția de build (vezi CLAUDE.md "CONVENȚII DE BUILD"):
+  // sursa PRIORITARĂ e folderul dedicat build/releases/costel/{platformă}/ cu
+  // nume versionat; fallback la calea intermediară veche din build/ pentru
+  // build-uri anterioare.
+  const apkReleaseDir = path.join('build', 'releases', 'costel', 'android', `proventaris-costel-v${version}-build${buildNumber}.apk`);
+  const apkLegacyPath = path.join('build', `proventaris-costel-v${version}-build${buildNumber}.apk`);
+  const apkPath = fs.existsSync(apkReleaseDir) ? apkReleaseDir : apkLegacyPath;
+  const zipReleaseDir = path.join('build', 'releases', 'costel', 'windows', `proventaris-windows-costel-v${version}-build${buildNumber}.zip`);
+  const zipLegacyPath = path.join('build', `proventaris-windows-costel-v${version}-build${buildNumber}.zip`);
+  const zipPath = fs.existsSync(zipReleaseDir) ? zipReleaseDir : zipLegacyPath;
 
   const doApk     = !windowsOnly && fs.existsSync(apkPath);
   const doWindows = !apkOnly     && fs.existsSync(zipPath);
