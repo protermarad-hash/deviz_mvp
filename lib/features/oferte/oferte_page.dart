@@ -2705,6 +2705,10 @@ class _OfferDefaultsDialogState extends State<_OfferDefaultsDialog> {
                           value: 'EUR',
                           child: Text('EUR'),
                         ),
+                        DropdownMenuItem<String>(
+                          value: 'HUF',
+                          child: Text('HUF'),
+                        ),
                       ],
                       onChanged: (value) {
                         if (value == null) return;
@@ -3251,7 +3255,7 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
       _asDouble(_exchangeCommissionController.text, 0);
 
   double get _baseExchangeRate {
-    if (_selectedCurrency != 'EUR') return 0;
+    if (!OfferCurrencyConverter.requiresRate(_selectedCurrency)) return 0;
     if (_exchangeRateSource == OfferExchangeRateSource.bnr) {
       return _bnrRateValue > 0 ? _bnrRateValue : _manualRateValue;
     }
@@ -3259,7 +3263,7 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
   }
 
   double get _effectiveExchangeRate {
-    if (_selectedCurrency != 'EUR') return 1;
+    if (!OfferCurrencyConverter.requiresRate(_selectedCurrency)) return 1;
     return OfferCurrencyConverter.computeEffectiveRate(
       baseRate: _baseExchangeRate,
       commissionPercent: _exchangeCommissionPercent,
@@ -3270,7 +3274,7 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
     if (_loadingBnrRate) return;
     setState(() => _loadingBnrRate = true);
     try {
-      final fetched = await _bnrService.fetchOrCachedEurRate();
+      final fetched = await _bnrService.fetchOrCachedRate(_selectedCurrency);
       if (!mounted) return;
       if (fetched != null && fetched > 0) {
         setState(() => _bnrRateValue = fetched);
@@ -3604,11 +3608,14 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
     final manualRate = _manualRateValue;
     final bnrRate = _bnrRateValue;
     final effectiveExchangeRate = _effectiveExchangeRate;
-    if (_selectedCurrency == 'EUR' && effectiveExchangeRate <= 0) {
+    if (OfferCurrencyConverter.requiresRate(_selectedCurrency) &&
+        effectiveExchangeRate <= 0) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Completeaza un curs EUR valid (manual sau BNR).'),
+          SnackBar(
+            content: Text(
+              'Completeaza un curs $_selectedCurrency valid (manual sau BNR).',
+            ),
           ),
         );
       }
@@ -3971,10 +3978,22 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
                             value: 'EUR',
                             child: Text('EUR'),
                           ),
+                          DropdownMenuItem<String>(
+                            value: 'HUF',
+                            child: Text('HUF'),
+                          ),
                         ],
                         onChanged: (value) {
                           if (value == null) return;
                           setState(() => _selectedCurrency = value);
+                          // Cursul BNR este per-valută: la schimbarea monedei,
+                          // reîmprospătează dacă sursa e BNR (altfel s-ar folosi
+                          // cursul valutei anterioare).
+                          if (OfferCurrencyConverter.requiresRate(value) &&
+                              _exchangeRateSource ==
+                                  OfferExchangeRateSource.bnr) {
+                            _refreshBnrRate();
+                          }
                         },
                       ),
                     ),
@@ -4004,7 +4023,7 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
                     ),
                   ],
                 ),
-                if (_selectedCurrency == 'EUR') ...[
+                if (OfferCurrencyConverter.requiresRate(_selectedCurrency)) ...[
                   const SizedBox(height: 8),
                   if (_exchangeRateSource == OfferExchangeRateSource.manual)
                     TextFormField(
@@ -4012,12 +4031,15 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Curs manual RON/EUR',
+                      decoration: InputDecoration(
+                        labelText: 'Curs manual RON/$_selectedCurrency',
                       ),
                       onChanged: (_) => setState(() {}),
                       validator: (value) {
-                        if (_selectedCurrency != 'EUR') return null;
+                        if (!OfferCurrencyConverter.requiresRate(
+                            _selectedCurrency)) {
+                          return null;
+                        }
                         if (_exchangeRateSource !=
                             OfferExchangeRateSource.manual) {
                           return null;
@@ -4032,8 +4054,8 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
                       children: [
                         Expanded(
                           child: InputDecorator(
-                            decoration: const InputDecoration(
-                              labelText: 'Curs BNR RON/EUR',
+                            decoration: InputDecoration(
+                              labelText: 'Curs BNR RON/$_selectedCurrency',
                             ),
                             child: Text(
                               _bnrRateValue > 0
@@ -4061,7 +4083,10 @@ class _OfferFormDialogState extends State<_OfferFormDialog> {
                     ),
                     onChanged: (_) => setState(() {}),
                     validator: (value) {
-                      if (_selectedCurrency != 'EUR') return null;
+                      if (!OfferCurrencyConverter.requiresRate(
+                          _selectedCurrency)) {
+                        return null;
+                      }
                       final commission = _asDouble(value ?? '', -1);
                       if (commission < 0) {
                         return 'Comisionul trebuie să fie >= 0.';

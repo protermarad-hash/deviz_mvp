@@ -317,7 +317,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   String _rateLabel() {
     final currency = OfferCurrencyConverter.normalizeCurrency(_offer.currency);
-    if (currency != 'EUR') return '-';
+    if (!OfferCurrencyConverter.requiresRate(currency)) return '-';
     final base = _offer.exchangeRateSource == OfferExchangeRateSource.bnr
         ? _offer.bnrRate
         : _offer.manualRate;
@@ -581,7 +581,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   OfferLineItem _commercialLineForDisplay(OfferLineItem source) {
     final currency = OfferCurrencyConverter.normalizeCurrency(_offer.currency);
-    if (currency != 'EUR') return source;
+    if (!OfferCurrencyConverter.requiresRate(currency)) return source;
     final convertedUnitPrice = OfferCurrencyConverter.convertRonToOfferCurrency(
       ronAmount: source.unitPrice,
       currency: currency,
