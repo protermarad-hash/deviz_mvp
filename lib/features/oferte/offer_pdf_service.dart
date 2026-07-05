@@ -135,8 +135,12 @@ class OfferPdfService {
         branding: branding,
         clauses: offer.acceptanceClauses.isEmpty
             ? OfferAcceptanceClause.defaults(
-                totalLabel: offer.subtotalComercial.toStringAsFixed(0),
-                currency: offer.currency,
+                totalLabel: OfferCurrencyConverter.convertRonToOfferCurrency(
+                  ronAmount: offer.totalValue,
+                  currency: offer.currency,
+                  effectiveRate: offer.effectiveExchangeRate,
+                ).toStringAsFixed(2),
+                currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
               )
             : offer.acceptanceClauses,
       );
@@ -936,8 +940,12 @@ class OfferPdfService {
       branding: branding,
       clauses: offer.acceptanceClauses.isEmpty
           ? OfferAcceptanceClause.defaults(
-              totalLabel: offer.subtotalComercial.toStringAsFixed(0),
-              currency: offer.currency,
+              totalLabel: OfferCurrencyConverter.convertRonToOfferCurrency(
+                ronAmount: offer.totalValue,
+                currency: offer.currency,
+                effectiveRate: offer.effectiveExchangeRate,
+              ).toStringAsFixed(2),
+              currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
             )
           : offer.acceptanceClauses,
     );
@@ -978,8 +986,12 @@ class OfferPdfService {
         branding: branding,
         clauses: offer.acceptanceClauses.isEmpty
             ? OfferAcceptanceClause.defaults(
-                totalLabel: offer.subtotalComercial.toStringAsFixed(0),
-                currency: offer.currency,
+                totalLabel: OfferCurrencyConverter.convertRonToOfferCurrency(
+                  ronAmount: offer.totalValue,
+                  currency: offer.currency,
+                  effectiveRate: offer.effectiveExchangeRate,
+                ).toStringAsFixed(2),
+                currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
               )
             : offer.acceptanceClauses,
       );
@@ -1659,8 +1671,12 @@ class OfferPdfService {
       branding: branding,
       clauses: offer.acceptanceClauses.isEmpty
           ? OfferAcceptanceClause.defaults(
-              totalLabel: offer.subtotalComercial.toStringAsFixed(0),
-              currency: offer.currency,
+              totalLabel: OfferCurrencyConverter.convertRonToOfferCurrency(
+                ronAmount: offer.totalValue,
+                currency: offer.currency,
+                effectiveRate: offer.effectiveExchangeRate,
+              ).toStringAsFixed(2),
+              currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
             )
           : offer.acceptanceClauses,
     );

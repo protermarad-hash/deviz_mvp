@@ -844,11 +844,16 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   List<OfferAcceptanceClause> _resolvedAcceptanceClauses() {
     if (_offer.acceptanceClauses.isNotEmpty) return _offer.acceptanceClauses;
-    // Generează clauze default cu totalul ofertei
-    final totalStr = _offer.totalValue.toStringAsFixed(2);
+    // Generează clauze default cu totalul ofertei (CU TVA), convertit în
+    // moneda ofertei — identic cu caseta „VALOARE TOTALĂ" din formular.
+    final totalStr = OfferCurrencyConverter.convertRonToOfferCurrency(
+      ronAmount: _offer.totalValue,
+      currency: _offer.currency,
+      effectiveRate: _offer.effectiveExchangeRate,
+    ).toStringAsFixed(2);
     return OfferAcceptanceClause.defaults(
       totalLabel: totalStr,
-      currency: _offer.currency,
+      currency: OfferCurrencyConverter.normalizeCurrency(_offer.currency),
     );
   }
 
