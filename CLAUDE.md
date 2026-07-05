@@ -1884,14 +1884,31 @@ CrmRecord {
 
 ---
 
-## 🧱 CONVENȚII DE BUILD (REGULĂ PERMANENTĂ)
+## 🧱 CONVENȚII DE BUILD ȘI LIVRARE MULTI-CLIENT (REGULĂ PERMANENTĂ)
 
 **Motiv (de ce e documentat aici):** aceste convenții existau deja ca practică,
-dar nefiind scrise în CLAUDE.md, sesiunile viitoare ale agentului NU le cunoșteau
-automat și le reinventau sau le ignorau. De acum sunt regulă permanentă, obligatorie
-pentru orice build (inclusiv de test).
+dar nefiind scrise complet în CLAUDE.md, sesiunile viitoare ale agentului le
+reinventau sau le ignorau. De acum sunt **regulă permanentă, obligatorie pentru
+orice build (inclusiv de test)**. Această secțiune unică absoarbe și înlocuiește
+fostele secțiuni separate „Convenții de build" și „Build separat multi-client".
 
-### 1. Structură fixă de artefacte
+### 0. Cei doi clienți și izolarea datelor
+
+Aplicația se livrează la doi clienți cu date Firebase **complet izolate**:
+
+| Client | `{client}` | Proiect Firebase | applicationId Android | Dart |
+|---|---|---|---|---|
+| **PRO TERM SRL** | `proterm` | `devizpro-ultra-pilot` | `ro.proterm.proventaris` | implicit (fără `--dart-define`) |
+| **Costel Costea** | `costel` | `proventaris-costel-costea` | `ro.proterm.proventaris.costel` | `--dart-define=CLIENT=costel` |
+
+- Izolarea pe **Android** = Gradle **product flavors** (`proterm` / `costel`) +
+  `applicationId` diferit. Flavor-ul `costel` își ia automat
+  `android/app/src/costel/google-services.json` (NU se atinge cel de la root).
+- Pe **Windows** NU există flavors → izolarea se face DOAR prin
+  `--dart-define=CLIENT=costel` la compilare (vezi pct. 7 — bug contaminare cache).
+
+### 1. Structură fixă de artefacte — `build/releases/{client}/{platformă}/`
+
 Toate artefactele livrabile stau EXCLUSIV în:
 ```
 build/releases/{client}/{platformă}/
@@ -1899,14 +1916,23 @@ build/releases/{client}/{platformă}/
 - `{client}` ∈ `{proterm, costel}`
 - `{platformă}` ∈ `{android, windows}`
 
-Folderele se creează automat de scripturi (`New-Item -Force` / `mkdir -p`) și NU se
-șterg niciodată artefacte vechi de acolo — istoric păstrat.
+Folderele se creează automat de scripturi (`New-Item -Force`) și NU se șterg
+niciodată artefacte vechi de acolo — **istoric păstrat**.
 
-### 2. Nume de artefact versionat (obligatoriu)
-Format: `proventaris-{client}-v{versiune}-build{buildNumber}.{apk|zip}`
-- `{versiune}` = partea `X.Y.Z` din `pubspec.yaml`; `{buildNumber}` = partea de după `+`.
-- Excepție istorică: **proterm/android** păstrează prefixul generat de Flutter
-  `app-proterm-v{versiune}-build{buildNumber}.apk` (numele existent în folder).
+### 2. Convenția de nume REALĂ (exact ce produc scripturile)
+
+Format general: `proventaris-{sufix client}-v{versiune}-build{buildNumber}.{apk|zip}`,
+unde `{versiune}` = partea `X.Y.Z` din `pubspec.yaml`, `{buildNumber}` = partea
+de după `+`. **Excepția** este APK-ul PRO TERM, care păstrează prefixul generat
+de flavor-ul Flutter (`app-proterm-...`). Numele reale, verificate în
+`build_proterm.ps1` / `build_costel.ps1` (și căutate de `publish_release*.js`):
+
+| Artefact | Cale REALĂ (sursă unică de adevăr) |
+|---|---|
+| APK PRO TERM | `build/releases/proterm/android/app-proterm-v{versiune}-build{buildNumber}.apk` |
+| ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v{versiune}-build{buildNumber}.zip` |
+| APK Costel | `build/releases/costel/android/proventaris-costel-v{versiune}-build{buildNumber}.apk` |
+| ZIP Windows Costel | `build/releases/costel/windows/proventaris-windows-costel-v{versiune}-build{buildNumber}.zip` |
 
 Exemple reale:
 ```
@@ -1916,198 +1942,166 @@ build/releases/costel/android/proventaris-costel-v1.5.3-build55.apk
 build/releases/costel/windows/proventaris-windows-costel-v1.5.3-build55.zip
 ```
 
-### 3. NICIUN artefact nu rămâne în output-ul implicit Flutter
-După build, artefactul se COPIAZĂ în folderul dedicat (pct. 1) cu nume versionat,
-apoi se ȘTERGE din output-ul implicit:
-- Android: `build/app/outputs/flutter-apk/` — după copiere, `app-*-release.apk` se șterge.
-- Windows: `build/windows/x64/runner/Release/` — se arhivează în ZIP versionat în folderul
-  dedicat (folderul de output rămâne, dar livrabilul e ZIP-ul din `build/releases/`).
+Fiecare build creează fișiere NOI, distincte (numele versionat NU suprascrie
+build-urile anterioare). Vechile căi din rădăcina `build/`
+(`build/proventaris-costel-v...apk` etc.) sunt considerate **legacy** — scripturile
+de publicare le mai acceptă doar ca fallback, dar sursa curentă e `build/releases/`.
 
-### 4. Instalarea/testarea EXCLUSIV din folderul dedicat
-Niciodată nu instala/testa direct din `build/app/outputs/...`. Sursa unică de adevăr
-pentru ce se dă la client / se testează pe device este `build/releases/{client}/{platformă}/`.
-Elimină ambiguitatea „ce APK am instalat de fapt".
+### 3. Scripturile de build — ce fac EXACT
 
-### 5. Orice build e numerotat/versionat vizibil
-- `version:` din `pubspec.yaml` se incrementează la FIECARE build (build number).
-  **Două APK-uri diferite cu același `versionCode` sunt INTERZISE** — Android nu reinstalează
-  cod la versionCode identic → device-ul rămâne pe cod vechi (incident real: build-uri de
-  test cu +53 neschimbat → telefonul rula cod vechi, fix-urile păreau „fără efect").
-- `kBuildTag` din `lib/core/build_info.dart` — identificator vizibil pe ecran (Drawer, lângă
-  versiune). Format: `rel-YYYYMMDD-HHMM` (build de release) sau `diag-YYYYMMDD-HHMM` (build de
-  diagnostic). Se pasează la build via `--dart-define=BUILD_TAG=rel-YYYYMMDD-HHMM`.
-- Verificare obligatorie înainte de a cere testarea: `aapt dump badging <apk> | grep package:`
-  → confirmă `versionCode` incrementat.
-
----
-
-## 🏭 BUILD SEPARAT MULTI-CLIENT — PRO TERM / COSTEL
-
-Aplicația se livrează la doi clienți cu date Firebase izolate:
-- **PRO TERM SRL** — build implicit (proiectul principal)
-- **Costel Costea** — proiect Firebase separat `proventaris-costel-costea`
-  (date complet izolate)
-
-Izolarea pe Android se face prin **Gradle product flavors** +
-`applicationId` diferit. Pe partea Dart, clientul se alege cu
-`--dart-define=CLIENT=costel` (default = proterm).
-
-### Comenzile exacte de build
-
-| Client | Platformă | Comandă |
-|---|---|---|
-| PRO TERM | Android | `flutter build apk --release --flavor proterm` |
-| PRO TERM | Windows | **curăță cache-ul** (vezi mai jos) + `flutter build windows --release` |
-| Costel | Android + Windows | `scripts/build_costel.ps1` (curăță automat cache-ul Windows) |
-
-#### ⚠️ OBLIGATORIU înainte de ORICE build PRO TERM Windows
-
-```powershell
-Remove-Item -Recurse -Force build\windows -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force .dart_tool\flutter_build -ErrorAction SilentlyContinue
-flutter build windows --release
-```
-(echivalent bash: `rm -rf build/windows .dart_tool/flutter_build && flutter build windows --release`)
-
-**DE CE (incident 2026-07-03 — nu elimina acest pas):** `build\windows\` este
-folder COMUN între PRO TERM și Costel (Windows nu are product flavors ca Android),
-iar Flutter **NU invalidează cache-ul Dart la schimbarea `--dart-define`**. Fără
-curățare, un build Windows reutilizează silențios `app.so`-ul clientului compilat
-anterior → artefact contaminat cu Firebase-ul greșit. În ziua respectivă PRO TERM
-Windows a ieșit cu cod Costel (hash `app.so` identic cu Costel), descoperit prin
-hash-compare chiar înainte de livrarea către echipa reală. `build_costel.ps1` face
-deja această curățare automat la pasul [2/6]. **FIX APLICAT** (2026-07-03) în
-`build_costel.ps1` + documentat aici pentru PRO TERM Windows.
-
-##### Arhivare PRO TERM în `build/releases/` (recomandat, după build)
-```powershell
-# după build-ul de mai sus, cu $version/$buildNumber din pubspec:
-New-Item -ItemType Directory -Force -Path build\releases\proterm\android | Out-Null
-New-Item -ItemType Directory -Force -Path build\releases\proterm\windows | Out-Null
-Copy-Item build\app\outputs\flutter-apk\app-proterm-release.apk `
-  "build\releases\proterm\android\app-proterm-v$version-build$buildNumber.apk" -Force
-Compress-Archive -Path build\windows\x64\runner\Release\* `
-  -DestinationPath "build\releases\proterm\windows\proventaris-windows-v$version-build$buildNumber.zip" -Force
-```
-(COPIERE, nu mutare — artefactele rămân și la calea originală pe care o citesc
-`publish_release.js` / fluxul Flutter. NU șterge artefacte vechi din `build/releases/`.)
-
-`scripts/build_costel.ps1` rulează, în ordine:
-1. `flutter build apk --release --flavor costel --dart-define=CLIENT=costel`
-2. **Curăță `build\windows` + `.dart_tool\flutter_build`** (anti-contaminare)
-3. `flutter build windows --release --dart-define=CLIENT=costel`
-4. Arhivează Windows în ZIP (nume versionat) + 5. copiază APK cu nume clar
-6. **Copiază ambele artefacte în `build\releases\costel\{android,windows}\`**
-   (copiere, nu mutare; folderele se creează automat; istoric păstrat)
-
-Rulare script (din rădăcina proiectului):
-```
-powershell -ExecutionPolicy Bypass -File scripts\build_costel.ps1
-```
-
-### Locațiile exacte ale artefactelor generate
-
-Numele artefactelor includ versiunea din `pubspec.yaml`
-(`version: X.Y.Z+BUILD`) pentru trasabilitate — convenția comună
-`v{versiune}-build{buildNumber}` (folosită și de `publish_release.js`).
-`{versiune}` = partea `X.Y.Z`, `{buildNumber}` = partea de după `+`.
-
-| Artefact | Cale |
+| Client | Comandă |
 |---|---|
-| APK PRO TERM | `build/app/outputs/flutter-apk/app-proterm-release.apk` (nume fix generat de flutter) |
-| APK Costel | `build/proventaris-costel-v{versiune}-build{buildNumber}.apk` |
-| ZIP Windows PRO TERM | `build/proventaris-windows-v{versiune}-build{buildNumber}.zip` |
-| ZIP Windows Costel | `build/proventaris-windows-costel-v{versiune}-build{buildNumber}.zip` |
+| PRO TERM (Android + Windows) | `powershell -ExecutionPolicy Bypass -File scripts\build_proterm.ps1` |
+| PRO TERM (doar APK) | `... scripts\build_proterm.ps1 -ApkOnly` |
+| Costel (Android + Windows) | `powershell -ExecutionPolicy Bypass -File scripts\build_costel.ps1` |
 
-**Fiecare build creează fișiere NOI, distincte** — numele versionat
-NU suprascrie build-urile anterioare, deci istoricul local se
-păstrează. (Excepție: APK PRO TERM, care păstrează numele fix generat
-de flutter — se redenumește manual la publicare dacă e nevoie.)
+Ambele scripturi rulează aceeași secvență (6 pași), diferind doar prin flavor /
+`CLIENT` / numele artefactelor:
+1. Citesc `version: X.Y.Z+BUILD` din `pubspec.yaml` și compun `$buildTag =
+   rel-yyyyMMdd-HHmm`.
+2. `flutter build apk --release --flavor {proterm|costel}` (+ `--dart-define=CLIENT=costel`
+   la Costel) `--dart-define=BUILD_TAG=$buildTag`.
+3. **Curăță cache-ul Windows** (`build\windows` + `.dart_tool\flutter_build`) —
+   OBLIGATORIU înainte de compilarea Windows (anti-contaminare, vezi pct. 7).
+4. `flutter build windows --release` (+ `--dart-define=CLIENT=costel` la Costel)
+   `--dart-define=BUILD_TAG=$buildTag`.
+5. **Arhivează** Windows direct în ZIP-ul versionat din `build\releases\{client}\windows\`.
+6. **Copiază** APK-ul din output-ul implicit Flutter
+   (`build\app\outputs\flutter-apk\app-{proterm|costel}-release.apk`) în
+   `build\releases\{client}\android\` cu nume versionat, apoi **ȘTERGE** APK-ul din
+   output-ul implicit.
 
-#### 📁 Organizare finală per client — `build/releases/` (siguranță vizuală)
+Regulă rezultată: **build → copiere în folderul dedicat → ștergere din output-ul
+implicit → (Windows) curățare cache la fiecare build.**
 
-Pe lângă căile originale de mai sus (nemodificate — `publish_release*.js`
-citește tot de acolo), fiecare build **copiază** artefactele într-o structură
-clară per client, ca să nu existe NICIODATĂ confuzie despre ce fișier aparține
-cărui client, nici la o privire rapidă pe disc:
+> Manual, fără scripturi, PRO TERM Windows necesită curățarea explicită:
+> ```powershell
+> Remove-Item -Recurse -Force build\windows -ErrorAction SilentlyContinue
+> Remove-Item -Recurse -Force .dart_tool\flutter_build -ErrorAction SilentlyContinue
+> flutter build windows --release
+> ```
+> (echivalent bash: `rm -rf build/windows .dart_tool/flutter_build && flutter build windows --release`)
 
+### 4. Versionare obligatorie — versionCode NOU la FIECARE build
+
+- `version:` din `pubspec.yaml` se incrementează la FIECARE build (inclusiv de test).
+- **Două APK-uri diferite cu același `versionCode` sunt INTERZISE.** Android NU
+  reinstalează codul la `versionCode` identic → telefonul rămâne silențios pe
+  codul vechi, iar fix-urile par „fără efect". **Confirmat empiric** în această
+  sesiune (build-uri de test cu `+53` neschimbat → device-ul rula cod vechi).
+- Numărul de build (`+BUILD`) e sursa `versionCode` pe Android — de aici regula.
+
+### 5. `kBuildTag` — identificator de build vizibil pe ecran
+
+- Definit în `lib/core/build_info.dart`:
+  `const String kBuildTag = String.fromEnvironment('BUILD_TAG', defaultValue: 'rel-...');`
+- Se afișează în aplicație în **Drawer, lângă versiune** (sub numele companiei).
+- Format: `rel-YYYYMMDD-HHMM` (build de release) sau `diag-YYYYMMDD-HHMM` (build de
+  diagnostic/test).
+- Se pasează la build via `--dart-define=BUILD_TAG=rel-YYYYMMDD-HHMM` (scripturile
+  îl generează automat din data curentă). Permite identificarea vizuală exactă a
+  build-ului instalat pe device.
+
+### 6. NICIUN artefact în output-ul implicit + testare EXCLUSIV din folderul dedicat
+
+- După build, **NICIUN artefact livrabil nu rămâne** în output-ul implicit Flutter
+  (`build/app/outputs/flutter-apk/` — APK-ul se șterge după copiere;
+  `build/windows/x64/runner/Release/` rămâne ca folder de lucru, dar livrabilul e
+  ZIP-ul din `build/releases/`).
+- **Instalarea/testarea se face EXCLUSIV din `build/releases/{client}/{platformă}/`.**
+  Niciodată direct din `build/app/outputs/...`. Elimină ambiguitatea „ce APK am
+  instalat de fapt".
+
+### 7. Bug contaminare Windows multi-client (curățare cache OBLIGATORIE)
+
+Pe Windows NU există izolare de flavor (folder comun `build/windows/`), iar Flutter
+**NU invalidează cache-ul Dart la schimbarea `--dart-define`**. Dacă rulezi
+`flutter build windows` pentru un client după un build pentru celălalt fără
+curățare, al doilea build reutilizează silențios `app.so`-ul primului client →
+**artefact contaminat cu Firebase-ul greșit**.
+
+**INCIDENT 2026-07-03:** PRO TERM Windows a ieșit cu cod Costel (`app.so` identic
+la hash), compilat după un build Costel fără curățare. Descoperit prin hash-compare
+chiar înainte de livrare. **FIX APLICAT:** curățarea `build\windows` +
+`.dart_tool\flutter_build` rulează automat în ambele scripturi (pasul [2/6]) și e
+obligatorie manual pentru PRO TERM Windows. Verificat practic (build Costel→PRO TERM:
+hash-uri `app.so` diferite = fără contaminare).
+
+**Notă Flutter Windows:** codul Dart compilat trăiește în
+`build/windows/x64/runner/Release/data/app.so`, NU în `ProVentaris.exe`. `.exe`-ul
+(runner nativ C++) se relinkează doar la modificări de cod nativ — la un fix pur
+Dart rămâne cu timestamp vechi (NORMAL, nu cache). Pentru a confirma că un build
+include o modificare Dart, verifică timestamp-ul lui `data/app.so`, nu al `.exe`.
+
+### 8. Verificare `aapt dump badging` — OBLIGATORIE în raportul de build
+
+Înainte de a cere testarea/livrarea unui APK, agentul rulează:
 ```
-build/releases/
-├── proterm/
-│   ├── android/app-proterm-v{versiune}-build{build}.apk
-│   └── windows/proventaris-windows-v{versiune}-build{build}.zip
-└── costel/
-    ├── android/proventaris-costel-v{versiune}-build{build}.apk
-    └── windows/proventaris-windows-costel-v{versiune}-build{build}.zip
+aapt dump badging <apk> | grep -E "package:|versionCode|versionName"
 ```
+și **confirmă în raport** `versionCode` incrementat + `versionName` + `package`
+(clientul corect: `ro.proterm.proventaris` vs `ro.proterm.proventaris.costel`).
+Fără această confirmare, un `versionCode` reutilizat trece neobservat (pct. 4).
 
-- **Copiere, nu mutare** — artefactele rămân și la locația originală.
-- Folderele se creează automat (`New-Item -Force`).
-- **NU se șterg** artefacte vechi din `build/releases/` — istoric păstrat (ca la numele versionate).
-- Costel: automat via `build_costel.ps1` (pașii 6). PRO TERM: pas documentat mai sus (secțiunea „Arhivare PRO TERM în build/releases/").
+### 9. REGULĂ CRITICĂ — testarea Windows Costel pe PC/VM SEPARAT
 
-### Publicare release (upload în Firebase) — MANUALĂ, separată per client
+**Build-ul Windows Costel se testează EXCLUSIV pe un PC sau VM separat de mașina
+de dezvoltare principală — NICIODATĂ pe același laptop cu PRO TERM Windows.**
 
-Fiecare client are propriul script de publicare, care urcă artefactele
-în Storage-ul proiectului său și actualizează `app_config/version_info`
-(pentru auto-update in-app). **Publicarea e MANUALĂ** — NU rulează
-automat la build.
+De ce: spre deosebire de Android (flavors + `applicationId` diferit = storage izolat),
+pe Windows NU există separare de storage local. `Runner.rc` are `CompanyName` și
+`ProductName` identice pentru ambele build-uri → ambele scriu în ACELAȘI fișier:
+```
+%APPDATA%\com.example\ProVentaris\shared_preferences.json
+```
+Rulate pe același Windows, PRO TERM și Costel își suprascriu reciproc
+`shared_preferences` (sesiune, cache, setări) → date amestecate între clienți.
+
+### 10. Publicare release (upload Firebase) — MANUALĂ, separată per client
+
+Publicarea e **MANUALĂ** (NU rulează automat la build). Fiecare client are propriul
+script; ambele citesc PRIORITAR artefactele din `build/releases/{client}/{platformă}/`
+(fallback la căile legacy din `build/`).
 
 | Client | Script | Proiect Firebase | Bucket Storage |
 |---|---|---|---|
 | PRO TERM | `scripts/publish_release.js` | `devizpro-ultra-pilot` | `devizpro-ultra-pilot.firebasestorage.app` |
 | Costel | `scripts/publish_release_costel.js` | `proventaris-costel-costea` | `proventaris-costel-costea.firebasestorage.app` |
 
-`publish_release_costel.js` e o copie adaptată a `publish_release.js` —
-diferă DOAR prin `PROJECT_ID`, `BUCKET` și numele artefactelor
-(convenția versionată Costel). Restul (OAuth, upload, Firestore) e
-identic; `updateFirestore` scrie automat în proiectul corect prin
-`PROJECT_ID` din fiecare fișier. Credențialele OAuth Firebase CLI sunt
-generice (nu specifice unui proiect) — funcționează pentru orice proiect
-la care userul `firebase login` are acces.
+`publish_release_costel.js` = copie adaptată a `publish_release.js`, diferă DOAR prin
+`PROJECT_ID`, `BUCKET` și numele artefactelor. Restul (OAuth, upload, actualizare
+`app_config/version_info` pentru auto-update in-app) e identic. Credențialele OAuth
+Firebase CLI sunt generice — funcționează pentru orice proiect la care userul are
+acces prin `firebase login`.
 
-Utilizare Costel (după `build_costel.ps1`, cu aceeași versiune):
+Utilizare (după build, cu aceeași versiune):
 ```
-node scripts/publish_release_costel.js --version 1.5.2 --build 52 --notes "Descriere"
+node scripts/publish_release.js         --version 1.5.3 --build 55 --notes "Descriere"
+node scripts/publish_release_costel.js  --version 1.5.3 --build 55 --notes "Descriere"
 ```
-Opțional: `--apk-only` | `--windows-only`. Scriptul caută artefactele
-`build/proventaris-costel-v{v}-build{b}.apk` și
-`build/proventaris-windows-costel-v{v}-build{b}.zip`.
+Opțional: `--apk-only` | `--windows-only`.
 
-**Notă Flutter Windows:** codul Dart compilat trăiește în
-`build/windows/x64/runner/Release/data/app.so`, NU în `ProVentaris.exe`.
-`.exe`-ul (runner nativ C++) se relinkează doar la modificări de cod
-nativ — la un fix pur Dart rămâne cu timestamp vechi, ceea ce e NORMAL,
-nu build cache-uit. Pentru a confirma că un build include o modificare
-Dart, verifică timestamp-ul lui `data/app.so`, nu al `.exe`.
+### 11. `.gitignore` — excluderea backup-urilor din tracking (adăugată 2026-07-05)
 
-### ⚠️ REGULĂ CRITICĂ — testarea Windows Costel pe PC/VM SEPARAT
-
-**Build-ul Windows Costel se testează EXCLUSIV pe un PC sau VM separat
-de mașina de dezvoltare principală — NICIODATĂ pe același laptop cu
-PRO TERM Windows.**
-
-**De ce:** spre deosebire de Android (unde flavors + `applicationId`
-diferit garantează storage izolat per client), pe Windows NU există
-separare de storage local. `Runner.rc` are `CompanyName` și
-`ProductName` identice pentru ambele build-uri → ambele scriu în
-ACELAȘI fișier:
+`.gitignore` exclude toate variantele de backup:
 ```
-%APPDATA%\com.example\ProVentaris\shared_preferences.json
+*.bak*
+*.diagbak*
+*.cap_bak
+!*.yaml.bak   # excepție: backup-uri de configurare YAML
 ```
-Dacă rulezi PRO TERM Windows și Costel Windows pe același Windows,
-își suprascriu reciproc `shared_preferences` (sesiune, cache local,
-setări) → date amestecate între clienți. Pe Android acest lucru NU se
-întâmplă datorită izolării prin `applicationId`/flavors.
+**Motiv:** `*.bak` singur NU prinde `.bak2`/`.bak3` (se termină în „bak2", nu „bak"),
+de aceea folosim `*.bak*` (orice conține „.bak"). Regula a fost adăugată după ce
+**370 de fișiere backup fuseseră trackate accidental** în git (curățate în aceeași
+zi). Backup-urile `.bak` rămân obligatorii local (regula de siguranță producție),
+dar NU se mai commit-ează.
 
-### 📌 REGULĂ PERMANENTĂ — jurnal artefacte după FIECARE build
+### 12. REGULĂ PERMANENTĂ — jurnal artefacte după FIECARE build
 
-După FIECARE build (Android sau Windows, orice client), agentul
-TREBUIE:
+După FIECARE build (orice platformă, orice client), agentul TREBUIE:
 1. Să raporteze în conversație calea exactă + timestamp-ul artefactului.
-2. Să scrie aceeași informație în tabelul de mai jos, ca acest CLAUDE.md
-   să rămână document de referință actualizat (nu doar raportul din
-   conversație).
+2. Să actualizeze tabelul de mai jos, ca acest CLAUDE.md să rămână document de
+   referință actualizat (nu doar raportul din conversație).
 
 **Ultimul build per artefact (actualizează la fiecare build nou):**
 
@@ -2115,10 +2109,9 @@ TREBUIE:
 |---|---|---|
 | APK Costel | `build/proventaris-costel-v1.5.2-build53.apk` | 2026-07-03 23:16:52 (bump +53; aapt: ro.proterm.proventaris.costel versionCode 53; libapp.so 996e4fd3) |
 | ZIP Windows Costel | `build/proventaris-windows-costel-v1.5.2-build53.zip` | 2026-07-03 23:17:59 (bump +53; app.so costel f6617a18 confirmat prin eliminare + hash-compare; exe v53) |
-| APK PRO TERM | `build/app/outputs/flutter-apk/app-proterm-release.apk` | 2026-07-04 22:27:33 (bump 1.5.3+54; aapt: ro.proterm.proventaris versionCode 54 versionName 1.5.3; build tag vizibil `diag-20260704-2250`; fix shell gestionare_utilizatori + banner DIAG restore sesiune) |
-| Windows PRO TERM (folder) | `build/windows/x64/runner/Release/` | 2026-07-03 23:27:03 (REBUILD CURAT după decontaminare: pasul flutter build windows inițial reutilizase app.so Costel din cache — dart-define nu invalidează cache Windows; app.so proterm 4f8d77d3 ≠ costel f6617a18) |
-
-> ⚠️ **BUG BUILD WINDOWS MULTI-CLIENT:** pe Windows nu există izolare de flavor (folder comun `build/windows/`), iar Flutter NU invalidează cache-ul Dart la schimbarea `--dart-define`. Dacă rulezi `flutter build windows` (proterm) după un build costel (sau invers) fără curățare, al doilea build reutilizează `app.so`-ul primului client → artefact contaminat (Firebase greșit). SOLUȚIE: `rm -rf build/windows .dart_tool/flutter_build` înainte de fiecare build Windows care schimbă clientul. **✅ FIX APLICAT (2026-07-03):** curățarea rulează automat în `build_costel.ps1` (pasul [2/6]) și este documentată obligatoriu pentru PRO TERM Windows (secțiunea „Comenzile exacte de build" → „OBLIGATORIU înainte de ORICE build PRO TERM Windows"). Verificat practic prin build Costel→PRO TERM: hash-uri `app.so` diferite = fără contaminare.
+| APK PRO TERM | `build/releases/proterm/android/app-proterm-v1.5.3-build55.apk` | 2026-07-05 08:58:05 (bump 1.5.3+55; aapt: ro.proterm.proventaris versionCode 55 versionName 1.5.3; build tag `rel-20260705-0851`; via scripts/build_proterm.ps1; output implicit Flutter curatat) |
+| ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v1.5.3-build55.zip` | 2026-07-05 09:08:37 (bump 1.5.3+55; app.so cu cache curatat inainte de build — anti-contaminare; via scripts/build_proterm.ps1) |
+| Windows PRO TERM (folder) | `build/windows/x64/runner/Release/` | 2026-07-05 09:04:21 (build tag `rel-20260705-0851`; cache Windows curatat automat de build_proterm.ps1 pasul [2/6]) |
 
 ---
 
