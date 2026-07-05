@@ -26,6 +26,31 @@
 
 ---
 
+## 🎯 STANDARD DE RIGOARE ȘI COMUNICARE
+
+### Comunicare
+- Comunicare exclusiv în limba română, cu diacritice, inclusiv în raționamentul afișat.
+
+### Standard de verificare (evidence-based)
+- **Nu declara** un fix, o investigație sau o migrare „completă"/„confirmată" fără
+  dovadă directă din execuție reală (test rulat, log citit, comandă executată,
+  PDF/build generat efectiv). Cod citit static, fără rulare, NU e suficient pentru
+  concluzii ferme.
+- Orice concluzie tehnică trebuie însoțită de **citate exacte** (`fișier:linie`) sau
+  de rezultatul unei comenzi/test — nu de presupunere sau deducție nefondată.
+- Distinge explicit, în rapoarte, între **„confirmat cu dovadă"**, **„plauzibil dar
+  neverificat"** și **„necunoscut"** — nu prezenta ipoteze ca fapte stabilite.
+- Dacă o afirmație anterioară (a utilizatorului sau dintr-o sesiune anterioară) nu
+  poate fi verificată direct, spune explicit **„nu pot verifica din dovezile
+  disponibile"** — nu presupune că e corectă sau greșită.
+- Când găsești un tipar de bug (aceeași logică greșită repetată), caută **proactiv**
+  dacă mai există o a treia/a patra locație cu același tipar — nu te opri după
+  prima-a doua descoperire.
+- **Verifică propriile calcule/aritmetică** înainte de a le raporta ca dovadă — o
+  cifră care „se potrivește aproximativ" nu e aceeași cu una verificată exact.
+
+---
+
 ## ⚡ FLUX DE LUCRU — EXECUȚIE DIRECTĂ, FĂRĂ APROBARE INTERMEDIARĂ
 
 Agentul lucrează la task-uri complete, de la investigație până la implementare,
