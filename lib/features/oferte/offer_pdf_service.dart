@@ -73,16 +73,17 @@ class OfferPdfService {
     String currencyLabel, {
     bool labeled = false,
   }) {
+    final dec = OfferCurrencyConverter.displayDecimals(offer.currency);
     final withoutVat = OfferCurrencyConverter.convertRonToOfferCurrency(
       ronAmount: amountWithoutVat,
       currency: offer.currency,
       effectiveRate: offer.effectiveExchangeRate,
-    ).toStringAsFixed(2);
+    ).toStringAsFixed(dec);
     final withVat = OfferCurrencyConverter.convertRonToOfferCurrency(
       ronAmount: _amountWithVat(offer, amountWithoutVat),
       currency: offer.currency,
       effectiveRate: offer.effectiveExchangeRate,
-    ).toStringAsFixed(2);
+    ).toStringAsFixed(dec);
     switch (offer.priceDisplayMode) {
       case OfferPriceDisplayMode.withoutVat:
         return '$withoutVat $currencyLabel';
@@ -139,7 +140,7 @@ class OfferPdfService {
                   ronAmount: offer.totalValue,
                   currency: offer.currency,
                   effectiveRate: offer.effectiveExchangeRate,
-                ).toStringAsFixed(2),
+                ).toStringAsFixed(OfferCurrencyConverter.displayDecimals(offer.currency)),
                 currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
               )
             : offer.acceptanceClauses,
@@ -203,7 +204,9 @@ class OfferPdfService {
         currency: offer.currency,
         effectiveRate: offer.effectiveExchangeRate,
       );
-      return converted.toStringAsFixed(2);
+      return converted.toStringAsFixed(
+        OfferCurrencyConverter.displayDecimals(offer.currency),
+      );
     }
 
     String currencyLabel() => OfferCurrencyConverter.normalizeCurrency(
@@ -211,7 +214,7 @@ class OfferPdfService {
         );
 
     String rateSummary() {
-      if (currencyLabel() != 'EUR') return '-';
+      if (!OfferCurrencyConverter.requiresRate(currencyLabel())) return '-';
       final source = offer.exchangeRateSource.label;
       final base = offer.exchangeRateSource == OfferExchangeRateSource.bnr
           ? offer.bnrRate
@@ -350,7 +353,8 @@ class OfferPdfService {
       MapEntry('Status', offer.lifecycleLabel),
       MapEntry('Emitent', issuerLabel),
       MapEntry('Moneda', currencyLabel()),
-      if (currencyLabel() == 'EUR') MapEntry('Rezumat curs', rateSummary()),
+      if (OfferCurrencyConverter.requiresRate(currencyLabel()))
+        MapEntry('Rezumat curs', rateSummary()),
     ];
 
     final clientInfoEntries = <MapEntry<String, String>>[
@@ -944,7 +948,7 @@ class OfferPdfService {
                 ronAmount: offer.totalValue,
                 currency: offer.currency,
                 effectiveRate: offer.effectiveExchangeRate,
-              ).toStringAsFixed(2),
+              ).toStringAsFixed(OfferCurrencyConverter.displayDecimals(offer.currency)),
               currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
             )
           : offer.acceptanceClauses,
@@ -990,7 +994,7 @@ class OfferPdfService {
                   ronAmount: offer.totalValue,
                   currency: offer.currency,
                   effectiveRate: offer.effectiveExchangeRate,
-                ).toStringAsFixed(2),
+                ).toStringAsFixed(OfferCurrencyConverter.displayDecimals(offer.currency)),
                 currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
               )
             : offer.acceptanceClauses,
@@ -1050,7 +1054,9 @@ class OfferPdfService {
         currency: offer.currency,
         effectiveRate: offer.effectiveExchangeRate,
       );
-      return converted.toStringAsFixed(2);
+      return converted.toStringAsFixed(
+        OfferCurrencyConverter.displayDecimals(offer.currency),
+      );
     }
 
     String currencyLabel() => OfferCurrencyConverter.normalizeCurrency(
@@ -1058,7 +1064,7 @@ class OfferPdfService {
         );
 
     String rateSummary() {
-      if (currencyLabel() != 'EUR') return '-';
+      if (!OfferCurrencyConverter.requiresRate(currencyLabel())) return '-';
       final source = offer.exchangeRateSource.label;
       final base = offer.exchangeRateSource == OfferExchangeRateSource.bnr
           ? offer.bnrRate
@@ -1191,7 +1197,8 @@ class OfferPdfService {
       MapEntry('Status', offer.lifecycleLabel),
       MapEntry('Emitent', issuerLabel),
       MapEntry('Moneda', currencyLabel()),
-      if (currencyLabel() == 'EUR') MapEntry('Rezumat curs', rateSummary()),
+      if (OfferCurrencyConverter.requiresRate(currencyLabel()))
+        MapEntry('Rezumat curs', rateSummary()),
     ];
 
     final clientInfoEntries = <MapEntry<String, String>>[
@@ -1675,7 +1682,7 @@ class OfferPdfService {
                 ronAmount: offer.totalValue,
                 currency: offer.currency,
                 effectiveRate: offer.effectiveExchangeRate,
-              ).toStringAsFixed(2),
+              ).toStringAsFixed(OfferCurrencyConverter.displayDecimals(offer.currency)),
               currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
             )
           : offer.acceptanceClauses,
@@ -1786,7 +1793,7 @@ class OfferPdfService {
         currency: offer.currency,
         effectiveRate: offer.effectiveExchangeRate,
       );
-      return '${converted.toStringAsFixed(2)} ${OfferCurrencyConverter.normalizeCurrency(offer.currency)}';
+      return '${converted.toStringAsFixed(OfferCurrencyConverter.displayDecimals(offer.currency))} ${OfferCurrencyConverter.normalizeCurrency(offer.currency)}';
     }
 
     String quantityLabel(double value) {

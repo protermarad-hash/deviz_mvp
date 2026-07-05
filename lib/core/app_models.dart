@@ -19,8 +19,8 @@ double parseDouble(Object? value, {double fallback = 0}) {
 double convertFromRon(
   double ronAmount, {
   required String currency,
-  // Cursul valutei față de RON (denumit istoric eurRate; se aplică generic
-  // oricărei valute ≠ RON, ex. EUR sau HUF).
+  // Numele e istoric — funcția acceptă orice valută ≠ RON (ex. EUR sau HUF),
+  // nu doar EUR. Păstrat pentru compatibilitate cu call-site-urile existente.
   required double eurRate,
 }) {
   final normalizedCurrency = currency.trim().toUpperCase();
