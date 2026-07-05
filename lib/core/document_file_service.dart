@@ -35,6 +35,8 @@ class DocumentFileService {
   const DocumentFileService._();
 
   static final Map<String, String> _resolvedPathCache = <String, String>{};
+  static const String _documentsFolderName = 'ProVentaris';
+  static const String _legacyDocumentsFolderName = 'DevizPro';
 
   static bool get isMobilePlatform =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
@@ -240,16 +242,20 @@ class DocumentFileService {
     if (Platform.isWindows) {
       final userProfile = (Platform.environment['USERPROFILE'] ?? '').trim();
       if (userProfile.isNotEmpty) {
-        directories.add('$userProfile\\Downloads\\DevizPro');
-        directories.add('$userProfile\\Documents\\DevizPro');
+        directories.add('$userProfile\\Downloads\\$_documentsFolderName');
+        directories.add('$userProfile\\Documents\\$_documentsFolderName');
+        directories.add('$userProfile\\Downloads\\$_legacyDocumentsFolderName');
+        directories.add('$userProfile\\Documents\\$_legacyDocumentsFolderName');
         directories.add('$userProfile\\Downloads');
       }
     }
 
     if (Platform.isAndroid) {
-      directories.add('/storage/emulated/0/Download/DevizPro');
+      directories.add('/storage/emulated/0/Download/$_documentsFolderName');
+      directories.add('/storage/emulated/0/Download/$_legacyDocumentsFolderName');
       directories.add('/storage/emulated/0/Download');
-      directories.add('/storage/emulated/0/Documents/DevizPro');
+      directories.add('/storage/emulated/0/Documents/$_documentsFolderName');
+      directories.add('/storage/emulated/0/Documents/$_legacyDocumentsFolderName');
     }
 
     return directories

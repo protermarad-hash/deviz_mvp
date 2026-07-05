@@ -1,11 +1,11 @@
 {
-    "name": "devizpro_ultra",
-    "short_name": "devizpro_ultra",
+    "name": "ProVentaris",
+    "short_name": "ProVentaris",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "ProVentaris - aplicatie ERP pentru PRO TERM SRL.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

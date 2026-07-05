@@ -17,6 +17,9 @@ class PdfSaveCanceledException implements Exception {
 class PdfSaveService {
   const PdfSaveService._();
 
+  static const String _documentsFolderName = 'ProVentaris';
+  static const String _legacyDocumentsFolderName = 'DevizPro';
+
   static const MethodChannel _androidDownloadsChannel = MethodChannel(
     'devizpro/pdf_exports',
   );
@@ -139,7 +142,7 @@ class PdfSaveService {
       final userProfile = Platform.environment['USERPROFILE'];
       if (userProfile != null && userProfile.trim().isNotEmpty) {
         final windowsPath =
-            '$userProfile\\Downloads\\DevizPro\\${_windowsFolderSuffix(category)}';
+            '$userProfile\\Downloads\\$_documentsFolderName\\${_windowsFolderSuffix(category)}';
         final directory = Directory(windowsPath);
         if (!directory.existsSync()) {
           directory.createSync(recursive: true);
@@ -165,7 +168,7 @@ class PdfSaveService {
   }
 
   static String _androidDownloadsPath(PdfDocumentCategory category) {
-    return '/storage/emulated/0/Download/DevizPro/${_androidFolderSuffix(category)}';
+    return '/storage/emulated/0/Download/$_documentsFolderName/${_androidFolderSuffix(category)}';
   }
 
   static String _androidFolderSuffix(PdfDocumentCategory category) {
@@ -203,13 +206,22 @@ class PdfSaveService {
     final relativeDirectory = markerIndex >= 0
         ? normalizedPath.substring(markerIndex + marker.length)
         : normalizedPath.split('/').last;
+    final normalizedRelativeDirectory = relativeDirectory
+        .replaceAll('\\', '/')
+        .replaceAll(RegExp(r'^/+|/+$'), '');
+    final folderPrefixPattern = RegExp(
+      '^(${RegExp.escape(_documentsFolderName)}|${RegExp.escape(_legacyDocumentsFolderName)})/?',
+      caseSensitive: false,
+    );
+    final storageRelativeDirectory = normalizedRelativeDirectory
+        .replaceFirst(folderPrefixPattern, '');
     try {
       final savedPath = await _androidDownloadsChannel.invokeMethod<String>(
         'savePdfToDownloads',
         <String, dynamic>{
           'bytes': bytes,
           'fileName': fileName,
-          'relativeDirectory': relativeDirectory,
+          'relativeDirectory': storageRelativeDirectory,
         },
       );
       return (savedPath ?? '').trim();

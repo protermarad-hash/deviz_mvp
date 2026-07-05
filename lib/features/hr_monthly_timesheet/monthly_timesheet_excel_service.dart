@@ -379,11 +379,11 @@ class MonthlyTimesheetExcelService {
 
   static Future<Directory> _resolveFallbackDirectory() async {
     if (Platform.isWindows) {
-      final userProfile = Platform.environment['USERPROFILE'];
-      if (userProfile != null && userProfile.trim().isNotEmpty) {
-        final windowsPath =
-            '$userProfile\\Downloads\\DevizPro\\HR\\RapoartePontaj';
-        final directory = Directory(windowsPath);
+        final userProfile = Platform.environment['USERPROFILE'];
+        if (userProfile != null && userProfile.trim().isNotEmpty) {
+          final windowsPath =
+            '$userProfile\\Downloads\\ProVentaris\\HR\\RapoartePontaj';
+          final directory = Directory(windowsPath);
         if (!directory.existsSync()) {
           directory.createSync(recursive: true);
         }

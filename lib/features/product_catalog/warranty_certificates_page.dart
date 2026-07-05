@@ -410,14 +410,14 @@ class _WarrantyCertificatesPageState extends State<WarrantyCertificatesPage> {
       final userProfile = Platform.environment['USERPROFILE'] ?? '';
       if (userProfile.isNotEmpty) {
         final dir =
-            Directory('$userProfile\\Downloads\\DevizPro\\Garantii');
+            Directory('$userProfile\\Downloads\\ProVentaris\\Garantii');
         if (!dir.existsSync()) dir.createSync(recursive: true);
         return dir.path;
       }
     }
     if (Platform.isAndroid) {
       const path =
-          '/storage/emulated/0/Download/DevizPro/Garantii';
+          '/storage/emulated/0/Download/ProVentaris/Garantii';
       final dir = Directory(path);
       if (!dir.existsSync()) dir.createSync(recursive: true);
       return path;
