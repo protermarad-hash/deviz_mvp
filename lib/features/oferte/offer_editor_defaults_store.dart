@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/company_profile.dart';
+import 'offer_currency_converter.dart';
 import 'offer_models.dart';
 
 class OfferEditorDefaults {
@@ -62,10 +63,9 @@ class OfferEditorDefaults {
           fallback;
     }
 
-    final normalizedCurrency =
-        (map['currency'] ?? 'RON').toString().trim().toUpperCase() == 'EUR'
-            ? 'EUR'
-            : 'RON';
+    final normalizedCurrency = OfferCurrencyConverter.normalizeCurrency(
+      (map['currency'] ?? 'RON').toString(),
+    );
     return OfferEditorDefaults(
       vatPercent: asDouble(map['vat_percent'] ?? map['vatPercent'], 21),
       regiePercent: asDouble(map['regie_percent'] ?? map['regiePercent'], 0),

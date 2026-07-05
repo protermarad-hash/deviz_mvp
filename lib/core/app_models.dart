@@ -19,10 +19,14 @@ double parseDouble(Object? value, {double fallback = 0}) {
 double convertFromRon(
   double ronAmount, {
   required String currency,
+  // Cursul valutei față de RON (denumit istoric eurRate; se aplică generic
+  // oricărei valute ≠ RON, ex. EUR sau HUF).
   required double eurRate,
 }) {
   final normalizedCurrency = currency.trim().toUpperCase();
-  if (normalizedCurrency == 'EUR' && eurRate > 0) {
+  if (normalizedCurrency != 'RON' &&
+      normalizedCurrency.isNotEmpty &&
+      eurRate > 0) {
     return ronAmount / eurRate;
   }
   return ronAmount;
@@ -38,7 +42,11 @@ String formatMoney(
     currency: currency,
     eurRate: eurRate,
   );
-  return '${converted.toStringAsFixed(2)} ${currency.trim().isEmpty ? 'RON' : currency.trim().toUpperCase()}';
+  final normalizedCurrency =
+      currency.trim().isEmpty ? 'RON' : currency.trim().toUpperCase();
+  // HUF fără zecimale (convenție de piață); restul cu 2 zecimale.
+  final decimals = normalizedCurrency == 'HUF' ? 0 : 2;
+  return '${converted.toStringAsFixed(decimals)} $normalizedCurrency';
 }
 
 bool parseBool(Object? value, {bool fallback = false}) {
