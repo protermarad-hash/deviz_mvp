@@ -54,9 +54,13 @@ android/key.properties
 node_modules/
 functions/node_modules/
 
-# Fișiere backup create de agentul Claude Code
-*.bak
-*.bak_*
+# Fișiere backup create de agentul Claude Code — TOATE variantele de sufix.
+# Acoperă: .bak, .bak2..bak5, .bak_labels, .bak_usermgmt, .bak_20260705_...,
+#          .diagbak2 și orice sufix viitor care conține „bak".
+# NOTĂ: „*.bak" singur NU prinde „.bak2/.bak3" (se termină în „bak2", nu „bak");
+#       de aceea folosim „*.bak*" (orice conține „.bak") + „*.diagbak*".
+*.bak*
+*.diagbak*
 *.cap_bak
 # Excepție: fișierele .bak YAML/TOML de configurare dacă există
 !*.yaml.bak
