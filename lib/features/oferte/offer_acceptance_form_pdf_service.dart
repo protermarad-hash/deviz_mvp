@@ -10,6 +10,7 @@ import '../../core/company_profile.dart';
 import '../../core/pdf/pdf_font_helper.dart';
 import '../../core/pdf_document_branding.dart';
 import 'offer_acceptance_models.dart';
+import 'offer_currency_converter.dart';
 import 'offer_models.dart';
 
 /// Generează PDF pentru Formularul de Acceptare Ofertă.
@@ -68,7 +69,11 @@ class OfferAcceptanceFormPdfService {
         ? dateFormatter.format(offer.acceptanceFormSignedAt!)
         : '________________';
     final issueDate = dateFormatter.format(offer.issueDate);
-    final totalStr = _formatMoney(offer.totalValue, offer.currency);
+    final totalStr = OfferCurrencyConverter.formatMoney(
+      ronAmount: offer.totalValue,
+      currency: offer.currency,
+      effectiveRate: offer.effectiveExchangeRate,
+    );
     final enabledClauses = clauses.where((c) => c.enabled).toList()
       ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
 
@@ -164,7 +169,11 @@ class OfferAcceptanceFormPdfService {
         ? dateFormatter.format(offer.acceptanceFormSignedAt!)
         : '________________';
     final issueDate = dateFormatter.format(offer.issueDate);
-    final totalStr = _formatMoney(offer.totalValue, offer.currency);
+    final totalStr = OfferCurrencyConverter.formatMoney(
+      ronAmount: offer.totalValue,
+      currency: offer.currency,
+      effectiveRate: offer.effectiveExchangeRate,
+    );
     final enabledClauses = clauses.where((c) => c.enabled).toList()
       ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
 
@@ -672,8 +681,4 @@ class OfferAcceptanceFormPdfService {
     return base64Decode(clean);
   }
 
-  static String _formatMoney(double value, String currency) {
-    final formatter = NumberFormat('#,##0.00', 'ro_RO');
-    return '${formatter.format(value)} $currency';
-  }
 }

@@ -2234,13 +2234,13 @@ class _OfertePageState extends State<OfertePage>
                                 runSpacing: 6,
                                 children: [
                                   Text(
-                                    'Fără TVA: ${_formatCurrency(offer.subtotalComercial, currency: offer.currency)}',
+                                    'Fără TVA: ${OfferCurrencyConverter.formatMoney(ronAmount: offer.subtotalComercial, currency: offer.currency, effectiveRate: offer.effectiveExchangeRate)}',
                                   ),
                                   Text(
-                                    'TVA: ${_formatCurrency(offer.vatValue, currency: offer.currency)}',
+                                    'TVA: ${OfferCurrencyConverter.formatMoney(ronAmount: offer.vatValue, currency: offer.currency, effectiveRate: offer.effectiveExchangeRate)}',
                                   ),
                                   Text(
-                                    'Cu TVA: ${_formatCurrency(offer.totalValue, currency: offer.currency)}',
+                                    'Cu TVA: ${OfferCurrencyConverter.formatMoney(ronAmount: offer.totalValue, currency: offer.currency, effectiveRate: offer.effectiveExchangeRate)}',
                                   ),
                                 ],
                               ),
