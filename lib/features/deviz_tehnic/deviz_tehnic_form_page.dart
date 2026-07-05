@@ -14,8 +14,10 @@ import '../../core/widgets/smartbill_bon_consum_dialog.dart';
 import '../clients/client_models.dart';
 import '../master/master_local_store.dart';
 import '../materials/materials_catalog_service.dart';
+import '../oferte/bnr_exchange_rate_service.dart';
 import '../oferte/deviz_articol_template_models.dart';
 import '../oferte/deviz_articol_template_repository.dart';
+import '../oferte/offer_currency_converter.dart';
 import '../registratura/registry_service.dart';
 import 'package:uuid/uuid.dart';
 import 'deviz_tehnic_email_dialog.dart';
@@ -60,6 +62,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   final _profitCtrl = TextEditingController(text: '10');
   final _tvaCtrl = TextEditingController(text: '21');
   final _zileCtrl = TextEditingController(text: '30');
+  final _manualRateCtrl = TextEditingController();
+  final _exchangeCommissionCtrl = TextEditingController(text: '0');
 
   // Lista locală — extinsă când utilizatorul adaugă client inline
   List<ClientRecord> _localClients = const [];
@@ -71,11 +75,14 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   DateTime _dataEmiterii = DateTime.now();
   List<_ArticolState> _articole = [];
   bool _saving = false;
+  bool _loadingBnrRate = false;
 
   // Câmpuri noi
   DevizTehnicTipDocument _tipDocument = DevizTehnicTipDocument.devizTehnic;
   DevizTehnicStatus _status = DevizTehnicStatus.draft;
   DevizTehnicPriceDisplay _priceDisplay = DevizTehnicPriceDisplay.faraTva;
+  String _selectedCurrency = 'RON';
+  double _bnrRateValue = 0;
   String _registryEntryId = '';
   String _registryNumber = '';
   DateTime? _registeredAt;
@@ -83,6 +90,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   final _materialsService = MaterialsCatalogService();
   final _templateRepo = DevizArticolTemplateRepository();
   final _stockCacheService = SmartBillStockCacheService();
+  final _bnrService = const BnrExchangeRateService();
   List<MasterMaterial> _materialCatalog = [];
   List<DevizArticolTemplate> _templateCatalog = [];
   List<_Sugestie> _sugestii = [];
@@ -113,6 +121,12 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       _tipDocument = ex.tipDocument;
       _status = ex.status;
       _priceDisplay = ex.priceDisplay;
+      _selectedCurrency = ex.normalizedCurrency;
+      _bnrRateValue = ex.bnrRate;
+      _manualRateCtrl.text =
+          ex.manualRate > 0 ? ex.manualRate.toStringAsFixed(6) : '';
+      _exchangeCommissionCtrl.text =
+          ex.exchangeCommissionPercent.toStringAsFixed(2);
       _registryEntryId = ex.registryEntryId;
       _registryNumber = ex.registryNumber;
       _registeredAt = ex.registeredAt;
@@ -155,7 +169,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
         _sugestii = _buildSugestii(materials, templates);
       });
     } catch (e) {
-      debugPrint('[DevizTehnicForm] încărcare catalog materiale/template eșuată: $e');
+      debugPrint(
+          '[DevizTehnicForm] încărcare catalog materiale/template eșuată: $e');
     }
   }
 
@@ -192,10 +207,18 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       if (tpl != null) {
         final oldMat = a.mat;
         final oldMan = a.man;
-        if (tpl.pretUnitarMat > 0) a.matCtrl.text = _fmtV(tpl.pretUnitarMat);
-        if (tpl.pretUnitarMan > 0) a.manCtrl.text = _fmtV(tpl.pretUnitarMan);
-        if (tpl.pretUnitarUtilaj > 0) a.utilajCtrl.text = _fmtV(tpl.pretUnitarUtilaj);
-        if (tpl.pretUnitarTransport > 0) a.transportCtrl.text = _fmtV(tpl.pretUnitarTransport);
+        if (tpl.pretUnitarMat > 0) {
+          a.matCtrl.text = _fmtV(tpl.pretUnitarMat);
+        }
+        if (tpl.pretUnitarMan > 0) {
+          a.manCtrl.text = _fmtV(tpl.pretUnitarMan);
+        }
+        if (tpl.pretUnitarUtilaj > 0) {
+          a.utilajCtrl.text = _fmtV(tpl.pretUnitarUtilaj);
+        }
+        if (tpl.pretUnitarTransport > 0) {
+          a.transportCtrl.text = _fmtV(tpl.pretUnitarTransport);
+        }
         if (a.mat != oldMat || a.man != oldMan) updated++;
         continue;
       }
@@ -216,7 +239,6 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
           : 'Toate prețurile sunt deja la zi.'),
     ));
   }
-
 
   static String _fmtPct(double v) =>
       v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
@@ -277,6 +299,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     _profitCtrl.dispose();
     _tvaCtrl.dispose();
     _zileCtrl.dispose();
+    _manualRateCtrl.dispose();
+    _exchangeCommissionCtrl.dispose();
     _contactPersonCtrl.dispose();
     _contactDepartmentCtrl.dispose();
     for (final a in _articole) {
@@ -288,14 +312,68 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   double get _regie => double.tryParse(_regieCtrl.text) ?? 9;
   double get _profit => double.tryParse(_profitCtrl.text) ?? 10;
   double get _tva => double.tryParse(_tvaCtrl.text) ?? 21;
+  double _asDouble(String raw, [double fallback = 0]) {
+    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
+  }
+
+  String get _currency =>
+      OfferCurrencyConverter.normalizeCurrency(_selectedCurrency);
+  bool get _requiresRate => OfferCurrencyConverter.requiresRate(_currency);
+  double get _manualRate => _asDouble(_manualRateCtrl.text);
+  double get _exchangeCommissionPercent =>
+      _asDouble(_exchangeCommissionCtrl.text);
+  double get _baseExchangeRate {
+    if (!_requiresRate) return 0;
+    return _manualRate > 0 ? _manualRate : _bnrRateValue;
+  }
+
+  double get _effectiveExchangeRate {
+    if (!_requiresRate) return 1;
+    return OfferCurrencyConverter.computeEffectiveRate(
+      baseRate: _baseExchangeRate,
+      commissionPercent: _exchangeCommissionPercent,
+    );
+  }
+
+  String _money(double ronAmount, {bool includeCurrency = true}) {
+    final converted = OfferCurrencyConverter.convertRonToOfferCurrency(
+      ronAmount: ronAmount,
+      currency: _currency,
+      effectiveRate: _effectiveExchangeRate,
+    );
+    final fmt = NumberFormat.currency(
+      locale: 'ro_RO',
+      symbol: '',
+      decimalDigits: OfferCurrencyConverter.displayDecimals(_currency),
+    );
+    final amount = fmt.format(converted).trim();
+    return includeCurrency ? '$amount $_currency' : amount;
+  }
+
+  Future<void> _refreshBnrRate() async {
+    if (_loadingBnrRate || !_requiresRate) return;
+    setState(() => _loadingBnrRate = true);
+    try {
+      final fetched = await _bnrService.fetchOrCachedRate(_currency);
+      if (!mounted) return;
+      if (fetched != null && fetched > 0) {
+        setState(() {
+          _bnrRateValue = fetched;
+          if (_manualRateCtrl.text.trim().isEmpty) {
+            _manualRateCtrl.text = fetched.toStringAsFixed(6);
+          }
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _loadingBnrRate = false);
+    }
+  }
 
   List<DevizTehnicArticol> get _buildArticole =>
       _articole.map((a) => a.toModel()).toList();
 
-  double get _totalMat =>
-      _buildArticole.fold(0, (s, a) => s + a.valoareMat);
-  double get _totalMan =>
-      _buildArticole.fold(0, (s, a) => s + a.valoareMan);
+  double get _totalMat => _buildArticole.fold(0, (s, a) => s + a.valoareMat);
+  double get _totalMan => _buildArticole.fold(0, (s, a) => s + a.valoareMan);
   double get _totalUtilaj =>
       _buildArticole.fold(0, (s, a) => s + a.valoareUtilaj);
   double get _totalTransport =>
@@ -322,7 +400,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
         title: 'PDF ${record.tipDocument.label.toLowerCase()} generat',
         shareSubject:
             '${record.tipDocument.label} ${record.numar.isNotEmpty ? record.numar : record.titlu}',
-        shareText: 'PDF ${record.tipDocument.label.toLowerCase()} generat din aplicație.',
+        shareText:
+            'PDF ${record.tipDocument.label.toLowerCase()} generat din aplicație.',
       );
     } catch (e) {
       if (!mounted) return;
@@ -358,9 +437,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     // Preia emailul clientului selectat (dacă există)
     String clientEmail = '';
     if (_selectedClientId != null) {
-      final client = widget.clients
-          .where((c) => c.id == _selectedClientId)
-          .firstOrNull;
+      final client =
+          widget.clients.where((c) => c.id == _selectedClientId).firstOrNull;
       clientEmail = client?.email ?? '';
     }
 
@@ -387,8 +465,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     if (record.numar.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-              'Completează numărul documentului înainte de înregistrare.'),
+          content:
+              Text('Completează numărul documentului înainte de înregistrare.'),
         ),
       );
       return;
@@ -565,9 +643,15 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       clientId: _selectedClientId ?? '',
       clientName: _selectedClientName,
       clientCui: _clientById(_selectedClientId)?.cui ?? ex?.clientCui ?? '',
-      clientAddress: _clientById(_selectedClientId)?.address ?? ex?.clientAddress ?? '',
-      clientPhone: _clientById(_selectedClientId)?.allPhoneNumbers.firstOrNull ?? _clientById(_selectedClientId)?.phone ?? ex?.clientPhone ?? '',
-      clientEmail: _clientById(_selectedClientId)?.email ?? ex?.clientEmail ?? '',
+      clientAddress:
+          _clientById(_selectedClientId)?.address ?? ex?.clientAddress ?? '',
+      clientPhone:
+          _clientById(_selectedClientId)?.allPhoneNumbers.firstOrNull ??
+              _clientById(_selectedClientId)?.phone ??
+              ex?.clientPhone ??
+              '',
+      clientEmail:
+          _clientById(_selectedClientId)?.email ?? ex?.clientEmail ?? '',
       contactPerson: _contactPersonCtrl.text.trim(),
       contactDepartment: _contactDepartmentCtrl.text.trim(),
       dataEmiterii: _dataEmiterii,
@@ -578,6 +662,11 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       tvaPercent: _tva,
       intocmitDe: _intocmitDeCtrl.text.trim(),
       note: _noteCtrl.text.trim(),
+      currency: _currency,
+      bnrRate: _bnrRateValue,
+      manualRate: _manualRate,
+      exchangeCommissionPercent: _exchangeCommissionPercent,
+      effectiveExchangeRate: _effectiveExchangeRate,
       createdAt: ex?.createdAt ?? now,
       updatedAt: now,
       createdByUserId: widget.currentUserId,
@@ -596,6 +685,12 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     if (_articole.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Adaugă cel puțin un articol.')),
+      );
+      return;
+    }
+    if (_requiresRate && _effectiveExchangeRate <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Completează un curs valid pentru $_currency.')),
       );
       return;
     }
@@ -630,8 +725,11 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
             um: um,
             pretUnitarMat: a.mat > 0 ? a.mat : (existing?.pretUnitarMat ?? 0),
             pretUnitarMan: a.man > 0 ? a.man : (existing?.pretUnitarMan ?? 0),
-            pretUnitarUtilaj: a.utilaj > 0 ? a.utilaj : (existing?.pretUnitarUtilaj ?? 0),
-            pretUnitarTransport: a.transport > 0 ? a.transport : (existing?.pretUnitarTransport ?? 0),
+            pretUnitarUtilaj:
+                a.utilaj > 0 ? a.utilaj : (existing?.pretUnitarUtilaj ?? 0),
+            pretUnitarTransport: a.transport > 0
+                ? a.transport
+                : (existing?.pretUnitarTransport ?? 0),
             lastUpdated: now,
             folositDeCateOri: (existing?.folositDeCateOri ?? 0) + 1,
           );
@@ -639,7 +737,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
           try {
             await _templateRepo.upsertToFirebase(tpl);
           } catch (e) {
-            debugPrint('[DevizTehnicForm] upsert template la Firebase eșuat (local persistă): $e');
+            debugPrint(
+                '[DevizTehnicForm] upsert template la Firebase eșuat (local persistă): $e');
           }
         }
       }
@@ -684,8 +783,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
           isNew
               ? '${_tipDocument.label} nou'
               : (widget.existing!.numar.isNotEmpty
-                    ? widget.existing!.numar
-                    : _tipDocument.label),
+                  ? widget.existing!.numar
+                  : _tipDocument.label),
         ),
         actions: [
           if (!isNew) ...[
@@ -739,7 +838,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                     Text(
                       'Tip document',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                     const SizedBox(height: 6),
@@ -771,16 +871,15 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                           icon: const Icon(Icons.star_outline, size: 14),
                           label: const Text('Setează ca implicit'),
                           onPressed: () async {
-                            final messenger =
-                                ScaffoldMessenger.of(context);
+                            final messenger = ScaffoldMessenger.of(context);
                             final tipLabel = _tipDocument.label;
                             await widget.repository
                                 .saveDefaultTipDocument(_tipDocument);
                             if (!mounted) return;
                             messenger.showSnackBar(
                               SnackBar(
-                                content: Text(
-                                    '$tipLabel setat ca tip implicit.'),
+                                content:
+                                    Text('$tipLabel setat ca tip implicit.'),
                                 duration: const Duration(seconds: 2),
                               ),
                             );
@@ -798,8 +897,9 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                         controller: _numarCtrl,
                         decoration:
                             const InputDecoration(labelText: 'Număr document'),
-                        validator: (v) =>
-                            (v == null || v.trim().isEmpty) ? 'Obligatoriu' : null,
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Obligatoriu'
+                            : null,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -858,7 +958,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                     setState(() {
                       _selectedClientId = c?.id;
                       _selectedClientName = c?.name ?? '';
-                      if (c != null && _contactPersonCtrl.text.isEmpty &&
+                      if (c != null &&
+                          _contactPersonCtrl.text.isEmpty &&
                           c.contactPerson.isNotEmpty) {
                         _contactPersonCtrl.text = c.contactPerson;
                       }
@@ -914,12 +1015,132 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
             const SizedBox(height: 16),
 
             // ── Articole ───────────────────────────────────────
+            _SectionCard(
+              title: 'Monedă și curs valutar',
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _currency,
+                        decoration: const InputDecoration(labelText: 'Moneda'),
+                        items: OfferCurrencyConverter.supportedCurrencies
+                            .map(
+                              (value) => DropdownMenuItem<String>(
+                                value: value,
+                                child: Text(value),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() {
+                            _selectedCurrency =
+                                OfferCurrencyConverter.normalizeCurrency(value);
+                            if (!_requiresRate) {
+                              _bnrRateValue = 0;
+                              _manualRateCtrl.clear();
+                              _exchangeCommissionCtrl.text = '0';
+                            }
+                          });
+                        },
+                      ),
+                    ),
+                    if (_requiresRate) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextFormField(
+                          controller: _manualRateCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.,]'),
+                            ),
+                          ],
+                          decoration: InputDecoration(
+                            labelText: 'Curs RON/$_currency',
+                            helperText: _bnrRateValue > 0
+                                ? 'BNR: ${_bnrRateValue.toStringAsFixed(6)}'
+                                : 'Introdu cursul sau preia BNR',
+                          ),
+                          onChanged: (_) => setState(() {}),
+                          validator: (value) {
+                            if (!_requiresRate) return null;
+                            final rate = _asDouble(value ?? '');
+                            if (rate <= 0 && _bnrRateValue <= 0) {
+                              return 'Introdu un curs valid.';
+                            }
+                            return null;
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                if (_requiresRate) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          controller: _exchangeCommissionCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.,]'),
+                            ),
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: 'Comision curs %',
+                            suffixText: '%',
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: _loadingBnrRate ? null : _refreshBnrRate,
+                        icon: const Icon(Icons.refresh, size: 18),
+                        label: Text(_loadingBnrRate ? 'Se citește...' : 'BNR'),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Curs efectiv',
+                          ),
+                          child: Text(
+                            _effectiveExchangeRate > 0
+                                ? _effectiveExchangeRate.toStringAsFixed(6)
+                                : '-',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Prețurile introduse rămân bază RON; totalurile afișate și PDF-ul se convertesc în $_currency.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 16),
+
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final isMobile = constraints.maxWidth < _kArticolMobileBreakpoint;
+                    final isMobile =
+                        constraints.maxWidth < _kArticolMobileBreakpoint;
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -960,7 +1181,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                         ),
                         const SizedBox(height: 4),
                         if (!isMobile) ...[
-                          const _ArticolHeader(),
+                          _ArticolHeader(currency: _currency),
                           const Divider(),
                         ],
                         if (_articole.isEmpty)
@@ -981,9 +1202,11 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                             state: a,
                             sugestii: _sugestii,
                             isMobile: isMobile,
+                            formatMoney: _money,
                             onChanged: () => setState(() {}),
                             onRemove: () => _removeArticol(i),
-                            onMoveUp: i > 0 ? () => _moveArticol(i, i - 1) : null,
+                            onMoveUp:
+                                i > 0 ? () => _moveArticol(i, i - 1) : null,
                             onMoveDown: i < _articole.length - 1
                                 ? () => _moveArticol(i, i + 1)
                                 : null,
@@ -997,6 +1220,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                           utilaj: _totalUtilaj,
                           transport: _totalTransport,
                           total: _totalDirect,
+                          formatMoney: _money,
                           bold: true,
                         ),
                       ],
@@ -1025,6 +1249,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                   tvaPercent: _tva,
                   tvaVal: _tvaVal,
                   totalCuTva: _totalCuTva,
+                  formatMoney: _money,
                 ),
               ],
             ),
@@ -1042,8 +1267,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                              RegExp(r'[0-9.]')),
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                         ],
                         decoration: const InputDecoration(
                           labelText: 'Regie / Overhead %',
@@ -1059,8 +1283,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                              RegExp(r'[0-9.]')),
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                         ],
                         decoration: const InputDecoration(
                           labelText: 'Profit %',
@@ -1076,8 +1299,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                         keyboardType: const TextInputType.numberWithOptions(
                             decimal: true),
                         inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                              RegExp(r'[0-9.]')),
+                          FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                         ],
                         decoration: const InputDecoration(
                           labelText: 'TVA %',
@@ -1096,7 +1318,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                     Text(
                       'Afișare prețuri în PDF',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                     const SizedBox(height: 6),
@@ -1172,9 +1395,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                     Text(
                       'Status',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                     const SizedBox(height: 6),
@@ -1187,8 +1409,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                           label: Text(st.label),
                           selected: selected,
                           selectedColor: st.color.withValues(alpha: 0.2),
-                          onSelected: (_) =>
-                              setState(() => _status = st),
+                          onSelected: (_) => setState(() => _status = st),
                           avatar: selected
                               ? Icon(Icons.check_circle,
                                   size: 16, color: st.color)
@@ -1215,6 +1436,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                             label: 'Fără TVA',
                             value: _totalFaraTva,
                             cs: cs,
+                            formatMoney: _money,
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -1223,6 +1445,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                             label: 'Cu TVA',
                             value: _totalCuTva,
                             cs: cs,
+                            formatMoney: _money,
                             highlight: true,
                           ),
                         ),
@@ -1232,6 +1455,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                             label: 'Profit',
                             value: _profitVal,
                             cs: cs,
+                            formatMoney: _money,
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -1260,8 +1484,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                           ? Row(
                               children: [
                                 Icon(Icons.check_circle_outline,
-                                    size: 16,
-                                    color: Colors.green.shade700),
+                                    size: 16, color: Colors.green.shade700),
                                 const SizedBox(width: 6),
                                 Expanded(
                                   child: Text(
@@ -1328,8 +1551,8 @@ class _ArticolState {
   }) : id = id?.isNotEmpty == true ? id! : const Uuid().v4() {
     denumireCtrl = TextEditingController(text: denumire);
     umCtrl = TextEditingController(text: um);
-    cantCtrl = TextEditingController(
-        text: cantitate == 0 ? '' : _fmt(cantitate));
+    cantCtrl =
+        TextEditingController(text: cantitate == 0 ? '' : _fmt(cantitate));
     matCtrl = TextEditingController(text: pretMat == 0 ? '' : _fmt(pretMat));
     manCtrl = TextEditingController(text: pretMan == 0 ? '' : _fmt(pretMan));
     utilajCtrl =
@@ -1405,6 +1628,7 @@ class _ProfitabilitateItem extends StatelessWidget {
     required this.label,
     required this.value,
     required this.cs,
+    this.formatMoney,
     this.highlight = false,
     this.isPercent = false,
   });
@@ -1412,6 +1636,7 @@ class _ProfitabilitateItem extends StatelessWidget {
   final String label;
   final double value;
   final ColorScheme cs;
+  final String Function(double)? formatMoney;
   final bool highlight;
   final bool isPercent;
 
@@ -1420,7 +1645,7 @@ class _ProfitabilitateItem extends StatelessWidget {
     final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final text = isPercent
         ? '${value.toStringAsFixed(1)}%'
-        : '${fmt.format(value)} RON';
+        : formatMoney?.call(value) ?? '${fmt.format(value)} RON';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1467,7 +1692,9 @@ class _SectionCard extends StatelessWidget {
 }
 
 class _ArticolHeader extends StatelessWidget {
-  const _ArticolHeader();
+  const _ArticolHeader({required this.currency});
+
+  final String currency;
 
   @override
   Widget build(BuildContext context) {
@@ -1481,13 +1708,32 @@ class _ArticolHeader extends StatelessWidget {
         children: [
           const SizedBox(width: 32), // reorder
           Expanded(flex: 4, child: Text('Denumire articol', style: style)),
-          SizedBox(width: 52, child: Text('UM', style: style, textAlign: TextAlign.center)),
-          SizedBox(width: 64, child: Text('Cant.', style: style, textAlign: TextAlign.center)),
-          SizedBox(width: 72, child: Text('Mat RON', style: style, textAlign: TextAlign.center)),
-          SizedBox(width: 72, child: Text('Man RON', style: style, textAlign: TextAlign.center)),
-          SizedBox(width: 72, child: Text('Utilaj', style: style, textAlign: TextAlign.center)),
-          SizedBox(width: 72, child: Text('Transp.', style: style, textAlign: TextAlign.center)),
-          SizedBox(width: 80, child: Text('Total', style: style, textAlign: TextAlign.right)),
+          SizedBox(
+              width: 52,
+              child: Text('UM', style: style, textAlign: TextAlign.center)),
+          SizedBox(
+              width: 64,
+              child: Text('Cant.', style: style, textAlign: TextAlign.center)),
+          SizedBox(
+              width: 72,
+              child: Text('Mat bază RON',
+                  style: style, textAlign: TextAlign.center)),
+          SizedBox(
+              width: 72,
+              child: Text('Man bază RON',
+                  style: style, textAlign: TextAlign.center)),
+          SizedBox(
+              width: 72,
+              child: Text('Utilaj bază RON',
+                  style: style, textAlign: TextAlign.center)),
+          SizedBox(
+              width: 72,
+              child: Text('Transp. bază RON',
+                  style: style, textAlign: TextAlign.center)),
+          SizedBox(
+              width: 80,
+              child: Text('Total $currency',
+                  style: style, textAlign: TextAlign.right)),
           const SizedBox(width: 64), // actions
         ],
       ),
@@ -1502,6 +1748,7 @@ class _ArticolRow extends StatefulWidget {
     required this.state,
     required this.sugestii,
     required this.isMobile,
+    required this.formatMoney,
     required this.onChanged,
     required this.onRemove,
     this.onMoveUp,
@@ -1512,6 +1759,7 @@ class _ArticolRow extends StatefulWidget {
   final _ArticolState state;
   final List<_Sugestie> sugestii;
   final bool isMobile;
+  final String Function(double) formatMoney;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
   final VoidCallback? onMoveUp;
@@ -1553,7 +1801,8 @@ class _ArticolRowState extends State<_ArticolRow> {
     super.dispose();
   }
 
-  InputDecoration _inputDecoration(String hint, {String? label, bool dense = true}) {
+  InputDecoration _inputDecoration(String hint,
+      {String? label, bool dense = true}) {
     return InputDecoration(
       labelText: label,
       hintText: hint,
@@ -1576,14 +1825,14 @@ class _ArticolRowState extends State<_ArticolRow> {
       width: width,
       child: TextFormField(
         controller: ctrl,
-        keyboardType:
-            const TextInputType.numberWithOptions(decimal: true),
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
         inputFormatters: [
           FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
         ],
         textAlign: TextAlign.right,
         style: const TextStyle(fontSize: 13),
-        decoration: _inputDecoration(hint, label: label, dense: !widget.isMobile),
+        decoration:
+            _inputDecoration(hint, label: label, dense: !widget.isMobile),
       ),
     );
   }
@@ -1633,8 +1882,8 @@ class _ArticolRowState extends State<_ArticolRow> {
       optionsBuilder: (textEditingValue) {
         final q = textEditingValue.text.trim().toLowerCase();
         if (q.isEmpty) return const [];
-        return widget.sugestii.where((s) =>
-            s.denumire.toLowerCase().contains(q));
+        return widget.sugestii
+            .where((s) => s.denumire.toLowerCase().contains(q));
       },
       onSelected: _applySugestie,
       fieldViewBuilder:
@@ -1670,8 +1919,8 @@ class _ArticolRowState extends State<_ArticolRow> {
       optionsBuilder: (textEditingValue) {
         final q = textEditingValue.text.trim().toLowerCase();
         if (q.isEmpty) return const [];
-        return widget.sugestii.where((s) =>
-            s.denumire.toLowerCase().contains(q));
+        return widget.sugestii
+            .where((s) => s.denumire.toLowerCase().contains(q));
       },
       onSelected: _applySugestie,
       fieldViewBuilder:
@@ -1751,8 +2000,7 @@ class _ArticolRowState extends State<_ArticolRow> {
               final badgeColor = s.isTemplate
                   ? cs.secondaryContainer
                   : cs.surfaceContainerHighest;
-              final badgeText =
-                  s.isTemplate ? 'norme' : 'catalog';
+              final badgeText = s.isTemplate ? 'norme' : 'catalog';
               return ListTile(
                 dense: !widget.isMobile,
                 title: Row(
@@ -1790,7 +2038,7 @@ class _ArticolRowState extends State<_ArticolRow> {
     );
   }
 
-  Widget _buildMobileLayout(BuildContext context, NumberFormat fmt, ColorScheme cs) {
+  Widget _buildMobileLayout(BuildContext context, ColorScheme cs) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
@@ -1868,7 +2116,8 @@ class _ArticolRowState extends State<_ArticolRow> {
             ),
             right: TextFormField(
               controller: widget.state.cantCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
               ],
@@ -1887,13 +2136,13 @@ class _ArticolRowState extends State<_ArticolRow> {
               widget.state.matCtrl,
               width: double.infinity,
               hint: '0',
-              label: 'Materiale RON',
+              label: 'Materiale bază RON',
             ),
             right: _numField(
               widget.state.manCtrl,
               width: double.infinity,
               hint: '0',
-              label: 'Manoperă RON',
+              label: 'Manoperă bază RON',
             ),
           ),
           const SizedBox(height: 12),
@@ -1902,13 +2151,13 @@ class _ArticolRowState extends State<_ArticolRow> {
               widget.state.utilajCtrl,
               width: double.infinity,
               hint: '0',
-              label: 'Utilaj RON',
+              label: 'Utilaj bază RON',
             ),
             right: _numField(
               widget.state.transportCtrl,
               width: double.infinity,
               hint: '0',
-              label: 'Transport RON',
+              label: 'Transport bază RON',
             ),
           ),
           const SizedBox(height: 12),
@@ -1930,7 +2179,7 @@ class _ArticolRowState extends State<_ArticolRow> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${fmt.format(widget.state.totalArticol)} RON',
+                  widget.formatMoney(widget.state.totalArticol),
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                         color: cs.onPrimaryContainer,
@@ -1941,17 +2190,22 @@ class _ArticolRowState extends State<_ArticolRow> {
           ),
           if (widget.state.cant > 0) ...[
             const SizedBox(height: 10),
-            _SubtotalRow(state: widget.state, isMobile: true),
+            _SubtotalRow(
+              state: widget.state,
+              isMobile: true,
+              formatMoney: widget.formatMoney,
+            ),
           ],
         ],
       ),
     );
   }
 
-  Widget _buildDesktopLayout(BuildContext context, NumberFormat fmt, ColorScheme cs) {
+  Widget _buildDesktopLayout(BuildContext context, ColorScheme cs) {
     return Container(
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: cs.outlineVariant, width: 0.5)),
+        border:
+            Border(bottom: BorderSide(color: cs.outlineVariant, width: 0.5)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
@@ -1997,7 +2251,8 @@ class _ArticolRowState extends State<_ArticolRow> {
                 width: 64,
                 child: TextFormField(
                   controller: widget.state.cantCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
                   ],
@@ -2018,7 +2273,7 @@ class _ArticolRowState extends State<_ArticolRow> {
               SizedBox(
                 width: 80,
                 child: Text(
-                  fmt.format(widget.state.totalArticol),
+                  widget.formatMoney(widget.state.totalArticol),
                   textAlign: TextAlign.right,
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
@@ -2048,7 +2303,12 @@ class _ArticolRowState extends State<_ArticolRow> {
                 if (widget.state.sursa.isNotEmpty && widget.state.cant > 0)
                   const SizedBox(width: 8),
                 if (widget.state.cant > 0)
-                  Expanded(child: _SubtotalRow(state: widget.state)),
+                  Expanded(
+                    child: _SubtotalRow(
+                      state: widget.state,
+                      formatMoney: widget.formatMoney,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -2059,36 +2319,39 @@ class _ArticolRowState extends State<_ArticolRow> {
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final cs = Theme.of(context).colorScheme;
 
     if (widget.isMobile) {
-      return _buildMobileLayout(context, fmt, cs);
+      return _buildMobileLayout(context, cs);
     }
-    return _buildDesktopLayout(context, fmt, cs);
+    return _buildDesktopLayout(context, cs);
   }
 }
 
 class _SubtotalRow extends StatelessWidget {
-  const _SubtotalRow({required this.state, this.isMobile = false});
+  const _SubtotalRow({
+    required this.state,
+    required this.formatMoney,
+    this.isMobile = false,
+  });
   final _ArticolState state;
+  final String Function(double) formatMoney;
   final bool isMobile;
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final items = <String>[];
     if (state.mat > 0) {
-      items.add('Mat: ${fmt.format(state.cant * state.mat)}');
+      items.add('Mat: ${formatMoney(state.cant * state.mat)}');
     }
     if (state.man > 0) {
-      items.add('Man: ${fmt.format(state.cant * state.man)}');
+      items.add('Man: ${formatMoney(state.cant * state.man)}');
     }
     if (state.utilaj > 0) {
-      items.add('Utilaj: ${fmt.format(state.cant * state.utilaj)}');
+      items.add('Utilaj: ${formatMoney(state.cant * state.utilaj)}');
     }
     if (state.transport > 0) {
-      items.add('Transport: ${fmt.format(state.cant * state.transport)}');
+      items.add('Transport: ${formatMoney(state.cant * state.transport)}');
     }
     if (items.isEmpty) return const SizedBox.shrink();
     if (isMobile) {
@@ -2170,10 +2433,18 @@ class _Sugestie {
 
 String _sugestieSubtitle(_Sugestie s) {
   final buf = StringBuffer('UM: ${s.um}');
-  if (s.pretMat > 0) buf.write('  •  Mat: ${s.pretMat.toStringAsFixed(2)}');
-  if (s.pretMan > 0) buf.write('  •  Man: ${s.pretMan.toStringAsFixed(2)}');
-  if (s.pretUtilaj > 0) buf.write('  •  Utilaj: ${s.pretUtilaj.toStringAsFixed(2)}');
-  if (s.pretTransport > 0) buf.write('  •  Transp: ${s.pretTransport.toStringAsFixed(2)}');
+  if (s.pretMat > 0) {
+    buf.write('  •  Mat: ${s.pretMat.toStringAsFixed(2)}');
+  }
+  if (s.pretMan > 0) {
+    buf.write('  •  Man: ${s.pretMan.toStringAsFixed(2)}');
+  }
+  if (s.pretUtilaj > 0) {
+    buf.write('  •  Utilaj: ${s.pretUtilaj.toStringAsFixed(2)}');
+  }
+  if (s.pretTransport > 0) {
+    buf.write('  •  Transp: ${s.pretTransport.toStringAsFixed(2)}');
+  }
   return buf.toString();
 }
 
@@ -2228,16 +2499,17 @@ class _TotalRow extends StatelessWidget {
     required this.utilaj,
     required this.transport,
     required this.total,
+    required this.formatMoney,
     this.bold = false,
   });
 
   final String label;
   final double mat, man, utilaj, transport, total;
+  final String Function(double) formatMoney;
   final bool bold;
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final style = TextStyle(
       fontWeight: bold ? FontWeight.bold : FontWeight.normal,
       fontSize: 13,
@@ -2264,10 +2536,10 @@ class _TotalRow extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    'Mat: ${fmt.format(mat)}',
-                    'Man: ${fmt.format(man)}',
-                    'Utilaj: ${fmt.format(utilaj)}',
-                    'Transp: ${fmt.format(transport)}',
+                    'Mat: ${formatMoney(mat)}',
+                    'Man: ${formatMoney(man)}',
+                    'Utilaj: ${formatMoney(utilaj)}',
+                    'Transp: ${formatMoney(transport)}',
                   ]
                       .map(
                         (item) => Container(
@@ -2294,7 +2566,7 @@ class _TotalRow extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
-                    'Total: ${fmt.format(total)} RON',
+                    'Total: ${formatMoney(total)}',
                     textAlign: TextAlign.right,
                     style: style.copyWith(
                       fontSize: 15,
@@ -2313,28 +2585,32 @@ class _TotalRow extends StatelessWidget {
               Expanded(child: Text(label, style: style)),
               SizedBox(
                 width: 90,
-                child: Text('Mat: ${fmt.format(mat)}',
-                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+                child: Text('Mat: ${formatMoney(mat)}',
+                    style: style.copyWith(fontSize: 12),
+                    textAlign: TextAlign.right),
               ),
               SizedBox(
                 width: 90,
-                child: Text('Man: ${fmt.format(man)}',
-                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+                child: Text('Man: ${formatMoney(man)}',
+                    style: style.copyWith(fontSize: 12),
+                    textAlign: TextAlign.right),
               ),
               SizedBox(
                 width: 90,
-                child: Text('Utilaj: ${fmt.format(utilaj)}',
-                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+                child: Text('Utilaj: ${formatMoney(utilaj)}',
+                    style: style.copyWith(fontSize: 12),
+                    textAlign: TextAlign.right),
               ),
               SizedBox(
                 width: 96,
-                child: Text('Transp: ${fmt.format(transport)}',
-                    style: style.copyWith(fontSize: 12), textAlign: TextAlign.right),
+                child: Text('Transp: ${formatMoney(transport)}',
+                    style: style.copyWith(fontSize: 12),
+                    textAlign: TextAlign.right),
               ),
               SizedBox(
                 width: 100,
                 child: Text(
-                  fmt.format(total),
+                  formatMoney(total),
                   textAlign: TextAlign.right,
                   style: style.copyWith(
                     color: Theme.of(context).colorScheme.primary,
@@ -2364,16 +2640,17 @@ class _CentralizatorTable extends StatelessWidget {
     required this.tvaPercent,
     required this.tvaVal,
     required this.totalCuTva,
+    required this.formatMoney,
   });
 
   final double totalMat, totalMan, totalUtilaj, totalTransport, totalDirect;
   final double regiePercent, regieVal;
   final double profitPercent, profitVal;
   final double totalFaraTva, tvaPercent, tvaVal, totalCuTva;
+  final String Function(double) formatMoney;
 
   @override
   Widget build(BuildContext context) {
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final cs = Theme.of(context).colorScheme;
 
     Widget row(String label, double value,
@@ -2392,7 +2669,7 @@ class _CentralizatorTable extends StatelessWidget {
               ),
             ),
             Text(
-              '${fmt.format(value)} RON',
+              formatMoney(value),
               style: TextStyle(
                 fontWeight: bold ? FontWeight.bold : FontWeight.normal,
                 fontSize: 13,
@@ -2436,7 +2713,6 @@ class _CentralizatorTable extends StatelessWidget {
   }
 
   Widget _catChip(String label, double val, ColorScheme cs) {
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -2448,7 +2724,7 @@ class _CentralizatorTable extends StatelessWidget {
         children: [
           Text(label,
               style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-          Text(fmt.format(val),
+          Text(formatMoney(val),
               style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 13,

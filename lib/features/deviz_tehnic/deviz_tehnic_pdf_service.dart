@@ -30,17 +30,21 @@ class DevizTehnicPdfService {
     }
 
     final doc = pw.Document(theme: PdfFontHelper.theme);
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final dateFmt = DateFormat('dd.MM.yyyy');
+    final currencyLabel = deviz.normalizedCurrency;
+    String money(double ronAmount) =>
+        deviz.formatMoney(ronAmount, includeCurrency: false);
+    String moneyOrDash(double ronAmount) =>
+        ronAmount > 0 ? money(ronAmount) : '-';
 
     // ── Culori ─────────────────────────────────────────────────────
-    const headerBg = PdfColor.fromInt(0xFF1565C0);   // albastru
-    const rowAlt = PdfColor.fromInt(0xFFF5F5F5);      // gri foarte deschis
-    const catMatBg = PdfColor.fromInt(0xFFE3F2FD);    // albastru deschis
-    const catManBg = PdfColor.fromInt(0xFFE8F5E9);    // verde deschis
-    const catUtilBg = PdfColor.fromInt(0xFFFFF3E0);   // portocaliu deschis
-    const catTranBg = PdfColor.fromInt(0xFFF3E5F5);   // mov deschis
-    const totalBg = PdfColor.fromInt(0xFF0D47A1);     // albastru închis
+    const headerBg = PdfColor.fromInt(0xFF1565C0); // albastru
+    const rowAlt = PdfColor.fromInt(0xFFF5F5F5); // gri foarte deschis
+    const catMatBg = PdfColor.fromInt(0xFFE3F2FD); // albastru deschis
+    const catManBg = PdfColor.fromInt(0xFFE8F5E9); // verde deschis
+    const catUtilBg = PdfColor.fromInt(0xFFFFF3E0); // portocaliu deschis
+    const catTranBg = PdfColor.fromInt(0xFFF3E5F5); // mov deschis
+    const totalBg = PdfColor.fromInt(0xFF0D47A1); // albastru închis
     const white = PdfColors.white;
     const black = PdfColors.black;
     const grey = PdfColor.fromInt(0xFF757575);
@@ -61,8 +65,7 @@ class DevizTehnicPdfService {
           fontStyle: italic ? pw.FontStyle.italic : pw.FontStyle.normal,
         );
 
-    pw.TextStyle tsBold(
-            {double size = 9, PdfColor color = black}) =>
+    pw.TextStyle tsBold({double size = 9, PdfColor color = black}) =>
         pw.TextStyle(font: bold, fontSize: size, color: color);
 
     // ── Helper celulă tabel ───────────────────────────────────────
@@ -82,15 +85,11 @@ class DevizTehnicPdfService {
       );
     }
 
-    pw.Widget cellRight(String text,
-            {pw.TextStyle? style, PdfColor? bg}) =>
-        cell(text,
-            style: style, alignment: pw.Alignment.centerRight, bg: bg);
+    pw.Widget cellRight(String text, {pw.TextStyle? style, PdfColor? bg}) =>
+        cell(text, style: style, alignment: pw.Alignment.centerRight, bg: bg);
 
-    pw.Widget cellCenter(String text,
-            {pw.TextStyle? style, PdfColor? bg}) =>
-        cell(text,
-            style: style, alignment: pw.Alignment.center, bg: bg);
+    pw.Widget cellCenter(String text, {pw.TextStyle? style, PdfColor? bg}) =>
+        cell(text, style: style, alignment: pw.Alignment.center, bg: bg);
 
     // ── Header firmă ─────────────────────────────────────────────
     pw.Widget buildHeader() {
@@ -98,8 +97,9 @@ class DevizTehnicPdfService {
       if (profile.companyName.isNotEmpty) companyLines.add(profile.companyName);
       if (profile.address.isNotEmpty) companyLines.add(profile.address);
       if (profile.city.isNotEmpty || profile.county.isNotEmpty) {
-        companyLines.add(
-            [profile.city, profile.county].where((s) => s.isNotEmpty).join(', '));
+        companyLines.add([profile.city, profile.county]
+            .where((s) => s.isNotEmpty)
+            .join(', '));
       }
       if (profile.cui.isNotEmpty) companyLines.add('CUI: ${profile.cui}');
       if (profile.iban.isNotEmpty) companyLines.add('IBAN: ${profile.iban}');
@@ -119,10 +119,9 @@ class DevizTehnicPdfService {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: companyLines
                     .map((l) => pw.Text(l,
-                        style: tsBold(size: companyLines.first == l ? 11 : 8,
-                            color: companyLines.first == l
-                                ? headerBg
-                                : grey)))
+                        style: tsBold(
+                            size: companyLines.first == l ? 11 : 8,
+                            color: companyLines.first == l ? headerBg : grey)))
                     .toList(),
               ),
             ),
@@ -169,13 +168,39 @@ class DevizTehnicPdfService {
       addRow('Lucrare:', deviz.titlu);
       addRow('Obiectiv:', deviz.obiectiv);
       addRow('Client:', deviz.clientName);
-      if (deviz.clientCui.isNotEmpty) addRow('CUI client:', deviz.clientCui);
-      if (deviz.clientAddress.isNotEmpty) addRow('Adresă client:', deviz.clientAddress);
-      if (deviz.clientPhone.isNotEmpty) addRow('Tel. client:', deviz.clientPhone);
-      if (deviz.clientEmail.isNotEmpty) addRow('Email client:', deviz.clientEmail);
-      if (deviz.contactDepartment.isNotEmpty) addRow('Departament:', deviz.contactDepartment);
-      if (deviz.contactPerson.isNotEmpty) addRow('Att:', deviz.contactPerson);
+      if (deviz.clientCui.isNotEmpty) {
+        addRow('CUI client:', deviz.clientCui);
+      }
+      if (deviz.clientAddress.isNotEmpty) {
+        addRow('Adresă client:', deviz.clientAddress);
+      }
+      if (deviz.clientPhone.isNotEmpty) {
+        addRow('Tel. client:', deviz.clientPhone);
+      }
+      if (deviz.clientEmail.isNotEmpty) {
+        addRow('Email client:', deviz.clientEmail);
+      }
+      if (deviz.contactDepartment.isNotEmpty) {
+        addRow('Departament:', deviz.contactDepartment);
+      }
+      if (deviz.contactPerson.isNotEmpty) {
+        addRow('Att:', deviz.contactPerson);
+      }
       addRow('Cota TVA:', '${_fmtNum(deviz.tvaPercent)}%');
+      addRow('Moneda:', currencyLabel);
+      if (deviz.requiresExchangeRate) {
+        final sourceRate =
+            deviz.manualRate > 0 ? deviz.manualRate : deviz.bnrRate;
+        addRow('Curs RON/$currencyLabel:',
+            sourceRate > 0 ? sourceRate.toStringAsFixed(6) : '-');
+        addRow('Comision curs:',
+            '${deviz.exchangeCommissionPercent.toStringAsFixed(2)}%');
+        addRow(
+            'Curs efectiv:',
+            deviz.resolvedEffectiveExchangeRate > 0
+                ? deviz.resolvedEffectiveExchangeRate.toStringAsFixed(6)
+                : '-');
+      }
 
       if (rows.isEmpty) return pw.SizedBox();
 
@@ -202,12 +227,17 @@ class DevizTehnicPdfService {
         decoration: const pw.BoxDecoration(color: headerBg),
         children: [
           cellCenter('Nr.', style: tsBold(size: 8, color: white), bg: headerBg),
-          cell('Denumire articol', style: tsBold(size: 8, color: white), bg: headerBg),
+          cell('Denumire articol',
+              style: tsBold(size: 8, color: white), bg: headerBg),
           cellCenter('UM', style: tsBold(size: 8, color: white), bg: headerBg),
-          cellRight('Cantitate', style: tsBold(size: 8, color: white), bg: headerBg),
-          cellCenter('Categorie', style: tsBold(size: 8, color: white), bg: headerBg),
-          cellRight('Preț unitar\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
-          cellRight('Valoare\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+          cellRight('Cantitate',
+              style: tsBold(size: 8, color: white), bg: headerBg),
+          cellCenter('Categorie',
+              style: tsBold(size: 8, color: white), bg: headerBg),
+          cellRight('Preț unitar\n($currencyLabel)',
+              style: tsBold(size: 8, color: white), bg: headerBg),
+          cellRight('Valoare\n($currencyLabel)',
+              style: tsBold(size: 8, color: white), bg: headerBg),
         ],
       );
 
@@ -235,15 +265,9 @@ class DevizTehnicPdfService {
                 style: tsBold(size: 8)),
             cellCenter(a.um, style: ts(size: 8)),
             cellRight(_fmtNum(a.cantitate), style: ts(size: 8)),
-            cellCenter(first.label,
-                style: ts(size: 8),
-                bg: first.bg),
-            cellRight(
-                first.pret > 0 ? fmt.format(first.pret) : '—',
-                style: ts(size: 8)),
-            cellRight(
-                first.valoare > 0 ? fmt.format(first.valoare) : '—',
-                style: tsBold(size: 8)),
+            cellCenter(first.label, style: ts(size: 8), bg: first.bg),
+            cellRight(moneyOrDash(first.pret), style: ts(size: 8)),
+            cellRight(moneyOrDash(first.valoare), style: tsBold(size: 8)),
           ],
         ));
 
@@ -257,14 +281,9 @@ class DevizTehnicPdfService {
               cell('', style: ts(size: 8)),
               cellCenter('', style: ts(size: 8)),
               cellRight('', style: ts(size: 8)),
-              cellCenter(cat.label,
-                  style: ts(size: 8), bg: cat.bg),
-              cellRight(
-                  cat.pret > 0 ? fmt.format(cat.pret) : '—',
-                  style: ts(size: 8)),
-              cellRight(
-                  cat.valoare > 0 ? fmt.format(cat.valoare) : '—',
-                  style: tsBold(size: 8)),
+              cellCenter(cat.label, style: ts(size: 8), bg: cat.bg),
+              cellRight(moneyOrDash(cat.pret), style: ts(size: 8)),
+              cellRight(moneyOrDash(cat.valoare), style: tsBold(size: 8)),
             ],
           ));
         }
@@ -282,7 +301,7 @@ class DevizTehnicPdfService {
             cellRight('', style: ts(size: 8)),
             cellCenter('', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
-            cellRight(fmt.format(a.totalArticol),
+            cellRight(money(a.totalArticol),
                 style: tsBold(size: 9, color: headerBg)),
           ],
         ));
@@ -318,16 +337,34 @@ class DevizTehnicPdfService {
           decoration: pw.BoxDecoration(color: rowBg),
           children: [
             cell(label, style: style, bg: rowBg),
-            cellRight(mat > 0 || isHeader ? (isHeader ? 'Material' : fmt.format(mat)) : '—',
-                style: style, bg: rowBg),
-            cellRight(man > 0 || isHeader ? (isHeader ? 'Manoperă' : fmt.format(man)) : '—',
-                style: style, bg: rowBg),
-            cellRight(utilaj > 0 || isHeader ? (isHeader ? 'Utilaj' : fmt.format(utilaj)) : '—',
-                style: style, bg: rowBg),
-            cellRight(transport > 0 || isHeader ? (isHeader ? 'Transport' : fmt.format(transport)) : '—',
-                style: style, bg: rowBg),
-            cellRight(isHeader ? 'Total' : fmt.format(total),
-                style: isBold || isHeader ? tsBold(size: 8, color: isHeader ? white : black) : style,
+            cellRight(
+                mat > 0 || isHeader
+                    ? (isHeader ? 'Material' : money(mat))
+                    : '—',
+                style: style,
+                bg: rowBg),
+            cellRight(
+                man > 0 || isHeader
+                    ? (isHeader ? 'Manoperă' : money(man))
+                    : '—',
+                style: style,
+                bg: rowBg),
+            cellRight(
+                utilaj > 0 || isHeader
+                    ? (isHeader ? 'Utilaj' : money(utilaj))
+                    : '—',
+                style: style,
+                bg: rowBg),
+            cellRight(
+                transport > 0 || isHeader
+                    ? (isHeader ? 'Transport' : money(transport))
+                    : '—',
+                style: style,
+                bg: rowBg),
+            cellRight(isHeader ? 'Total' : money(total),
+                style: isBold || isHeader
+                    ? tsBold(size: 8, color: isHeader ? white : black)
+                    : style,
                 bg: rowBg),
           ],
         );
@@ -344,10 +381,15 @@ class DevizTehnicPdfService {
         },
         border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
         children: [
-          row('1. Total cheltuieli directe din articole',
-              deviz.totalMat, deviz.totalMan, deviz.totalUtilaj,
-              deviz.totalTransport, deviz.totalDirect,
-              isHeader: false, isBold: true),
+          row(
+              '1. Total cheltuieli directe din articole',
+              deviz.totalMat,
+              deviz.totalMan,
+              deviz.totalUtilaj,
+              deviz.totalTransport,
+              deviz.totalDirect,
+              isHeader: false,
+              isBold: true),
           pw.TableRow(children: [
             cell('2. Cheltuieli regie (${_fmtNum(deviz.regiePercent)}%)',
                 style: ts(size: 8)),
@@ -355,7 +397,7 @@ class DevizTehnicPdfService {
             cellRight('', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
-            cellRight(fmt.format(deviz.regie), style: ts(size: 8)),
+            cellRight(money(deviz.regie), style: ts(size: 8)),
           ]),
           pw.TableRow(children: [
             cell('3. Profit (${_fmtNum(deviz.profitPercent)}%)',
@@ -364,12 +406,13 @@ class DevizTehnicPdfService {
             cellRight('', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
-            cellRight(fmt.format(deviz.profit), style: ts(size: 8)),
+            cellRight(money(deviz.profit), style: ts(size: 8)),
           ]),
           // Rândul "Total fără TVA" — vizibil când priceDisplay = faraTva sau ambele
           if (deviz.priceDisplay.showFaraTva)
             pw.TableRow(
-              decoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFE3F2FD)),
+              decoration:
+                  const pw.BoxDecoration(color: PdfColor.fromInt(0xFFE3F2FD)),
               children: [
                 cell(
                     'Total ${_getLabelDocument(deviz.tipDocument).toLowerCase()} fără TVA',
@@ -378,7 +421,7 @@ class DevizTehnicPdfService {
                 cellRight('', style: ts(size: 8)),
                 cellRight('', style: ts(size: 8)),
                 cellRight('', style: ts(size: 8)),
-                cellRight(fmt.format(deviz.totalFaraTva), style: tsBold(size: 9)),
+                cellRight(money(deviz.totalFaraTva), style: tsBold(size: 9)),
               ],
             ),
           pw.TableRow(children: [
@@ -387,7 +430,7 @@ class DevizTehnicPdfService {
             cellRight('', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
             cellRight('', style: ts(size: 8)),
-            cellRight(fmt.format(deviz.tva), style: ts(size: 8)),
+            cellRight(money(deviz.tva), style: ts(size: 8)),
           ]),
           // Rândul "TOTAL CU TVA" — vizibil când priceDisplay = cuTva sau ambele
           if (deviz.priceDisplay.showCuTva)
@@ -399,7 +442,7 @@ class DevizTehnicPdfService {
                 cellRight('', style: tsBold(size: 8, color: white)),
                 cellRight('', style: tsBold(size: 8, color: white)),
                 cellRight('', style: tsBold(size: 8, color: white)),
-                cellRight(fmt.format(deviz.totalCuTva),
+                cellRight(money(deviz.totalCuTva),
                     style: tsBold(size: 11, color: white)),
               ],
             ),
@@ -427,12 +470,18 @@ class DevizTehnicPdfService {
               pw.TableRow(
                 decoration: const pw.BoxDecoration(color: headerBg),
                 children: [
-                  cell('Cheltuieli', style: tsBold(size: 8, color: white), bg: headerBg),
-                  cellRight('Material\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
-                  cellRight('Manoperă\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
-                  cellRight('Utilaj\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
-                  cellRight('Transport\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
-                  cellRight('Total\n(RON)', style: tsBold(size: 8, color: white), bg: headerBg),
+                  cell('Cheltuieli',
+                      style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Material\n($currencyLabel)',
+                      style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Manoperă\n($currencyLabel)',
+                      style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Utilaj\n($currencyLabel)',
+                      style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Transport\n($currencyLabel)',
+                      style: tsBold(size: 8, color: white), bg: headerBg),
+                  cellRight('Total\n($currencyLabel)',
+                      style: tsBold(size: 8, color: white), bg: headerBg),
                 ],
               ),
             ],
@@ -485,8 +534,7 @@ class DevizTehnicPdfService {
                   ),
                 ],
                 pw.SizedBox(height: 6),
-                pw.Text('Întocmit de:',
-                    style: tsBold(size: 8)),
+                pw.Text('Întocmit de:', style: tsBold(size: 8)),
                 pw.SizedBox(height: 2),
                 pw.Text(
                   deviz.intocmitDe.isNotEmpty
@@ -529,7 +577,8 @@ class DevizTehnicPdfService {
         build: (ctx) => [
           buildProjectInfo(),
           pw.SizedBox(height: 8),
-          pw.Text('Articole ${_getLabelDocument(deviz.tipDocument).toLowerCase()}',
+          pw.Text(
+              'Articole ${_getLabelDocument(deviz.tipDocument).toLowerCase()}',
               style: tsBold(size: 10, color: headerBg)),
           pw.SizedBox(height: 4),
           buildArticleTable(),
@@ -541,12 +590,14 @@ class DevizTehnicPdfService {
     );
 
     final bytes = await doc.save();
-    final numarSafe =
-        deviz.numar.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
+    final numarSafe = deviz.numar.replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
     final prefix = _getPrefixFisier(deviz.tipDocument);
     final titluSafe = deviz.titlu.isEmpty
         ? 'document'
-        : deviz.titlu.replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '').trim().replaceAll(' ', '_');
+        : deviz.titlu
+            .replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '')
+            .trim()
+            .replaceAll(' ', '_');
     final fileName = '${prefix}_${numarSafe}_$titluSafe.pdf';
 
     return PdfSaveService.savePdf(

@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+import '../oferte/offer_currency_converter.dart';
+
 // ── Enumerare tip document ────────────────────────────────────────────────────
 
 enum DevizTehnicTipDocument {
@@ -278,6 +280,11 @@ class DevizTehnicRecord {
     this.tvaPercent = 21,
     this.intocmitDe = '',
     this.note = '',
+    this.currency = 'RON',
+    this.bnrRate = 0,
+    this.manualRate = 0,
+    this.exchangeCommissionPercent = 0,
+    this.effectiveExchangeRate = 1,
     required this.createdAt,
     required this.updatedAt,
     this.createdByUserId = '',
@@ -311,6 +318,11 @@ class DevizTehnicRecord {
   final double tvaPercent;
   final String intocmitDe;
   final String note;
+  final String currency;
+  final double bnrRate;
+  final double manualRate;
+  final double exchangeCommissionPercent;
+  final double effectiveExchangeRate;
   final DateTime createdAt;
   final DateTime updatedAt;
   final String createdByUserId;
@@ -324,14 +336,40 @@ class DevizTehnicRecord {
   final String convertedToJobId;
 
   bool get isConverted => convertedToJobId.trim().isNotEmpty;
+  String get normalizedCurrency =>
+      OfferCurrencyConverter.normalizeCurrency(currency);
+  bool get requiresExchangeRate =>
+      OfferCurrencyConverter.requiresRate(normalizedCurrency);
+  double get resolvedEffectiveExchangeRate {
+    if (!requiresExchangeRate) return 1;
+    if (effectiveExchangeRate > 0) return effectiveExchangeRate;
+    final baseRate = manualRate > 0 ? manualRate : bnrRate;
+    return OfferCurrencyConverter.computeEffectiveRate(
+      baseRate: baseRate,
+      commissionPercent: exchangeCommissionPercent,
+    );
+  }
+
+  double convertRonToCurrency(double ronAmount) {
+    return OfferCurrencyConverter.convertRonToOfferCurrency(
+      ronAmount: ronAmount,
+      currency: normalizedCurrency,
+      effectiveRate: resolvedEffectiveExchangeRate,
+    );
+  }
+
+  String formatMoney(double ronAmount, {bool includeCurrency = true}) {
+    final converted = convertRonToCurrency(ronAmount);
+    final amount = converted.toStringAsFixed(
+      OfferCurrencyConverter.displayDecimals(normalizedCurrency),
+    );
+    return includeCurrency ? '$amount $normalizedCurrency' : amount;
+  }
 
   // ── Totaluri calculate ──────────────────────────────────────────
-  double get totalMat =>
-      articole.fold(0, (s, a) => s + a.valoareMat);
-  double get totalMan =>
-      articole.fold(0, (s, a) => s + a.valoareMan);
-  double get totalUtilaj =>
-      articole.fold(0, (s, a) => s + a.valoareUtilaj);
+  double get totalMat => articole.fold(0, (s, a) => s + a.valoareMat);
+  double get totalMan => articole.fold(0, (s, a) => s + a.valoareMan);
+  double get totalUtilaj => articole.fold(0, (s, a) => s + a.valoareUtilaj);
   double get totalTransport =>
       articole.fold(0, (s, a) => s + a.valoareTransport);
   double get totalDirect => totalMat + totalMan + totalUtilaj + totalTransport;
@@ -361,6 +399,11 @@ class DevizTehnicRecord {
     double? tvaPercent,
     String? intocmitDe,
     String? note,
+    String? currency,
+    double? bnrRate,
+    double? manualRate,
+    double? exchangeCommissionPercent,
+    double? effectiveExchangeRate,
     DateTime? updatedAt,
     DevizTehnicTipDocument? tipDocument,
     DevizTehnicStatus? status,
@@ -391,6 +434,13 @@ class DevizTehnicRecord {
       tvaPercent: tvaPercent ?? this.tvaPercent,
       intocmitDe: intocmitDe ?? this.intocmitDe,
       note: note ?? this.note,
+      currency: currency ?? this.currency,
+      bnrRate: bnrRate ?? this.bnrRate,
+      manualRate: manualRate ?? this.manualRate,
+      exchangeCommissionPercent:
+          exchangeCommissionPercent ?? this.exchangeCommissionPercent,
+      effectiveExchangeRate:
+          effectiveExchangeRate ?? this.effectiveExchangeRate,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       createdByUserId: createdByUserId,
@@ -425,6 +475,11 @@ class DevizTehnicRecord {
         'tva_percent': tvaPercent,
         'intocmit_de': intocmitDe,
         'note': note,
+        'currency': normalizedCurrency,
+        'bnr_rate': bnrRate,
+        'manual_rate': manualRate,
+        'exchange_commission_percent': exchangeCommissionPercent,
+        'effective_exchange_rate': resolvedEffectiveExchangeRate,
         'created_at': createdAt.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
         'created_by_user_id': createdByUserId,
@@ -450,6 +505,25 @@ class DevizTehnicRecord {
                 DevizTehnicArticol.fromMap(Map<String, dynamic>.from(e as Map)))
             .toList() ??
         [];
+    final currency = OfferCurrencyConverter.normalizeCurrency(
+      (m['currency'] ?? m['moneda'] ?? 'RON').toString(),
+    );
+    final bnrRate = DevizTehnicArticol._d(m['bnr_rate'] ?? m['bnrRate']);
+    final manualRate =
+        DevizTehnicArticol._d(m['manual_rate'] ?? m['manualRate']);
+    final exchangeCommissionPercent = DevizTehnicArticol._d(
+      m['exchange_commission_percent'] ?? m['exchangeCommissionPercent'],
+    );
+    final storedEffectiveRate = DevizTehnicArticol._d(
+      m['effective_exchange_rate'] ?? m['effectiveExchangeRate'],
+    );
+    final fallbackBaseRate = manualRate > 0 ? manualRate : bnrRate;
+    final fallbackEffectiveRate = currency == 'RON'
+        ? 1.0
+        : OfferCurrencyConverter.computeEffectiveRate(
+            baseRate: fallbackBaseRate,
+            commissionPercent: exchangeCommissionPercent,
+          );
 
     return DevizTehnicRecord(
       id: (m['id'] ?? '').toString(),
@@ -465,20 +539,30 @@ class DevizTehnicRecord {
       contactPerson: (m['contact_person'] ?? '').toString(),
       contactDepartment: (m['contact_department'] ?? '').toString(),
       dataEmiterii: parseDate(m['data_emiterii']),
-      zileValabilitate: int.tryParse((m['zile_valabilitate'] ?? 30).toString()) ?? 30,
+      zileValabilitate:
+          int.tryParse((m['zile_valabilitate'] ?? 30).toString()) ?? 30,
       articole: artList,
       regiePercent: double.tryParse((m['regie_percent'] ?? 9).toString()) ?? 9,
-      profitPercent: double.tryParse((m['profit_percent'] ?? 10).toString()) ?? 10,
+      profitPercent:
+          double.tryParse((m['profit_percent'] ?? 10).toString()) ?? 10,
       tvaPercent: double.tryParse((m['tva_percent'] ?? 21).toString()) ?? 21,
       intocmitDe: (m['intocmit_de'] ?? '').toString(),
       note: (m['note'] ?? '').toString(),
+      currency: currency,
+      bnrRate: bnrRate,
+      manualRate: manualRate,
+      exchangeCommissionPercent: exchangeCommissionPercent,
+      effectiveExchangeRate:
+          storedEffectiveRate > 0 ? storedEffectiveRate : fallbackEffectiveRate,
       createdAt: parseDate(m['created_at']),
       updatedAt: parseDate(m['updated_at']),
       createdByUserId: (m['created_by_user_id'] ?? '').toString(),
       // Câmpuri noi — backward-compatible (valori default dacă lipsesc)
-      tipDocument: DevizTehnicTipDocument.fromValue(m['tip_document']?.toString()),
+      tipDocument:
+          DevizTehnicTipDocument.fromValue(m['tip_document']?.toString()),
       status: DevizTehnicStatus.fromValue(m['status']?.toString()),
-      priceDisplay: DevizTehnicPriceDisplay.fromValue(m['price_display']?.toString()),
+      priceDisplay:
+          DevizTehnicPriceDisplay.fromValue(m['price_display']?.toString()),
       registryEntryId: (m['registry_entry_id'] ?? '').toString(),
       registryNumber: (m['registry_number'] ?? '').toString(),
       convertedToJobId: (m['converted_to_job_id'] ?? '').toString(),

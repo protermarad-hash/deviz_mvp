@@ -337,9 +337,7 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
         id: 'job-${now.microsecondsSinceEpoch}',
         jobCode: nextJobCode.trim(),
         clientId: d.clientId,
-        title: d.titlu.isNotEmpty
-            ? d.titlu
-            : 'Lucrare din deviz ${d.numar}',
+        title: d.titlu.isNotEmpty ? d.titlu : 'Lucrare din deviz ${d.numar}',
         location: '',
         city: '',
         county: '',
@@ -502,9 +500,8 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
       contactDepartment: source.contactDepartment,
       dataEmiterii: now,
       zileValabilitate: source.zileValabilitate,
-      articole: source.articole
-          .map((a) => a.copyWith())
-          .toList(growable: false),
+      articole:
+          source.articole.map((a) => a.copyWith()).toList(growable: false),
       regiePercent: source.regiePercent,
       profitPercent: source.profitPercent,
       tvaPercent: source.tvaPercent,
@@ -577,7 +574,6 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
     }
 
     final items = _filtered;
-    final fmt = NumberFormat('#,##0.00', 'ro_RO');
     final dateFmt = DateFormat('dd.MM.yyyy');
     final cs = Theme.of(context).colorScheme;
 
@@ -655,7 +651,8 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                           )
                         : const Icon(Icons.cloud_sync_outlined),
                     tooltip: 'Sincronizează la cloud (trimite datele locale)',
-                    onPressed: (_loading || _syncing) ? null : _forceSyncToCloud,
+                    onPressed:
+                        (_loading || _syncing) ? null : _forceSyncToCloud,
                   ),
                 ],
               ),
@@ -670,7 +667,8 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                     // Filtrare tip document
                     Text(
                       'Tip document',
-                      style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                      style:
+                          TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
                     ),
                     const SizedBox(height: 4),
                     Wrap(
@@ -698,7 +696,8 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                     // Filtrare status
                     Text(
                       'Status',
-                      style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                      style:
+                          TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
                     ),
                     const SizedBox(height: 4),
                     Wrap(
@@ -728,462 +727,465 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                 ),
               ),
             // List
-          Expanded(
-            child: items.isEmpty
-                ? RefreshIndicator(
-                    onRefresh: _load,
-                    child: ListView(
-                      children: [
-                        const SizedBox(height: 32),
-                        Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.calculate_outlined,
-                                  size: 48, color: cs.outline),
-                              const SizedBox(height: 12),
-                              Text(
-                                _searchCtrl.text.isNotEmpty ||
-                                        _filterTip.isNotEmpty ||
-                                        _filterStatus.isNotEmpty
-                                    ? 'Niciun deviz corespunde filtrelor active.'
-                                    : 'Niciun deviz tehnic găsit.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: cs.outline),
-                              ),
-                              // Info debug extins — diagnosticare cross-device
-                              if (_searchCtrl.text.isEmpty &&
-                                  _filterTip.isEmpty &&
-                                  _filterStatus.isEmpty) ...[
-                                const SizedBox(height: 16),
-                                Card(
-                                  margin: const EdgeInsets.symmetric(
-                                      horizontal: 24),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(12),
-                                    child: DefaultTextStyle(
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          color: cs.onSurfaceVariant),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            'Firebase: '
-                                            'init=${FirebaseBootstrap.isInitialized} '
-                                            'online=${FirebaseBootstrap.isOnline}',
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              color: FirebaseBootstrap.isInitialized
-                                                  ? cs.onSurfaceVariant
-                                                  : Colors.orange.shade700,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            'Cache local: ${DevizTehnicRepository.lastLocalCount} doc.'
-                                            '  |  Firestore: ${DevizTehnicRepository.lastFirestoreCount < 0 ? "eroare/nefinalizat" : "${DevizTehnicRepository.lastFirestoreCount} doc."}',
-                                          ),
-                                          if (DevizTehnicRepository.lastFirestoreError != null) ...[
-                                            const SizedBox(height: 4),
+            Expanded(
+              child: items.isEmpty
+                  ? RefreshIndicator(
+                      onRefresh: _load,
+                      child: ListView(
+                        children: [
+                          const SizedBox(height: 32),
+                          Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.calculate_outlined,
+                                    size: 48, color: cs.outline),
+                                const SizedBox(height: 12),
+                                Text(
+                                  _searchCtrl.text.isNotEmpty ||
+                                          _filterTip.isNotEmpty ||
+                                          _filterStatus.isNotEmpty
+                                      ? 'Niciun deviz corespunde filtrelor active.'
+                                      : 'Niciun deviz tehnic găsit.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: cs.outline),
+                                ),
+                                // Info debug extins — diagnosticare cross-device
+                                if (_searchCtrl.text.isEmpty &&
+                                    _filterTip.isEmpty &&
+                                    _filterStatus.isEmpty) ...[
+                                  const SizedBox(height: 16),
+                                  Card(
+                                    margin: const EdgeInsets.symmetric(
+                                        horizontal: 24),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: DefaultTextStyle(
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: cs.onSurfaceVariant),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
                                             Text(
-                                              'Eroare Firestore: ${DevizTehnicRepository.lastFirestoreError}',
+                                              'Firebase: '
+                                              'init=${FirebaseBootstrap.isInitialized} '
+                                              'online=${FirebaseBootstrap.isOnline}',
                                               style: TextStyle(
-                                                fontSize: 10,
-                                                color: Colors.red.shade700,
+                                                fontSize: 11,
+                                                color: FirebaseBootstrap
+                                                        .isInitialized
+                                                    ? cs.onSurfaceVariant
+                                                    : Colors.orange.shade700,
                                               ),
-                                              maxLines: 3,
-                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Cache local: ${DevizTehnicRepository.lastLocalCount} doc.'
+                                              '  |  Firestore: ${DevizTehnicRepository.lastFirestoreCount < 0 ? "eroare/nefinalizat" : "${DevizTehnicRepository.lastFirestoreCount} doc."}',
+                                            ),
+                                            if (DevizTehnicRepository
+                                                    .lastFirestoreError !=
+                                                null) ...[
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                'Eroare Firestore: ${DevizTehnicRepository.lastFirestoreError}',
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: Colors.red.shade700,
+                                                ),
+                                                maxLines: 3,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ],
+                                            const SizedBox(height: 4),
+                                            const Text(
+                                              'Trage în jos pentru a reîncărca din cloud.',
                                             ),
                                           ],
-                                          const SizedBox(height: 4),
-                                          const Text(
-                                            'Trage în jos pentru a reîncărca din cloud.',
-                                          ),
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(height: 12),
-                                FilledButton.icon(
-                                  onPressed: _loading ? null : _load,
-                                  icon: const Icon(Icons.refresh, size: 16),
-                                  label: const Text('Reîncarcă din cloud'),
-                                ),
-                                const SizedBox(height: 8),
-                                // Buton forțare sync: publică documentele locale în Firestore
-                                if (DevizTehnicRepository.lastLocalCount > 0)
-                                  OutlinedButton.icon(
-                                    onPressed: (_loading || _syncing)
-                                        ? null
-                                        : _forceSyncToCloud,
-                                    icon: _syncing
-                                        ? const SizedBox(
-                                            width: 14,
-                                            height: 14,
-                                            child: CircularProgressIndicator(
-                                                strokeWidth: 2))
-                                        : const Icon(Icons.cloud_upload_outlined,
-                                            size: 16),
-                                    label: Text(_syncing
-                                        ? 'Se trimite la cloud…'
-                                        : 'Trimite la cloud (${DevizTehnicRepository.lastLocalCount} doc.)'),
+                                  const SizedBox(height: 12),
+                                  FilledButton.icon(
+                                    onPressed: _loading ? null : _load,
+                                    icon: const Icon(Icons.refresh, size: 16),
+                                    label: const Text('Reîncarcă din cloud'),
                                   ),
+                                  const SizedBox(height: 8),
+                                  // Buton forțare sync: publică documentele locale în Firestore
+                                  if (DevizTehnicRepository.lastLocalCount > 0)
+                                    OutlinedButton.icon(
+                                      onPressed: (_loading || _syncing)
+                                          ? null
+                                          : _forceSyncToCloud,
+                                      icon: _syncing
+                                          ? const SizedBox(
+                                              width: 14,
+                                              height: 14,
+                                              child: CircularProgressIndicator(
+                                                  strokeWidth: 2))
+                                          : const Icon(
+                                              Icons.cloud_upload_outlined,
+                                              size: 16),
+                                      label: Text(_syncing
+                                          ? 'Se trimite la cloud…'
+                                          : 'Trimite la cloud (${DevizTehnicRepository.lastLocalCount} doc.)'),
+                                    ),
+                                ],
                               ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 8),
-                      itemBuilder: (ctx, i) {
-                        final d = items[i];
-                        final statusColor = d.status.color;
-                        return Card(
-                          clipBehavior: Clip.antiAlias,
-                          // Chenar colorat după status (vizibil ca la programări)
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            side: BorderSide(
-                              color: statusColor.withValues(alpha: 0.5),
-                              width: 1.5,
                             ),
                           ),
-                          child: InkWell(
-                            onTap: () => _openForm(existing: d),
-                            child: Container(
-                              // Fundal colorat subtil după status
-                              decoration: BoxDecoration(
-                                color: statusColor.withValues(alpha: 0.06),
-                                borderRadius: BorderRadius.circular(12),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _load,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        itemBuilder: (ctx, i) {
+                          final d = items[i];
+                          final statusColor = d.status.color;
+                          return Card(
+                            clipBehavior: Clip.antiAlias,
+                            // Chenar colorat după status (vizibil ca la programări)
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: BorderSide(
+                                color: statusColor.withValues(alpha: 0.5),
+                                width: 1.5,
                               ),
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // Tip document + număr + status + data
-                                  Row(
-                                    children: [
-                                      // Badge tip document
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: cs.secondaryContainer,
-                                          borderRadius:
-                                              BorderRadius.circular(4),
-                                        ),
-                                        child: Text(
-                                          d.tipDocument.label,
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
-                                            color: cs.onSecondaryContainer,
-                                          ),
-                                        ),
-                                      ),
-                                      if (d.numar.isNotEmpty) ...[
-                                        const SizedBox(width: 6),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 8, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: cs.primaryContainer,
-                                            borderRadius:
-                                                BorderRadius.circular(4),
-                                          ),
-                                          child: Text(
-                                            d.numar,
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.bold,
-                                              color: cs.onPrimaryContainer,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                      const SizedBox(width: 6),
-                                      // Badge status colorat
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: statusColor
-                                              .withValues(alpha: 0.18),
-                                          borderRadius:
-                                              BorderRadius.circular(4),
-                                          border: Border.all(
-                                            color: statusColor
-                                                .withValues(alpha: 0.5),
-                                            width: 1,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          d.status.label,
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            color: statusColor,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                      ),
-                                      if (d.isConverted) ...[
-                                        const SizedBox(width: 6),
+                            ),
+                            child: InkWell(
+                              onTap: () => _openForm(existing: d),
+                              child: Container(
+                                // Fundal colorat subtil după status
+                                decoration: BoxDecoration(
+                                  color: statusColor.withValues(alpha: 0.06),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Tip document + număr + status + data
+                                    Row(
+                                      children: [
+                                        // Badge tip document
                                         Container(
                                           padding: const EdgeInsets.symmetric(
                                               horizontal: 6, vertical: 2),
                                           decoration: BoxDecoration(
-                                            color: Colors.green.withValues(
-                                                alpha: 0.12),
+                                            color: cs.secondaryContainer,
+                                            borderRadius:
+                                                BorderRadius.circular(4),
+                                          ),
+                                          child: Text(
+                                            d.tipDocument.label,
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              color: cs.onSecondaryContainer,
+                                            ),
+                                          ),
+                                        ),
+                                        if (d.numar.isNotEmpty) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 8, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: cs.primaryContainer,
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              d.numar,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.bold,
+                                                color: cs.onPrimaryContainer,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                        const SizedBox(width: 6),
+                                        // Badge status colorat
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 6, vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: statusColor.withValues(
+                                                alpha: 0.18),
                                             borderRadius:
                                                 BorderRadius.circular(4),
                                             border: Border.all(
-                                              color: Colors.green
-                                                  .withValues(alpha: 0.4),
+                                              color: statusColor.withValues(
+                                                  alpha: 0.5),
+                                              width: 1,
                                             ),
                                           ),
-                                          child: const Text(
-                                            '✓ Lucrare',
+                                          child: Text(
+                                            d.status.label,
                                             style: TextStyle(
                                               fontSize: 10,
-                                              color: Colors.green,
+                                              color: statusColor,
                                               fontWeight: FontWeight.w700,
                                             ),
                                           ),
                                         ),
-                                      ],
-                                      const Spacer(),
-                                      Text(
-                                        dateFmt.format(d.dataEmiterii),
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: cs.outline,
+                                        if (d.isConverted) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: Colors.green
+                                                  .withValues(alpha: 0.12),
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                              border: Border.all(
+                                                color: Colors.green
+                                                    .withValues(alpha: 0.4),
+                                              ),
+                                            ),
+                                            child: const Text(
+                                              '✓ Lucrare',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: Colors.green,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                        const Spacer(),
+                                        Text(
+                                          dateFmt.format(d.dataEmiterii),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: cs.outline,
+                                          ),
                                         ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 6),
+                                    // Titlu
+                                    Text(
+                                      d.titlu.isNotEmpty
+                                          ? d.titlu
+                                          : d.tipDocument.label,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    if (d.obiectiv.isNotEmpty) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        d.obiectiv,
+                                        style: TextStyle(
+                                            fontSize: 13, color: cs.outline),
                                       ),
                                     ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  // Titlu
-                                  Text(
-                                    d.titlu.isNotEmpty
-                                        ? d.titlu
-                                        : d.tipDocument.label,
-                                    style: const TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  if (d.obiectiv.isNotEmpty) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      d.obiectiv,
-                                      style: TextStyle(
-                                          fontSize: 13, color: cs.outline),
-                                    ),
-                                  ],
-                                  if (d.clientName.isNotEmpty) ...[
-                                    const SizedBox(height: 2),
+                                    if (d.clientName.isNotEmpty) ...[
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        children: [
+                                          Icon(Icons.person_outline,
+                                              size: 14, color: cs.outline),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            d.clientName,
+                                            style: TextStyle(
+                                                fontSize: 13,
+                                                color: cs.outline),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                    const SizedBox(height: 8),
+                                    // Totaluri + articole count
                                     Row(
                                       children: [
-                                        Icon(Icons.person_outline,
-                                            size: 14, color: cs.outline),
-                                        const SizedBox(width: 4),
-                                        Text(
-                                          d.clientName,
-                                          style: TextStyle(
-                                              fontSize: 13, color: cs.outline),
+                                        _MiniStat(
+                                            label: 'Articole',
+                                            value: '${d.articole.length}'),
+                                        const SizedBox(width: 12),
+                                        _MiniStat(
+                                            label: 'Fără TVA',
+                                            value:
+                                                d.formatMoney(d.totalFaraTva)),
+                                        const SizedBox(width: 12),
+                                        _MiniStat(
+                                          label: 'TOTAL cu TVA',
+                                          value: d.formatMoney(d.totalCuTva),
+                                          highlight: true,
                                         ),
-                                      ],
-                                    ),
-                                  ],
-                                  const SizedBox(height: 8),
-                                  // Totaluri + articole count
-                                  Row(
-                                    children: [
-                                      _MiniStat(
-                                          label: 'Articole',
-                                          value: '${d.articole.length}'),
-                                      const SizedBox(width: 12),
-                                      _MiniStat(
-                                          label: 'Fără TVA',
-                                          value:
-                                              '${fmt.format(d.totalFaraTva)} RON'),
-                                      const SizedBox(width: 12),
-                                      _MiniStat(
-                                        label: 'TOTAL cu TVA',
-                                        value:
-                                            '${fmt.format(d.totalCuTva)} RON',
-                                        highlight: true,
-                                      ),
-                                      const Spacer(),
-                                      IconButton(
-                                        icon: const Icon(
-                                            Icons.picture_as_pdf_outlined,
-                                            size: 18),
-                                        tooltip: 'Exportă PDF',
-                                        onPressed: () => _exportPdf(d),
-                                      ),
-                                      SizedBox(
-                                        width: 36,
-                                        height: 36,
-                                        child: PopupMenuButton<String>(
-                                          padding: EdgeInsets.zero,
-                                          icon: const Icon(Icons.more_vert,
-                                              size: 20),
-                                          tooltip: 'Acțiuni',
-                                          onSelected: (value) {
-                                            switch (value) {
-                                              case 'open':
-                                                _openForm(existing: d);
-                                              case 'edit':
-                                                _openForm(existing: d);
-                                              case 'duplicate':
-                                                _duplicateDevizTehnic(d);
-                                              case 'convert':
-                                                _convertDevizToJob(d);
-                                              case 'delete':
-                                                _confirmDelete(d);
-                                            }
-                                          },
-                                          itemBuilder: (context) => [
-                                            const PopupMenuItem(
-                                              value: 'open',
-                                              child: ListTile(
-                                                leading: Icon(Icons
-                                                    .visibility_outlined),
-                                                title:
-                                                    Text('Deschide detaliu'),
-                                                dense: true,
-                                                contentPadding:
-                                                    EdgeInsets.zero,
-                                              ),
-                                            ),
-                                            const PopupMenuItem(
-                                              value: 'edit',
-                                              child: ListTile(
-                                                leading:
-                                                    Icon(Icons.edit_outlined),
-                                                title: Text('Editează'),
-                                                dense: true,
-                                                contentPadding:
-                                                    EdgeInsets.zero,
-                                              ),
-                                            ),
-                                            const PopupMenuItem(
-                                              value: 'duplicate',
-                                              child: ListTile(
-                                                leading: Icon(Icons
-                                                    .content_copy_outlined),
-                                                title: Text('Duplică'),
-                                                dense: true,
-                                                contentPadding:
-                                                    EdgeInsets.zero,
-                                              ),
-                                            ),
-                                            if (d.tipDocument !=
-                                                DevizTehnicTipDocument
-                                                    .situatieLucrari)
-                                              PopupMenuItem(
-                                                value: 'convert',
+                                        const Spacer(),
+                                        IconButton(
+                                          icon: const Icon(
+                                              Icons.picture_as_pdf_outlined,
+                                              size: 18),
+                                          tooltip: 'Exportă PDF',
+                                          onPressed: () => _exportPdf(d),
+                                        ),
+                                        SizedBox(
+                                          width: 36,
+                                          height: 36,
+                                          child: PopupMenuButton<String>(
+                                            padding: EdgeInsets.zero,
+                                            icon: const Icon(Icons.more_vert,
+                                                size: 20),
+                                            tooltip: 'Acțiuni',
+                                            onSelected: (value) {
+                                              switch (value) {
+                                                case 'open':
+                                                  _openForm(existing: d);
+                                                case 'edit':
+                                                  _openForm(existing: d);
+                                                case 'duplicate':
+                                                  _duplicateDevizTehnic(d);
+                                                case 'convert':
+                                                  _convertDevizToJob(d);
+                                                case 'delete':
+                                                  _confirmDelete(d);
+                                              }
+                                            },
+                                            itemBuilder: (context) => [
+                                              const PopupMenuItem(
+                                                value: 'open',
                                                 child: ListTile(
-                                                  leading: Icon(
-                                                    Icons.transform_outlined,
-                                                    color: d.isConverted
-                                                        ? Colors.green
-                                                        : null,
-                                                  ),
-                                                  title: Text(
-                                                    d.isConverted
-                                                        ? 'Convertit în lucrare'
-                                                        : 'Convertește în lucrare',
-                                                    style: TextStyle(
-                                                      color: d.isConverted
-                                                          ? Colors.green
-                                                          : null,
-                                                    ),
-                                                  ),
+                                                  leading: Icon(Icons
+                                                      .visibility_outlined),
+                                                  title:
+                                                      Text('Deschide detaliu'),
                                                   dense: true,
                                                   contentPadding:
                                                       EdgeInsets.zero,
                                                 ),
                                               ),
-                                            const PopupMenuItem(
-                                              value: 'delete',
-                                              child: ListTile(
-                                                leading: Icon(
-                                                    Icons.delete_outline,
-                                                    color: Colors.red),
-                                                title: Text('Șterge',
-                                                    style: TextStyle(
-                                                        color: Colors.red)),
-                                                dense: true,
-                                                contentPadding:
-                                                    EdgeInsets.zero,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  // ── Butoane rapide schimbare status ──────────
-                                  const SizedBox(height: 6),
-                                  SingleChildScrollView(
-                                    scrollDirection: Axis.horizontal,
-                                    child: Row(
-                                      children: DevizTehnicStatus.values
-                                          .where((s) => s != d.status)
-                                          .map(
-                                            (s) => Padding(
-                                              padding: const EdgeInsets.only(
-                                                  right: 6),
-                                              child: OutlinedButton(
-                                                style:
-                                                    OutlinedButton.styleFrom(
-                                                  foregroundColor: s.color,
-                                                  side: BorderSide(
-                                                      color: s.color
-                                                          .withValues(
-                                                              alpha: 0.5)),
-                                                  padding:
-                                                      const EdgeInsets.symmetric(
-                                                          horizontal: 10,
-                                                          vertical: 4),
-                                                  minimumSize:
-                                                      const Size(0, 28),
-                                                  tapTargetSize:
-                                                      MaterialTapTargetSize
-                                                          .shrinkWrap,
-                                                  textStyle:
-                                                      const TextStyle(
-                                                          fontSize: 11),
+                                              const PopupMenuItem(
+                                                value: 'edit',
+                                                child: ListTile(
+                                                  leading:
+                                                      Icon(Icons.edit_outlined),
+                                                  title: Text('Editează'),
+                                                  dense: true,
+                                                  contentPadding:
+                                                      EdgeInsets.zero,
                                                 ),
-                                                onPressed: () =>
-                                                    _changeStatus(d, s),
-                                                child: Text('→ ${s.label}'),
                                               ),
-                                            ),
-                                          )
-                                          .toList(),
+                                              const PopupMenuItem(
+                                                value: 'duplicate',
+                                                child: ListTile(
+                                                  leading: Icon(Icons
+                                                      .content_copy_outlined),
+                                                  title: Text('Duplică'),
+                                                  dense: true,
+                                                  contentPadding:
+                                                      EdgeInsets.zero,
+                                                ),
+                                              ),
+                                              if (d.tipDocument !=
+                                                  DevizTehnicTipDocument
+                                                      .situatieLucrari)
+                                                PopupMenuItem(
+                                                  value: 'convert',
+                                                  child: ListTile(
+                                                    leading: Icon(
+                                                      Icons.transform_outlined,
+                                                      color: d.isConverted
+                                                          ? Colors.green
+                                                          : null,
+                                                    ),
+                                                    title: Text(
+                                                      d.isConverted
+                                                          ? 'Convertit în lucrare'
+                                                          : 'Convertește în lucrare',
+                                                      style: TextStyle(
+                                                        color: d.isConverted
+                                                            ? Colors.green
+                                                            : null,
+                                                      ),
+                                                    ),
+                                                    dense: true,
+                                                    contentPadding:
+                                                        EdgeInsets.zero,
+                                                  ),
+                                                ),
+                                              const PopupMenuItem(
+                                                value: 'delete',
+                                                child: ListTile(
+                                                  leading: Icon(
+                                                      Icons.delete_outline,
+                                                      color: Colors.red),
+                                                  title: Text('Șterge',
+                                                      style: TextStyle(
+                                                          color: Colors.red)),
+                                                  dense: true,
+                                                  contentPadding:
+                                                      EdgeInsets.zero,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ),
-                                ],
+                                    // ── Butoane rapide schimbare status ──────────
+                                    const SizedBox(height: 6),
+                                    SingleChildScrollView(
+                                      scrollDirection: Axis.horizontal,
+                                      child: Row(
+                                        children: DevizTehnicStatus.values
+                                            .where((s) => s != d.status)
+                                            .map(
+                                              (s) => Padding(
+                                                padding: const EdgeInsets.only(
+                                                    right: 6),
+                                                child: OutlinedButton(
+                                                  style:
+                                                      OutlinedButton.styleFrom(
+                                                    foregroundColor: s.color,
+                                                    side: BorderSide(
+                                                        color: s.color
+                                                            .withValues(
+                                                                alpha: 0.5)),
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 4),
+                                                    minimumSize:
+                                                        const Size(0, 28),
+                                                    tapTargetSize:
+                                                        MaterialTapTargetSize
+                                                            .shrinkWrap,
+                                                    textStyle: const TextStyle(
+                                                        fontSize: 11),
+                                                  ),
+                                                  onPressed: () =>
+                                                      _changeStatus(d, s),
+                                                  child: Text('→ ${s.label}'),
+                                                ),
+                                              ),
+                                            )
+                                            .toList(),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     ),
-                  ),
             ),
           ],
         );
@@ -1224,8 +1226,7 @@ class _MiniStat extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style: TextStyle(fontSize: 10, color: cs.outline)),
+        Text(label, style: TextStyle(fontSize: 10, color: cs.outline)),
         Text(
           value,
           style: TextStyle(
