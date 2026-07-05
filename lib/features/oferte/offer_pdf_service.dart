@@ -56,6 +56,11 @@ class OfferPdfService {
     return amountWithoutVat * (1 + (offer.vatPercent / 100));
   }
 
+  /// Zecimale pentru afișarea cursului valutar: 6 când rata subunitară (ex. HUF,
+  /// unde curs ≈ 0,0148), 4 pentru rate ≥ 1 (EUR și altele).
+  static int _rateDisplayDecimals(double rate) =>
+      (rate > 0 && rate < 1) ? 6 : 4;
+
   static String _priceDisplayNote(OfferRecord offer) {
     switch (offer.priceDisplayMode) {
       case OfferPriceDisplayMode.withoutVat:
@@ -219,9 +224,11 @@ class OfferPdfService {
       final base = offer.exchangeRateSource == OfferExchangeRateSource.bnr
           ? offer.bnrRate
           : offer.manualRate;
-      final baseLabel = base > 0 ? base.toStringAsFixed(4) : '-';
+      final baseLabel =
+          base > 0 ? base.toStringAsFixed(_rateDisplayDecimals(base)) : '-';
       final effective = offer.effectiveExchangeRate > 0
-          ? offer.effectiveExchangeRate.toStringAsFixed(4)
+          ? offer.effectiveExchangeRate
+              .toStringAsFixed(_rateDisplayDecimals(offer.effectiveExchangeRate))
           : '-';
       final commission = offer.exchangeCommissionPercent.toStringAsFixed(2);
       return '$source | baza $baseLabel | comision $commission% | efectiv $effective';
@@ -1069,9 +1076,11 @@ class OfferPdfService {
       final base = offer.exchangeRateSource == OfferExchangeRateSource.bnr
           ? offer.bnrRate
           : offer.manualRate;
-      final baseLabel = base > 0 ? base.toStringAsFixed(4) : '-';
+      final baseLabel =
+          base > 0 ? base.toStringAsFixed(_rateDisplayDecimals(base)) : '-';
       final effective = offer.effectiveExchangeRate > 0
-          ? offer.effectiveExchangeRate.toStringAsFixed(4)
+          ? offer.effectiveExchangeRate
+              .toStringAsFixed(_rateDisplayDecimals(offer.effectiveExchangeRate))
           : '-';
       final commission = offer.exchangeCommissionPercent.toStringAsFixed(2);
       return '$source | baza $baseLabel | comision $commission% | efectiv $effective';
