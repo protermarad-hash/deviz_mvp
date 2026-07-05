@@ -1160,7 +1160,7 @@ ClientAutocompleteField(
 - **Sistem Help inteligent**: HelpModuleButton 4 tab-uri (Info/Ghid/FAQ/AI), 14 module, HelpAdminPage (iun 2026)
 - **Certificate garanție PDF**: 3 pagini — tabel echipament + 3 taloane intervenție + condiții OG 21/1992. Condiții hardcodate, NU se modifică. Regenerare bulk în toolbar (mai 2026)
 - **Versiune în Drawer**: `package_info_plus`, format `v{version}+{buildNumber}` (iun 2026)
-- **Auto-update in-app**: `app_version_checker.dart` + `update_available_banner.dart`, descărcare APK + instalare via `OpenFilex`. Doar Android. Ghid: `docs/ghid_actualizare_apk.md` (iun 2026)
+- **Auto-update in-app**: `app_version_checker.dart` + `update_available_banner.dart`; citește Firestore `app_config/version_info`. Android descarcă APK din `apkUrl` și pornește instalarea via `OpenFilex`; Windows descarcă ZIP din `windowsExeUrl` și afișează pași manuali. Ghid: `docs/ghid_actualizare_apk.md` (iun 2026)
 
 ---
 
@@ -1966,6 +1966,21 @@ build/releases/{client}/{platformă}/
 Folderele se creează automat de scripturi (`New-Item -Force`) și NU se șterg
 niciodată artefacte vechi de acolo — **istoric păstrat**.
 
+**Căi oficiale obligatorii (singurele livrabile):**
+- PRO TERM Android: `build/releases/proterm/android/`
+- PRO TERM Windows: `build/releases/proterm/windows/`
+- Costel Android: `build/releases/costel/android/`
+- Costel Windows: `build/releases/costel/windows/`
+
+Artefactele din foldere intermediare NU sunt livrabile finale, chiar dacă există
+și par instalabile:
+- `build/app/outputs/flutter-apk/`
+- `build/windows/`
+- orice alt folder temporar Flutter/Gradle
+
+Acestea sunt doar artefacte intermediare până când au fost verificate și copiate
+în folderul oficial corect din `build/releases/{client}/{platformă}/`.
+
 ### 2. Convenția de nume REALĂ (exact ce produc scripturile)
 
 Format general: `proventaris-{sufix client}-v{versiune}-build{buildNumber}.{apk|zip}`,
@@ -1993,6 +2008,14 @@ Fiecare build creează fișiere NOI, distincte (numele versionat NU suprascrie
 build-urile anterioare). Vechile căi din rădăcina `build/`
 (`build/proventaris-costel-v...apk` etc.) sunt considerate **legacy** — scripturile
 de publicare le mai acceptă doar ca fallback, dar sursa curentă e `build/releases/`.
+
+Numele de artefact este obligatoriu și trebuie să respecte convenția reală de mai
+sus. Nu se redenumește liber și nu se „potrivește din ochi” un fișier cu un client:
+numărul de versiune/build, clientul și platforma trebuie să fie în nume și să
+corespundă metadatelor reale ale artefactului.
+
+**Nu se suprascrie un artefact existent din `build/releases/...` fără confirmare
+explicită.** Dacă numele final există deja, agentul se oprește și cere decizie.
 
 ### 3. Scripturile de build — ce fac EXACT
 
@@ -2059,6 +2082,43 @@ implicit → (Windows) curățare cache la fiecare build.**
   Niciodată direct din `build/app/outputs/...`. Elimină ambiguitatea „ce APK am
   instalat de fapt".
 
+### 6.1. Protecție autoupdate — `build/releases/...` este zonă sensibilă
+
+Aplicația are autoupdate, dar simpla existență a unui APK/ZIP în
+`build/releases/{client}/{platformă}/` NU declanșează livrarea. `build/releases/...`
+este arhivă locală de livrare și sursă prioritară pentru scripturile de publicare.
+Autoupdate se activează doar după rularea scriptului de publicare, care urcă
+artefactul în Firebase Storage și actualizează Firestore `app_config/version_info`.
+
+Din acest motiv, `build/releases/{client}/{platformă}/` trebuie tratat ca zonă
+sensibilă de livrare: un APK/ZIP greșit pus în folderul greșit sau cu
+nume/versionCode greșit poate deveni sursă pentru publicarea către clientul greșit.
+
+Nu se copiază niciun APK/ZIP în folderul final de release până când NU sunt
+verificate explicit:
+- clientul (`proterm` sau `costel`);
+- flavor/build target;
+- Firebase project/config;
+- `applicationId`/package;
+- `versionName`;
+- `versionCode`/build number;
+- `BUILD_TAG`/build tag, dacă este verificabil;
+- numele fișierului;
+- platforma;
+- folderul de destinație;
+- URL-ul generat pentru artefact, înainte de confirmarea publicării.
+
+Un build de test local NU se pune în `build/releases/...`, ca să nu devină sursă
+accidentală pentru scriptul de publicare. Dacă artefactul este doar pentru test
+local, se păstrează în `build/test-releases/{client}/{platformă}/`, de exemplu
+`build/test-releases/proterm/android/app-proterm-v1.5.3-build58-TEST.apk`.
+
+Pentru test intern:
+- nu se rulează `publish_release*.js`;
+- nu se face upload în Firebase Storage;
+- nu se modifică Firestore `app_config/version_info`;
+- nu se livrează artefactul clientului.
+
 ### 7. Bug contaminare Windows multi-client (curățare cache OBLIGATORIE)
 
 Pe Windows NU există izolare de flavor (folder comun `build/windows/`), iar Flutter
@@ -2090,6 +2150,46 @@ aapt dump badging <apk> | grep -E "package:|versionCode|versionName"
 (clientul corect: `ro.proterm.proventaris` vs `ro.proterm.proventaris.costel`).
 Fără această confirmare, un `versionCode` reutilizat trece neobservat (pct. 4).
 
+### 8.1. Separare strictă PRO TERM / Costel
+
+PRO TERM și Costel NU sunt același build redenumit. Au Firebase diferit, target
+diferit și trebuie build-uite/verificate separat.
+
+| Client | Android folder | Windows folder | Firebase project | Android package |
+|---|---|---|---|---|
+| PRO TERM | `build/releases/proterm/android/` | `build/releases/proterm/windows/` | `devizpro-ultra-pilot` | `ro.proterm.proventaris` |
+| Costel | `build/releases/costel/android/` | `build/releases/costel/windows/` | `proventaris-costel-costea` | `ro.proterm.proventaris.costel` |
+
+Reguli obligatorii:
+- Nu se refolosește APK/ZIP de la un client pentru celălalt.
+- Nu se copiază manual un APK/ZIP al unui client în folderul celuilalt.
+- Nu este suficient ca numele fișierului să conțină clientul; trebuie verificată
+  configurația reală (`applicationId`/package, Firebase project/config, build target).
+- Dacă există orice neconcordanță între client, Firebase config, package,
+  nume fișier, `versionCode` sau folder release, agentul se oprește și raportează.
+  Nu improvizează și nu livrează.
+
+### 8.2. Criteriu strict: când un build este considerat reușit
+
+Un build este considerat reușit doar dacă TOATE sunt adevărate:
+1. Comanda de build termină cu exit code `0`.
+2. Artefactul intermediar există.
+3. Artefactul final există în folderul oficial `build/releases/{client}/{platformă}/`.
+4. Numele artefactului conține clientul și versiunea/build number.
+5. `versionName` este corect.
+6. `versionCode`/build number este corect și nou.
+7. `applicationId`/package este corect pentru client.
+8. Firebase project/config este corect pentru client.
+9. `BUILD_TAG`/build tag este corect, dacă este verificabil.
+10. Raportul final precizează explicit clientul și platforma.
+
+Dacă exit code este diferit de `0`:
+- NU se raportează build reușit.
+- NU se livrează artefactul.
+- Existența fizică a unui APK/ZIP nu este suficientă.
+- Statusul trebuie să fie `build eșuat` sau `neconcludent`.
+- Se raportează ultimele linii relevante din output, nu doar o concluzie.
+
 ### 9. REGULĂ CRITICĂ — testarea Windows Costel pe PC/VM SEPARAT
 
 **Build-ul Windows Costel se testează EXCLUSIV pe un PC sau VM separat de mașina
@@ -2106,9 +2206,15 @@ Rulate pe același Windows, PRO TERM și Costel își suprascriu reciproc
 
 ### 10. Publicare release (upload Firebase) — MANUALĂ, separată per client
 
-Publicarea e **MANUALĂ** (NU rulează automat la build). Fiecare client are propriul
-script; ambele citesc PRIORITAR artefactele din `build/releases/{client}/{platformă}/`
-(fallback la căile legacy din `build/`).
+Publicarea e **MANUALĂ** (NU rulează automat la build) și este operație cu risc
+ridicat: scriptul urcă artefacte în Firebase Storage și actualizează Firestore
+`app_config/version_info`, ceea ce poate face update-ul vizibil în aplicație.
+
+Fiecare client are propriul script; ambele citesc PRIORITAR artefactele din
+`build/releases/{client}/{platformă}/` (fallback la căile legacy din `build/`).
+Fallback-ul către `build/app/outputs/flutter-apk/...` trebuie tratat cu atenție:
+verifică explicit APK-ul preluat înainte de publicare, ca să nu fie publicat un
+artefact greșit.
 
 | Client | Script | Proiect Firebase | Bucket Storage |
 |---|---|---|---|
@@ -2121,12 +2227,75 @@ script; ambele citesc PRIORITAR artefactele din `build/releases/{client}/{platfo
 Firebase CLI sunt generice — funcționează pentru orice proiect la care userul are
 acces prin `firebase login`.
 
-Utilizare (după build, cu aceeași versiune):
+Utilizare (după build, cu aceeași versiune). PRO TERM se publică doar cu
+`scripts/publish_release.js`; Costel se publică doar cu
+`scripts/publish_release_costel.js`:
 ```
 node scripts/publish_release.js         --version 1.5.3 --build 55 --notes "Descriere"
 node scripts/publish_release_costel.js  --version 1.5.3 --build 55 --notes "Descriere"
 ```
 Opțional: `--apk-only` | `--windows-only`.
+
+### 10.1. Autoupdate: verificare înainte de publicare
+
+Mecanismul real de autoupdate:
+- aplicația citește Firestore `app_config/version_info`;
+- câmpurile folosite sunt `latestVersion`, `latestBuildNumber`, `apkUrl`,
+  `windowsExeUrl`, `releaseNotes` și `forceUpdate`;
+- update-ul se afișează dacă `latestBuildNumber` este mai mare decât build number-ul
+  instalat local;
+- Android descarcă APK-ul din `apkUrl` și pornește instalarea via `OpenFilex`;
+- Windows descarcă ZIP-ul din `windowsExeUrl` și afișează pași manuali; nu există
+  updater separat care suprascrie automat aplicația.
+
+Pentru că autoupdate citește informația de release publicată separat per client,
+agentul verifică înainte de orice publicare:
+- artefactul provine din folderul oficial al clientului corect;
+- numele artefactului respectă convenția obligatorie;
+- `versionName`, `versionCode`, package/applicationId și Firebase project sunt cele
+  ale clientului pentru care se publică;
+- bucketul Firebase este cel al clientului corect;
+- nu există un artefact cu același `versionCode` deja publicat pentru același client;
+- notele de release și parametrii `--version` / `--build` corespund fișierului;
+- URL-ul generat (`apkUrl` sau `windowsExeUrl`) indică artefactul corect.
+
+Riscuri principale:
+- rularea scriptului greșit pentru client;
+- publicarea artefactului greșit în proiectul Firebase greșit;
+- artefact greșit în `build/releases/{client}/...`, preluat prioritar de script;
+- fallback-ul scriptului către `build/app/outputs/flutter-apk/...`, dacă APK-ul
+  intermediar nu este verificat înainte de publicare.
+
+Dacă oricare verificare nu este confirmată prin comandă/output real, publicarea se
+oprește. Nu se publică „probabil corect”.
+
+Dacă agentul nu poate verifica scriptul, clientul, Firebase project, bucket,
+`applicationId`, `versionName`, `versionCode` și URL-ul generat, publicarea este
+NECONCLUDENTĂ și se oprește.
+
+### 10.2. Raport obligatoriu pentru orice build
+
+Pentru fiecare artefact, raportul de build include obligatoriu:
+```
+Client:
+Platformă:
+Comandă build:
+Exit code:
+Flavor/build target:
+Firebase project/config:
+ApplicationId/package:
+versionName:
+versionCode/build number:
+Build tag:
+Artefact intermediar:
+Folder release oficial:
+Artefact final:
+Autoupdate afectat: da/nu
+Status: reușit / eșuat / neconcludent
+Observații/risc:
+```
+
+Fără acest raport complet, build-ul nu este considerat verificat pentru livrare.
 
 ### 11. `.gitignore` — excluderea backup-urilor din tracking (adăugată 2026-07-05)
 
