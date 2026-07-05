@@ -1120,8 +1120,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     }
     buffer.write(
       'UM: ${line.unit} • Cantitate: ${line.quantity.toStringAsFixed(2)}'
-      ' • Preț unitar: ${_displayAmountWithLabels(line.unitPrice, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}'
-      ' • Total linie: ${_displayAmountWithLabels(line.effectiveLineTotal, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}',
+      ' • Preț unitar: ${_displayAmountWithLabels(sourceLine.unitPrice, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}'
+      ' • Total linie: ${_displayAmountWithLabels(sourceLine.effectiveLineTotal, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}',
     );
     if (sourceLine.lineType == OfferLineType.manopera &&
         sourceLine.laborSourceMode == OfferLaborSourceMode.standard) {
