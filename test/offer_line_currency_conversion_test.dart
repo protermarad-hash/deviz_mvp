@@ -37,13 +37,13 @@ void main() {
       );
 
   test('conversie unică din valorile RON brute → valori corecte pe ecran', () {
-    // Total linie în RON (rotunjit în sus la 10 în spațiul RON de getter).
+    // Total linie în RON — calcul pur, fără rotunjire: 2 × 3567 = 7134.
     final ronTotal = material.effectiveLineTotal;
-    expect(ronTotal, 7140.0);
+    expect(ronTotal, 7134.0);
 
     // Preț unitar și total, convertite O SINGURĂ DATĂ din RON.
     expect(displayEur(material.unitPrice), '700.28 EUR');
-    expect(displayEur(ronTotal), '1401.73 EUR');
+    expect(displayEur(ronTotal), '1400.55 EUR');
   });
 
   test('conversia dublă (bug istoric) ar produce valorile greșite 137.48 / 276.81',
@@ -60,7 +60,7 @@ void main() {
 
     // Conversia dublă pe câmpurile deja convertite.
     expect(displayEur(convertedLine.unitPrice), '137.48 EUR');
-    expect(displayEur(convertedLine.effectiveLineTotal), '276.81 EUR');
+    expect(displayEur(convertedLine.effectiveLineTotal), '274.96 EUR');
 
     // Confirmă că valorile buggy DIFERĂ de cele corecte → regresia e prinsă.
     expect(displayEur(convertedLine.unitPrice),

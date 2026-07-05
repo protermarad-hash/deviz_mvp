@@ -299,36 +299,34 @@ class OfferLineItem {
   double get effectiveLineTotal {
     if (lineType == OfferLineType.manopera) {
       if (laborSourceMode == OfferLaborSourceMode.standard) {
-        return OfferLaborCalculator.roundPriceUpToTen(quantity * unitPrice);
+        return quantity * unitPrice;
       }
-      return OfferLaborCalculator.roundPriceUpToTen(
-        OfferLaborCalculator.computeFromResources(
-          personal: hasLaborResourceDetails
-              ? laborPersonal
-              : <OfferLaborResourceUsage>[
-                  OfferLaborResourceUsage(
-                    resourceId: '',
-                    name: '',
-                    hours: laborHours,
-                    days: 0,
-                    hourlyRate: laborHourlyRate,
-                    dailyRate: 0,
-                  ),
-                ],
-          autoturisme: hasLaborResourceDetails
-              ? laborVehicles
-              : const <OfferLaborResourceUsage>[],
-          pacheteScule: hasLaborResourceDetails
-              ? laborToolPackages
-              : const <OfferLaborResourceUsage>[],
-          perDiemDays: laborPerDiemDays,
-          perDiemPerDay: laborPerDiemPerDay,
-          lodgingNights: laborLodgingNights,
-          lodgingPerNight: laborLodgingPerNight,
-        ).total,
-      );
+      return OfferLaborCalculator.computeFromResources(
+        personal: hasLaborResourceDetails
+            ? laborPersonal
+            : <OfferLaborResourceUsage>[
+                OfferLaborResourceUsage(
+                  resourceId: '',
+                  name: '',
+                  hours: laborHours,
+                  days: 0,
+                  hourlyRate: laborHourlyRate,
+                  dailyRate: 0,
+                ),
+              ],
+        autoturisme: hasLaborResourceDetails
+            ? laborVehicles
+            : const <OfferLaborResourceUsage>[],
+        pacheteScule: hasLaborResourceDetails
+            ? laborToolPackages
+            : const <OfferLaborResourceUsage>[],
+        perDiemDays: laborPerDiemDays,
+        perDiemPerDay: laborPerDiemPerDay,
+        lodgingNights: laborLodgingNights,
+        lodgingPerNight: laborLodgingPerNight,
+      ).total;
     }
-    return OfferLaborCalculator.roundPriceUpToTen(quantity * unitPrice);
+    return quantity * unitPrice;
   }
 
   OfferLineItem copyWith({

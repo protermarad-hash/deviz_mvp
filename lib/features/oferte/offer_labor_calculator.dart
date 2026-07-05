@@ -127,11 +127,8 @@ class OfferLaborCalculator {
     final costScule = _sumToolPackageTotalsHoursOnly(pacheteScule);
     final costDiurna = perDiemDays * perDiemPerDay;
     final costCazare = lodgingNights * lodgingPerNight;
-    var total =
+    final total =
         costPersonal + costAutoturisme + costScule + costDiurna + costCazare;
-
-    // Round final total UP to nearest 10
-    total = roundPriceUpToTen(total);
 
     return OfferLaborBreakdown(
       costOre: costPersonal,
