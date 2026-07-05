@@ -1121,7 +1121,11 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
       status: OfferStatus.draft,
       issueDate: now,
       validUntil: now.add(const Duration(days: 30)),
-      currency: request.currency.trim().isEmpty ? 'RON' : request.currency,
+      // Fluxul de teren NU are mecanism de curs valutar. O cerere marcată EUR
+      // ar produce o ofertă cu etichetă „EUR" dar fără conversie reală (curs 1),
+      // adică valoarea RON afișată ca și cum ar fi EUR. Forțăm RON, consistent
+      // cu restul aplicației pentru documente fără curs (curs efectiv = 1).
+      currency: 'RON',
       exchangeRateSource: OfferExchangeRateSource.manual,
       bnrRate: 1,
       manualRate: 1,
