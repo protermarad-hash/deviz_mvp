@@ -1,12 +1,31 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:devizpro_ultra/features/oferte/offer_models.dart';
 
-// Regresie: totalValue NU se mai rotunjește separat la multiplu de 10.
-// totalValue = subtotalComercial + vatValue EXACT.
-// Rotunjirea la 10 rămâne DOAR pe pozițiile individuale (effectiveLineTotal)
-// și pe subtotalComercial — nu se mai aplică a doua oară pe totalul final.
+// Regresie: calcul PUR în modulul oferte, fără nicio rotunjire artificială
+// (roundPriceUpToTen eliminat de pe poziții, subtotal și total).
+// - totalul liniei = quantity × unitPrice exact
+// - subtotalComercial = suma exactă a liniilor
+// - totalValue = subtotalComercial + vatValue exact
 void main() {
-  test('totalValue = subtotalComercial + vatValue exact, fără rotunjire', () {
+  test('linie material: total = quantity × unitPrice exact, fără rotunjire', () {
+    final material = OfferLineItem(
+      id: 'test-linie',
+      name: 'Material test',
+      description: '',
+      unit: 'buc',
+      quantity: 2,
+      unitPrice: 3567.00,
+      lineTotal: 0,
+      sortOrder: 1,
+      lineType: OfferLineType.material,
+    );
+
+    // 2 × 3567 = 7134 EXACT (înainte era rotunjit la 7140).
+    expect(material.effectiveLineTotal, 7134.0);
+  });
+
+  test('totaluri: subtotal = suma liniilor, total = subtotal + TVA, fără rotunjire',
+      () {
     final material = OfferLineItem(
       id: 'test-linie',
       name: 'Material test',
@@ -24,13 +43,13 @@ void main() {
       vatPercent: 21,
     );
 
-    // Poziția: 2 × 3567 = 7134 → rotunjit în sus la 10 = 7140.
-    expect(totals.subtotalComercial, 7140.0);
-    // TVA 21%: 7140 × 0.21 = 1499.4.
-    expect(totals.vatValue, 1499.4);
-    // Total NU mai e rotunjit la 8640 — rămâne 8639.4.
-    expect(totals.totalValue, 8639.4);
-    // Egalitate exactă subtotalComercial + vatValue == totalValue.
+    // subtotalComercial = suma exactă a liniilor = 7134 (înainte 7140).
+    expect(totals.subtotalComercial, 7134.0);
+    // TVA 21%: 7134 × 0.21 = 1498.14.
+    expect(totals.vatValue, closeTo(1498.14, 1e-9));
+    // Total = subtotalComercial + vatValue exact (înainte rotunjit la 8640).
     expect(totals.totalValue, totals.subtotalComercial + totals.vatValue);
+    // Nu mai e multiplu de 10.
+    expect(totals.totalValue, closeTo(8632.14, 1e-9));
   });
 }

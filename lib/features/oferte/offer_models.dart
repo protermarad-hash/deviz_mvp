@@ -880,11 +880,7 @@ class OfferRecord {
     final subtotalDirect = materialSubtotal + laborSubtotal;
     final regieValue = subtotalDirect * regiePercent / 100;
     final profitValue = subtotalDirect * profitPercent / 100;
-    var subtotalComercial = subtotalDirect + regieValue + profitValue;
-
-    // Round commercial subtotal UP to nearest 10
-    subtotalComercial =
-        OfferLaborCalculator.roundPriceUpToTen(subtotalComercial);
+    final subtotalComercial = subtotalDirect + regieValue + profitValue;
 
     final vatValue = subtotalComercial * vatPercent / 100;
     final totalValue = subtotalComercial + vatValue;
