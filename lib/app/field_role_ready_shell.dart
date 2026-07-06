@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/auth/field_auth_service.dart';
 import '../core/auth/field_auth_models.dart';
+import '../core/cloud/firestore_auth_warning_banner.dart';
 import '../core/update/update_available_banner.dart';
 import '../features/notifications/notification_runtime_service.dart';
 
@@ -56,6 +57,7 @@ class FieldRoleReadyShell extends StatelessWidget {
       body: Column(
         children: [
           const UpdateAvailableBanner(),
+          FirestoreAuthWarningBanner(authService: authService),
           Expanded(child: child),
         ],
       ),
