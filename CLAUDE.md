@@ -181,6 +181,12 @@ ajunge să fie testată/folosită de utilizator:
 5. La finalul fiecărui raport de modificări, agentul
    menționează explicit noul număr de versiune
 
+> **NOTĂ — build-uri de diagnostic/test:** Build-urile de diagnostic/test cu
+> versionCode incrementat manual trebuie comise în pubspec.yaml imediat, chiar
+> dacă nu se face push complet — altfel git log nu reflectă versiunile reale
+> livrate pe device-uri (precedent: +60 folosit real, necomis, dus la salt
+> +59→+61).
+
 ### Implementare versiune în Drawer (iun 2026):
 - Pachet: `package_info_plus` (`PackageInfo.fromPlatform()`)
 - Fișier: `lib/app/role_ready_shell.dart` → `_RoleReadyAppShellState`
