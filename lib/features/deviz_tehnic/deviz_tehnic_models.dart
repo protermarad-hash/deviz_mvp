@@ -4,6 +4,64 @@ import 'package:uuid/uuid.dart';
 
 import '../oferte/offer_currency_converter.dart';
 
+class DevizTehnicExchangeRateState {
+  const DevizTehnicExchangeRateState({
+    required this.currency,
+    required this.bnrRate,
+    required this.manualRate,
+    required this.exchangeCommissionPercent,
+  });
+
+  factory DevizTehnicExchangeRateState.forCurrencyChange({
+    required String currency,
+    double exchangeCommissionPercent = 0,
+  }) {
+    final normalized = OfferCurrencyConverter.normalizeCurrency(currency);
+    final requiresRate = OfferCurrencyConverter.requiresRate(normalized);
+    return DevizTehnicExchangeRateState(
+      currency: normalized,
+      bnrRate: 0,
+      manualRate: 0,
+      exchangeCommissionPercent: requiresRate ? exchangeCommissionPercent : 0,
+    );
+  }
+
+  factory DevizTehnicExchangeRateState.fromBnrRate({
+    required String currency,
+    required double bnrRate,
+    required double exchangeCommissionPercent,
+  }) {
+    final normalized = OfferCurrencyConverter.normalizeCurrency(currency);
+    final requiresRate = OfferCurrencyConverter.requiresRate(normalized);
+    return DevizTehnicExchangeRateState(
+      currency: normalized,
+      bnrRate: requiresRate ? bnrRate : 0,
+      manualRate: 0,
+      exchangeCommissionPercent: requiresRate ? exchangeCommissionPercent : 0,
+    );
+  }
+
+  final String currency;
+  final double bnrRate;
+  final double manualRate;
+  final double exchangeCommissionPercent;
+
+  bool get requiresRate => OfferCurrencyConverter.requiresRate(currency);
+
+  double get baseRate {
+    if (!requiresRate) return 0;
+    return manualRate > 0 ? manualRate : bnrRate;
+  }
+
+  double get effectiveRate {
+    if (!requiresRate) return 1;
+    return OfferCurrencyConverter.computeEffectiveRate(
+      baseRate: baseRate,
+      commissionPercent: exchangeCommissionPercent,
+    );
+  }
+}
+
 // ── Enumerare tip document ────────────────────────────────────────────────────
 
 enum DevizTehnicTipDocument {

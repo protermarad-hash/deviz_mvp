@@ -83,6 +83,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   DevizTehnicPriceDisplay _priceDisplay = DevizTehnicPriceDisplay.faraTva;
   String _selectedCurrency = 'RON';
   double _bnrRateValue = 0;
+  bool _manualRateEdited = false;
   String _registryEntryId = '';
   String _registryNumber = '';
   DateTime? _registeredAt;
@@ -123,8 +124,12 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       _priceDisplay = ex.priceDisplay;
       _selectedCurrency = ex.normalizedCurrency;
       _bnrRateValue = ex.bnrRate;
-      _manualRateCtrl.text =
-          ex.manualRate > 0 ? ex.manualRate.toStringAsFixed(6) : '';
+      _manualRateEdited = ex.manualRate > 0;
+      _manualRateCtrl.text = ex.manualRate > 0
+          ? ex.manualRate.toStringAsFixed(6)
+          : ex.bnrRate > 0
+              ? ex.bnrRate.toStringAsFixed(6)
+              : '';
       _exchangeCommissionCtrl.text =
           ex.exchangeCommissionPercent.toStringAsFixed(2);
       _registryEntryId = ex.registryEntryId;
@@ -319,21 +324,19 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   String get _currency =>
       OfferCurrencyConverter.normalizeCurrency(_selectedCurrency);
   bool get _requiresRate => OfferCurrencyConverter.requiresRate(_currency);
-  double get _manualRate => _asDouble(_manualRateCtrl.text);
+  double get _enteredExchangeRate => _asDouble(_manualRateCtrl.text);
+  double get _manualRate => _manualRateEdited ? _enteredExchangeRate : 0;
   double get _exchangeCommissionPercent =>
       _asDouble(_exchangeCommissionCtrl.text);
-  double get _baseExchangeRate {
-    if (!_requiresRate) return 0;
-    return _manualRate > 0 ? _manualRate : _bnrRateValue;
-  }
+  DevizTehnicExchangeRateState get _exchangeRateState =>
+      DevizTehnicExchangeRateState(
+        currency: _currency,
+        bnrRate: _bnrRateValue,
+        manualRate: _manualRate,
+        exchangeCommissionPercent: _exchangeCommissionPercent,
+      );
 
-  double get _effectiveExchangeRate {
-    if (!_requiresRate) return 1;
-    return OfferCurrencyConverter.computeEffectiveRate(
-      baseRate: _baseExchangeRate,
-      commissionPercent: _exchangeCommissionPercent,
-    );
-  }
+  double get _effectiveExchangeRate => _exchangeRateState.effectiveRate;
 
   String _money(double ronAmount, {bool includeCurrency = true}) {
     final converted = OfferCurrencyConverter.convertRonToOfferCurrency(
@@ -359,13 +362,33 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       if (fetched != null && fetched > 0) {
         setState(() {
           _bnrRateValue = fetched;
-          if (_manualRateCtrl.text.trim().isEmpty) {
+          if (!_manualRateEdited) {
             _manualRateCtrl.text = fetched.toStringAsFixed(6);
           }
         });
       }
     } finally {
       if (mounted) setState(() => _loadingBnrRate = false);
+    }
+  }
+
+  void _handleCurrencyChanged(String rawValue) {
+    final nextState = DevizTehnicExchangeRateState.forCurrencyChange(
+      currency: rawValue,
+      exchangeCommissionPercent: _exchangeCommissionPercent,
+    );
+    if (nextState.currency == _currency) return;
+    setState(() {
+      _selectedCurrency = nextState.currency;
+      _bnrRateValue = nextState.bnrRate;
+      _manualRateEdited = false;
+      _manualRateCtrl.clear();
+      if (!nextState.requiresRate) {
+        _exchangeCommissionCtrl.text = '0';
+      }
+    });
+    if (nextState.requiresRate) {
+      _refreshBnrRate();
     }
   }
 
@@ -1034,15 +1057,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                             .toList(growable: false),
                         onChanged: (value) {
                           if (value == null) return;
-                          setState(() {
-                            _selectedCurrency =
-                                OfferCurrencyConverter.normalizeCurrency(value);
-                            if (!_requiresRate) {
-                              _bnrRateValue = 0;
-                              _manualRateCtrl.clear();
-                              _exchangeCommissionCtrl.text = '0';
-                            }
-                          });
+                          _handleCurrencyChanged(value);
                         },
                       ),
                     ),
@@ -1065,7 +1080,11 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                                 ? 'BNR: ${_bnrRateValue.toStringAsFixed(6)}'
                                 : 'Introdu cursul sau preia BNR',
                           ),
-                          onChanged: (_) => setState(() {}),
+                          onChanged: (value) {
+                            setState(() {
+                              _manualRateEdited = value.trim().isNotEmpty;
+                            });
+                          },
                           validator: (value) {
                             if (!_requiresRate) return null;
                             final rate = _asDouble(value ?? '');
