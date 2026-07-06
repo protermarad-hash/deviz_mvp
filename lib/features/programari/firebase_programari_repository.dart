@@ -36,7 +36,9 @@ class FirebaseProgramariRepository implements ProgramariCloudRepository {
     final snapshot = await _collection.get();
     final docs = snapshot.docs;
     return docs
-        .map((doc) => Appointment.fromMap(_normalizeAppointmentMap(doc.data())))
+        .map((doc) => Appointment.fromMap(
+              _normalizeAppointmentMap(doc.data(), documentId: doc.id),
+            ))
         .toList(growable: false);
   }
 
@@ -51,8 +53,9 @@ class FirebaseProgramariRepository implements ProgramariCloudRepository {
   Stream<List<Appointment>> watchAppointments() {
     return _collection.snapshots().map((snapshot) {
       return snapshot.docs
-          .map((doc) =>
-              Appointment.fromMap(_normalizeAppointmentMap(doc.data())))
+          .map((doc) => Appointment.fromMap(
+                _normalizeAppointmentMap(doc.data(), documentId: doc.id),
+              ))
           .toList(growable: false);
     });
   }
@@ -63,10 +66,13 @@ class FirebaseProgramariRepository implements ProgramariCloudRepository {
     return payload;
   }
 
-  Map<String, dynamic> _normalizeAppointmentMap(Map<String, dynamic> raw) {
+  Map<String, dynamic> _normalizeAppointmentMap(
+    Map<String, dynamic> raw, {
+    required String documentId,
+  }) {
     return <String, dynamic>{
       ...raw,
-      'id': (raw['id'] ?? '').toString(),
+      'id': (raw['id'] ?? documentId).toString(),
       'client_id': (raw['client_id'] ?? raw['clientId'] ?? '').toString(),
       'client_name': (raw['client_name'] ?? raw['clientName'] ?? '').toString(),
       'contracting_client_id':
@@ -76,7 +82,7 @@ class FirebaseProgramariRepository implements ProgramariCloudRepository {
           (raw['contracting_client_name'] ?? raw['contractingClientName'] ?? '')
               .toString(),
       'scheduled_date':
-          (raw['scheduled_date'] ?? raw['scheduledDate'] ?? '').toString(),
+          raw['scheduled_date'] ?? raw['scheduledDate'] ?? raw['date'] ?? '',
       'start_time': (raw['start_time'] ?? raw['startTime'] ?? '').toString(),
       'end_time': (raw['end_time'] ?? raw['endTime'] ?? '').toString(),
       'start_date_time':
@@ -116,18 +122,16 @@ class FirebaseProgramariRepository implements ProgramariCloudRepository {
               .toString(),
       'intervention_price':
           raw['intervention_price'] ?? raw['interventionPrice'] ?? 0,
-      'intervention_price_currency':
-          (raw['intervention_price_currency'] ??
-                  raw['interventionPriceCurrency'] ??
-                  'RON')
-              .toString(),
+      'intervention_price_currency': (raw['intervention_price_currency'] ??
+              raw['interventionPriceCurrency'] ??
+              'RON')
+          .toString(),
       'admin_collected_amount':
           raw['admin_collected_amount'] ?? raw['adminCollectedAmount'] ?? 0,
-      'admin_collected_currency':
-          (raw['admin_collected_currency'] ??
-                  raw['adminCollectedCurrency'] ??
-                  'RON')
-              .toString(),
+      'admin_collected_currency': (raw['admin_collected_currency'] ??
+              raw['adminCollectedCurrency'] ??
+              'RON')
+          .toString(),
       'admin_financial_status':
           (raw['admin_financial_status'] ?? raw['adminFinancialStatus'] ?? '')
               .toString(),
@@ -136,7 +140,8 @@ class FirebaseProgramariRepository implements ProgramariCloudRepository {
       'admin_financial_notes':
           (raw['admin_financial_notes'] ?? raw['adminFinancialNotes'] ?? '')
               .toString(),
-      'material_usage': raw['material_usage'] ?? raw['materialUsage'] ?? const {},
+      'material_usage':
+          raw['material_usage'] ?? raw['materialUsage'] ?? const {},
     };
   }
 }

@@ -490,12 +490,9 @@ class LocalAppDataRepository implements AppDataRepository {
       // Cache local există → fetch incremental: ultimele 14 luni din cloud
       // + datele istorice din cache local (strategia normală de refresh rapid).
       final windowStart = DateTime.now().subtract(const Duration(days: 425));
-      final windowStartStr = windowStart.toIso8601String().substring(0, 10);
-      final snapshot = await _appointmentsCollection
-          .where('scheduled_date', isGreaterThanOrEqualTo: windowStartStr)
-          .get();
-      var cloudItems = snapshot.docs
-          .map((doc) => Appointment.fromMap(doc.data()))
+      final docs = await _fetchRecentAppointmentDocs(windowStart);
+      var cloudItems = docs
+          .map(_appointmentFromDoc)
           .where((item) => item.id.trim().isNotEmpty)
           .toList(growable: false);
       appointmentLastCloudCount = cloudItems.length;
@@ -598,7 +595,7 @@ class LocalAppDataRepository implements AppDataRepository {
       // Fetch complet din Firestore, fără filtru de dată
       final snapshot = await _appointmentsCollection.get();
       var cloudItems = snapshot.docs
-          .map((doc) => Appointment.fromMap(doc.data()))
+          .map(_appointmentFromDoc)
           .where((item) => item.id.trim().isNotEmpty)
           .toList(growable: false);
       appointmentLastCloudCount = cloudItems.length;
@@ -740,6 +737,31 @@ class LocalAppDataRepository implements AppDataRepository {
   }
 
   // ── Helper-e background pentru listAppointments ──────────────────────────
+
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      _fetchRecentAppointmentDocs(DateTime windowStart) async {
+    // Firestore stochează programările exclusiv cu `scheduled_date` string ISO
+    // (verificat pe producție: 272/272 documente snake_case + stringValue).
+    // Un singur query este suficient — combinațiile camelCase/Timestamp erau
+    // redundante (0 rezultate posibile) și adăugau 4 round-trip-uri la fiecare
+    // refresh. Parsarea tolerantă din Appointment.fromMap rămâne, ca plasă de
+    // siguranță pentru eventuale cache-uri locale vechi.
+    final windowStartStr = windowStart.toIso8601String().substring(0, 10);
+    final snapshot = await _appointmentsCollection
+        .where('scheduled_date', isGreaterThanOrEqualTo: windowStartStr)
+        .get();
+    return snapshot.docs;
+  }
+
+  Appointment _appointmentFromDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data();
+    return Appointment.fromMap(<String, dynamic>{
+      ...data,
+      'id': (data['id'] ?? doc.id).toString(),
+    });
+  }
 
   /// Reîncearcă ștergerile Firestore PENDENTE în background.
   /// Rulează complet asincron — nu blochează niciodată `listAppointments()`.

@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 enum ComplaintVisitType {
   constatare,
   interventie,
@@ -324,6 +326,7 @@ class AppointmentMaterialUsage {
   final double linearMetersUsed;
   final List<AppointmentMaterialUsageLine> lines;
   final String notes;
+
   /// Dacă true (default), costul materialelor/kitului se recuperează de la
   /// partenerul beneficiar și apare în soldul "De încasat". Dacă false,
   /// materialele sunt suportate intern — nu modifică soldul partenerului.
@@ -348,7 +351,7 @@ class AppointmentMaterialUsage {
   }
 
   double get totalCost =>
-      lines.fold<double>(0, (sum, line) => sum + line.totalCost);
+      lines.fold<double>(0, (total, line) => total + line.totalCost);
 
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
@@ -538,6 +541,7 @@ class Appointment {
   final DateTime? forPartnerReceiveDate;
   final String forPartnerReceiveNotes;
   final List<String> clientPhoneNumbers;
+
   /// True dacă stocul a fost deja scăzut pentru materialele acestei programări.
   /// Previne scăderi duble la editări ulterioare.
   final bool stocScazut;
@@ -671,8 +675,7 @@ class Appointment {
       adminCollectedAmount: adminCollectedAmount ?? this.adminCollectedAmount,
       adminCollectedCurrency:
           adminCollectedCurrency ?? this.adminCollectedCurrency,
-      adminFinancialStatus:
-          adminFinancialStatus ?? this.adminFinancialStatus,
+      adminFinancialStatus: adminFinancialStatus ?? this.adminFinancialStatus,
       adminDueDate:
           clearAdminDueDate ? null : (adminDueDate ?? this.adminDueDate),
       adminFinancialNotes: adminFinancialNotes ?? this.adminFinancialNotes,
@@ -726,8 +729,9 @@ class Appointment {
 
   double get estimatedMaterialsCost => materialUsage.totalCost;
 
-  double get estimatedProfit =>
-      adminCollectedAmount > 0 ? adminCollectedAmount - estimatedMaterialsCost : 0;
+  double get estimatedProfit => adminCollectedAmount > 0
+      ? adminCollectedAmount - estimatedMaterialsCost
+      : 0;
 
   List<String> get resolvedAssignedTeamIds {
     final values = <String>[];
@@ -828,6 +832,10 @@ class Appointment {
 
   factory Appointment.fromMap(Map<String, dynamic> map) {
     DateTime? parseDateTime(dynamic raw) {
+      if (raw is Timestamp) return raw.toDate();
+      if (raw is DateTime) return raw;
+      if (raw is int) return DateTime.fromMillisecondsSinceEpoch(raw);
+      if (raw is num) return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
       final text = (raw ?? '').toString().trim();
       if (text.isEmpty) return null;
       return DateTime.tryParse(text);
@@ -908,12 +916,12 @@ class Appointment {
           (map['contact_email'] ?? map['contactEmail'] ?? '').toString(),
       title: (map['title'] ?? '').toString(),
       location: (map['location'] ?? '').toString(),
-      scheduledDate: DateTime.tryParse(
-            (map['scheduled_date'] ?? '').toString(),
+      scheduledDate: parseDateTime(
+            map['scheduled_date'] ?? map['scheduledDate'] ?? map['date'],
           ) ??
           DateTime.now(),
-      startTime: (map['start_time'] ?? '').toString(),
-      endTime: (map['end_time'] ?? '').toString(),
+      startTime: (map['start_time'] ?? map['startTime'] ?? '').toString(),
+      endTime: (map['end_time'] ?? map['endTime'] ?? '').toString(),
       startDateTime: parseDateTime(
         map['start_date_time'] ?? map['startDateTime'],
       ),
@@ -930,7 +938,7 @@ class Appointment {
       assignedEmployeeIds: parseIdList(
         map['assigned_employee_ids'] ?? map['assignedEmployeeIds'],
       ),
-      vehicleId: (map['vehicle_id'] ?? '').toString(),
+      vehicleId: (map['vehicle_id'] ?? map['vehicleId'] ?? '').toString(),
       complaintVisitType: ComplaintVisitType.fromValue(
         (map['complaint_visit_type'] ?? map['complaintVisitType'] ?? '')
             .toString(),
@@ -1020,10 +1028,9 @@ class Appointment {
       adminDueDate: parseDateTime(
         map['admin_due_date'] ?? map['adminDueDate'],
       ),
-      adminFinancialNotes: (map['admin_financial_notes'] ??
-              map['adminFinancialNotes'] ??
-              '')
-          .toString(),
+      adminFinancialNotes:
+          (map['admin_financial_notes'] ?? map['adminFinancialNotes'] ?? '')
+              .toString(),
       materialUsage: parseMaterialUsage(
         map['material_usage'] ?? map['materialUsage'],
       ),
@@ -1086,7 +1093,9 @@ class Appointment {
           );
         }
         // Fallback: migrare din contactPhone
-        final single = (map['contact_phone'] ?? '').toString().trim();
+        final single = (map['contact_phone'] ?? map['contactPhone'] ?? '')
+            .toString()
+            .trim();
         return single.isNotEmpty ? [single] : const <String>[];
       })(),
     );
