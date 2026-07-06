@@ -123,7 +123,7 @@ void main() {
     });
 
     test(
-        'already-synced items are not removed when a new op for same entity is queued',
+        'already-synced items are removed and a new op for same entity is queued',
         () async {
       final repo = LocalCloudSyncRepository();
       final service = CloudSyncService(repo);
@@ -145,10 +145,10 @@ void main() {
       );
 
       final allFinal = await repo.listItems();
-      // Synced item stays; a new pending item is added
+      // Synced items are removed from the queue; only the fresh pending op stays.
       final synced = allFinal.where((item) => item.isSynced).toList();
       final pending = allFinal.where((item) => !item.isSynced).toList();
-      expect(synced.length, 1);
+      expect(synced, isEmpty);
       expect(pending.length, 1);
       expect(pending.first.payload['name'], 'Updated');
     });
@@ -310,7 +310,7 @@ void main() {
       );
     });
 
-    test('markItemSynced clears retry metadata', () async {
+    test('markItemSynced removes synced items with retry metadata', () async {
       final repo = LocalCloudSyncRepository();
       final service = CloudSyncService(repo);
 
@@ -329,13 +329,11 @@ void main() {
       await repo.markItemSynced(created.first.id, DateTime.now());
 
       final all = await repo.listItems();
-      final synced =
-          all.firstWhere((item) => item.entityId == 'retry-client-1');
-      expect(synced.retryCount, 0);
-      expect(synced.lastError, isNull);
-      expect(synced.nextAttemptAt, isNull);
-      expect(synced.lastAttemptAt, isNull);
-      expect(synced.isSynced, isTrue);
+      expect(
+        all.where((item) => item.entityId == 'retry-client-1'),
+        isEmpty,
+        reason: 'Synced queue entries are deleted instead of kept as history.',
+      );
     });
   });
 }
