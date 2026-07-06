@@ -1701,6 +1701,8 @@ class LocalAppDataRepository implements AppDataRepository {
       _lastComplaintsFallbackReason = '';
       return merged;
     } catch (error) {
+      // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       _lastComplaintsDataSourceLabel = 'local_cache';
       _lastComplaintsFallbackReason = error.toString();
       return localItems;
@@ -1831,6 +1833,8 @@ class LocalAppDataRepository implements AppDataRepository {
       _lastRepairReportsFallbackReason = '';
       return merged;
     } catch (error) {
+      // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       _lastRepairReportsDataSourceLabel = 'local_cache';
       _lastRepairReportsFallbackReason = error.toString();
       return localItems;
@@ -1943,7 +1947,9 @@ class LocalAppDataRepository implements AppDataRepository {
       final merged = [...cloudItems]..sort(_compareWarrantyInterventionReports);
       await _writeWarrantyInterventionReports(merged);
       return merged;
-    } catch (_) {
+    } catch (error) {
+      // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       return localItems;
     }
   }
@@ -2554,6 +2560,8 @@ class LocalAppDataRepository implements AppDataRepository {
       return cloudItems;
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
+      // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       _lastClientsDataSourceLabel = 'local_cache';
       _lastClientsFallbackReason = error.toString().trim();
       return localItems;
@@ -2599,6 +2607,8 @@ class LocalAppDataRepository implements AppDataRepository {
       (_) {},
       onError: (Object error) {
         FirebaseBootstrap.registerRuntimeError(error);
+        // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+        FirestoreAuthWarningService.instance.reportCloudError(error);
       },
     );
     _clientsCloudRefreshFuture = future;

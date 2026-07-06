@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/firestore_auth_warning_service.dart';
 import '../../features/product_catalog/product_catalog_models.dart';
 import '../../features/product_catalog/product_catalog_service.dart';
 import '../../features/product_catalog/product_sales_models.dart';
@@ -87,7 +88,9 @@ class FieldSalesService {
       final merged = [...cloudItems]..sort(_compareLeads);
       await _writeLeads(merged);
       return merged;
-    } catch (_) {
+    } catch (error) {
+      // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       return localItems..sort(_compareLeads);
     }
   }
@@ -146,7 +149,9 @@ class FieldSalesService {
       final merged = [...cloudItems]..sort(_compareRequests);
       await _writeRequests(merged);
       return merged;
-    } catch (_) {
+    } catch (error) {
+      // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       return localItems..sort(_compareRequests);
     }
   }
