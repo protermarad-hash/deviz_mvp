@@ -1931,6 +1931,24 @@ CrmRecord {
 
 ---
 
+## 🚨 PROCEDURĂ OBLIGATORIE — BUILD, PUSH ȘI AUTOUPDATE
+
+Înainte de orice build, push sau publicare/autoupdate, agentul citește INTEGRAL
+`docs/procedura_build_push_autoupdate.md` și urmează procedura literal. Această
+procedură este obligatorie și are prioritate peste orice deducție, comandă generică
+sau amintire din sesiuni anterioare.
+
+Reguli de oprire:
+- `flutter build apk` direct este INTERZIS pentru release/build client.
+- Pentru build client se folosesc exclusiv scripturile existente
+  `scripts/build_proterm.ps1` / `scripts/build_costel.ps1`.
+- Dacă procedura, scriptul real sau clientul țintă nu pot fi verificate, agentul se
+  oprește și raportează; nu improvizează o comandă.
+- Publicarea prin `publish_release*.js` cere confirmare explicită separată înainte
+  de execuție, chiar dacă alte reguli generale permit lucru fără întrerupere.
+
+---
+
 ## 🧱 CONVENȚII DE BUILD ȘI LIVRARE MULTI-CLIENT (REGULĂ PERMANENTĂ)
 
 **Motiv (de ce e documentat aici):** aceste convenții existau deja ca practică,
