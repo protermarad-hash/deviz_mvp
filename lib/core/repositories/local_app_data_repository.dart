@@ -11,6 +11,7 @@ import '../auth_models.dart';
 import '../app_models.dart';
 import '../cloud/firebase_bootstrap.dart';
 import '../cloud/firebase_collections.dart';
+import '../cloud/firestore_auth_warning_service.dart';
 import '../cloud/cloud_sync_models.dart';
 import '../cloud/offline_sync_runtime.dart';
 import '../company_profile.dart';
@@ -572,6 +573,7 @@ class LocalAppDataRepository implements AppDataRepository {
       appointmentLastCloudCount = -1;
       _lastAppointmentsDataSourceLabel = 'local_cache';
       _lastAppointmentsFallbackReason = error.toString();
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       _programariLog(
         'listAppointments end duration_ms=${listStopwatch.elapsedMilliseconds} count=${localItems.length} source=local_cache error=$error',
       );
@@ -647,6 +649,7 @@ class LocalAppDataRepository implements AppDataRepository {
       appointmentLastCloudCount = -1;
       _lastAppointmentsDataSourceLabel = 'local_cache';
       _lastAppointmentsFallbackReason = error.toString();
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       _programariLog(
         'listAppointments end duration_ms=${listStopwatch.elapsedMilliseconds} count=${localItems.length} source=local_cache mode=all_history error=$error',
       );

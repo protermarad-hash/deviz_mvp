@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/cloud/firestore_auth_warning_service.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
@@ -333,6 +334,7 @@ class _OfertePageState extends State<OfertePage>
       },
       onError: (Object error) {
         FirebaseBootstrap.registerRuntimeError(error);
+        FirestoreAuthWarningService.instance.reportCloudError(error);
         if (!mounted) {
           return;
         }
@@ -357,6 +359,7 @@ class _OfertePageState extends State<OfertePage>
       return cloudItems;
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
+      FirestoreAuthWarningService.instance.reportCloudError(error);
       _setLocalCacheSource(_shortCloudError(error));
       return _localRepository.listOffers();
     }

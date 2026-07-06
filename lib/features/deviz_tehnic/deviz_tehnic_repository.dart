@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/firestore_auth_warning_service.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import 'deviz_tehnic_models.dart';
 
@@ -121,6 +122,8 @@ class DevizTehnicRepository {
     } catch (e, stack) {
       lastFirestoreCount = -1;
       lastFirestoreError = e.toString();
+      // Semnalează centralizat dacă e permission-denied (sesiune cloud invalidă).
+      FirestoreAuthWarningService.instance.reportCloudError(e);
       debugPrint('[DevizTehnic] ❌ Eroare Firestore list(): $e');
       debugPrint('[DevizTehnic] Stack: $stack');
       return _sorted(localItems);
