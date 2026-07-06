@@ -30,7 +30,6 @@ import '../../core/widgets/adaptive_side_panel_layout.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../../core/widgets/client_autocomplete_field.dart';
 import '../../core/widgets/partner_autocomplete_field.dart';
-import '../../core/widgets/quick_add_client_dialog.dart';
 import '../../core/widgets/serviciu_autocomplete_field.dart';
 import '../field_photos/field_photo_capture_service.dart';
 import '../field_photos/field_photos_page.dart';
@@ -2617,9 +2616,6 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
     return null;
   }
-
-  Future<ClientRecord?> _openQuickCreateClientDialog() =>
-      showQuickAddClientDialog(context, repository: widget.repository);
 
   Future<PartnerRecord?> _openQuickCreatePartnerDialog() =>
       openQuickCreatePartnerDialog(context, widget.repository);
