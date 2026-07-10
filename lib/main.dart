@@ -38,7 +38,10 @@ void main() async {
 
   // Refresh token la login și la fiecare schimbare de stare auth
   FirebaseAuth.instance.authStateChanges().listen((user) {
-    if (user != null) user.getIdToken(true).catchError((_) => '');
+    if (user != null) {
+      user.getIdToken(true).catchError((_) => '');
+      _fieldAuthService.promoteCloudSessionIfPossible();
+    }
   });
   // Timer periodic 30 min — previne expirarea silențioasă a token-ului după inactivitate
   Timer.periodic(const Duration(minutes: 30), (_) {

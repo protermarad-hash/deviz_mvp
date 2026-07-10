@@ -25,9 +25,8 @@ void main() {
 
     test('mesaj text "Missing or insufficient permissions" este detectat', () {
       expect(
-        svc.reportCloudError(
-            Exception('[cloud_firestore/permission-denied] '
-                'Missing or insufficient permissions.')),
+        svc.reportCloudError(Exception('[cloud_firestore/permission-denied] '
+            'Missing or insufficient permissions.')),
         isTrue,
       );
       expect(svc.permissionDeniedNotifier.value, isTrue);

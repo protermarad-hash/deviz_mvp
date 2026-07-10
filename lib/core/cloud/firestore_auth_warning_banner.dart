@@ -4,6 +4,17 @@ import 'package:flutter/material.dart';
 import '../auth/field_auth_service.dart';
 import 'firestore_auth_warning_service.dart';
 
+bool shouldShowReloginAction({
+  required bool isAuthenticated,
+  required String authSourceLabel,
+  required bool permissionDenied,
+}) {
+  if (permissionDenied) {
+    return true;
+  }
+  return isAuthenticated && authSourceLabel == 'local';
+}
+
 /// Banner persistent, non-blocant, afișat sub AppBar când sesiunea cloud nu e
 /// validă (fallback auth local sau permission-denied Firestore confirmat).
 ///
@@ -73,43 +84,83 @@ class _FirestoreAuthWarningBannerState
           return const SizedBox.shrink();
         }
         final permissionDenied = svc.permissionDeniedNotifier.value;
+        final showReloginAction = shouldShowReloginAction(
+          isAuthenticated: widget.authService.isAuthenticated,
+          authSourceLabel: widget.authService.authSourceLabel,
+          permissionDenied: permissionDenied,
+        );
         return Material(
           color: const Color(0xFFB71C1C), // roșu închis — avertisment
-          child: Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
-              children: [
-                const Icon(Icons.cloud_off_outlined,
-                    color: Colors.white, size: 20),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Rulezi neautentificat la cloud — datele pot fi învechite '
-                    'și modificările NU se vor sincroniza.',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12.5,
-                    ),
-                  ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final useStackedLayout = constraints.maxWidth < 720;
+              final action = showReloginAction
+                  ? FilledButton.tonalIcon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: const Color(0xFFB71C1C),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: _openReloginDialog,
+                      icon: const Icon(Icons.login, size: 16),
+                      label: const Text('Reconectează'),
+                    )
+                  : null;
+              final message = const Text(
+                'Rulezi neautentificat la cloud — datele pot fi învechite '
+                'și modificările NU se vor sincroniza.',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12.5,
                 ),
-                if (permissionDenied) ...[
-                  const SizedBox(width: 8),
-                  FilledButton.tonalIcon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Colors.white,
-                      foregroundColor: const Color(0xFFB71C1C),
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    onPressed: _openReloginDialog,
-                    icon: const Icon(Icons.login, size: 16),
-                    label: const Text('Reconectează'),
-                  ),
-                ],
-              ],
-            ),
+              );
+              return Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: useStackedLayout
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.cloud_off_outlined,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(child: message),
+                            ],
+                          ),
+                          if (action != null) ...[
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: action,
+                            ),
+                          ],
+                        ],
+                      )
+                    : Row(
+                        children: [
+                          const Icon(
+                            Icons.cloud_off_outlined,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(child: message),
+                          if (action != null) ...[
+                            const SizedBox(width: 8),
+                            action,
+                          ],
+                        ],
+                      ),
+              );
+            },
           ),
         );
       },
@@ -187,6 +238,15 @@ class _ReloginDialogState extends State<_ReloginDialog> {
         });
         return;
       }
+      if (widget.authService.authSourceLabel != 'cloud') {
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _error = 'Autentificarea Firebase a reușit, dar profilul cloud nu a '
+              'putut fi confirmat. Verifică internetul și încearcă din nou.';
+        });
+        return;
+      }
       FirestoreAuthWarningService.instance.clear();
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -260,8 +320,7 @@ class _ReloginDialogState extends State<_ReloginDialog> {
               prefixIcon: const Icon(Icons.lock_outline),
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
-                icon: Icon(
-                    _obscure ? Icons.visibility : Icons.visibility_off),
+                icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
                 onPressed: () => setState(() => _obscure = !_obscure),
               ),
             ),

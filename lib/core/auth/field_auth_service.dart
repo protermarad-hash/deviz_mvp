@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import '../auth_models.dart';
@@ -14,6 +15,7 @@ class FieldAuthService extends ChangeNotifier {
   FieldAuthUser? _currentUser;
   bool _loading = false;
   bool _restoring = false;
+  bool _promotingCloudSession = false;
   String? _lastError;
 
   FieldAuthSession? get session => _session;
@@ -40,7 +42,11 @@ class FieldAuthService extends ChangeNotifier {
     final name = _currentUser?.name.trim() ?? '';
     return name.isNotEmpty ? name : null;
   }
+
   String get authSourceLabel => _repository.authSourceLabel;
+
+  bool get isCloudAuthenticated =>
+      isAuthenticated && _repository.authSourceLabel == 'cloud';
 
   Future<void> restoreSession() async {
     _loading = true;
@@ -57,6 +63,24 @@ class FieldAuthService extends ChangeNotifier {
       _loading = false;
       _restoring = false;
       notifyListeners();
+    }
+  }
+
+  Future<void> promoteCloudSessionIfPossible() async {
+    if (_promotingCloudSession || _restoring) {
+      return;
+    }
+    if (_repository.authSourceLabel == 'cloud') {
+      return;
+    }
+    if (FirebaseAuth.instance.currentUser == null) {
+      return;
+    }
+    _promotingCloudSession = true;
+    try {
+      await restoreSession();
+    } finally {
+      _promotingCloudSession = false;
     }
   }
 
