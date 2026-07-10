@@ -11,6 +11,20 @@ import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import 'employee_financial_models.dart';
 
+class EmployeePayEntriesLoadResult {
+  const EmployeePayEntriesLoadResult({
+    required this.entries,
+    required this.isConclusive,
+  });
+
+  final List<EmployeePayEntry> entries;
+
+  /// True doar cand am putut verifica sursa completa pentru programare.
+  /// Cand e false, UI-ul poate salva/upserta sume, dar nu are voie sa stearga
+  /// intrari vechi care lipsesc din formular.
+  final bool isConclusive;
+}
+
 class EmployeeFinancialRepository {
   EmployeeFinancialRepository._();
   static final EmployeeFinancialRepository instance =
@@ -195,29 +209,68 @@ class EmployeeFinancialRepository {
   Future<List<EmployeePayEntry>> listPayEntriesForAppointmentWithSync(
     String appointmentId,
   ) async {
+    final result = await loadPayEntriesForAppointmentWithSyncStatus(
+      appointmentId,
+    );
+    return result.entries;
+  }
+
+  Future<EmployeePayEntriesLoadResult>
+      loadPayEntriesForAppointmentWithSyncStatus(
+    String appointmentId,
+  ) async {
     final local = await _readLocalPayEntries();
     final localFiltered =
         local.where((e) => e.appointmentId == appointmentId).toList();
-    if (localFiltered.isNotEmpty || !_isCloudAvailable) {
-      return _sortPayEntries(localFiltered);
+    if (!_isCloudAvailable) {
+      return EmployeePayEntriesLoadResult(
+        entries: _sortPayEntries(localFiltered),
+        isConclusive: false,
+      );
     }
-    // Local gol + online → sync din Firestore pentru acest appointment
+
     try {
       final snapshot = await _payEntriesCol
           .where('appointment_id', isEqualTo: appointmentId)
           .get();
-      if (snapshot.docs.isEmpty) return [];
       final cloud = snapshot.docs
           .map((doc) => EmployeePayEntry.fromMap(doc.data()))
           .toList();
-      // Merge în local cache (nu suprascrie alte entries)
+
+      final resolved = _mergePayEntriesForAppointment(
+        local: localFiltered,
+        cloud: cloud,
+      );
+
       final otherLocal =
           local.where((e) => e.appointmentId != appointmentId).toList();
-      await _writeLocalPayEntries([...otherLocal, ...cloud]);
-      return _sortPayEntries(cloud);
+      await _writeLocalPayEntries([...otherLocal, ...resolved]);
+      return EmployeePayEntriesLoadResult(
+        entries: _sortPayEntries(resolved),
+        isConclusive: true,
+      );
     } catch (_) {
-      return _sortPayEntries(localFiltered);
+      return EmployeePayEntriesLoadResult(
+        entries: _sortPayEntries(localFiltered),
+        isConclusive: false,
+      );
     }
+  }
+
+  List<EmployeePayEntry> _mergePayEntriesForAppointment({
+    required List<EmployeePayEntry> local,
+    required List<EmployeePayEntry> cloud,
+  }) {
+    if (local.isEmpty) return cloud;
+    if (cloud.isEmpty) return local;
+
+    final byEmployeeId = <String, EmployeePayEntry>{
+      for (final entry in cloud) entry.employeeId: entry,
+    };
+    for (final entry in local) {
+      byEmployeeId[entry.employeeId] = entry;
+    }
+    return _sortPayEntries(byEmployeeId.values.toList(growable: false));
   }
 
   /// Curăță PayEntry-urile orfane: angajați care nu mai sunt alocați

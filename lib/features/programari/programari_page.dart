@@ -62,6 +62,7 @@ import 'servicii/firebase_serviciu_prestat_repository.dart';
 import 'dialogs/client_partner_dialogs.dart';
 import 'dialogs/document_dialogs.dart';
 import 'dialogs/employee_pay_dialog.dart';
+import 'employee_pay_editing_guard.dart';
 import 'programare_kit_catalog_service.dart';
 import 'programare_kit_models.dart';
 import 'programare_kituri_page.dart';
@@ -4174,9 +4175,25 @@ class _ProgramariPageState extends State<ProgramariPage> {
 
     // ── Employee pay — pre-populate controllers ───────────────────────────────
     final employeePayControllers = <String, TextEditingController>{};
+    var employeePayEntriesLoadConclusive = !isEditingExisting;
     if (isEditingExisting) {
-      final existingPayEntries = await EmployeeFinancialRepository.instance
-          .listPayEntriesForAppointment(appointment.id);
+      List<EmployeePayEntry> existingPayEntries = const [];
+      try {
+        final payLoad = await EmployeeFinancialRepository.instance
+            .loadPayEntriesForAppointmentWithSyncStatus(appointment.id);
+        existingPayEntries = payLoad.entries;
+        employeePayEntriesLoadConclusive = payLoad.isConclusive;
+        if (!employeePayEntriesLoadConclusive) {
+          _programariLog(
+            'employee pay preload inconclusive appointment=${appointment.id}',
+          );
+        }
+      } catch (error) {
+        employeePayEntriesLoadConclusive = false;
+        _programariLog(
+          'employee pay preload error appointment=${appointment.id} error=$error',
+        );
+      }
       for (final e in existingPayEntries) {
         if (e.amountDue > 0) {
           employeePayControllers[e.employeeId] = TextEditingController(
@@ -6406,6 +6423,12 @@ class _ProgramariPageState extends State<ProgramariPage> {
                       final savedItem = item;
                       final savedAuthUserId = authUserId;
                       final savedIsEditing = isEditingExisting;
+                      final savedCanDeleteMissingPayEntries =
+                          canDeleteMissingEmployeePayEntries(
+                        isEditingExisting: savedIsEditing,
+                        payEntriesLoadConclusive:
+                            employeePayEntriesLoadConclusive,
+                      );
                       final savedPayData =
                           Map<String, double>.from(employeePayData);
                       _startBackgroundTask('employee pay save', () async {
@@ -6456,7 +6479,8 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         // 2. Ștergere PayEntry pentru angajați dezalocați sau
                         // cu sumă 0. Previne reapariția sumelor vechi după
                         // dezalocare + curăță istoricul la prima salvare.
-                        if (savedIsEditing && existing.isNotEmpty) {
+                        if (savedCanDeleteMissingPayEntries &&
+                            existing.isNotEmpty) {
                           final allocatedIds = savedPayData.keys.toSet();
                           for (final oldEntry in existing) {
                             if (!allocatedIds
@@ -9553,9 +9577,21 @@ class _ProgramariPageState extends State<ProgramariPage> {
         .whereType<MasterEmployee>()
         .toList(growable: false);
 
-    // Încarcă intrările existente pentru această programare
-    var entries = await repo.listPayEntriesForAppointment(item.id);
+    // Încarcă intrările existente pentru această programare.
+    final payLoad = await repo.loadPayEntriesForAppointmentWithSyncStatus(
+      item.id,
+    );
+    final entries = payLoad.entries;
     if (!mounted) return;
+    if (!payLoad.isConclusive) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Plățile angajaților nu au putut fi verificate complet. Verifică internetul înainte de modificări.',
+          ),
+        ),
+      );
+    }
 
     final appointmentTitle = item.title.trim().isEmpty
         ? item.jobId.trim()
