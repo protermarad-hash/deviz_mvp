@@ -53,6 +53,8 @@ import '../product_catalog/warranty_certificate_editor_dialog.dart';
 import '../product_catalog/warranty_certificate_pdf_service.dart';
 import '../registratura/registry_models.dart';
 import 'appointment_models.dart';
+import 'appointment_sheet_export_dialog.dart';
+import 'appointment_sheet_pdf_service.dart';
 import 'appointment_status_utils.dart';
 import 'programari_models.dart';
 import 'programari_utils.dart';
@@ -8490,6 +8492,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
                               await _handleGpsCheckin(item);
                             },
                           ),
+                          IconButton(
+                            tooltip: 'Export fișă (PDF)',
+                            icon: const Icon(Icons.print_outlined),
+                            onPressed: () async {
+                              Navigator.of(dialogContext).pop();
+                              await _exportAppointmentSheet(item);
+                            },
+                          ),
                           if (_canCreateAdministrativeAppointments)
                             IconButton(
                               tooltip: 'Editează',
@@ -8538,6 +8548,125 @@ class _ProgramariPageState extends State<ProgramariPage> {
         );
       },
     );
+  }
+
+  /// Exportă fișa programării ca PDF. Setul de câmpuri „teren" se include mereu;
+  /// câmpurile administrative apar DOAR pentru rol admin și DOAR dacă sunt bifate
+  /// explicit în dialogul de export.
+  Future<void> _exportAppointmentSheet(Appointment item) async {
+    final isAdmin = _canManageAppointmentFinancials;
+
+    final options = await showAppointmentSheetExportDialog(
+      context,
+      isAdmin: isAdmin,
+    );
+    if (options == null || !mounted) return;
+
+    // Fetch suplimentar plăți angajați DOAR dacă e bifat (și doar pentru admin).
+    List<EmployeePayEntry> payEntries = const <EmployeePayEntry>[];
+    if (isAdmin && options.platiAngajati) {
+      try {
+        payEntries = await EmployeeFinancialRepository.instance
+            .listPayEntriesForAppointmentWithSync(item.id);
+      } catch (_) {
+        payEntries = const <EmployeePayEntry>[];
+      }
+    }
+
+    // ── Rezolvare etichete (lookup-uri din state) ──────────────────────────
+    final clientRec = _clientRecordById(item.clientId);
+    final clientAddrParts = <String>[
+      if ((clientRec?.address ?? '').trim().isNotEmpty)
+        clientRec!.address.trim(),
+      if ((clientRec?.city ?? '').trim().isNotEmpty) clientRec!.city.trim(),
+      if ((clientRec?.county ?? '').trim().isNotEmpty) clientRec!.county.trim(),
+    ];
+
+    // Vehicul — best-effort din lookup (nu blochează exportul dacă lipsește).
+    String vehicleLabel = '';
+    if (item.vehicleId.trim().isNotEmpty) {
+      vehicleLabel = item.vehicleId.trim();
+      try {
+        final vehicles = await widget.repository.listVehiclesLookup();
+        for (final v in vehicles) {
+          if (v.id == item.vehicleId.trim()) {
+            vehicleLabel = v.name.trim().isEmpty ? v.id : v.name.trim();
+            break;
+          }
+        }
+      } catch (_) {
+        // păstrează id-ul brut
+      }
+    }
+
+    final job = _jobRecordById(item.jobId);
+    String jobLabel = '';
+    if (job != null) {
+      final parts = <String>[
+        if (job.jobCode.trim().isNotEmpty) job.jobCode.trim(),
+        if (job.title.trim().isNotEmpty) job.title.trim(),
+      ];
+      jobLabel = parts.join(' — ');
+    } else if (item.jobId.trim().isNotEmpty) {
+      jobLabel = item.jobId.trim();
+    }
+
+    final phones = item.clientPhoneNumbers.isNotEmpty
+        ? item.clientPhoneNumbers
+        : (() {
+            final p = _detailPhone(item).trim();
+            return p.isEmpty ? const <String>[] : <String>[p];
+          })();
+
+    final labels = AppointmentSheetLabels(
+      clientName: _resolvedClientName(item.clientId, item.clientName),
+      addressLabel: _detailAddress(item),
+      clientAddressFromRecord: clientAddrParts.join(', '),
+      contractingClientName: _resolvedClientName(
+        item.contractingClientId,
+        item.contractingClientName,
+      ),
+      teamLabel: _teamNamesFromIds(_appointmentTeamIds(item)).join(', '),
+      employeeLabel: _employeeNamesFromIds(_appointmentEmployeeIds(item)).join(', '),
+      vehicleLabel: vehicleLabel,
+      jobLabel: jobLabel,
+      statusLabel: _statusLabel(item.status),
+      priorityLabel: _priorityLabel(item.priority),
+      contactPerson: _detailContactPerson(item),
+      phones: phones,
+      email: _detailEmail(item),
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Se generează fișa PDF...')),
+    );
+
+    try {
+      final path = await AppointmentSheetPdfService.export(
+        repository: widget.repository,
+        appointment: item,
+        labels: labels,
+        options: options,
+        isAdmin: isAdmin,
+        payEntries: payEntries,
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Fișă programare generată',
+        shareSubject: 'Fișă programare — ${item.title}',
+        shareText: 'Fișa programării generată din aplicație.',
+      );
+    } on PdfSaveCanceledException {
+      // Utilizatorul a anulat salvarea — nimic de făcut.
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Nu am putut genera fișa PDF: $e')),
+      );
+    }
   }
 
   /// Shows the audit-history entries for [item] loaded from Firestore.
