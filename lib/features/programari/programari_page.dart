@@ -78,6 +78,7 @@ import '../reclamatii/repair_report_models.dart';
 import '../reclamatii/warranty_intervention_report_editor_page.dart';
 import '../reclamatii/warranty_intervention_report_models.dart';
 import '../../core/help/help_module_button.dart';
+import 'programare_cancel_confirm_dialog.dart';
 import 'programari_postpone_dialog.dart';
 import 'programari_bon_consum_dialog.dart';
 import '../hr/employee_financial_models.dart';
@@ -7015,23 +7016,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
   Future<void> _quickCancel(Appointment item) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Anulează programarea'),
-        content: const Text('Sigur anulezi această programare?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Nu'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-            ),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Anulează programarea'),
-          ),
-        ],
-      ),
+      builder: (_) => const ProgramariCancelConfirmDialog(),
     );
     if (!mounted || confirmed != true) return;
     await _quickChangeStatus(item, 'anulata');
