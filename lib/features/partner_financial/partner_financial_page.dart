@@ -12,6 +12,7 @@ import '../../core/repositories/app_data_repository.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../notifications/notification_runtime_service.dart';
 import '../programari/appointment_models.dart';
+import '../programari/appointment_status_utils.dart';
 import 'partner_decont_pdf_service.dart';
 import 'partner_financial_models.dart';
 import 'partner_financial_repository.dart';
@@ -142,12 +143,24 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
 
       // Construim lista de tranzacții în memorie — fără nicio scriere încă
       final toUpsert = <PartnerTransaction>[];
+      // Programări NEfinalizate care au (posibil) ptxn_* orfane de curățat.
+      final orphanAppointmentIds = <String>[];
 
       for (final doc in docs) {
         final raw = doc.data();
         final id = doc.id;
         // BUG 7: preferă versiunea locală dacă există (mai recentă, corectă)
         final localApt = localById[id];
+
+        // Guard status (Problema c): generăm ptxn_* DOAR pentru programări
+        // finalizate. Pentru cele nefinalizate cu ptxn_* existente (create
+        // înainte de guard sau retrogradate) → curățare prin helper-ul comun.
+        final statusStr =
+            (localApt?.status ?? raw['status'] ?? '').toString();
+        if (!isCompletedAppointmentStatus(statusStr)) {
+          orphanAppointmentIds.add(id);
+          continue;
+        }
 
         double parseNum(dynamic v) =>
             v is num ? v.toDouble() : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
@@ -291,6 +304,12 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
           toUpsert,
           preserveExistingStatus: true,
         );
+      }
+
+      // Curăță ptxn_* orfane pentru programările nefinalizate (helper comun).
+      // Idempotent: șterge doar dacă tranzacțiile există efectiv local.
+      for (final appointmentId in orphanAppointmentIds) {
+        await _repository.removeOrphanedTransactionsFor(appointmentId);
       }
     } catch (_) {
       // Sync eșuat silențios — datele existente rămân neafectate

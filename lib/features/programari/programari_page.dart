@@ -1445,6 +1445,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
     Appointment? previous,
   }) async {
     final repo = PartnerFinancialRepository();
+    // Guard status (Problema c): tranzacțiile financiare ale partenerilor se
+    // generează/actualizează DOAR pentru programări finalizate. Dacă programarea
+    // NU (mai) e finalizată dar are deja ptxn_* (creat înainte de acest guard sau
+    // retrogradată dintr-un status finalizat) → le ștergem prin helper-ul comun.
+    if (!isCompletedAppointmentStatus(item.status)) {
+      await repo.removeOrphanedTransactionsFor(item.id);
+      return;
+    }
     final now = DateTime.now();
     final appointmentLabel = item.title.trim().isEmpty
         ? 'Programare ${item.scheduledDate.day.toString().padLeft(2, '0')}.${item.scheduledDate.month.toString().padLeft(2, '0')}.${item.scheduledDate.year}'
@@ -1539,10 +1547,25 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
   }
 
-  Future<void> _deleteAppointmentResolved(String id) async {
+  Future<void> _deleteAppointmentResolved(Appointment item) async {
+    // Part B (Problema b): capturăm partenerii din programarea completă ÎNAINTE
+    // de ștergere (caller-ul a scos deja item-ul din _items prin optimistic UI),
+    // apoi eliminăm tranzacțiile financiare asociate (ptxn_{id}_for/_exec/_materials)
+    // prin helper-ul comun din repository (queue offline, nu scriere directă).
+    final id = item.id;
+    final forPartnerId = item.forPartnerId.trim();
+    final execPartnerId = item.executingPartnerId.trim();
     await widget.repository.deleteAppointment(id);
     _syncAppointmentDataSourceLabel();
     // Queue apelat din repository (CLAUDE.md: nu din pagini)
+    // Helper idempotent (existență verificată local): sigur de apelat mereu —
+    // acoperă și programările cu material_usage facturabil (ptxn_*_materials)
+    // chiar dacă nu mai au partener for/exec setat la momentul ștergerii.
+    if (forPartnerId.isNotEmpty ||
+        execPartnerId.isNotEmpty ||
+        item.materialUsage.facturabilPartener) {
+      await PartnerFinancialRepository().removeOrphanedTransactionsFor(id);
+    }
   }
 
   Future<void> _confirmAndDeleteAppointment(Appointment item) async {
@@ -1582,7 +1605,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
       'history background delete',
       () => _writeAppointmentHistory(item: item, action: 'delete'),
     );
-    _deleteAppointmentResolved(item.id).catchError((e) {
+    _deleteAppointmentResolved(item).catchError((e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Eroare la ștergere: $e')),

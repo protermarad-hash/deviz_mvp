@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/help/help_module_button.dart';
 import '../../core/repositories/app_data_repository.dart';
+import '../programari/appointment_status_utils.dart';
 import 'partner_financial_models.dart';
 import 'partner_financial_page.dart';
 import 'partner_financial_repository.dart';
@@ -216,6 +217,14 @@ class _PartnerFinancialDashboardPageState
       for (final doc in snapshot.docs) {
         final raw = doc.data();
         final id = doc.id;
+        // Guard status (Problema c): NU regenera ptxn_* pentru programări
+        // nefinalizate. Curățarea ptxn_* orfane existente se face din pagina
+        // partenerului (_syncFromAppointments), la ștergere/edit programare,
+        // sau prin curățarea de producție (Partea D). Aici doar prevenim
+        // regenerarea în masă pe load-ul dashboard-ului (toți partenerii).
+        if (!isCompletedAppointmentStatus((raw['status'] ?? '').toString())) {
+          continue;
+        }
         final scheduledDateStr =
             (raw['scheduled_date'] ?? raw['scheduledDate'] ?? '').toString();
         final scheduledDate = DateTime.tryParse(scheduledDateStr) ?? now;

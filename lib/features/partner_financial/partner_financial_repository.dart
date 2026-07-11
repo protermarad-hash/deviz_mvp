@@ -257,6 +257,38 @@ class PartnerFinancialRepository {
     }
   }
 
+  /// Șterge tranzacțiile deterministe generate dintr-o programare
+  /// (ptxn_{id}_for / ptxn_{id}_exec / ptxn_{id}_materials).
+  ///
+  /// Helper COMUN — apelat din:
+  ///   1. ștergerea unei programări (elimină tranzacțiile asociate),
+  ///   2. sync-ul din programări când o programare NU (mai) e finalizată
+  ///      (retrogradare sau creat înainte de guard-ul de status).
+  ///
+  /// Ștergerea trece prin queue-ul offline (deleteTransaction), NU scriere
+  /// directă neawait-ată. Fiecare deleteTransaction reconstruiește sumarul
+  /// partenerului afectat (partenerId rezolvat din tranzacția locală).
+  /// Returnează numărul de tranzacții efectiv existente și șterse.
+  Future<int> removeOrphanedTransactionsFor(String appointmentId) async {
+    final id = appointmentId.trim();
+    if (id.isEmpty) return 0;
+    final existing = await _readLocalTransactions();
+    final existingIds = existing.map((t) => t.id).toSet();
+    final candidateIds = <String>[
+      'ptxn_${id}_for',
+      'ptxn_${id}_exec',
+      'ptxn_${id}_materials',
+    ];
+    int removed = 0;
+    for (final txnId in candidateIds) {
+      if (existingIds.contains(txnId)) {
+        await deleteTransaction(txnId);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   Future<void> deleteTransaction(String transactionId) async {
     final items = [...await _readLocalTransactions()];
     final existing = items.firstWhere(
