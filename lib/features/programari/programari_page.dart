@@ -7012,6 +7012,31 @@ class _ProgramariPageState extends State<ProgramariPage> {
     );
   }
 
+  Future<void> _quickCancel(Appointment item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Anulează programarea'),
+        content: const Text('Sigur anulezi această programare?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Nu'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red.shade700,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Anulează programarea'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    await _quickChangeStatus(item, 'anulata');
+  }
+
   List<Widget> _buildQuickStatusActions(Appointment item) {
     if (!_canCurrentUserUpdateStatus(item)) {
       return const <Widget>[];
@@ -7050,6 +7075,19 @@ class _ProgramariPageState extends State<ProgramariPage> {
           onPressed: () => _quickPostpone(item),
           icon: const Icon(Icons.schedule_outlined, size: 16),
           label: const Text('Amanata'),
+        ),
+      );
+    }
+
+    if (!isDone && !isCancelled) {
+      actions.add(
+        OutlinedButton.icon(
+          onPressed: () => _quickCancel(item),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.red.shade700,
+          ),
+          icon: const Icon(Icons.cancel_outlined, size: 16),
+          label: const Text('Anuleaza'),
         ),
       );
     }
@@ -7107,6 +7145,19 @@ class _ProgramariPageState extends State<ProgramariPage> {
           onPressed: () => closeAndRun(() => _quickPostpone(item)),
           icon: const Icon(Icons.schedule_outlined, size: 16),
           label: const Text('Amanata'),
+        ),
+      );
+    }
+
+    if (!isDone && !isCancelled) {
+      actions.add(
+        OutlinedButton.icon(
+          onPressed: () => closeAndRun(() => _quickCancel(item)),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Colors.red.shade700,
+          ),
+          icon: const Icon(Icons.cancel_outlined, size: 16),
+          label: const Text('Anuleaza'),
         ),
       );
     }
