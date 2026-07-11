@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../programari/appointment_models.dart';
+import '../programari/appointment_status_utils.dart';
 import '../jobs/job_models.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,6 +155,17 @@ class FinancialDashboardService {
     final payEntries = _readPayEntries(prefs);
     final empSummaries = _readMaps(prefs, _empSummariesKey);
     final partnerSummaries = _readMaps(prefs, _partnerSummariesKey);
+    final completedAppointmentIds = appointments
+        .where(isAppointmentEligibleForEmployeePay)
+        .map((appointment) => appointment.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final eligiblePayEntries = payEntries.where((entry) {
+      final appointmentId =
+          (entry['appointment_id'] ?? '').toString().trim();
+      return appointmentId.isNotEmpty &&
+          completedAppointmentIds.contains(appointmentId);
+    }).toList(growable: false);
 
     // ── Perioade ──────────────────────────────────────────────────────────────
     final monthStart = DateTime(now.year, now.month, 1);
@@ -219,7 +231,7 @@ class FinancialDashboardService {
 
     // ── Costuri angajați luna curentă ─────────────────────────────────────────
     double costuriAngajatiLuna = 0;
-    for (final e in payEntries) {
+    for (final e in eligiblePayEntries) {
       final dateStr = e['appointment_date'] as String? ?? '';
       final dt = DateTime.tryParse(dateStr);
       if (dt != null && !dt.isBefore(monthStart) && !dt.isAfter(monthEnd)) {
@@ -236,12 +248,20 @@ class FinancialDashboardService {
     // ── Datorii angajați ──────────────────────────────────────────────────────
     double datoriiAngajati = 0;
     final topAngajati = <EmployeeBalanceSummary>[];
+    final dueByEmployee = <String, double>{};
+    for (final entry in eligiblePayEntries) {
+      final employeeId = (entry['employee_id'] ?? '').toString();
+      dueByEmployee[employeeId] =
+          (dueByEmployee[employeeId] ?? 0) + _parseAmount(entry['amount_due']);
+    }
     for (final s in empSummaries) {
-      final balance = _parseAmount(s['total_due']) - _parseAmount(s['total_paid']);
+      final employeeId = s['employee_id']?.toString() ?? '';
+      final balance =
+          (dueByEmployee[employeeId] ?? 0) - _parseAmount(s['total_paid']);
       if (balance > 0.01) {
         datoriiAngajati += balance;
         topAngajati.add(EmployeeBalanceSummary(
-          employeeId: s['employee_id']?.toString() ?? '',
+          employeeId: employeeId,
           employeeName: s['employee_name']?.toString() ?? '',
           balance: balance,
         ));
@@ -302,7 +322,7 @@ class FinancialDashboardService {
         }
       }
       double mCosturiAngajati = 0;
-      for (final e in payEntries) {
+      for (final e in eligiblePayEntries) {
         final dt = DateTime.tryParse(e['appointment_date'] as String? ?? '');
         if (dt != null && !dt.isBefore(mStart) && !dt.isAfter(mEnd)) {
           mCosturiAngajati += _parseAmount(e['amount_due']);

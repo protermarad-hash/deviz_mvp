@@ -6,7 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../master/master_local_store.dart';
+import '../programari/appointment_models.dart';
 import '../programari/programari_page.dart';
+import 'employee_pay_eligibility.dart';
 import 'employee_financial_models.dart';
 import 'employee_financial_repository.dart';
 
@@ -156,16 +158,26 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
     });
     try {
       final range = _rangeForPeriod(_selectedPeriod, _customRange);
+      final appointmentRepository = widget.repository;
       final results = await Future.wait([
         MasterLocalStore.readEmployees(),
         _repo.listAllPayEntries(from: range.start, to: range.end),
         _repo.listAllPayments(),
         _repo.loadAllEmployeeSettings(),
+        if (appointmentRepository != null)
+          appointmentRepository.listAppointments()
+        else
+          Future.value(const <Appointment>[]),
       ]);
       if (!mounted) return;
       final employees = results[0] as List<MasterEmployee>;
       final settingsMap =
           results[3] as Map<String, EmployeeSettings>;
+      final appointments = results[4] as List<Appointment>;
+      final eligiblePayEntries = filterPayEntriesForCompletedAppointments(
+        results[1] as List<EmployeePayEntry>,
+        appointments,
+      );
 
       // Populează controllere de tarif pentru angajații noi
       for (final emp in employees) {
@@ -194,12 +206,22 @@ class _EmployeeFinancialPageState extends State<EmployeeFinancialPage>
 
       setState(() {
         _employees = employees;
-        _payEntries = results[1] as List<EmployeePayEntry>;
+        _payEntries = eligiblePayEntries;
         _payments = results[2] as List<EmployeePayment>;
         _settingsMap = settingsMap;
+        if (appointmentRepository == null) {
+          _error = 'Programările nu au putut fi verificate; sumele datorate '
+              'nu sunt incluse în sold.';
+        }
       });
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) {
+        setState(() {
+          _payEntries = const [];
+          _error = 'Programările nu au putut fi verificate; sumele datorate '
+              'nu sunt incluse în sold. Eroare: $e';
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

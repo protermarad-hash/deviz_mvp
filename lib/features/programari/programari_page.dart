@@ -53,6 +53,7 @@ import '../product_catalog/warranty_certificate_editor_dialog.dart';
 import '../product_catalog/warranty_certificate_pdf_service.dart';
 import '../registratura/registry_models.dart';
 import 'appointment_models.dart';
+import 'appointment_status_utils.dart';
 import 'programari_models.dart';
 import 'programari_utils.dart';
 import 'programari_calendar_placement.dart';
@@ -1598,41 +1599,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
   }
 
   String _normalizeStatusValue(String raw) {
-    final v = raw
-        .trim()
-        .toLowerCase()
-        .replaceAll('ă', 'a')
-        .replaceAll('â', 'a')
-        .replaceAll('î', 'i')
-        .replaceAll('ș', 's')
-        .replaceAll('ş', 's')
-        .replaceAll('ț', 't')
-        .replaceAll('ţ', 't')
-        .replaceAll('-', '_')
-        .replaceAll(' ', '_');
-    switch (v) {
-      case 'planificata':
-      case 'planned':
-      case 'noua':
-        return 'planificata';
-      case 'in_curs':
-      case 'incurs':
-      case 'in_progress':
-        return 'in_curs';
-      case 'finalizata':
-      case 'done':
-      case 'completed':
-        return 'finalizata';
-      case 'amanata':
-      case 'postponed':
-        return 'amanata';
-      case 'anulata':
-      case 'canceled':
-      case 'cancelled':
-        return 'anulata';
-      default:
-        return 'planificata';
-    }
+    return normalizeAppointmentStatus(raw);
   }
 
   // Normalizează text pentru căutare: lowercase + elimină diacriticele.
@@ -4292,7 +4259,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                     'Scrie liber sau alege un serviciu din catalog (cu pret).',
                                 onServiceSelected: (serviciu) {
                                   // Titlul e setat automat de Autocomplete (= denumire).
-                                  if (serviciu.pretSugerat <= 0) return;
+                                  if (serviciu.pretSugerat <= 0) {
+                                    return;
+                                  }
                                   setDialogState(() {
                                     // ÎNTOTDEAUNA în „Suma incasata / de incasat"
                                     // (tab Financiar, admin-only).
@@ -4909,7 +4878,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                               final t = _masterTeams
                                                   .where((x) => x.id == tid)
                                                   .firstOrNull;
-                                              if (t == null) continue;
+                                              if (t == null) {
+                                                continue;
+                                              }
                                               for (final mid
                                                   in t.memberIds) {
                                                 if (autoAddedEmployeeIds
@@ -4932,7 +4903,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                               final t = _masterTeams
                                                   .where((x) => x.id == tid)
                                                   .firstOrNull;
-                                              if (t == null) continue;
+                                              if (t == null) {
+                                                continue;
+                                              }
                                               for (final mid
                                                   in t.memberIds) {
                                                 if (!selectedAssignedEmployeeIds
@@ -5062,7 +5035,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                           final aTeams = _appointmentTeamIds(a).toSet();
                           return selectedAssignedTeamIds.any(aTeams.contains);
                         }).toList(growable: false);
-                        if (conflicting.isEmpty) return const SizedBox.shrink();
+                        if (conflicting.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
                         final duration = selectedEnd.difference(selectedStart);
                         final suggested = _findFirstFreeSlotForTeams(
                           teamIds: selectedAssignedTeamIds,
@@ -5673,7 +5648,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                             onCreateNew: () async {
                               final created =
                                   await _openQuickCreatePartnerDialog();
-                              if (created == null || !mounted) return;
+                              if (created == null || !mounted) {
+                                return;
+                              }
                               final nextPartners =
                                   await widget.repository.listPartners();
                               if (!mounted) return;
@@ -5818,7 +5795,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                             onCreateNew: () async {
                               final created =
                                   await _openQuickCreatePartnerDialog();
-                              if (created == null || !mounted) return;
+                              if (created == null || !mounted) {
+                                return;
+                              }
                               final nextPartners =
                                   await widget.repository.listPartners();
                               if (!mounted) return;
@@ -9507,7 +9486,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         firstDate: DateTime(2020),
                         lastDate: DateTime(2030),
                       );
-                      if (picked != null) setDialogState(() => selectedDate = picked);
+                      if (picked != null) {
+                        setDialogState(() => selectedDate = picked);
+                      }
                     },
                   ),
                   const SizedBox(height: 12),
@@ -9788,7 +9769,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         firstDate: DateTime(2020),
                         lastDate: DateTime(2030),
                       );
-                      if (picked != null) setDialogState(() => selectedDate = picked);
+                      if (picked != null) {
+                        setDialogState(() => selectedDate = picked);
+                      }
                     },
                   ),
                   const SizedBox(height: 12),
