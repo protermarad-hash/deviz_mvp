@@ -297,6 +297,8 @@ class _ProgramariPageState extends State<ProgramariPage> {
   LucrariCloudRepository? _lucrariCloudRepository;
   Map<String, String> _jobClientById = const <String, String>{};
   final ScrollController _pageScrollController = ScrollController();
+  final ScrollController _calendarHorizontalScrollController =
+      ScrollController();
   String _dataSourceLabel = 'local_cache';
   String? _cloudFallbackReason = FirebaseBootstrap.lastErrorMessage;
   DateTime _calendarFocusDate = DateTime.now();
@@ -317,6 +319,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
   double _calendarOverscrollAccum = 0.0;
   bool _didHandleInitialDraft = false;
   bool _didHandleInitialFocus = false;
+  bool _didScrollCalendarToTodayOnOpen = false;
 
   // ── Cache calendar — evită recalcul plasamente la orice setState ──────────
   // Invalidat NUMAI când se schimbă _cachedFilteredItems sau _calendarFocusDate.
@@ -509,6 +512,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
     _realtimeSyncDebounce?.cancel();
     _appointmentsRealtimeSubscription?.cancel();
     _pageScrollController.dispose();
+    _calendarHorizontalScrollController.dispose();
     _searchController.dispose();
     _serviciiPrestateNotifier.dispose();
     super.dispose();
@@ -6813,6 +6817,62 @@ class _ProgramariPageState extends State<ProgramariPage> {
           ? _startOfWeekMonday(DateTime.now())
           : _dateOnly(DateTime.now());
     });
+    _scheduleCalendarScrollToDate(DateTime.now());
+  }
+
+  void _scheduleCalendarScrollToDate(
+    DateTime date, {
+    bool animate = true,
+    int attemptsRemaining = 3,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_calendarHorizontalScrollController.hasClients) {
+        if (attemptsRemaining > 1) {
+          _scheduleCalendarScrollToDate(
+            date,
+            animate: animate,
+            attemptsRemaining: attemptsRemaining - 1,
+          );
+        }
+        return;
+      }
+
+      final visibleDayCount =
+          _calendarVisibleDayOptions.contains(_calendarVisibleDays)
+              ? _calendarVisibleDays
+              : 7;
+      final visibleDays = _calendarDays(dayCount: visibleDayCount);
+      final dayIndex =
+          visibleDays.indexWhere((day) => _isSameDate(day, date));
+      if (dayIndex < 0) return;
+
+      final position = _calendarHorizontalScrollController.position;
+      final zoom = _calendarZoom.clamp(0.78, 1.16);
+      final timeColumnWidth = 68.0 * zoom;
+      final targetDayColumnWidth =
+          (visibleDayCount == 1 ? 240.0 : 176.0) * zoom;
+      final plannerViewportWidth =
+          (position.viewportDimension - timeColumnWidth).clamp(1.0, double.infinity);
+      final plannerWidth = (targetDayColumnWidth * visibleDays.length)
+          .clamp(plannerViewportWidth, double.infinity);
+      final dayColumnWidth = plannerWidth / visibleDays.length;
+      final targetOffset = (16.0 +
+              timeColumnWidth +
+              dayIndex * dayColumnWidth -
+              (position.viewportDimension - dayColumnWidth) / 2)
+          .clamp(0.0, position.maxScrollExtent);
+
+      if (animate) {
+        _calendarHorizontalScrollController.animateTo(
+          targetOffset,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _calendarHorizontalScrollController.jumpTo(targetOffset);
+      }
+    });
   }
 
   Future<void> _showCalendarIntervalPicker() async {
@@ -10407,6 +10467,10 @@ class _ProgramariPageState extends State<ProgramariPage> {
   }
 
   Widget _buildCalendarView(List<Appointment> items) {
+    if (!_didScrollCalendarToTodayOnOpen) {
+      _didScrollCalendarToTodayOnOpen = true;
+      _scheduleCalendarScrollToDate(DateTime.now(), animate: false);
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final bottomSpacing = AppViewportGuard.bottomSpacing(
@@ -10511,13 +10575,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                         ),
                         if (!isTodayRange)
                           FilledButton.tonalIcon(
-                            onPressed: () {
-                              setState(() {
-                                _calendarFocusDate = useWeekAnchor
-                                    ? _startOfWeekMonday(DateTime.now())
-                                    : _dateOnly(DateTime.now());
-                              });
-                            },
+                            onPressed: _goToTodayCalendar,
                             icon: const Icon(Icons.my_location_outlined),
                             label: const Text('Astazi'),
                           ),
@@ -10643,6 +10701,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
                   return false;
                 },
                 child: SingleChildScrollView(
+                controller: _calendarHorizontalScrollController,
                 padding: EdgeInsets.fromLTRB(16, 16, 16, bottomSpacing),
                 scrollDirection: Axis.horizontal,
                 child: SizedBox(
