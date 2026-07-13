@@ -8,6 +8,7 @@ import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
+import 'partner_financial_calculator.dart';
 import 'partner_financial_models.dart';
 
 class PartnerFinancialRepository {
@@ -414,6 +415,9 @@ class PartnerFinancialRepository {
     //
     // consumMateriale → MEREU 'credit_neincasat' (recuperat de la partener)
     // incasareManuala = MEREU 'plata_primita' indiferent de câmpul status
+    // plataManuala + iesire = plată efectivă către partener, indiferent de status;
+    // este tratată explicit înainte de switch pentru a nu scădea generic toate
+    // datoriile originale cu financialDirection='plata_efectuata_achitata'.
     //
     // Etapa 2 — alocare încasări pe categorii:
     //   collectionCategory=work      → reduce workCredits
@@ -431,7 +435,8 @@ class PartnerFinancialRepository {
     double collectedProducts = 0;
     double collectedGeneral = 0;   // legacy / nealocate
     double platiPrimite = 0;       // = Σ toate plata_primita
-    double debiteNeachitate = 0;
+    double datoriiBrute = 0;
+    double platiCatrePartener = 0;
     DateTime? lastDate;
 
     // ── AUDIT LOG temporar pentru parteneri cheie ─────────────────────────────
@@ -455,6 +460,11 @@ class PartnerFinancialRepository {
     for (final t in partnerTransactions) {
       if (lastDate == null || t.date.isAfter(lastDate)) lastDate = t.date;
       final amount = t.amount.abs();
+      if (t.type == PartnerTransactionType.plataManuala &&
+          t.direction == PartnerTransactionDirection.iesire) {
+        platiCatrePartener += amount;
+        continue;
+      }
       switch (t.financialDirection) {
         case 'credit_neincasat':
           crediteNeincasate += amount;
@@ -491,7 +501,7 @@ class PartnerFinancialRepository {
           }
           break;
         case 'plata_efectuata':
-          debiteNeachitate += amount;
+          datoriiBrute += amount;
           break;
         case 'credit_incasat':
         case 'plata_efectuata_achitata':
@@ -500,28 +510,24 @@ class PartnerFinancialRepository {
     }
 
     final deIncasat = (crediteNeincasate - platiPrimite).clamp(0.0, double.infinity);
-    final soldNet = deIncasat - debiteNeachitate;
+    final dePlata =
+        (datoriiBrute - platiCatrePartener).clamp(0.0, double.infinity);
+    final soldNet = deIncasat - dePlata;
 
     if (auditMode) {
       debugPrint('[AUDIT $partnerName] crediteNeincasate=$crediteNeincasate'
           ' (work=$workCredits mat=$materialsCredits prod=$productsCredits)');
       debugPrint('[AUDIT $partnerName] platiPrimite=$platiPrimite'
           ' (work=$collectedWork mat=$collectedMaterials prod=$collectedProducts gen=$collectedGeneral)');
-      debugPrint('[AUDIT $partnerName] deIncasat=$deIncasat debiteNeachitate=$debiteNeachitate soldNet=$soldNet');
+      debugPrint('[AUDIT $partnerName] deIncasat=$deIncasat datoriiBrute=$datoriiBrute platiCatrePartener=$platiCatrePartener dePlata=$dePlata soldNet=$soldNet');
       debugPrint('[AUDIT $partnerName] ══════════════════════════════════════');
     }
-    debugPrint('[Financiar $partnerId] lucrari=$workCredits mat=$materialsCredits prod=$productsCredits platiPrimite=$platiPrimite deIncasat=$deIncasat soldNet=$soldNet');
+    debugPrint('[Financiar $partnerId] lucrari=$workCredits mat=$materialsCredits prod=$productsCredits platiPrimite=$platiPrimite platiCatrePartener=$platiCatrePartener deIncasat=$deIncasat dePlata=$dePlata soldNet=$soldNet');
 
-    final summary = PartnerFinancialSummary(
+    final summary = calculatePartnerFinancialSummaryFromTransactions(
       partnerId: partnerId,
       partnerName: partnerName,
-      totalDeIncasat: deIncasat,
-      totalDePlata: debiteNeachitate,
-      totalIncasat: platiPrimite,
-      totalPlatit: 0,
-      lastTransactionDate: lastDate,
-      transactionCount: partnerTransactions.length,
-      updatedAt: DateTime.now(),
+      transactions: partnerTransactions,
     );
 
     await _upsertLocalSummary(summary);

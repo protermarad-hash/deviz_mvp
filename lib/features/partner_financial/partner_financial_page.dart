@@ -853,15 +853,18 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
       const SnackBar(content: Text('Tranzacție ștearsă.')),
     );
 
-    // Repository se ocupă de queue intern — nu apelăm din pagină (CLAUDE.md)
-    _repository.deleteTransaction(transaction.id).catchError((e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Eroare la ștergere: $e')),
-        );
-        _load(); // restaurează starea la eroare
-      }
-    });
+    // Repository se ocupă de queue și reconstruiește sumarul. Reîncărcăm după
+    // succes pentru ca și cardul superior să afișeze imediat noul rest de plată.
+    try {
+      await _repository.deleteTransaction(transaction.id);
+      if (mounted) await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la ștergere: $e')),
+      );
+      await _load(); // restaurează starea optimistă la eroare
+    }
   }
 
   Future<void> _editTransaction(PartnerTransaction transaction) async {
@@ -1898,6 +1901,7 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
     final platiPrimite = _platiPrimite;
     final restDeIncasat = (credite - platiPrimite).clamp(0.0, double.infinity);
     final dePlata = s?.totalDePlata ?? 0;
+    final platitCatrePartener = s?.totalPlatit ?? 0;
 
     // Breakdown pe categorii
     final workCredits = _workToCollect;
@@ -1974,14 +1978,20 @@ class _PartnerFinancialPageState extends State<PartnerFinancialPage> {
             ),
 
             // ── Secțiunea: Datorii către partener ─────────────────────────────
-            if (dePlata > 0) ...[
+            if (dePlata > 0 || platitCatrePartener > 0) ...[
               const SizedBox(height: 12),
               _SectionHeader(
                   label: 'Datorii către partener',
                   color: Colors.red.shade700),
               const SizedBox(height: 6),
+              if (platitCatrePartener > 0)
+                _DetailRow(
+                  label: 'Plătit către partener',
+                  value: '− ${_fmt.format(platitCatrePartener)} RON',
+                  color: Colors.teal.shade700,
+                ),
               _DetailRow(
-                label: 'Total de plătit partenerului',
+                label: 'REST DE PLATĂ',
                 value: '${_fmt.format(dePlata)} RON',
                 color: Colors.red.shade700,
                 bold: true,
