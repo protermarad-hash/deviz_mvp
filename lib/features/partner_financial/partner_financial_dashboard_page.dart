@@ -66,6 +66,8 @@ class _PartnerFinancialDashboardPageState
   bool _loading = true;
   bool _syncing = false;
   bool _recalculating = false;
+  DateTime? _lastManualSyncAt;
+  String? _syncError;
 
   List<PartnerFinancialSummary> _summaries = const [];
   Map<String, DateTime> _lastTxDate = const {};
@@ -96,20 +98,25 @@ class _PartnerFinancialDashboardPageState
   void _onOnlineChanged() {
     if (!mounted) return;
     setState(() {}); // actualizează iconița status
-    if (FirebaseBootstrap.isOnline) {
-      // La revenire online: dacă lista e goală sau există alerte fără date reale,
-      // declanșează faza 2 în background
-      _loadPhase2();
-    }
   }
 
   // ── Faza 1: date locale imediate ─────────────────────────────────────────
   Future<void> _loadPhase1() async {
     if (!mounted) return;
+    final stopwatch = Stopwatch()..start();
+    debugPrint('[FinanciarParteneri] phase1 start');
     setState(() => _loading = true);
 
     final summaries = await _repository.listLocalOnlySummaries();
+    debugPrint(
+      '[FinanciarParteneri] phase1 summaries count=${summaries.length} '
+      'ms=${stopwatch.elapsedMilliseconds}',
+    );
     final txns = await _repository.listLocalOnlyTransactions();
+    debugPrint(
+      '[FinanciarParteneri] phase1 transactions count=${txns.length} '
+      'ms=${stopwatch.elapsedMilliseconds}',
+    );
     final lastTxDate = _computeLastTxDates(txns);
     final alerts = _computeAlerts(summaries, lastTxDate);
 
@@ -120,24 +127,48 @@ class _PartnerFinancialDashboardPageState
       _alerts = alerts;
       _loading = false;
     });
-
-    // Faza 2 în background — nu blochează UI-ul
-    if (FirebaseBootstrap.isOnline) {
-      _loadPhase2();
-    }
+    stopwatch.stop();
+    debugPrint(
+      '[FinanciarParteneri] phase1 complete summaries=${summaries.length} '
+      'transactions=${txns.length} alerts=${alerts.length} '
+      'totalMs=${stopwatch.elapsedMilliseconds}',
+    );
   }
 
-  // ── Faza 2: sync Firestore în background ──────────────────────────────────
+  // ── Faza 2: sync Firestore DOAR la cererea utilizatorului ─────────────────
   Future<void> _loadPhase2() async {
     if (_syncing || !mounted) return;
-    if (!mounted) return;
-    setState(() => _syncing = true);
+    final totalStopwatch = Stopwatch()..start();
+    debugPrint('[FinanciarParteneri] phase2 start (manual)');
+    setState(() {
+      _syncing = true;
+      _syncError = null;
+    });
 
     try {
+      final appointmentsStopwatch = Stopwatch()..start();
       await _syncAllFromAppointments();
-      await _repository.rebuildAllSummaries();
+      appointmentsStopwatch.stop();
+      debugPrint(
+        '[FinanciarParteneri] phase2 appointments sync '
+        'ms=${appointmentsStopwatch.elapsedMilliseconds}',
+      );
 
+      final rebuildStopwatch = Stopwatch()..start();
+      await _repository.rebuildAllSummaries();
+      rebuildStopwatch.stop();
+      debugPrint(
+        '[FinanciarParteneri] phase2 rebuild summaries '
+        'ms=${rebuildStopwatch.elapsedMilliseconds}',
+      );
+
+      final listStopwatch = Stopwatch()..start();
       final summaries = await _repository.listAllSummaries();
+      listStopwatch.stop();
+      debugPrint(
+        '[FinanciarParteneri] phase2 list summaries count=${summaries.length} '
+        'ms=${listStopwatch.elapsedMilliseconds}',
+      );
       final txns = await _repository.listLocalOnlyTransactions();
       final lastTxDate = _computeLastTxDates(txns);
       final alerts = _computeAlerts(summaries, lastTxDate);
@@ -147,17 +178,26 @@ class _PartnerFinancialDashboardPageState
         _summaries = summaries..sort(_comparator);
         _lastTxDate = lastTxDate;
         _alerts = alerts;
+        _lastManualSyncAt = DateTime.now();
       });
-    } catch (_) {
-      // Eșec silențios — datele locale rămân vizibile
+    } catch (e, stackTrace) {
+      debugPrint('[FinanciarParteneri] phase2 error: $e');
+      debugPrintStack(stackTrace: stackTrace);
+      if (mounted) {
+        setState(() => _syncError = e.toString());
+      }
     } finally {
+      totalStopwatch.stop();
+      debugPrint(
+        '[FinanciarParteneri] phase2 complete '
+        'totalMs=${totalStopwatch.elapsedMilliseconds}',
+      );
       if (mounted) setState(() => _syncing = false);
     }
   }
 
   // ── Calcul ultima dată tranzacție per partener ────────────────────────────
-  Map<String, DateTime> _computeLastTxDates(
-      List<PartnerTransaction> allTx) {
+  Map<String, DateTime> _computeLastTxDates(List<PartnerTransaction> allTx) {
     final result = <String, DateTime>{};
     for (final tx in allTx) {
       final existing = result[tx.partnerId];
@@ -197,13 +237,21 @@ class _PartnerFinancialDashboardPageState
 
   // ── Sync programări din Firestore ─────────────────────────────────────────
   Future<void> _syncAllFromAppointments() async {
+    final totalStopwatch = Stopwatch()..start();
     try {
+      final fetchStopwatch = Stopwatch()..start();
       final snapshot =
           await FirebaseFirestore.instance.collection('appointments').get();
+      fetchStopwatch.stop();
+      debugPrint(
+        '[FinanciarParteneri] appointments fetched '
+        'count=${snapshot.docs.length} ms=${fetchStopwatch.elapsedMilliseconds}',
+      );
       final now = DateTime.now();
 
-      double parseNum(dynamic v) =>
-          v is num ? v.toDouble() : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
+      double parseNum(dynamic v) => v is num
+          ? v.toDouble()
+          : double.tryParse('$v'.replaceAll(',', '.')) ?? 0;
 
       PartnerTransactionStatus mapStatus(String raw) {
         final v = raw.trim().toLowerCase();
@@ -233,12 +281,14 @@ class _PartnerFinancialDashboardPageState
             ? 'Programare ${scheduledDate.day.toString().padLeft(2, '0')}.${scheduledDate.month.toString().padLeft(2, '0')}.${scheduledDate.year}'
             : title;
 
-        final forId =
-            (raw['for_partner_id'] ?? raw['forPartnerId'] ?? '').toString().trim();
-        final forName =
-            (raw['for_partner_name'] ?? raw['forPartnerName'] ?? '').toString().trim();
-        final forAmount = parseNum(
-            raw['for_partner_invoice_amount'] ?? raw['forPartnerInvoiceAmount']);
+        final forId = (raw['for_partner_id'] ?? raw['forPartnerId'] ?? '')
+            .toString()
+            .trim();
+        final forName = (raw['for_partner_name'] ?? raw['forPartnerName'] ?? '')
+            .toString()
+            .trim();
+        final forAmount = parseNum(raw['for_partner_invoice_amount'] ??
+            raw['forPartnerInvoiceAmount']);
         if (forId.isNotEmpty && forAmount > 0) {
           toUpsert.add(PartnerTransaction(
             id: 'ptxn_${id}_for',
@@ -253,7 +303,9 @@ class _PartnerFinancialDashboardPageState
             referenceType: 'programare',
             paymentMethod: PartnerTransactionPaymentMethod.transfer,
             status: mapStatus(
-              (raw['for_partner_receive_status'] ?? raw['forPartnerReceiveStatus'] ?? '')
+              (raw['for_partner_receive_status'] ??
+                      raw['forPartnerReceiveStatus'] ??
+                      '')
                   .toString(),
             ),
             createdAt: now,
@@ -269,8 +321,8 @@ class _PartnerFinancialDashboardPageState
             (raw['executing_partner_name'] ?? raw['executingPartnerName'] ?? '')
                 .toString()
                 .trim();
-        final execAmount = parseNum(
-            raw['executing_partner_commission'] ?? raw['executingPartnerCommission']);
+        final execAmount = parseNum(raw['executing_partner_commission'] ??
+            raw['executingPartnerCommission']);
         if (execId.isNotEmpty && execAmount > 0) {
           toUpsert.add(PartnerTransaction(
             id: 'ptxn_${id}_exec',
@@ -295,15 +347,32 @@ class _PartnerFinancialDashboardPageState
           ));
         }
       }
+      debugPrint(
+        '[FinanciarParteneri] transactions generated '
+        'count=${toUpsert.length} ms=${totalStopwatch.elapsedMilliseconds}',
+      );
 
       if (toUpsert.isNotEmpty) {
+        final upsertStopwatch = Stopwatch()..start();
         await _repository.upsertTransactionsBatch(
           toUpsert,
           preserveExistingStatus: true,
         );
+        upsertStopwatch.stop();
+        debugPrint(
+          '[FinanciarParteneri] transactions batch upsert '
+          'count=${toUpsert.length} ms=${upsertStopwatch.elapsedMilliseconds}',
+        );
       }
     } catch (e) {
       debugPrint('[PartnerFinancialDashboard] sync tranzacții batch eșuat: $e');
+      rethrow;
+    } finally {
+      totalStopwatch.stop();
+      debugPrint(
+        '[FinanciarParteneri] appointments sync total '
+        'ms=${totalStopwatch.elapsedMilliseconds}',
+      );
     }
   }
 
@@ -442,16 +511,18 @@ class _PartnerFinancialDashboardPageState
               : IconButton(
                   icon: Icon(
                     FirebaseBootstrap.isOnline
-                        ? Icons.cloud_done_outlined
+                        ? Icons.cloud_sync_outlined
                         : Icons.cloud_off_outlined,
                     color: FirebaseBootstrap.isOnline
                         ? Colors.green.shade600
                         : Colors.orange.shade600,
                   ),
                   tooltip: FirebaseBootstrap.isOnline
-                      ? 'Online — apasă pentru re-sync'
+                      ? 'Sincronizează manual din cloud'
                       : 'Offline — datele sunt din cache local',
-                  onPressed: _loading ? null : _loadPhase2,
+                  onPressed: (_loading || !FirebaseBootstrap.isOnline)
+                      ? null
+                      : _loadPhase2,
                 ),
           const HelpModuleButton(moduleId: 'financiar_parteneri'),
         ],
@@ -462,6 +533,7 @@ class _PartnerFinancialDashboardPageState
               onRefresh: _loadPhase1,
               child: CustomScrollView(
                 slivers: [
+                  SliverToBoxAdapter(child: _buildDataStatus()),
                   SliverToBoxAdapter(child: _buildGlobalSummary()),
                   if (_alerts.isNotEmpty)
                     SliverToBoxAdapter(child: _buildAlertsSection()),
@@ -473,7 +545,8 @@ class _PartnerFinancialDashboardPageState
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Text('Nicio tranzacție pentru filtrul selectat.'),
+                            const Text(
+                                'Nicio tranzacție pentru filtrul selectat.'),
                             const SizedBox(height: 12),
                             Card(
                               child: Padding(
@@ -518,9 +591,55 @@ class _PartnerFinancialDashboardPageState
   }
 
   // ── Widget: sumar global ──────────────────────────────────────────────────
+  Widget _buildDataStatus() {
+    final Color color;
+    final IconData icon;
+    final String label;
+
+    if (_syncing) {
+      color = Colors.blue.shade700;
+      icon = Icons.sync;
+      label = 'Sincronizare manuală în curs...';
+    } else if (_syncError != null) {
+      color = Colors.red.shade700;
+      icon = Icons.cloud_off_outlined;
+      label = 'Date locale • ultima sincronizare a eșuat';
+    } else if (_lastManualSyncAt != null) {
+      final last = _lastManualSyncAt!;
+      final hour = last.hour.toString().padLeft(2, '0');
+      final minute = last.minute.toString().padLeft(2, '0');
+      color = Colors.green.shade700;
+      icon = Icons.cloud_done_outlined;
+      label = 'Date sincronizate manual la $hour:$minute';
+    } else {
+      color = Colors.grey.shade700;
+      icon = Icons.storage_outlined;
+      label = FirebaseBootstrap.isOnline
+          ? 'Date locale • sincronizare manuală disponibilă în bara de sus'
+          : 'Date locale • sincronizarea este disponibilă când revine conexiunea';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(fontSize: 12, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildGlobalSummary() {
     final soldNet = _soldNetTotal;
-    final soldColor = soldNet >= 0 ? Colors.green.shade700 : Colors.red.shade700;
+    final soldColor =
+        soldNet >= 0 ? Colors.green.shade700 : Colors.red.shade700;
     final urgentCount =
         _alerts.where((a) => a.severity == _AlertSeverity.urgent).length;
     final warningCount =
@@ -546,8 +665,7 @@ class _PartnerFinancialDashboardPageState
                 ),
                 Text(
                   '${_summaries.length} parteneri',
-                  style: TextStyle(
-                      fontSize: 12, color: Colors.grey.shade600),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                 ),
               ],
             ),
@@ -579,15 +697,13 @@ class _PartnerFinancialDashboardPageState
                     _AlertChip(
                       label: '$urgentCount urgent${urgentCount > 1 ? 'e' : ''}',
                       color: Colors.red.shade700,
-                      onTap: () =>
-                          setState(() => _filter = 'alerte'),
+                      onTap: () => setState(() => _filter = 'alerte'),
                     ),
                   if (warningCount > 0)
                     _AlertChip(
                       label: '$warningCount atenție',
                       color: Colors.orange.shade700,
-                      onTap: () =>
-                          setState(() => _filter = 'alerte'),
+                      onTap: () => setState(() => _filter = 'alerte'),
                     ),
                 ],
               ),
@@ -651,13 +767,13 @@ class _PartnerFinancialDashboardPageState
                   onTap: () => _openPartner(alert.summary),
                   borderRadius: BorderRadius.circular(6),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 7),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                     decoration: BoxDecoration(
                       color: alertColor.withValues(alpha: 0.06),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: alertColor.withValues(alpha: 0.3)),
+                      border:
+                          Border.all(color: alertColor.withValues(alpha: 0.3)),
                     ),
                     child: Row(
                       children: [
@@ -684,8 +800,7 @@ class _PartnerFinancialDashboardPageState
                               Text(
                                 'Ultima tranzacție: ${dateFmt.format(alert.lastTxDate)} — ${alert.daysSince} zile fără activitate',
                                 style: TextStyle(
-                                    fontSize: 11,
-                                    color: Colors.grey.shade700),
+                                    fontSize: 11, color: Colors.grey.shade700),
                               ),
                             ],
                           ),
@@ -728,7 +843,11 @@ class _PartnerFinancialDashboardPageState
   Widget _buildFilterChips() {
     final filters = <(String, String, int?)>[
       ('toti', 'Toți', null),
-      ('de_incasat', 'De încasat', _summaries.where((s) => s.soldNet > 0).length),
+      (
+        'de_incasat',
+        'De încasat',
+        _summaries.where((s) => s.soldNet > 0).length
+      ),
       ('de_platit', 'De plătit', _summaries.where((s) => s.soldNet < 0).length),
       if (_alerts.isNotEmpty) ('alerte', 'Alerte', _alerts.length),
     ];
@@ -761,7 +880,8 @@ class _PartnerFinancialDashboardPageState
     final name = s.partnerName.isEmpty ? s.partnerId : s.partnerName;
 
     // Alertă pentru acest partener
-    final alert = _alerts.where((a) => a.summary.partnerId == s.partnerId).firstOrNull;
+    final alert =
+        _alerts.where((a) => a.summary.partnerId == s.partnerId).firstOrNull;
     final isUrgent = alert?.severity == _AlertSeverity.urgent;
     final isWarning = alert?.severity == _AlertSeverity.warning;
 
@@ -769,8 +889,7 @@ class _PartnerFinancialDashboardPageState
     final dateFmt = DateFormat('dd.MM.yyyy');
 
     return ListTile(
-      contentPadding:
-          const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       leading: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -792,9 +911,7 @@ class _PartnerFinancialDashboardPageState
               child: Icon(
                 isUrgent ? Icons.error : Icons.warning_amber,
                 size: 14,
-                color: isUrgent
-                    ? Colors.red.shade700
-                    : Colors.orange.shade700,
+                color: isUrgent ? Colors.red.shade700 : Colors.orange.shade700,
               ),
             ),
         ],
@@ -818,17 +935,14 @@ class _PartnerFinancialDashboardPageState
               '${alert.daysSince} zile fără activitate',
               style: TextStyle(
                 fontSize: 11,
-                color: isUrgent
-                    ? Colors.red.shade600
-                    : Colors.orange.shade600,
+                color: isUrgent ? Colors.red.shade600 : Colors.orange.shade600,
                 fontStyle: FontStyle.italic,
               ),
             ),
         ],
       ),
       trailing: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(8),
@@ -849,7 +963,8 @@ class _PartnerFinancialDashboardPageState
 
   void _openPartner(PartnerFinancialSummary s) {
     final name = s.partnerName.isEmpty ? s.partnerId : s.partnerName;
-    Navigator.of(context).push(
+    Navigator.of(context)
+        .push(
       MaterialPageRoute<void>(
         builder: (_) => PartnerFinancialPage(
           partnerId: s.partnerId,
@@ -857,7 +972,8 @@ class _PartnerFinancialDashboardPageState
           appRepository: widget.appRepository,
         ),
       ),
-    ).then((_) {
+    )
+        .then((_) {
       // La întoarcere, reîncarcă datele locale (soldurile pot fi modificate)
       if (mounted) _loadPhase1();
     });
