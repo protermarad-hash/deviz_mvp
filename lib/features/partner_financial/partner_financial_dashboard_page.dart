@@ -70,8 +70,9 @@ class _PartnerFinancialDashboardPageState
   String? _syncError;
 
   List<PartnerFinancialSummary> _summaries = const [];
-  Map<String, DateTime> _lastTxDate = const {};
   List<_PartnerAlert> _alerts = const [];
+
+  int _buildCount = 0;
 
   String _filter = 'toti';
   _SortOption _sort = _SortOption.balanceDesc;
@@ -103,36 +104,36 @@ class _PartnerFinancialDashboardPageState
   // ── Faza 1: date locale imediate ─────────────────────────────────────────
   Future<void> _loadPhase1() async {
     if (!mounted) return;
-    final stopwatch = Stopwatch()..start();
-    debugPrint('[FinanciarParteneri] phase1 start');
+    final totalStopwatch = Stopwatch()..start();
+    debugPrint('[PF-DASH] phase1 start');
     setState(() => _loading = true);
 
-    final summaries = await _repository.listLocalOnlySummaries();
-    debugPrint(
-      '[FinanciarParteneri] phase1 summaries count=${summaries.length} '
-      'ms=${stopwatch.elapsedMilliseconds}',
-    );
-    final txns = await _repository.listLocalOnlyTransactions();
-    debugPrint(
-      '[FinanciarParteneri] phase1 transactions count=${txns.length} '
-      'ms=${stopwatch.elapsedMilliseconds}',
-    );
-    final lastTxDate = _computeLastTxDates(txns);
-    final alerts = _computeAlerts(summaries, lastTxDate);
+    try {
+      final summariesStopwatch = Stopwatch()..start();
+      final summaries = await _repository.listLocalOnlySummaries();
+      summariesStopwatch.stop();
+      debugPrint(
+        '[PF-DASH] summaries count=${summaries.length} '
+        'ms=${summariesStopwatch.elapsedMilliseconds}',
+      );
+      if (!mounted) return;
 
-    if (!mounted) return;
-    setState(() {
-      _summaries = summaries..sort(_comparator);
-      _lastTxDate = lastTxDate;
-      _alerts = alerts;
-      _loading = false;
-    });
-    stopwatch.stop();
-    debugPrint(
-      '[FinanciarParteneri] phase1 complete summaries=${summaries.length} '
-      'transactions=${txns.length} alerts=${alerts.length} '
-      'totalMs=${stopwatch.elapsedMilliseconds}',
-    );
+      final alerts = _computeAlerts(summaries);
+      setState(() {
+        _summaries = summaries..sort(_comparator);
+        _alerts = alerts;
+        _loading = false;
+      });
+    } catch (e, stackTrace) {
+      debugPrint('[PF-DASH] phase1 error: $e');
+      debugPrintStack(stackTrace: stackTrace);
+      if (mounted) setState(() => _loading = false);
+    } finally {
+      totalStopwatch.stop();
+      debugPrint(
+        '[PF-DASH] phase1 totalMs=${totalStopwatch.elapsedMilliseconds}',
+      );
+    }
   }
 
   // ── Faza 2: sync Firestore DOAR la cererea utilizatorului ─────────────────
@@ -148,6 +149,7 @@ class _PartnerFinancialDashboardPageState
     try {
       final appointmentsStopwatch = Stopwatch()..start();
       await _syncAllFromAppointments();
+      if (!mounted) return;
       appointmentsStopwatch.stop();
       debugPrint(
         '[FinanciarParteneri] phase2 appointments sync '
@@ -156,6 +158,7 @@ class _PartnerFinancialDashboardPageState
 
       final rebuildStopwatch = Stopwatch()..start();
       await _repository.rebuildAllSummaries();
+      if (!mounted) return;
       rebuildStopwatch.stop();
       debugPrint(
         '[FinanciarParteneri] phase2 rebuild summaries '
@@ -164,19 +167,16 @@ class _PartnerFinancialDashboardPageState
 
       final listStopwatch = Stopwatch()..start();
       final summaries = await _repository.listAllSummaries();
+      if (!mounted) return;
       listStopwatch.stop();
       debugPrint(
         '[FinanciarParteneri] phase2 list summaries count=${summaries.length} '
         'ms=${listStopwatch.elapsedMilliseconds}',
       );
-      final txns = await _repository.listLocalOnlyTransactions();
-      final lastTxDate = _computeLastTxDates(txns);
-      final alerts = _computeAlerts(summaries, lastTxDate);
+      final alerts = _computeAlerts(summaries);
 
-      if (!mounted) return;
       setState(() {
         _summaries = summaries..sort(_comparator);
-        _lastTxDate = lastTxDate;
         _alerts = alerts;
         _lastManualSyncAt = DateTime.now();
       });
@@ -196,28 +196,15 @@ class _PartnerFinancialDashboardPageState
     }
   }
 
-  // ── Calcul ultima dată tranzacție per partener ────────────────────────────
-  Map<String, DateTime> _computeLastTxDates(List<PartnerTransaction> allTx) {
-    final result = <String, DateTime>{};
-    for (final tx in allTx) {
-      final existing = result[tx.partnerId];
-      if (existing == null || tx.date.isAfter(existing)) {
-        result[tx.partnerId] = tx.date;
-      }
-    }
-    return result;
-  }
-
   // ── Calcul alerte solduri inactiva ────────────────────────────────────────
   List<_PartnerAlert> _computeAlerts(
     List<PartnerFinancialSummary> summaries,
-    Map<String, DateTime> lastTxDate,
   ) {
     final now = DateTime.now();
     final alerts = <_PartnerAlert>[];
     for (final s in summaries) {
       if (s.soldNet < _minAlertBalance) continue;
-      final last = lastTxDate[s.partnerId];
+      final last = s.lastTransactionDate;
       if (last == null) continue;
       final days = now.difference(last).inDays;
       if (days >= _staleWarningDays) {
@@ -242,6 +229,7 @@ class _PartnerFinancialDashboardPageState
       final fetchStopwatch = Stopwatch()..start();
       final snapshot =
           await FirebaseFirestore.instance.collection('appointments').get();
+      if (!mounted) return;
       fetchStopwatch.stop();
       debugPrint(
         '[FinanciarParteneri] appointments fetched '
@@ -382,14 +370,12 @@ class _PartnerFinancialDashboardPageState
     setState(() => _recalculating = true);
     try {
       final count = await _repository.rebuildAllSummaries();
-      final summaries = await _repository.listAllSummaries();
-      final txns = await _repository.listLocalOnlyTransactions();
-      final lastTxDate = _computeLastTxDates(txns);
-      final alerts = _computeAlerts(summaries, lastTxDate);
       if (!mounted) return;
+      final summaries = await _repository.listAllSummaries();
+      if (!mounted) return;
+      final alerts = _computeAlerts(summaries);
       setState(() {
         _summaries = summaries..sort(_comparator);
-        _lastTxDate = lastTxDate;
         _alerts = alerts;
       });
       if (mounted) {
@@ -414,8 +400,8 @@ class _PartnerFinancialDashboardPageState
             .toLowerCase()
             .compareTo(b.partnerName.toLowerCase());
       case _SortOption.stalest:
-        final aLast = _lastTxDate[a.partnerId];
-        final bLast = _lastTxDate[b.partnerId];
+        final aLast = a.lastTransactionDate;
+        final bLast = b.lastTransactionDate;
         if (aLast == null && bLast == null) return 0;
         if (aLast == null) return 1;
         if (bLast == null) return -1;
@@ -453,7 +439,10 @@ class _PartnerFinancialDashboardPageState
   // ── BUILD ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final stopwatch = Stopwatch()..start();
+    final buildNumber = ++_buildCount;
+    final filtered = _filtered;
+    final result = Scaffold(
       appBar: AppBar(
         title: const Text('Financiar parteneri'),
         actions: [
@@ -539,7 +528,7 @@ class _PartnerFinancialDashboardPageState
                     SliverToBoxAdapter(child: _buildAlertsSection()),
                   SliverToBoxAdapter(child: _buildFilterChips()),
                   const SliverToBoxAdapter(child: SizedBox(height: 4)),
-                  if (_filtered.isEmpty)
+                  if (filtered.isEmpty)
                     SliverFillRemaining(
                       child: Center(
                         child: Column(
@@ -571,23 +560,28 @@ class _PartnerFinancialDashboardPageState
                     SliverList(
                       delegate: SliverChildBuilderDelegate(
                         (ctx, i) {
-                          final list = _filtered;
-                          if (i >= list.length) return null;
+                          if (i >= filtered.length) return null;
                           return Column(
                             children: [
-                              _buildPartnerCard(list[i]),
-                              if (i < list.length - 1)
+                              _buildPartnerCard(filtered[i]),
+                              if (i < filtered.length - 1)
                                 const Divider(height: 1, indent: 16),
                             ],
                           );
                         },
-                        childCount: _filtered.length,
+                        childCount: filtered.length,
                       ),
                     ),
                 ],
               ),
             ),
     );
+    stopwatch.stop();
+    debugPrint(
+      '[PF-DASH] build #$buildNumber summaries=${_summaries.length} '
+      'ms=${stopwatch.elapsedMilliseconds}',
+    );
+    return result;
   }
 
   // ── Widget: sumar global ──────────────────────────────────────────────────
@@ -885,7 +879,7 @@ class _PartnerFinancialDashboardPageState
     final isUrgent = alert?.severity == _AlertSeverity.urgent;
     final isWarning = alert?.severity == _AlertSeverity.warning;
 
-    final lastTx = _lastTxDate[s.partnerId];
+    final lastTx = s.lastTransactionDate;
     final dateFmt = DateFormat('dd.MM.yyyy');
 
     return ListTile(
