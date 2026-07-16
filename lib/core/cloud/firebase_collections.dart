@@ -112,4 +112,8 @@ class FirebaseCollections {
   static const String mentenantaInterventii = 'mentenanta_interventii';
   static const String serviciiPrestate = 'servicii_prestate';
   static const String clauzeCustomCatalog = 'clauze_custom_catalog';
+  // Catalog muncitori parteneri, auto-conținut în modulul Jobs (iul 2026) —
+  // separat de FirebaseCollections.partnerWorkers ('partner_workers'), care e
+  // catalogul mai vechi folosit de modulul partners/.
+  static const String partnerWorkersMaster = 'partner_workers_master';
 }

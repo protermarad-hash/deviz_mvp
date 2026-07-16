@@ -4,6 +4,9 @@ import '../../../core/widgets/anaf_company_autofill_section.dart';
 import '../../partners/partner_models.dart';
 import '../job_partner_models.dart';
 import '../lucrare_format_utils.dart';
+import '../partner_worker_autocomplete_field.dart';
+import '../partner_worker_master_models.dart';
+import 'partner_worker_master_dialog.dart';
 
 /// Dialoguri auto-conținute pentru parteneri (companie / personal / autovehicul)
 /// din fișa lucrării. Starea necesară (liste master, jobId, callback validare)
@@ -246,10 +249,14 @@ Future<JobPartner?> showPartnerDialog(
 Future<JobPartnerWorker?> showPartnerWorkerDialog(
   BuildContext context, {
   required JobPartner partner,
-  required List<PartnerWorkerRecord> masterWorkers,
+  required List<PartnerWorkerMaster> masterWorkers,
   required String jobId,
   required void Function(String message) onValidationError,
   JobPartnerWorker? existing,
+  /// Opțional: deschide dialogul de adăugare rapidă în catalog și
+  /// persistă noul muncitor. Întoarce `null` dacă utilizatorul renunță.
+  /// Fără acest callback, butonul „Nou” din câmpul de căutare nu apare.
+  Future<PartnerWorkerMaster?> Function()? onCreateWorker,
 }) async {
   final nameCtrl = TextEditingController(text: existing?.fullName ?? '');
   final roleCtrl = TextEditingController(text: existing?.role ?? '');
@@ -271,6 +278,33 @@ Future<JobPartnerWorker?> showPartnerWorkerDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
+          PartnerWorkerMaster? selectedMaster() {
+            final id = selectedMasterWorkerId;
+            if (id == null) return null;
+            for (final item in masterWorkers) {
+              if (item.id == id) return item;
+            }
+            return null;
+          }
+
+          void applySelection(PartnerWorkerMaster? selected) {
+            setDialogState(() {
+              selectedMasterWorkerId = selected?.id;
+              if (selected == null) return;
+              nameCtrl.text = selected.fullName;
+              roleCtrl.text = selected.role;
+              notesCtrl.text = selected.notes;
+            });
+          }
+
+          Future<void> createNew() async {
+            final handler = onCreateWorker;
+            if (handler == null) return;
+            final created = await handler();
+            if (created == null) return;
+            applySelection(created);
+          }
+
           return AlertDialog(
             title: Text(
               existing == null
@@ -290,49 +324,16 @@ Future<JobPartnerWorker?> showPartnerWorkerDialog(
                         style: Theme.of(context).textTheme.labelLarge,
                       ),
                     ),
-                    if (masterWorkers.isNotEmpty)
-                      DropdownButtonFormField<String?>(
-                        initialValue: selectedMasterWorkerId != null &&
-                                masterWorkers.any(
-                                  (item) => item.id == selectedMasterWorkerId,
-                                )
-                            ? selectedMasterWorkerId
-                            : null,
-                        decoration: const InputDecoration(
-                          labelText: 'Personal salvat',
-                          helperText:
-                              'Optional: precompleteaza din registrul partenerului',
-                        ),
-                        items: [
-                          const DropdownMenuItem<String?>(
-                            value: null,
-                            child: Text('Introducere manuala'),
-                          ),
-                          ...masterWorkers.map(
-                            (item) => DropdownMenuItem<String?>(
-                              value: item.id,
-                              child: Text(item.fullName),
-                            ),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setDialogState(() {
-                            selectedMasterWorkerId = value;
-                            final selected = value == null
-                                ? null
-                                : masterWorkers.firstWhere(
-                                    (item) => item.id == value,
-                                  );
-                            if (selected == null) return;
-                            nameCtrl.text = selected.fullName;
-                            roleCtrl.text = selected.role;
-                            rateCtrl.text =
-                                selected.hourlyRate.toStringAsFixed(2);
-                            currencyCtrl.text = selected.currency;
-                            notesCtrl.text = selected.notes;
-                          });
-                        },
-                      ),
+                    PartnerWorkerAutocompleteField(
+                      workers: masterWorkers,
+                      initialWorker: selectedMaster(),
+                      labelText: 'Personal salvat (caută)',
+                      helperText:
+                          'Optional: caută și precompletează din catalog',
+                      onWorkerSelected: applySelection,
+                      onCreateNew: onCreateWorker == null ? null : createNew,
+                    ),
+                    const SizedBox(height: 4),
                     TextField(
                       textCapitalization: TextCapitalization.sentences,
                       controller: nameCtrl,
