@@ -3,6 +3,14 @@ import 'package:uuid/uuid.dart';
 
 const _sentinel = Object();
 
+List<Map<String, dynamic>> _parseMapRows(dynamic raw) {
+  if (raw is! List) return const <Map<String, dynamic>>[];
+  return raw
+      .whereType<Map>()
+      .map((row) => Map<String, dynamic>.from(row))
+      .toList(growable: false);
+}
+
 // ── Linie planificată din ofertă (iun 2026) ────────────────────────────────
 class JobLine {
   const JobLine({
@@ -16,6 +24,11 @@ class JobLine {
     required this.categorie,
     this.ofertaLineId = '',
     this.observatii = '',
+    // Jurnal achiziții (iul 2026) — STRICT INFORMATIV. NU se calculează
+    // automat din el cantitateReala/pretUnitarReal — acelea rămân editabile
+    // manual, independent. Fiecare intrare: id, data (ISO string),
+    // cantitate (double), pretUnitar (double), notite.
+    this.achizitii = const <Map<String, dynamic>>[],
   });
 
   final String id;
@@ -28,6 +41,7 @@ class JobLine {
   final double pretUnitarReal;
   final String categorie; // 'material' | 'manopera' | 'transport' | 'altul'
   final String observatii;
+  final List<Map<String, dynamic>> achizitii;
 
   double get totalOferta => cantitateOferta * pretUnitarOferta;
   double get totalReal => cantitateReala * pretUnitarReal;
@@ -59,6 +73,7 @@ class JobLine {
     double? cantitateReala,
     double? pretUnitarReal,
     String? observatii,
+    List<Map<String, dynamic>>? achizitii,
   }) =>
       JobLine(
         id: id,
@@ -71,6 +86,7 @@ class JobLine {
         pretUnitarReal: pretUnitarReal ?? this.pretUnitarReal,
         categorie: categorie,
         observatii: observatii ?? this.observatii,
+        achizitii: achizitii ?? this.achizitii,
       );
 
   Map<String, dynamic> toMap() => {
@@ -84,6 +100,7 @@ class JobLine {
         'pret_unitar_real': pretUnitarReal,
         'categorie': categorie,
         'observatii': observatii,
+        'achizitii': achizitii,
       };
 
   factory JobLine.fromMap(Map<String, dynamic> map) {
@@ -100,6 +117,7 @@ class JobLine {
       pretUnitarReal: d(map['pret_unitar_real'] ?? map['pret_unitar_oferta'] ?? map['pret_unitar']),
       categorie: (map['categorie'] ?? 'altul').toString(),
       observatii: (map['observatii'] ?? '').toString(),
+      achizitii: _parseMapRows(map['achizitii']),
     );
   }
 }
@@ -743,13 +761,9 @@ class JobRecord {
 
     final now = DateTime.now();
     final id = (map['id'] ?? '').toString().trim();
-    List<Map<String, dynamic>> parseRows(dynamic raw) {
-      if (raw is! List) return const <Map<String, dynamic>>[];
-      return raw
-          .whereType<Map>()
-          .map((row) => Map<String, dynamic>.from(row))
-          .toList(growable: false);
-    }
+    // Reutilizează helper-ul comun (folosit și de JobLine.fromMap) — nu
+    // duplica logica de parsare a listelor brute.
+    List<Map<String, dynamic>> parseRows(dynamic raw) => _parseMapRows(raw);
 
     Map<String, bool> parseChecklist(dynamic raw) {
       if (raw is! Map) return const <String, bool>{};
