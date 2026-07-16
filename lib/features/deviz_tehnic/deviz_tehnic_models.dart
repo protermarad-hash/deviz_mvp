@@ -246,6 +246,9 @@ class DevizTehnicArticol {
     this.pretMan = 0,
     this.pretUtilaj = 0,
     this.pretTransport = 0,
+    // Reducere per articol (backward-compatible — default fără reducere)
+    this.discountType = '',
+    this.discountValue = 0,
   }) : id = id?.isNotEmpty == true ? id! : const Uuid().v4();
 
   /// ID unic per articol — generat automat dacă nu e furnizat.
@@ -258,12 +261,46 @@ class DevizTehnicArticol {
   final double pretUtilaj;
   final double pretTransport;
 
+  /// Tip reducere pe acest articol: '' (fără) | 'procentual' | 'fix'.
+  final String discountType;
+
+  /// Valoarea reducerii: procent (0-100) când 'procentual', sumă RON bază când 'fix'.
+  final double discountValue;
+
   double get valoareMat => cantitate * pretMat;
   double get valoareMan => cantitate * pretMan;
   double get valoareUtilaj => cantitate * pretUtilaj;
   double get valoareTransport => cantitate * pretTransport;
+
+  /// Totalul brut al articolului (suma celor 4 componente), înainte de reducere.
   double get totalArticol =>
       valoareMat + valoareMan + valoareUtilaj + valoareTransport;
+
+  /// Reducerea efectivă aplicată pe totalul articolului (clamp la [0, totalArticol]).
+  /// Se aplică pe suma celor 4 componente, nu pe o componentă izolată.
+  double get discountAmount {
+    if (discountValue <= 0) return 0;
+    final gross = totalArticol;
+    if (gross <= 0) return 0;
+    double raw;
+    switch (discountType) {
+      case 'procentual':
+        raw = gross * discountValue / 100;
+        break;
+      case 'fix':
+        raw = discountValue;
+        break;
+      default:
+        return 0;
+    }
+    if (raw <= 0) return 0;
+    return raw > gross ? gross : raw;
+  }
+
+  /// Totalul articolului după reducerea de linie.
+  double get totalArticolNet => totalArticol - discountAmount;
+
+  bool get hasDiscount => discountAmount > 0;
 
   DevizTehnicArticol copyWith({
     String? id,
@@ -274,6 +311,8 @@ class DevizTehnicArticol {
     double? pretMan,
     double? pretUtilaj,
     double? pretTransport,
+    String? discountType,
+    double? discountValue,
   }) {
     return DevizTehnicArticol(
       id: id ?? this.id,
@@ -284,6 +323,8 @@ class DevizTehnicArticol {
       pretMan: pretMan ?? this.pretMan,
       pretUtilaj: pretUtilaj ?? this.pretUtilaj,
       pretTransport: pretTransport ?? this.pretTransport,
+      discountType: discountType ?? this.discountType,
+      discountValue: discountValue ?? this.discountValue,
     );
   }
 
@@ -296,6 +337,8 @@ class DevizTehnicArticol {
         'pret_man': pretMan,
         'pret_utilaj': pretUtilaj,
         'pret_transport': pretTransport,
+        'discount_type': discountType,
+        'discount_value': discountValue,
       };
 
   factory DevizTehnicArticol.fromMap(Map<String, dynamic> m) =>
@@ -309,6 +352,9 @@ class DevizTehnicArticol {
         pretMan: _d(m['pret_man']),
         pretUtilaj: _d(m['pret_utilaj']),
         pretTransport: _d(m['pret_transport']),
+        // Backward compat: documente vechi fără reducere → '' / 0
+        discountType: (m['discount_type'] ?? '').toString(),
+        discountValue: _d(m['discount_value']),
       );
 
   static double _d(dynamic v) =>
@@ -354,6 +400,9 @@ class DevizTehnicRecord {
     this.registryNumber = '',
     this.registeredAt,
     this.convertedToJobId = '',
+    // Reducere globală pe total deviz (backward-compatible — default fără reducere)
+    this.discountType = '',
+    this.discountValue = 0,
   });
 
   final String id;
@@ -393,6 +442,13 @@ class DevizTehnicRecord {
   final DateTime? registeredAt;
   final String convertedToJobId;
 
+  /// Tip reducere globală pe total deviz: '' (fără) | 'procentual' | 'fix'.
+  final String discountType;
+
+  /// Valoarea reducerii globale: procent (0-100) când 'procentual',
+  /// sumă RON bază când 'fix'. Se aplică pe (direct net + regie).
+  final double discountValue;
+
   bool get isConverted => convertedToJobId.trim().isNotEmpty;
   String get normalizedCurrency =>
       OfferCurrencyConverter.normalizeCurrency(currency);
@@ -425,15 +481,61 @@ class DevizTehnicRecord {
   }
 
   // ── Totaluri calculate ──────────────────────────────────────────
+  // Componente brute (înainte de orice reducere) — folosite la coloanele
+  // centralizatorului (Material / Manoperă / Utilaj / Transport).
   double get totalMat => articole.fold(0, (s, a) => s + a.valoareMat);
   double get totalMan => articole.fold(0, (s, a) => s + a.valoareMan);
   double get totalUtilaj => articole.fold(0, (s, a) => s + a.valoareUtilaj);
   double get totalTransport =>
       articole.fold(0, (s, a) => s + a.valoareTransport);
+
+  /// Total cheltuieli directe BRUT (suma componentelor), înainte de reduceri.
   double get totalDirect => totalMat + totalMan + totalUtilaj + totalTransport;
-  double get regie => totalDirect * regiePercent / 100;
-  double get profit => (totalDirect + regie) * profitPercent / 100;
-  double get totalFaraTva => totalDirect + regie + profit;
+
+  /// Suma reducerilor de linie (pe articole).
+  double get totalDiscountLinii =>
+      articole.fold(0, (s, a) => s + a.discountAmount);
+
+  /// Total directe după aplicarea reducerilor de linie.
+  double get totalDirectNet => totalDirect - totalDiscountLinii;
+
+  bool get hasLineDiscounts => totalDiscountLinii > 0;
+
+  // Regie calculată pe directele NETE (după reducerile de linie).
+  double get regie => totalDirectNet * regiePercent / 100;
+
+  /// Subtotal (directe nete + regie), înainte de reducerea globală.
+  double get subtotalDupaRegie => totalDirectNet + regie;
+
+  /// Reducerea globală efectivă pe (directe nete + regie), clamp la [0, bază].
+  double get discountTotalAmount {
+    if (discountValue <= 0) return 0;
+    final base = subtotalDupaRegie;
+    if (base <= 0) return 0;
+    double raw;
+    switch (discountType) {
+      case 'procentual':
+        raw = base * discountValue / 100;
+        break;
+      case 'fix':
+        raw = discountValue;
+        break;
+      default:
+        return 0;
+    }
+    if (raw <= 0) return 0;
+    return raw > base ? base : raw;
+  }
+
+  bool get hasTotalDiscount => discountTotalAmount > 0;
+
+  /// Subtotal final după toate reducerile (linie + globală).
+  double get subtotalDupaReduceri => subtotalDupaRegie - discountTotalAmount;
+
+  // Profitul se calculează pe subtotalul deja redus (formula existentă
+  // direct+regie, dar aplicată pe valoarea redusă).
+  double get profit => subtotalDupaReduceri * profitPercent / 100;
+  double get totalFaraTva => subtotalDupaReduceri + profit;
   double get tva => totalFaraTva * tvaPercent / 100;
   double get totalCuTva => totalFaraTva + tva;
 
@@ -470,6 +572,8 @@ class DevizTehnicRecord {
     String? registryNumber,
     DateTime? registeredAt,
     String? convertedToJobId,
+    String? discountType,
+    double? discountValue,
   }) {
     return DevizTehnicRecord(
       id: id,
@@ -509,6 +613,8 @@ class DevizTehnicRecord {
       registryNumber: registryNumber ?? this.registryNumber,
       registeredAt: registeredAt ?? this.registeredAt,
       convertedToJobId: convertedToJobId ?? this.convertedToJobId,
+      discountType: discountType ?? this.discountType,
+      discountValue: discountValue ?? this.discountValue,
     );
   }
 
@@ -549,6 +655,8 @@ class DevizTehnicRecord {
         'registry_number': registryNumber,
         'registered_at': registeredAt?.toIso8601String(),
         'converted_to_job_id': convertedToJobId,
+        'discount_type': discountType,
+        'discount_value': discountValue,
       };
 
   factory DevizTehnicRecord.fromMap(Map<String, dynamic> m) {
@@ -624,6 +732,9 @@ class DevizTehnicRecord {
       registryEntryId: (m['registry_entry_id'] ?? '').toString(),
       registryNumber: (m['registry_number'] ?? '').toString(),
       convertedToJobId: (m['converted_to_job_id'] ?? '').toString(),
+      // Backward compat: documente vechi fără reducere globală → '' / 0
+      discountType: (m['discount_type'] ?? '').toString(),
+      discountValue: DevizTehnicArticol._d(m['discount_value']),
       registeredAt: m['registered_at'] != null
           ? (m['registered_at'] is Timestamp
               ? (m['registered_at'] as Timestamp).toDate()

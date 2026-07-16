@@ -288,12 +288,14 @@ class DevizTehnicPdfService {
           ));
         }
 
-        // Total articol
+        // Total articol (brut)
         dataRows.add(pw.TableRow(
           decoration: pw.BoxDecoration(
               color: rowBg,
-              border: const pw.Border(
-                  bottom: pw.BorderSide(color: headerBg, width: 0.5))),
+              border: a.hasDiscount
+                  ? null
+                  : const pw.Border(
+                      bottom: pw.BorderSide(color: headerBg, width: 0.5))),
           children: [
             cellCenter('', style: ts(size: 8)),
             cell('Total articol', style: tsBold(size: 8, color: headerBg)),
@@ -305,6 +307,44 @@ class DevizTehnicPdfService {
                 style: tsBold(size: 9, color: headerBg)),
           ],
         ));
+
+        // Reducere linie + Total articol net (doar dacă articolul are reducere)
+        if (a.hasDiscount) {
+          final discountLabel = a.discountType == 'procentual'
+              ? 'Reducere (${_fmtNum(a.discountValue)}%)'
+              : 'Reducere';
+          dataRows.add(pw.TableRow(
+            decoration: pw.BoxDecoration(color: rowBg),
+            children: [
+              cellCenter('', style: ts(size: 8)),
+              cell(discountLabel,
+                  style: ts(size: 8, color: PdfColor.fromInt(0xFFC62828))),
+              cellCenter('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellCenter('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('- ${money(a.discountAmount)}',
+                  style: ts(size: 8, color: PdfColor.fromInt(0xFFC62828))),
+            ],
+          ));
+          dataRows.add(pw.TableRow(
+            decoration: pw.BoxDecoration(
+                color: rowBg,
+                border: const pw.Border(
+                    bottom: pw.BorderSide(color: headerBg, width: 0.5))),
+            children: [
+              cellCenter('', style: ts(size: 8)),
+              cell('Total articol net',
+                  style: tsBold(size: 8, color: headerBg)),
+              cellCenter('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellCenter('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight(money(a.totalArticolNet),
+                  style: tsBold(size: 9, color: headerBg)),
+            ],
+          ));
+        }
       }
 
       return pw.Table(
@@ -390,6 +430,27 @@ class DevizTehnicPdfService {
               deviz.totalDirect,
               isHeader: false,
               isBold: true),
+          // Reducere pe articole (linie) — doar dacă există
+          if (deviz.hasLineDiscounts) ...[
+            pw.TableRow(children: [
+              cell('Reducere pe articole',
+                  style: ts(size: 8, color: PdfColor.fromInt(0xFFC62828))),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('- ${money(deviz.totalDiscountLinii)}',
+                  style: ts(size: 8, color: PdfColor.fromInt(0xFFC62828))),
+            ]),
+            pw.TableRow(children: [
+              cell('Total directe după reduceri', style: tsBold(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight(money(deviz.totalDirectNet), style: tsBold(size: 8)),
+            ]),
+          ],
           pw.TableRow(children: [
             cell('2. Cheltuieli regie (${_fmtNum(deviz.regiePercent)}%)',
                 style: ts(size: 8)),
@@ -399,6 +460,22 @@ class DevizTehnicPdfService {
             cellRight('', style: ts(size: 8)),
             cellRight(money(deviz.regie), style: ts(size: 8)),
           ]),
+          // Reducere totală deviz (globală) — doar dacă există
+          if (deviz.hasTotalDiscount)
+            pw.TableRow(children: [
+              cell(
+                  deviz.discountType == 'procentual'
+                      ? 'Reducere totală (${_fmtNum(deviz.discountValue)}%)'
+                      : 'Reducere totală deviz',
+                  style: tsBold(size: 8, color: PdfColor.fromInt(0xFFC62828))),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('', style: ts(size: 8)),
+              cellRight('- ${money(deviz.discountTotalAmount)}',
+                  style:
+                      tsBold(size: 8, color: PdfColor.fromInt(0xFFC62828))),
+            ]),
           pw.TableRow(children: [
             cell('3. Profit (${_fmtNum(deviz.profitPercent)}%)',
                 style: ts(size: 8)),
@@ -598,7 +675,8 @@ class DevizTehnicPdfService {
             .replaceAll(RegExp(r'[^a-zA-Z0-9 ]'), '')
             .trim()
             .replaceAll(' ', '_');
-    final fileName = '${prefix}_${numarSafe}_$titluSafe.pdf';
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    final fileName = '${prefix}_${numarSafe}_${titluSafe}_$timestamp.pdf';
 
     return PdfSaveService.savePdf(
       repository: repository,

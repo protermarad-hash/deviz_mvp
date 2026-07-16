@@ -65,6 +65,10 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
   final _manualRateCtrl = TextEditingController();
   final _exchangeCommissionCtrl = TextEditingController(text: '0');
 
+  // Reducere globală pe total deviz
+  String _totalDiscountType = ''; // '' | 'procentual' | 'fix'
+  final _totalDiscountCtrl = TextEditingController();
+
   // Lista locală — extinsă când utilizatorul adaugă client inline
   List<ClientRecord> _localClients = const [];
 
@@ -135,6 +139,9 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       _registryEntryId = ex.registryEntryId;
       _registryNumber = ex.registryNumber;
       _registeredAt = ex.registeredAt;
+      _totalDiscountType = ex.discountType;
+      _totalDiscountCtrl.text =
+          ex.discountValue == 0 ? '' : _fmtV(ex.discountValue);
     } else {
       _intocmitDeCtrl.text = widget.currentUserName;
       _articole = [_ArticolState()];
@@ -306,6 +313,7 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
     _zileCtrl.dispose();
     _manualRateCtrl.dispose();
     _exchangeCommissionCtrl.dispose();
+    _totalDiscountCtrl.dispose();
     _contactPersonCtrl.dispose();
     _contactDepartmentCtrl.dispose();
     for (final a in _articole) {
@@ -403,9 +411,39 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       _buildArticole.fold(0, (s, a) => s + a.valoareTransport);
   double get _totalDirect =>
       _totalMat + _totalMan + _totalUtilaj + _totalTransport;
-  double get _regieVal => _totalDirect * _regie / 100;
-  double get _profitVal => (_totalDirect + _regieVal) * _profit / 100;
-  double get _totalFaraTva => _totalDirect + _regieVal + _profitVal;
+
+  // Reduceri: identice ca logică cu modelul DevizTehnicRecord.
+  double get _totalDiscountLinii =>
+      _articole.fold(0.0, (s, a) => s + a.discountAmount);
+  double get _totalDirectNet => _totalDirect - _totalDiscountLinii;
+  double get _regieVal => _totalDirectNet * _regie / 100;
+  double get _subtotalDupaRegie => _totalDirectNet + _regieVal;
+
+  double get _totalDiscountValue =>
+      double.tryParse(_totalDiscountCtrl.text.replaceAll(',', '.')) ?? 0;
+
+  double get _discountTotalVal {
+    if (_totalDiscountValue <= 0) return 0;
+    final base = _subtotalDupaRegie;
+    if (base <= 0) return 0;
+    double raw;
+    switch (_totalDiscountType) {
+      case 'procentual':
+        raw = base * _totalDiscountValue / 100;
+        break;
+      case 'fix':
+        raw = _totalDiscountValue;
+        break;
+      default:
+        return 0;
+    }
+    if (raw <= 0) return 0;
+    return raw > base ? base : raw;
+  }
+
+  double get _subtotalDupaReduceri => _subtotalDupaRegie - _discountTotalVal;
+  double get _profitVal => _subtotalDupaReduceri * _profit / 100;
+  double get _totalFaraTva => _subtotalDupaReduceri + _profitVal;
   double get _tvaVal => _totalFaraTva * _tva / 100;
   double get _totalCuTva => _totalFaraTva + _tvaVal;
 
@@ -700,6 +738,8 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
       registryEntryId: _registryEntryId,
       registryNumber: _registryNumber,
       registeredAt: _registeredAt,
+      discountType: _totalDiscountType,
+      discountValue: _totalDiscountValue,
     );
   }
 
@@ -1250,6 +1290,96 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
             ),
             const SizedBox(height: 16),
 
+            // ── Reducere totală deviz ──────────────────────────
+            _SectionCard(
+              title: 'Reducere totală deviz',
+              children: [
+                Text(
+                  'Reducere globală aplicată pe subtotal (directe după reducerile de linie + regie), înainte de profit și TVA.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    ChoiceChip(
+                      label: const Text('Fără'),
+                      selected: _totalDiscountType.isEmpty,
+                      onSelected: (_) => setState(() {
+                        _totalDiscountType = '';
+                        _totalDiscountCtrl.clear();
+                      }),
+                    ),
+                    const SizedBox(width: 6),
+                    ChoiceChip(
+                      label: const Text('Procent %'),
+                      selected: _totalDiscountType == 'procentual',
+                      onSelected: (_) =>
+                          setState(() => _totalDiscountType = 'procentual'),
+                    ),
+                    const SizedBox(width: 6),
+                    ChoiceChip(
+                      label: const Text('Sumă RON'),
+                      selected: _totalDiscountType == 'fix',
+                      onSelected: (_) =>
+                          setState(() => _totalDiscountType = 'fix'),
+                    ),
+                    const SizedBox(width: 12),
+                    if (_totalDiscountType.isNotEmpty)
+                      SizedBox(
+                        width: 120,
+                        child: TextFormField(
+                          controller: _totalDiscountCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                                RegExp(r'[0-9.,]')),
+                          ],
+                          textAlign: TextAlign.right,
+                          decoration: InputDecoration(
+                            isDense: true,
+                            labelText: 'Valoare',
+                            suffixText: _totalDiscountType == 'procentual'
+                                ? '%'
+                                : 'RON',
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                  ],
+                ),
+                if (_totalDiscountType == 'procentual' &&
+                    _totalDiscountValue > 100) ...[
+                  const SizedBox(height: 6),
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.warning_amber_rounded,
+                          size: 16, color: Color(0xFFC62828)),
+                      SizedBox(width: 4),
+                      Text('Procentul depășește 100%.',
+                          style: TextStyle(
+                              fontSize: 12, color: Color(0xFFC62828))),
+                    ],
+                  ),
+                ],
+                if (_discountTotalVal > 0) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Reducere totală: - ${_money(_discountTotalVal)}   →   Subtotal după reduceri: ${_money(_subtotalDupaReduceri)}',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFFC62828),
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 16),
+
             // ── Centralizator ──────────────────────────────────
             _SectionCard(
               title: 'Centralizator cheltuieli',
@@ -1260,8 +1390,11 @@ class _DevizTehnicFormPageState extends State<DevizTehnicFormPage> {
                   totalUtilaj: _totalUtilaj,
                   totalTransport: _totalTransport,
                   totalDirect: _totalDirect,
+                  totalDiscountLinii: _totalDiscountLinii,
+                  totalDirectNet: _totalDirectNet,
                   regiePercent: _regie,
                   regieVal: _regieVal,
+                  discountTotalVal: _discountTotalVal,
                   profitPercent: _profit,
                   profitVal: _profitVal,
                   totalFaraTva: _totalFaraTva,
@@ -1567,6 +1700,8 @@ class _ArticolState {
     double pretMan = 0,
     double pretUtilaj = 0,
     double pretTransport = 0,
+    this.discountType = '',
+    double discountValue = 0,
   }) : id = id?.isNotEmpty == true ? id! : const Uuid().v4() {
     denumireCtrl = TextEditingController(text: denumire);
     umCtrl = TextEditingController(text: um);
@@ -1578,6 +1713,8 @@ class _ArticolState {
         TextEditingController(text: pretUtilaj == 0 ? '' : _fmt(pretUtilaj));
     transportCtrl = TextEditingController(
         text: pretTransport == 0 ? '' : _fmt(pretTransport));
+    discountValueCtrl = TextEditingController(
+        text: discountValue == 0 ? '' : _fmt(discountValue));
   }
 
   /// ID unic generat la creare — persistat în toMap/fromMap.
@@ -1585,6 +1722,9 @@ class _ArticolState {
 
   /// 'catalog' = material din nomenclator, 'norme' = din baza proprie, '' = manual
   String sursa = '';
+
+  /// Tip reducere linie: '' (fără) | 'procentual' | 'fix'.
+  String discountType;
 
   static _ArticolState fromModel(DevizTehnicArticol a) => _ArticolState(
         id: a.id,
@@ -1595,6 +1735,8 @@ class _ArticolState {
         pretMan: a.pretMan,
         pretUtilaj: a.pretUtilaj,
         pretTransport: a.pretTransport,
+        discountType: a.discountType,
+        discountValue: a.discountValue,
       );
 
   late final TextEditingController denumireCtrl;
@@ -1604,6 +1746,7 @@ class _ArticolState {
   late final TextEditingController manCtrl;
   late final TextEditingController utilajCtrl;
   late final TextEditingController transportCtrl;
+  late final TextEditingController discountValueCtrl;
 
   static String _fmt(double v) =>
       v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
@@ -1616,7 +1759,34 @@ class _ArticolState {
   double get transport =>
       double.tryParse(transportCtrl.text.replaceAll(',', '.')) ?? 0;
 
+  double get discountValue =>
+      double.tryParse(discountValueCtrl.text.replaceAll(',', '.')) ?? 0;
+
   double get totalArticol => cant * (mat + man + utilaj + transport);
+
+  /// Reducerea efectivă pe totalul articolului (mirror al modelului).
+  double get discountAmount {
+    if (discountValue <= 0) return 0;
+    final gross = totalArticol;
+    if (gross <= 0) return 0;
+    double raw;
+    switch (discountType) {
+      case 'procentual':
+        raw = gross * discountValue / 100;
+        break;
+      case 'fix':
+        raw = discountValue;
+        break;
+      default:
+        return 0;
+    }
+    if (raw <= 0) return 0;
+    return raw > gross ? gross : raw;
+  }
+
+  double get totalArticolNet => totalArticol - discountAmount;
+
+  bool get hasDiscount => discountAmount > 0;
 
   DevizTehnicArticol toModel() => DevizTehnicArticol(
         id: id,
@@ -1627,6 +1797,8 @@ class _ArticolState {
         pretMan: man,
         pretUtilaj: utilaj,
         pretTransport: transport,
+        discountType: discountType,
+        discountValue: discountValue,
       );
 
   void dispose() {
@@ -1637,6 +1809,7 @@ class _ArticolState {
     manCtrl.dispose();
     utilajCtrl.dispose();
     transportCtrl.dispose();
+    discountValueCtrl.dispose();
   }
 }
 
@@ -1805,7 +1978,95 @@ class _ArticolRowState extends State<_ArticolRow> {
         widget.state.manCtrl,
         widget.state.utilajCtrl,
         widget.state.transportCtrl,
+        widget.state.discountValueCtrl,
       ];
+
+  /// Comută tipul reducerii de linie; retapul pe același tip = dezactivare.
+  void _setDiscountType(String type) {
+    setState(() {
+      if (widget.state.discountType == type) {
+        widget.state.discountType = '';
+        widget.state.discountValueCtrl.clear();
+      } else {
+        widget.state.discountType = type;
+      }
+    });
+    widget.onChanged();
+  }
+
+  /// Control compact de reducere per linie (toggle procentual/fix + valoare).
+  Widget _buildDiscountControl(BuildContext context, ColorScheme cs) {
+    final st = widget.state;
+    final active = st.discountType.isNotEmpty;
+    const redColor = Color(0xFFC62828);
+    final overPercent =
+        st.discountType == 'procentual' && st.discountValue > 100;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('Reducere:',
+            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+        ChoiceChip(
+          label: const Text('%'),
+          labelStyle: const TextStyle(fontSize: 11),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          selected: st.discountType == 'procentual',
+          onSelected: (_) => _setDiscountType('procentual'),
+        ),
+        ChoiceChip(
+          label: const Text('Sumă'),
+          labelStyle: const TextStyle(fontSize: 11),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          selected: st.discountType == 'fix',
+          onSelected: (_) => _setDiscountType('fix'),
+        ),
+        if (active)
+          SizedBox(
+            width: 90,
+            child: TextFormField(
+              controller: st.discountValueCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]')),
+              ],
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 12),
+              decoration: InputDecoration(
+                isDense: true,
+                suffixText: st.discountType == 'procentual' ? '%' : 'RON',
+                suffixStyle: const TextStyle(fontSize: 10),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+          ),
+        if (st.hasDiscount)
+          Text(
+            '- ${widget.formatMoney(st.discountAmount)}  →  ${widget.formatMoney(st.totalArticolNet)}',
+            style: const TextStyle(
+                fontSize: 11,
+                color: redColor,
+                fontWeight: FontWeight.w600),
+          ),
+        if (overPercent)
+          const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 14, color: redColor),
+              SizedBox(width: 2),
+              Text('procent > 100%',
+                  style: TextStyle(fontSize: 10, color: redColor)),
+            ],
+          ),
+      ],
+    );
+  }
 
   void _onControllerChange() {
     setState(() {});
@@ -2214,6 +2475,8 @@ class _ArticolRowState extends State<_ArticolRow> {
               isMobile: true,
               formatMoney: widget.formatMoney,
             ),
+            const SizedBox(height: 10),
+            _buildDiscountControl(context, cs),
           ],
         ],
       ),
@@ -2331,6 +2594,11 @@ class _ArticolRowState extends State<_ArticolRow> {
               ],
             ),
           ),
+          if (widget.state.cant > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 36, top: 4),
+              child: _buildDiscountControl(context, cs),
+            ),
         ],
       ),
     );
@@ -2651,8 +2919,11 @@ class _CentralizatorTable extends StatelessWidget {
     required this.totalUtilaj,
     required this.totalTransport,
     required this.totalDirect,
+    required this.totalDiscountLinii,
+    required this.totalDirectNet,
     required this.regiePercent,
     required this.regieVal,
+    required this.discountTotalVal,
     required this.profitPercent,
     required this.profitVal,
     required this.totalFaraTva,
@@ -2663,7 +2934,9 @@ class _CentralizatorTable extends StatelessWidget {
   });
 
   final double totalMat, totalMan, totalUtilaj, totalTransport, totalDirect;
+  final double totalDiscountLinii, totalDirectNet;
   final double regiePercent, regieVal;
+  final double discountTotalVal;
   final double profitPercent, profitVal;
   final double totalFaraTva, tvaPercent, tvaVal, totalCuTva;
   final String Function(double) formatMoney;
@@ -2673,7 +2946,7 @@ class _CentralizatorTable extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
 
     Widget row(String label, double value,
-        {bool bold = false, bool highlight = false}) {
+        {bool bold = false, bool highlight = false, Color? valueColor}) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(
@@ -2684,6 +2957,7 @@ class _CentralizatorTable extends StatelessWidget {
                 style: TextStyle(
                   fontWeight: bold ? FontWeight.bold : FontWeight.normal,
                   fontSize: 13,
+                  color: valueColor,
                 ),
               ),
             ),
@@ -2692,7 +2966,7 @@ class _CentralizatorTable extends StatelessWidget {
               style: TextStyle(
                 fontWeight: bold ? FontWeight.bold : FontWeight.normal,
                 fontSize: 13,
-                color: highlight ? cs.primary : null,
+                color: valueColor ?? (highlight ? cs.primary : null),
               ),
             ),
           ],
@@ -2700,6 +2974,7 @@ class _CentralizatorTable extends StatelessWidget {
       );
     }
 
+    const redColor = Color(0xFFC62828);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2720,7 +2995,15 @@ class _CentralizatorTable extends StatelessWidget {
         ),
         const Divider(),
         row('1. Total cheltuieli directe', totalDirect, bold: true),
+        if (totalDiscountLinii > 0) ...[
+          row('   Reducere pe articole', -totalDiscountLinii,
+              valueColor: redColor),
+          row('   Total directe după reduceri', totalDirectNet, bold: true),
+        ],
         row('2. Cheltuieli regie ($regiePercent%)', regieVal),
+        if (discountTotalVal > 0)
+          row('   Reducere totală deviz', -discountTotalVal,
+              bold: true, valueColor: redColor),
         row('3. Profit ($profitPercent%)', profitVal),
         const Divider(),
         row('Total deviz fără TVA', totalFaraTva, bold: true),
