@@ -297,6 +297,51 @@ lib/
 
 ---
 
+## 🪦 ANTI-RESURECȚIE PROGRAMĂRI — REGISTRU LOCAL DE CONFIRMARE CLOUD (iul 2026)
+
+**Motivația (bug de producție):** ștergerea unei programări este HARD DELETE pe
+`appointments/{id}` + un tombstone separat în `deleted_appointments/{id}`.
+Propagarea ștergerii către alte device-uri se baza EXCLUSIV pe citirea tombstone-ului
+(best-effort, cache 60 min, `catch → {}` la eșec). `listAppointments`/
+`listAllAppointments` reconstruiau `merged = cloud + localOnlyItems` și **re-cozau
+NECONDIȚIONAT** orice item local absent din rezultatul cloud. Combinat cu fereastra
+de query de **425 zile** (programările mai vechi sunt MEREU „local-only"), un device
+cu cache vechi care nu primea tombstone-ul **re-încărca în Firestore documentul șters
+→ programarea „reapărea" / se „duplica".**
+
+**Fix (nu se mai bazează pe tombstone pentru decizia finală):**
+
+1. **Registru local „neconfirmate"** — `SharedPreferences` key
+   `ultra_appointments_unconfirmed_ids_v1`. Strict LOCAL, NU se pune în model/Firestore.
+   - Helper-e în `local_app_data_repository.dart`: `_readUnconfirmedAppointmentIds()`,
+     `_addUnconfirmedAppointmentId()`, `_markAppointmentsCloudConfirmed()`.
+   - **Populare:** programare NOUĂ creată local (`saveAppointment`, `index < 0`) →
+     marcată „neconfirmată"; item văzut în rezultat cloud → marcat CONFIRMAT; upsert
+     Firestore reușit → marcat CONFIRMAT.
+   - **Regulă de citire (migrare):** un id ABSENT din registru = CONFIRMAT implicit
+     (cache preexistent presupus deja sincronizat).
+
+2. **Clasificator pur** `planLocalOnlyRequeue()` în
+   `lib/features/programari/appointment_requeue_policy.dart` (testat:
+   `test/appointment_requeue_policy_test.dart`). Împarte `localOnlyItems`:
+   - `requeueNow` = neconfirmate (create offline) SAU cu upsert pending → re-queue normal.
+   - `verifyExistence` = confirmate ȘI fără pending → **verificare deterministă**.
+
+3. **Verificare `.doc(id).get()` înainte de re-queue** —
+   `_verifyAndReconcileLocalOnlyBackground()` (ocolește fereastra de 425 zile):
+   - documentul EXISTĂ → doar actualizare cache local, NU re-queue;
+   - NU EXISTĂ → ștergere reală → elimină din cache local + `_addDeletedAppointmentId`;
+   - `.get()` eșuează (rețea) → **fail-safe: sare itemul** (nu re-queue, nu șterge).
+
+4. **Tombstone-ul rămâne ca optimizare** (prim filtru rapid `allDeletedIds`), NU ca
+   sursă unică de adevăr — verificarea `.doc().get()` din pasul 3 e decizia finală.
+
+**Regulă pentru cod nou:** NICIODATĂ nu trata un item „absent din cloud" drept „de
+re-încărcat" fără să distingi „creat offline (neconfirmat)" de „confirmat cândva, acum
+absent (posibil șters)". Pentru al doilea caz, verifică existența reală în Firestore.
+
+---
+
 ## 💾 REGULI CRITICE DATE ȘI SINCRONIZARE
 
 ### Ordinea obligatorie în orice repository (upsert/delete):
