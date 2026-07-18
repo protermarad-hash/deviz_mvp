@@ -134,6 +134,7 @@ class PartnerWorkerRecord {
     this.hourlyRate = 0,
     this.currency = 'RON',
     this.notes = '',
+    this.active = true,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -145,6 +146,9 @@ class PartnerWorkerRecord {
   final double hourlyRate;
   final String currency;
   final String notes;
+  // Dezactivare fără ștergere (iul 2026) — backward-compatible: absent în
+  // documentele vechi = activ implicit.
+  final bool active;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -156,6 +160,7 @@ class PartnerWorkerRecord {
     double? hourlyRate,
     String? currency,
     String? notes,
+    bool? active,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -167,6 +172,7 @@ class PartnerWorkerRecord {
       hourlyRate: hourlyRate ?? this.hourlyRate,
       currency: currency ?? this.currency,
       notes: notes ?? this.notes,
+      active: active ?? this.active,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -181,6 +187,7 @@ class PartnerWorkerRecord {
       'hourly_rate': hourlyRate,
       'currency': currency,
       'notes': notes,
+      'active': active,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -192,6 +199,19 @@ class PartnerWorkerRecord {
     double parseDouble(dynamic raw) {
       if (raw is num) return raw.toDouble();
       return double.tryParse('${raw ?? '0'}'.replaceAll(',', '.')) ?? 0;
+    }
+
+    bool parseBool(dynamic raw, {bool fallback = false}) {
+      if (raw is bool) return raw;
+      final text = (raw ?? '').toString().trim().toLowerCase();
+      if (text.isEmpty) return fallback;
+      if (text == 'true' || text == '1' || text == 'da' || text == 'yes') {
+        return true;
+      }
+      if (text == 'false' || text == '0' || text == 'nu' || text == 'no') {
+        return false;
+      }
+      return fallback;
     }
 
     String pick(List<String> keys) {
@@ -213,6 +233,7 @@ class PartnerWorkerRecord {
       hourlyRate: parseDouble(map['hourly_rate'] ?? map['hourlyRate']),
       currency: currency.isEmpty ? 'RON' : currency.toUpperCase(),
       notes: pick(const <String>['notes', 'observatii']),
+      active: parseBool(map['active'], fallback: true),
       createdAt:
           DateTime.tryParse((map['created_at'] ?? '').toString()) ?? now,
       updatedAt:

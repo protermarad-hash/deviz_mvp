@@ -3096,49 +3096,64 @@ class LocalAppDataRepository implements AppDataRepository {
     } else {
       items.add(next);
     }
+    // 1. Salvare locală imediată
+    await _writePartners(items);
+    // 2. Queue offline OBLIGATORIU (fix BUG 1) — garantează reîncercarea
+    // ulterioară dacă scrierea Firestore de mai jos eșuează/e offline.
+    await OfflineSyncRuntime.instance.queuePartner(next);
+    // 3. Firestore direct — best-effort, fire-and-forget (fix BUG 8: nu await)
     if (_isPartnersCloudAvailable) {
-      try {
-        await _partnersCollection.doc(next.id).set(
-          {
-            ...next.toMap(),
-            'updated_at': next.updatedAt.toIso8601String(),
-          },
-          SetOptions(merge: true),
-        );
-        _lastPartnersDataSourceLabel = 'cloud';
-        _lastPartnersFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _lastPartnersDataSourceLabel = 'local_cache';
-        _lastPartnersFallbackReason = error.toString().trim();
-      }
+      _partnersCollection
+          .doc(next.id)
+          .set(
+            {
+              ...next.toMap(),
+              'updated_at': next.updatedAt.toIso8601String(),
+            },
+            SetOptions(merge: true),
+          )
+          .then((_) {
+            _lastPartnersDataSourceLabel = 'cloud';
+            _lastPartnersFallbackReason = '';
+          })
+          .catchError((error) {
+            FirebaseBootstrap.registerRuntimeError(error);
+            _lastPartnersDataSourceLabel = 'local_cache';
+            _lastPartnersFallbackReason = error.toString().trim();
+          });
     } else {
       _lastPartnersDataSourceLabel = 'local_cache';
       _lastPartnersFallbackReason = 'cloud indisponibil';
     }
-    await _writePartners(items);
     return next;
   }
 
   @override
   Future<void> deletePartner(String partnerId) async {
+    // 1. Ștergere locală imediată
+    final items = [...await listPartners()]
+      ..removeWhere((item) => item.id == partnerId);
+    await _writePartners(items);
+    // 2. Queue delete OBLIGATORIU (fix BUG 1)
+    await OfflineSyncRuntime.instance.queuePartnerDelete(partnerId);
+    // 3. Firestore direct — best-effort, fire-and-forget (fix BUG 8: nu await)
     if (_isPartnersCloudAvailable) {
-      try {
-        await _partnersCollection.doc(partnerId).delete();
-        _lastPartnersDataSourceLabel = 'cloud';
-        _lastPartnersFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _lastPartnersDataSourceLabel = 'local_cache';
-        _lastPartnersFallbackReason = error.toString().trim();
-      }
+      _partnersCollection
+          .doc(partnerId)
+          .delete()
+          .then((_) {
+            _lastPartnersDataSourceLabel = 'cloud';
+            _lastPartnersFallbackReason = '';
+          })
+          .catchError((error) {
+            FirebaseBootstrap.registerRuntimeError(error);
+            _lastPartnersDataSourceLabel = 'local_cache';
+            _lastPartnersFallbackReason = error.toString().trim();
+          });
     } else {
       _lastPartnersDataSourceLabel = 'local_cache';
       _lastPartnersFallbackReason = 'cloud indisponibil';
     }
-    final items = [...await listPartners()]
-      ..removeWhere((item) => item.id == partnerId);
-    await _writePartners(items);
   }
 
   @override
@@ -3210,49 +3225,63 @@ class LocalAppDataRepository implements AppDataRepository {
     } else {
       items.add(next);
     }
+    // 1. Salvare locală imediată
+    await _writePartnerWorkers(items);
+    // 2. Queue offline OBLIGATORIU (fix BUG 1)
+    await OfflineSyncRuntime.instance.queuePartnerWorker(next);
+    // 3. Firestore direct — best-effort, fire-and-forget (fix BUG 8: nu await)
     if (_isPartnersCloudAvailable) {
-      try {
-        await _partnerWorkersCollection.doc(next.id).set(
-          {
-            ...next.toMap(),
-            'updated_at': next.updatedAt.toIso8601String(),
-          },
-          SetOptions(merge: true),
-        );
-        _lastPartnersDataSourceLabel = 'cloud';
-        _lastPartnersFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _lastPartnersDataSourceLabel = 'local_cache';
-        _lastPartnersFallbackReason = error.toString().trim();
-      }
+      _partnerWorkersCollection
+          .doc(next.id)
+          .set(
+            {
+              ...next.toMap(),
+              'updated_at': next.updatedAt.toIso8601String(),
+            },
+            SetOptions(merge: true),
+          )
+          .then((_) {
+            _lastPartnersDataSourceLabel = 'cloud';
+            _lastPartnersFallbackReason = '';
+          })
+          .catchError((error) {
+            FirebaseBootstrap.registerRuntimeError(error);
+            _lastPartnersDataSourceLabel = 'local_cache';
+            _lastPartnersFallbackReason = error.toString().trim();
+          });
     } else {
       _lastPartnersDataSourceLabel = 'local_cache';
       _lastPartnersFallbackReason = 'cloud indisponibil';
     }
-    await _writePartnerWorkers(items);
     return next;
   }
 
   @override
   Future<void> deletePartnerWorker(String workerId) async {
+    // 1. Ștergere locală imediată
+    final items = [...await listPartnerWorkers()]
+      ..removeWhere((item) => item.id == workerId);
+    await _writePartnerWorkers(items);
+    // 2. Queue delete OBLIGATORIU (fix BUG 1)
+    await OfflineSyncRuntime.instance.queuePartnerWorkerDelete(workerId);
+    // 3. Firestore direct — best-effort, fire-and-forget (fix BUG 8: nu await)
     if (_isPartnersCloudAvailable) {
-      try {
-        await _partnerWorkersCollection.doc(workerId).delete();
-        _lastPartnersDataSourceLabel = 'cloud';
-        _lastPartnersFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _lastPartnersDataSourceLabel = 'local_cache';
-        _lastPartnersFallbackReason = error.toString().trim();
-      }
+      _partnerWorkersCollection
+          .doc(workerId)
+          .delete()
+          .then((_) {
+            _lastPartnersDataSourceLabel = 'cloud';
+            _lastPartnersFallbackReason = '';
+          })
+          .catchError((error) {
+            FirebaseBootstrap.registerRuntimeError(error);
+            _lastPartnersDataSourceLabel = 'local_cache';
+            _lastPartnersFallbackReason = error.toString().trim();
+          });
     } else {
       _lastPartnersDataSourceLabel = 'local_cache';
       _lastPartnersFallbackReason = 'cloud indisponibil';
     }
-    final items = [...await listPartnerWorkers()]
-      ..removeWhere((item) => item.id == workerId);
-    await _writePartnerWorkers(items);
   }
 
   @override
@@ -3324,49 +3353,63 @@ class LocalAppDataRepository implements AppDataRepository {
     } else {
       items.add(next);
     }
+    // 1. Salvare locală imediată
+    await _writePartnerVehicles(items);
+    // 2. Queue offline OBLIGATORIU (fix BUG 1)
+    await OfflineSyncRuntime.instance.queuePartnerVehicle(next);
+    // 3. Firestore direct — best-effort, fire-and-forget (fix BUG 8: nu await)
     if (_isPartnersCloudAvailable) {
-      try {
-        await _partnerVehiclesCollection.doc(next.id).set(
-          {
-            ...next.toMap(),
-            'updated_at': next.updatedAt.toIso8601String(),
-          },
-          SetOptions(merge: true),
-        );
-        _lastPartnersDataSourceLabel = 'cloud';
-        _lastPartnersFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _lastPartnersDataSourceLabel = 'local_cache';
-        _lastPartnersFallbackReason = error.toString().trim();
-      }
+      _partnerVehiclesCollection
+          .doc(next.id)
+          .set(
+            {
+              ...next.toMap(),
+              'updated_at': next.updatedAt.toIso8601String(),
+            },
+            SetOptions(merge: true),
+          )
+          .then((_) {
+            _lastPartnersDataSourceLabel = 'cloud';
+            _lastPartnersFallbackReason = '';
+          })
+          .catchError((error) {
+            FirebaseBootstrap.registerRuntimeError(error);
+            _lastPartnersDataSourceLabel = 'local_cache';
+            _lastPartnersFallbackReason = error.toString().trim();
+          });
     } else {
       _lastPartnersDataSourceLabel = 'local_cache';
       _lastPartnersFallbackReason = 'cloud indisponibil';
     }
-    await _writePartnerVehicles(items);
     return next;
   }
 
   @override
   Future<void> deletePartnerVehicle(String vehicleId) async {
+    // 1. Ștergere locală imediată
+    final items = [...await listPartnerVehicles()]
+      ..removeWhere((item) => item.id == vehicleId);
+    await _writePartnerVehicles(items);
+    // 2. Queue delete OBLIGATORIU (fix BUG 1)
+    await OfflineSyncRuntime.instance.queuePartnerVehicleDelete(vehicleId);
+    // 3. Firestore direct — best-effort, fire-and-forget (fix BUG 8: nu await)
     if (_isPartnersCloudAvailable) {
-      try {
-        await _partnerVehiclesCollection.doc(vehicleId).delete();
-        _lastPartnersDataSourceLabel = 'cloud';
-        _lastPartnersFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _lastPartnersDataSourceLabel = 'local_cache';
-        _lastPartnersFallbackReason = error.toString().trim();
-      }
+      _partnerVehiclesCollection
+          .doc(vehicleId)
+          .delete()
+          .then((_) {
+            _lastPartnersDataSourceLabel = 'cloud';
+            _lastPartnersFallbackReason = '';
+          })
+          .catchError((error) {
+            FirebaseBootstrap.registerRuntimeError(error);
+            _lastPartnersDataSourceLabel = 'local_cache';
+            _lastPartnersFallbackReason = error.toString().trim();
+          });
     } else {
       _lastPartnersDataSourceLabel = 'local_cache';
       _lastPartnersFallbackReason = 'cloud indisponibil';
     }
-    final items = [...await listPartnerVehicles()]
-      ..removeWhere((item) => item.id == vehicleId);
-    await _writePartnerVehicles(items);
   }
 
   @override

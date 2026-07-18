@@ -681,4 +681,61 @@ class CloudSyncBridge {
       payload: o,
     );
   }
+
+  Future<void> queuePartnerUpsert(Map<String, dynamic> partner) async {
+    final id = (partner['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.partners,
+      entityId: id,
+      payload: partner,
+    );
+  }
+
+  Future<void> queuePartnerDelete(String partnerId) async {
+    final id = partnerId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.partners,
+      entityId: id,
+    );
+  }
+
+  Future<void> queuePartnerWorkerUpsert(Map<String, dynamic> worker) async {
+    final id = (worker['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.partnerWorkers,
+      entityId: id,
+      payload: worker,
+    );
+  }
+
+  Future<void> queuePartnerWorkerDelete(String workerId) async {
+    final id = workerId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.partnerWorkers,
+      entityId: id,
+    );
+  }
+
+  Future<void> queuePartnerVehicleUpsert(Map<String, dynamic> vehicle) async {
+    final id = (vehicle['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.partnerVehicles,
+      entityId: id,
+      payload: vehicle,
+    );
+  }
+
+  Future<void> queuePartnerVehicleDelete(String vehicleId) async {
+    final id = vehicleId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.partnerVehicles,
+      entityId: id,
+    );
+  }
 }

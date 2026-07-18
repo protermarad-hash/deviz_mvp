@@ -37,6 +37,11 @@ enum CloudEntityType {
   crmRecords,
   obiectiveLunare,
   partnerSettlements,
+  // Entități modul Parteneri fără queue offline (iul 2026) — fix BUG 1/BUG 8
+  // pentru PartnerRecord/PartnerWorkerRecord/PartnerVehicleRecord.
+  partners,
+  partnerWorkers,
+  partnerVehicles,
   unknown,
 }
 
