@@ -1,24 +1,25 @@
 import 'package:flutter/material.dart';
 
-import '../partner_worker_master_models.dart';
+import '../../partners/partner_models.dart';
 
-/// Dialog auto-conținut adăugare/editare rapidă a unui muncitor partener în
-/// catalogul jobs/ (PartnerWorkerMaster). Folosit atât din pagina de
-/// management (`PartnerWorkerMasterPage`) cât și din butonul „Nou” al
-/// câmpului de autocompletare, ca să poți adăuga un muncitor nou fără să ieși
-/// din fișa lucrării.
-Future<PartnerWorkerMaster?> showPartnerWorkerMasterDialog(
+/// Dialog auto-conținut adăugare/editare rapidă a unui muncitor partener,
+/// folosit din modulul Lucrări (jobs/) fără a ieși din fișa lucrării. Scrie
+/// direct în catalogul unic `PartnerWorkerRecord` (colecția `partner_workers`),
+/// aceeași sursă de adevăr ca modulul Parteneri. Folosit atât din pagina de
+/// management (`PartnerWorkerMasterPage`) cât și din butonul „Nou” al câmpului
+/// de autocompletare.
+Future<PartnerWorkerRecord?> showPartnerWorkerMasterDialog(
   BuildContext context, {
   required String partnerId,
   required void Function(String message) onValidationError,
-  PartnerWorkerMaster? existing,
+  PartnerWorkerRecord? existing,
 }) async {
   final nameCtrl = TextEditingController(text: existing?.fullName ?? '');
   final roleCtrl = TextEditingController(text: existing?.role ?? '');
   final notesCtrl = TextEditingController(text: existing?.notes ?? '');
   var active = existing?.active ?? true;
   try {
-    return await showDialog<PartnerWorkerMaster>(
+    return await showDialog<PartnerWorkerRecord>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
@@ -80,12 +81,16 @@ Future<PartnerWorkerMaster?> showPartnerWorkerMasterDialog(
                 }
                 final now = DateTime.now();
                 Navigator.of(context).pop(
-                  PartnerWorkerMaster(
+                  PartnerWorkerRecord(
                     id: existing?.id ??
-                        'partner-worker-master-${now.microsecondsSinceEpoch}',
+                        'partner-worker-${now.microsecondsSinceEpoch}',
                     partnerId: partnerId,
                     fullName: fullName,
                     role: roleCtrl.text.trim(),
+                    // Câmpuri financiare gestionate din modulul Parteneri —
+                    // păstrate la editare, default la creare rapidă din jobs/.
+                    hourlyRate: existing?.hourlyRate ?? 0,
+                    currency: existing?.currency ?? 'RON',
                     active: active,
                     notes: notesCtrl.text.trim(),
                     createdAt: existing?.createdAt ?? now,

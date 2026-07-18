@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'partner_worker_master_models.dart';
+import '../partners/partner_models.dart';
 
 /// Widget reutilizabil pentru căutare/selecție muncitor partener din catalog,
 /// cu autocompletare — modelat direct pe
@@ -25,17 +25,17 @@ class PartnerWorkerAutocompleteField extends StatelessWidget {
 
   /// Listă deja filtrată de apelant (ex: doar muncitorii partenerului
   /// selectat pe job și doar cei activi).
-  final List<PartnerWorkerMaster> workers;
-  final PartnerWorkerMaster? initialWorker;
+  final List<PartnerWorkerRecord> workers;
+  final PartnerWorkerRecord? initialWorker;
   final String labelText;
   final String? helperText;
-  final void Function(PartnerWorkerMaster?) onWorkerSelected;
+  final void Function(PartnerWorkerRecord?) onWorkerSelected;
 
   /// Callback opțional pentru butonul "Nou" (adaugă rapid în catalog).
   final VoidCallback? onCreateNew;
   final bool enabled;
 
-  Iterable<PartnerWorkerMaster> _suggest(TextEditingValue textEditingValue) {
+  Iterable<PartnerWorkerRecord> _suggest(TextEditingValue textEditingValue) {
     final q = textEditingValue.text.trim().toLowerCase();
     if (q.isEmpty) return workers.take(12);
     return workers.where((w) {
@@ -52,7 +52,7 @@ class PartnerWorkerAutocompleteField extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Expanded(
-          child: Autocomplete<PartnerWorkerMaster>(
+          child: Autocomplete<PartnerWorkerRecord>(
             initialValue: initialWorker != null
                 ? TextEditingValue(text: initialWorker!.fullName)
                 : null,

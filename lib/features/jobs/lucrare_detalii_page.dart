@@ -68,9 +68,6 @@ import 'dialogs/contract_dialog.dart';
 import 'dialogs/work_task_dialog.dart';
 import 'dialogs/line_purchase_history_dialog.dart';
 import 'dialogs/partner_worker_master_dialog.dart';
-import 'partner_worker_master_models.dart';
-import 'partner_worker_master_repository.dart';
-import 'firebase_partner_worker_master_repository.dart';
 import 'partner_worker_master_page.dart';
 import 'services/lucrare_persistence.dart';
 import 'services/lucrare_labor_calc.dart';
@@ -286,13 +283,13 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   List<BeneficiarySuppliedEquipment> _beneficiarySuppliedEquipment = const [];
   List<BeneficiarySuppliedMaterial> _beneficiarySuppliedMaterials = const [];
   List<PartnerRecord> _masterPartners = const [];
+  // Catalog UNIC muncitori parteneri (PartnerWorkerRecord, colecția
+  // partner_workers) — încărcat prin repository-ul standard în loadResults[9]
+  // din marele Future.wait. Consolidat iul 2026: fostul catalog paralel
+  // PartnerWorkerMaster din jobs/ a fost eliminat, sursa de adevăr e aceeași
+  // ca modulul Parteneri (offline queue + sync incluse).
   List<PartnerWorkerRecord> _masterPartnerWorkers = const [];
   List<PartnerVehicleRecord> _masterPartnerVehicles = const [];
-  // Catalog muncitori parteneri auto-conținut în jobs/ (iul 2026) — separat
-  // de _masterPartnerWorkers (catalogul mai vechi din modulul partners/).
-  final PartnerWorkerMasterRepository _partnerWorkerMasterRepo =
-      FirebasePartnerWorkerMasterRepository();
-  List<PartnerWorkerMaster> _partnerWorkerMasters = const [];
   List<ClientRecord> _clients = const [];
   List<WarrantyCertificateRecord> _warrantyCertificates =
       const <WarrantyCertificateRecord>[];
@@ -489,25 +486,26 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         text: _jobSnapshot.partnerResources.toStringAsFixed(2));
     _refreshCloudRepository();
     // Future.microtask evită blocarea primului frame (CLAUDE.md ANTI-PATTERN 2)
+    // _loadData() încarcă și catalogul unic de muncitori parteneri
+    // (loadResults[9] → _masterPartnerWorkers) — nu mai există încărcare
+    // paralelă separată (consolidare iul 2026).
     Future.microtask(_loadData);
-    Future.microtask(_loadPartnerWorkerMasters);
     // Reîncarcă din cloud când Firebase devine disponibil după startup
     // (CLAUDE.md ANTI-PATTERN 4 — pagini care nu se reîncarcă după startup)
     FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
   }
 
-  /// Încărcare independentă a catalogului nou de muncitori parteneri
-  /// (jobs/) — separată de `_loadData()` ca să nu atingă marele Future.wait
-  /// existent. Repository-ul e cloud-only (fără cache local), la fel ca
-  /// referința urmată (`AngajatiCloudRepository`); best-effort, nu blochează
-  /// UI-ul dacă eșuează.
-  Future<void> _loadPartnerWorkerMasters() async {
+  /// Reîncărcare lightweight DOAR a catalogului de muncitori parteneri, prin
+  /// repository-ul standard (aceeași sursă ca loadResults[9]) — folosită după
+  /// revenirea online sau după management din catalog, fără a relua întregul
+  /// `_loadData()`. Best-effort, nu blochează UI-ul dacă eșuează.
+  Future<void> _reloadMasterPartnerWorkers() async {
     try {
-      final items = await _partnerWorkerMasterRepo.listPartnerWorkerMasters();
+      final items = await widget.repository.listPartnerWorkers();
       if (!mounted) return;
-      setState(() => _partnerWorkerMasters = items);
+      setState(() => _masterPartnerWorkers = items);
     } catch (e) {
-      debugPrint('[PartnerWorkerMaster] load error: $e');
+      debugPrint('[PartnerWorker] reload error: $e');
     }
   }
 
@@ -529,8 +527,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     }
     if (FirebaseBootstrap.isOnline &&
         mounted &&
-        _partnerWorkerMasters.isEmpty) {
-      _loadPartnerWorkerMasters();
+        _masterPartnerWorkers.isEmpty) {
+      _reloadMasterPartnerWorkers();
     }
   }
 
@@ -2561,10 +2559,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return null;
   }
 
-  List<PartnerWorkerMaster> _masterWorkersForJobPartner(JobPartner partner) {
+  List<PartnerWorkerRecord> _masterWorkersForJobPartner(JobPartner partner) {
     final masterPartnerId = partner.masterPartnerId.trim();
-    if (masterPartnerId.isEmpty) return const <PartnerWorkerMaster>[];
-    return _partnerWorkerMasters
+    if (masterPartnerId.isEmpty) return const <PartnerWorkerRecord>[];
+    return _masterPartnerWorkers
         .where((item) => item.partnerId == masterPartnerId && item.active)
         .toList(growable: false);
   }
@@ -2600,9 +2598,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         onCreateWorker: () => _quickAddPartnerWorkerMaster(partner),
       );
 
-  /// Adaugă rapid un muncitor nou în catalogul jobs/ fără să ieși din fișa
-  /// lucrării — folosit de butonul „Nou” din câmpul de căutare al catalogului.
-  Future<PartnerWorkerMaster?> _quickAddPartnerWorkerMaster(
+  /// Adaugă rapid un muncitor nou în catalogul unic (partner_workers) fără să
+  /// ieși din fișa lucrării — folosit de butonul „Nou” din câmpul de căutare.
+  Future<PartnerWorkerRecord?> _quickAddPartnerWorkerMaster(
     JobPartner partner,
   ) async {
     final masterPartnerId = partner.masterPartnerId.trim();
@@ -2620,13 +2618,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
     if (created == null) return null;
     setState(() {
-      _partnerWorkerMasters = [
-        ..._partnerWorkerMasters.where((w) => w.id != created.id),
+      _masterPartnerWorkers = [
+        ..._masterPartnerWorkers.where((w) => w.id != created.id),
         created,
       ];
     });
-    _partnerWorkerMasterRepo.upsertPartnerWorkerMaster(created).catchError((e) {
-      debugPrint('[PartnerWorkerMaster] quick add save error: $e');
+    // Salvare prin repository-ul standard: local → queue offline → Firestore
+    // fire-and-forget (aceeași sursă de adevăr ca modulul Parteneri).
+    widget.repository.savePartnerWorker(created).catchError((e) {
+      debugPrint('[PartnerWorker] quick add save error: $e');
+      return created;
     });
     return created;
   }
@@ -2645,11 +2646,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         builder: (context) => PartnerWorkerMasterPage(
           partnerId: masterPartnerId,
           partnerName: partner.name,
-          repository: _partnerWorkerMasterRepo,
+          repository: widget.repository,
         ),
       ),
     );
-    _loadPartnerWorkerMasters();
+    _reloadMasterPartnerWorkers();
   }
 
   Future<JobPartnerVehicle?> _showPartnerVehicleDialog({

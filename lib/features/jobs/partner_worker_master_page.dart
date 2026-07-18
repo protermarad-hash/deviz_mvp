@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
+import '../../core/repositories/app_data_repository.dart';
+import '../partners/partner_models.dart';
 import 'dialogs/partner_worker_master_dialog.dart';
-import 'partner_worker_master_models.dart';
-import 'partner_worker_master_repository.dart';
 
-/// Pagină simplă de management pentru catalogul de muncitori parteneri,
-/// reachable direct din fișa lucrării (Jobs) — fără să fie nevoie să treci
-/// în alt modul pentru a adăuga/edita/dezactiva personal partener.
+/// Pagină simplă de management pentru catalogul unic de muncitori parteneri
+/// (`PartnerWorkerRecord`, colecția `partner_workers`), reachable direct din
+/// fișa lucrării (Jobs) — fără să fie nevoie să treci în modulul Parteneri
+/// pentru a adăuga/edita/dezactiva personal partener. Operează prin
+/// repository-ul standard din aplicație (`AppDataRepository`), aceeași sursă de
+/// adevăr ca modulul Parteneri (offline queue + sync inclus).
 class PartnerWorkerMasterPage extends StatefulWidget {
   const PartnerWorkerMasterPage({
     super.key,
@@ -19,11 +22,11 @@ class PartnerWorkerMasterPage extends StatefulWidget {
 
   final String partnerId;
   final String partnerName;
-  final PartnerWorkerMasterRepository repository;
+  final AppDataRepository repository;
 
   /// Apelat de fiecare dată când lista se schimbă (adăugare/editare/ștergere),
   /// ca pagina apelantă (fișa lucrării) să-și poată reîmprospăta lista locală.
-  final void Function(List<PartnerWorkerMaster> workers)? onChanged;
+  final void Function(List<PartnerWorkerRecord> workers)? onChanged;
 
   @override
   State<PartnerWorkerMasterPage> createState() =>
@@ -33,7 +36,7 @@ class PartnerWorkerMasterPage extends StatefulWidget {
 class _PartnerWorkerMasterPageState extends State<PartnerWorkerMasterPage> {
   bool _loading = true;
   String? _error;
-  List<PartnerWorkerMaster> _items = const <PartnerWorkerMaster>[];
+  List<PartnerWorkerRecord> _items = const <PartnerWorkerRecord>[];
 
   @override
   void initState() {
@@ -57,7 +60,7 @@ class _PartnerWorkerMasterPageState extends State<PartnerWorkerMasterPage> {
   Future<void> _load() async {
     if (mounted) setState(() => _loading = true);
     try {
-      final all = await widget.repository.listPartnerWorkerMasters();
+      final all = await widget.repository.listPartnerWorkers();
       final filtered = all
           .where((item) => item.partnerId == widget.partnerId)
           .toList(growable: false)
@@ -85,7 +88,7 @@ class _PartnerWorkerMasterPageState extends State<PartnerWorkerMasterPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _addOrEdit({PartnerWorkerMaster? existing}) async {
+  Future<void> _addOrEdit({PartnerWorkerRecord? existing}) async {
     final result = await showPartnerWorkerMasterDialog(
       context,
       partnerId: widget.partnerId,
@@ -103,22 +106,24 @@ class _PartnerWorkerMasterPageState extends State<PartnerWorkerMasterPage> {
         ));
     if (mounted) setState(() => _items = next);
     widget.onChanged?.call(_items);
-    widget.repository.upsertPartnerWorkerMaster(result).catchError((e) {
+    widget.repository.savePartnerWorker(result).catchError((e) {
       _snack('Eroare la salvare: $e');
+      return result;
     });
   }
 
-  Future<void> _toggleActive(PartnerWorkerMaster item) async {
+  Future<void> _toggleActive(PartnerWorkerRecord item) async {
     final updated = item.copyWith(active: !item.active, updatedAt: DateTime.now());
     final next = _items.map((w) => w.id == item.id ? updated : w).toList();
     if (mounted) setState(() => _items = next);
     widget.onChanged?.call(_items);
-    widget.repository.upsertPartnerWorkerMaster(updated).catchError((e) {
+    widget.repository.savePartnerWorker(updated).catchError((e) {
       _snack('Eroare la salvare: $e');
+      return updated;
     });
   }
 
-  Future<void> _delete(PartnerWorkerMaster item) async {
+  Future<void> _delete(PartnerWorkerRecord item) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -145,7 +150,7 @@ class _PartnerWorkerMasterPageState extends State<PartnerWorkerMasterPage> {
       setState(() => _items = _items.where((w) => w.id != item.id).toList());
     }
     widget.onChanged?.call(_items);
-    widget.repository.deletePartnerWorkerMaster(item.id).catchError((e) {
+    widget.repository.deletePartnerWorker(item.id).catchError((e) {
       _snack('Eroare la ștergere: $e');
       _load();
     });

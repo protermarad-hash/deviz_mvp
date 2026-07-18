@@ -5,8 +5,6 @@ import '../../partners/partner_models.dart';
 import '../job_partner_models.dart';
 import '../lucrare_format_utils.dart';
 import '../partner_worker_autocomplete_field.dart';
-import '../partner_worker_master_models.dart';
-import 'partner_worker_master_dialog.dart';
 
 /// Dialoguri auto-conținute pentru parteneri (companie / personal / autovehicul)
 /// din fișa lucrării. Starea necesară (liste master, jobId, callback validare)
@@ -249,14 +247,14 @@ Future<JobPartner?> showPartnerDialog(
 Future<JobPartnerWorker?> showPartnerWorkerDialog(
   BuildContext context, {
   required JobPartner partner,
-  required List<PartnerWorkerMaster> masterWorkers,
+  required List<PartnerWorkerRecord> masterWorkers,
   required String jobId,
   required void Function(String message) onValidationError,
   JobPartnerWorker? existing,
   /// Opțional: deschide dialogul de adăugare rapidă în catalog și
   /// persistă noul muncitor. Întoarce `null` dacă utilizatorul renunță.
   /// Fără acest callback, butonul „Nou” din câmpul de căutare nu apare.
-  Future<PartnerWorkerMaster?> Function()? onCreateWorker,
+  Future<PartnerWorkerRecord?> Function()? onCreateWorker,
 }) async {
   final nameCtrl = TextEditingController(text: existing?.fullName ?? '');
   final roleCtrl = TextEditingController(text: existing?.role ?? '');
@@ -278,7 +276,7 @@ Future<JobPartnerWorker?> showPartnerWorkerDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
-          PartnerWorkerMaster? selectedMaster() {
+          PartnerWorkerRecord? selectedMaster() {
             final id = selectedMasterWorkerId;
             if (id == null) return null;
             for (final item in masterWorkers) {
@@ -287,7 +285,7 @@ Future<JobPartnerWorker?> showPartnerWorkerDialog(
             return null;
           }
 
-          void applySelection(PartnerWorkerMaster? selected) {
+          void applySelection(PartnerWorkerRecord? selected) {
             setDialogState(() {
               selectedMasterWorkerId = selected?.id;
               if (selected == null) return;
