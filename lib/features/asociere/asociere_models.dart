@@ -47,10 +47,36 @@ enum AsociereStatus {
   }
 }
 
+/// Cine facturează Beneficiarul și încasează veniturile pe această asociere
+/// (contractantul principal). Determină DIRECȚIA rambursării la decont:
+/// partea care încasează deține numerarul și rambursează cealaltă parte.
+/// - proTerm → PRO TERM e contractant principal (încasează, rambursează
+///   partenerul).
+/// - partener → partenerul e contractant principal (încasează, rambursează
+///   PRO TERM) — ex: contract Madalin/AIR, Art. 8.1 (AIR facturează
+///   Beneficiarul).
+enum AsociereIncasator {
+  proTerm,
+  partener;
+
+  String get value =>
+      this == AsociereIncasator.partener ? 'partener' : 'pro_term';
+
+  String get label =>
+      this == AsociereIncasator.partener ? 'Partener' : 'PRO TERM';
+
+  static AsociereIncasator fromValue(String? raw) {
+    return (raw ?? '').trim().toLowerCase() == 'partener'
+        ? AsociereIncasator.partener
+        : AsociereIncasator.proTerm;
+  }
+}
+
 class AsociereRecord {
   const AsociereRecord({
     required this.id,
     required this.lucrareId,
+    required this.cineFactureazaBeneficiarul,
     this.partenerExternId = '',
     this.partenerExternNume = '',
     this.partenerExternCUI = '',
@@ -71,6 +97,10 @@ class AsociereRecord {
 
   final String id;
   final String lucrareId;
+
+  /// Cine facturează Beneficiarul și încasează (contractant principal) —
+  /// determină direcția rambursării la decont. Vezi [AsociereIncasator].
+  final AsociereIncasator cineFactureazaBeneficiarul;
 
   /// Opțional — FK către PartnerRecord.id (lib/features/partners/), dacă
   /// partenerul extern e deja în registrul de parteneri.
@@ -110,6 +140,7 @@ class AsociereRecord {
   }
 
   AsociereRecord copyWith({
+    AsociereIncasator? cineFactureazaBeneficiarul,
     String? partenerExternId,
     String? partenerExternNume,
     String? partenerExternCUI,
@@ -129,6 +160,8 @@ class AsociereRecord {
     return AsociereRecord(
       id: id,
       lucrareId: lucrareId,
+      cineFactureazaBeneficiarul:
+          cineFactureazaBeneficiarul ?? this.cineFactureazaBeneficiarul,
       partenerExternId: partenerExternId ?? this.partenerExternId,
       partenerExternNume: partenerExternNume ?? this.partenerExternNume,
       partenerExternCUI: partenerExternCUI ?? this.partenerExternCUI,
@@ -157,6 +190,7 @@ class AsociereRecord {
     return <String, dynamic>{
       'id': id,
       'lucrare_id': lucrareId,
+      'cine_factureaza_beneficiarul': cineFactureazaBeneficiarul.value,
       'partener_extern_id': partenerExternId,
       'partener_extern_nume': partenerExternNume,
       'partener_extern_cui': partenerExternCUI,
@@ -200,6 +234,15 @@ class AsociereRecord {
     return AsociereRecord(
       id: pick(const <String>['id']),
       lucrareId: pick(const <String>['lucrare_id', 'lucrareId', 'jobId']),
+      // Backward compat: docs create înainte de introducerea câmpului (modul
+      // fără UI încă, fără date în producție) → proTerm, comportamentul
+      // istoric implicit. La creare din UI câmpul e obligatoriu (constructor
+      // `required`), fără default silențios.
+      cineFactureazaBeneficiarul: AsociereIncasator.fromValue(
+        (map['cine_factureaza_beneficiarul'] ??
+                map['cineFactureazaBeneficiarul'])
+            ?.toString(),
+      ),
       partenerExternId:
           pick(const <String>['partener_extern_id', 'partenerExternId']),
       partenerExternNume:

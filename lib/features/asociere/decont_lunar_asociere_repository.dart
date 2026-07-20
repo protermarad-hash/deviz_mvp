@@ -17,6 +17,31 @@ import 'pontaj_asociere_repository.dart';
 import 'tarif_asociere_repository.dart';
 import 'venit_asociere_repository.dart';
 
+/// Aruncată de [DecontLunarAsociereRepository.genereazaDecontPentruLuna] când
+/// există costuri din perioada decontului care necesită aprobare și nu au
+/// aprobarea completă. Generarea e blocată până la aprobare.
+class DecontAprobareIncompletaException implements Exception {
+  DecontAprobareIncompletaException(this.costuriNeaprobate);
+
+  final List<CostAsociereRecord> costuriNeaprobate;
+
+  String get message {
+    final n = costuriNeaprobate.length;
+    final descrieri = costuriNeaprobate
+        .map((c) =>
+            '${c.descriere.isEmpty ? '(fără descriere)' : c.descriere} '
+            '(${c.valoareFaraTva.toStringAsFixed(2)} RON)')
+        .join('; ');
+    return 'Nu se poate genera decontul: $n cost'
+        '${n == 1 ? '' : 'uri'} necesită aprobare și nu '
+        '${n == 1 ? 'este aprobat' : 'sunt aprobate'} integral (PRO TERM și '
+        'partener). Aprobă întâi: $descrieri.';
+  }
+
+  @override
+  String toString() => message;
+}
+
 /// Repository pentru deconturi lunare pe asociere. Decontul NU se introduce
 /// manual — se generează (vezi [genereazaDecontPentruLuna]).
 class DecontLunarAsociereRepository {
@@ -225,6 +250,14 @@ class DecontLunarAsociereRepository {
     // 3. Alte costuri (fără manopera calculată), pe părți.
     final costuri =
         await CostAsociereRepository.instance.listByAsociere(asociereId);
+
+    // BLOCARE: costuri din perioadă care necesită aprobare și nu o au completă
+    // → decontul ar fi incomplet. Se aruncă înainte de orice scriere.
+    final blocante = costuriCareBlocheazaDecont(costuri, luna, an);
+    if (blocante.isNotEmpty) {
+      throw DecontAprobareIncompletaException(blocante);
+    }
+
     for (final c in costuri) {
       if (c.categorie == AsociereCostCategorie.manoperaCalculata) continue;
       if (!_inMonth(c.dataRecunoastereCost, luna, an)) continue;
@@ -240,7 +273,9 @@ class DecontLunarAsociereRepository {
       veniturIncasatTotal: veniturIncasatTotal,
       costRecunoscutProTerm: costPT,
       costRecunoscutPartener: costPartener,
+      cotaProTerm: asociere.cotaProTerm,
       cotaPartener: asociere.cotaPartener,
+      incasator: asociere.cineFactureazaBeneficiarul,
       procentRezervaGarantie: asociere.procentRezervaGarantie,
     );
 
