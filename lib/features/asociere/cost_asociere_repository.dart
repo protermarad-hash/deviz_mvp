@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import 'cost_asociere_models.dart';
 
@@ -21,15 +22,22 @@ class CostAsociereRepository {
 
   static String? lastFirestoreError;
   static int lastLocalCount = 0;
+  static DateTime? lastSyncAt;
 
   bool get _isCloud => FirebaseBootstrap.isInitialized;
 
   CollectionReference<Map<String, dynamic>> get _col =>
-      FirebaseFirestore.instance.collection(FirebaseCollections.costuriAsociere);
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.costuriAsociere);
 
   // ── CRUD ─────────────────────────────────────────────────────────────────
 
   Future<void> upsertCost(CostAsociereRecord r) async {
+    final existing = await listLocal();
+    if (existing.any(
+        (item) => item.id != r.id && item.idempotencyKey == r.idempotencyKey)) {
+      throw StateError('Cost duplicat pentru aceeași sursă.');
+    }
     await _writeLocal(r);
     await OfflineSyncRuntime.instance.queueCostAsociere(r);
     if (_isCloud) {
@@ -75,22 +83,38 @@ class CostAsociereRepository {
       final cloud = snap.docs
           .map((d) => CostAsociereRecord.fromMap({...d.data(), 'id': d.id}))
           .toList();
-      final cloudIds = cloud.map((c) => c.id).toSet();
-      final localOnly = locals.where((l) => !cloudIds.contains(l.id)).toList();
-      for (final r in localOnly) {
-        await OfflineSyncRuntime.instance.queueCostAsociere(r);
+      final pendingIds = await OfflineSyncRuntime.instance
+          .pendingUpsertEntityIds(CloudEntityType.costuriAsociere);
+      final localById = {for (final item in locals) item.id: item};
+      final merged = <String, CostAsociereRecord>{};
+      for (final remote in cloud) {
+        final local = localById[remote.id];
+        merged[remote.id] = local != null &&
+                (pendingIds.contains(remote.id) ||
+                    local.revision > remote.revision)
+            ? local
+            : remote;
+      }
+      for (final local in locals) {
+        if (!merged.containsKey(local.id)) {
+          merged[local.id] = local;
+          await OfflineSyncRuntime.instance.queueCostAsociere(local);
+        }
       }
       lastFirestoreError = null;
-      return _sort([...cloud, ...localOnly]);
+      lastSyncAt = DateTime.now();
+      final result = _sort(merged.values.toList());
+      await _writeAll(result);
+      return result;
     } catch (e) {
       lastFirestoreError = e.toString();
       return _sort(locals);
     }
   }
 
-  Future<List<CostAsociereRecord>> listByAsociere(String asociereId) async {
-    final all = await listLocal();
-    return _sort(all.where((r) => r.asociereId == asociereId).toList());
+  Future<List<CostAsociereRecord>> listByProject(String projectId) async {
+    final all = await listMerged();
+    return _sort(all.where((r) => r.projectId == projectId).toList());
   }
 
   // ── Persistență ───────────────────────────────────────────────────────────
@@ -114,6 +138,14 @@ class CostAsociereRepository {
     all.removeWhere((r) => r.id == id);
     await prefs.setString(
         _localKey, jsonEncode(all.map((r) => r.toMap()).toList()));
+  }
+
+  Future<void> _writeAll(List<CostAsociereRecord> records) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _localKey,
+      jsonEncode(records.map((record) => record.toMap()).toList()),
+    );
   }
 
   List<CostAsociereRecord> _sort(List<CostAsociereRecord> list) {

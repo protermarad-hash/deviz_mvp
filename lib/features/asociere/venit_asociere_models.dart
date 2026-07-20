@@ -1,109 +1,143 @@
-/// Venit (factură emisă) pe o Asociere. Intră în `veniturIncasatTotal` al
-/// unui decont lunar DOAR dacă `dataIncasare` e setată și cade în luna
-/// respectivă — o factură emisă dar neîncasată nu contează ca venit
-/// recunoscut (numele câmpului pe DecontLunarAsociere e explicit
-/// "încasat", nu "facturat").
+import 'asociere_operational_common.dart';
+
+enum VenitAsociereEtapa { estimat, facturat, incasat }
+
 class VenitAsociereRecord {
   const VenitAsociereRecord({
     required this.id,
-    required this.asociereId,
-    required this.nrFactura,
-    required this.dataFactura,
+    required this.projectId,
+    this.contractId,
+    required this.etapa,
+    this.numarFactura = '',
+    this.dataFactura,
     required this.valoareFaraTva,
-    this.situatieLucrariAferenta = '',
-    this.dataIncasare,
+    this.moneda = 'RON',
+    this.curs = 1,
+    this.emitent = AsociereParte.proTerm,
+    this.beneficiar = '',
+    this.scadenta,
+    this.sumaIncasata = 0,
+    this.dataIncasarii,
+    this.documentRef,
+    this.eligibil = true,
+    this.status = AsociereOperationalStatus.draft,
+    this.observatii = '',
     required this.createdAt,
     required this.updatedAt,
+    this.createdBy = '',
+    this.updatedBy = '',
+    this.revision = 1,
   });
 
   final String id;
-  final String asociereId;
-  final String nrFactura;
-  final DateTime dataFactura;
+  final String projectId;
+  final String? contractId;
+  final VenitAsociereEtapa etapa;
+  final String numarFactura;
+  final DateTime? dataFactura;
   final double valoareFaraTva;
-
-  /// Referință text la situația de lucrări care a generat factura (nu FK
-  /// strict — situațiile de lucrări nu au încă id-uri stabile expuse aici).
-  final String situatieLucrariAferenta;
-  final DateTime? dataIncasare;
+  final String moneda;
+  final double curs;
+  final AsociereParte emitent;
+  final String beneficiar;
+  final DateTime? scadenta;
+  final double sumaIncasata;
+  final DateTime? dataIncasarii;
+  final String? documentRef;
+  final bool eligibil;
+  final AsociereOperationalStatus status;
+  final String observatii;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String createdBy;
+  final String updatedBy;
+  final int revision;
 
-  bool get esteIncasat => dataIncasare != null;
+  bool get esteIncasat =>
+      etapa == VenitAsociereEtapa.incasat && sumaIncasata > 0;
+  String get idempotencyKey =>
+      '$projectId:${numarFactura.trim().toLowerCase()}:${dataFactura?.toIso8601String() ?? id}';
+  double get valoareProiect => sumaIncasata * curs;
 
-  VenitAsociereRecord copyWith({
-    String? nrFactura,
-    DateTime? dataFactura,
-    double? valoareFaraTva,
-    String? situatieLucrariAferenta,
-    Object? dataIncasare = _unset,
-    DateTime? updatedAt,
-  }) {
-    return VenitAsociereRecord(
-      id: id,
-      asociereId: asociereId,
-      nrFactura: nrFactura ?? this.nrFactura,
-      dataFactura: dataFactura ?? this.dataFactura,
-      valoareFaraTva: valoareFaraTva ?? this.valoareFaraTva,
-      situatieLucrariAferenta:
-          situatieLucrariAferenta ?? this.situatieLucrariAferenta,
-      dataIncasare: identical(dataIncasare, _unset)
-          ? this.dataIncasare
-          : dataIncasare as DateTime?,
-      createdAt: createdAt,
-      updatedAt: updatedAt ?? this.updatedAt,
-    );
+  List<String> validate() {
+    final errors = <String>[];
+    if (projectId.trim().isEmpty) errors.add('Proiectul este obligatoriu.');
+    if (!valoareFaraTva.isFinite || valoareFaraTva < 0) {
+      errors.add('Valoarea este invalidă.');
+    }
+    if (!sumaIncasata.isFinite || sumaIncasata < 0 || curs <= 0) {
+      errors.add('Încasarea sau cursul este invalid.');
+    }
+    if (etapa != VenitAsociereEtapa.estimat &&
+        (numarFactura.trim().isEmpty || dataFactura == null)) {
+      errors.add(
+          'Factura și data sunt obligatorii pentru venit facturat/încasat.');
+    }
+    if (etapa == VenitAsociereEtapa.incasat && dataIncasarii == null) {
+      errors.add('Data încasării este obligatorie.');
+    }
+    return errors;
   }
 
-  Map<String, dynamic> toMap() {
-    return <String, dynamic>{
-      'id': id,
-      'asociere_id': asociereId,
-      'nr_factura': nrFactura,
-      'data_factura': dataFactura.toIso8601String(),
-      'valoare_fara_tva': valoareFaraTva,
-      'situatie_lucrari_aferenta': situatieLucrariAferenta,
-      'data_incasare': dataIncasare?.toIso8601String(),
-      'created_at': createdAt.toIso8601String(),
-      'updated_at': updatedAt.toIso8601String(),
-    };
-  }
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'project_id': projectId,
+        'contract_id': contractId,
+        'etapa': etapa.name,
+        'numar_factura': numarFactura,
+        'data_factura': dataFactura?.toIso8601String(),
+        'valoare_fara_tva': valoareFaraTva,
+        'moneda': moneda,
+        'curs': curs,
+        'emitent': emitent.value,
+        'beneficiar': beneficiar,
+        'scadenta': scadenta?.toIso8601String(),
+        'suma_incasata': sumaIncasata,
+        'data_incasarii': dataIncasarii?.toIso8601String(),
+        'document_ref': documentRef,
+        'eligibil': eligibil,
+        'status': status.value,
+        'observatii': observatii,
+        'created_at': createdAt.toIso8601String(),
+        'updated_at': updatedAt.toIso8601String(),
+        'created_by': createdBy,
+        'updated_by': updatedBy,
+        'revision': revision,
+      };
 
   factory VenitAsociereRecord.fromMap(Map<String, dynamic> map) {
     final now = DateTime.now();
-
-    double parseDouble(dynamic raw) {
-      if (raw is num) return raw.toDouble();
-      return double.tryParse('${raw ?? '0'}'.replaceAll(',', '.')) ?? 0;
-    }
-
-    String pick(List<String> keys) {
-      for (final key in keys) {
-        final value = (map[key] ?? '').toString().trim();
-        if (value.isNotEmpty) return value;
-      }
-      return '';
-    }
-
+    final etapaRaw = mapString(map, const ['etapa']);
+    final etapa = VenitAsociereEtapa.values.firstWhere(
+      (item) => item.name == etapaRaw,
+      orElse: () => VenitAsociereEtapa.estimat,
+    );
     return VenitAsociereRecord(
-      id: pick(const <String>['id']),
-      asociereId: pick(const <String>['asociere_id', 'asociereId']),
-      nrFactura: pick(const <String>['nr_factura', 'nrFactura']),
-      dataFactura:
-          DateTime.tryParse((map['data_factura'] ?? '').toString()) ?? now,
+      id: mapString(map, const ['id']),
+      projectId: mapString(map, const ['project_id', 'projectId']),
+      contractId: nullableMapString(map, const ['contract_id', 'contractId']),
+      etapa: etapa,
+      numarFactura: mapString(map, const ['numar_factura', 'numarFactura']),
+      dataFactura: valueDate(map['data_factura'] ?? map['dataFactura']),
       valoareFaraTva:
-          parseDouble(map['valoare_fara_tva'] ?? map['valoareFaraTva']),
-      situatieLucrariAferenta: pick(
-        const <String>['situatie_lucrari_aferenta', 'situatieLucrariAferenta'],
-      ),
-      dataIncasare:
-          DateTime.tryParse((map['data_incasare'] ?? '').toString()),
-      createdAt:
-          DateTime.tryParse((map['created_at'] ?? '').toString()) ?? now,
-      updatedAt:
-          DateTime.tryParse((map['updated_at'] ?? '').toString()) ?? now,
+          valueDouble(map['valoare_fara_tva'] ?? map['valoareFaraTva']),
+      moneda: mapString(map, const ['moneda'], fallback: 'RON'),
+      curs: valueDouble(map['curs'], fallback: 1),
+      emitent: AsociereParteX.fromValue(map['emitent']?.toString()),
+      beneficiar: mapString(map, const ['beneficiar']),
+      scadenta: valueDate(map['scadenta']),
+      sumaIncasata: valueDouble(map['suma_incasata'] ?? map['sumaIncasata']),
+      dataIncasarii: valueDate(map['data_incasarii'] ?? map['dataIncasarii']),
+      documentRef:
+          nullableMapString(map, const ['document_ref', 'documentRef']),
+      eligibil: valueBool(map['eligibil'], fallback: true),
+      status: AsociereOperationalStatus.fromValue(map['status']),
+      observatii: mapString(map, const ['observatii']),
+      createdAt: valueDate(map['created_at'] ?? map['createdAt']) ?? now,
+      updatedAt: valueDate(map['updated_at'] ?? map['updatedAt']) ?? now,
+      createdBy: mapString(map, const ['created_by', 'createdBy']),
+      updatedBy: mapString(map, const ['updated_by', 'updatedBy']),
+      revision: valueInt(map['revision'], fallback: 1),
     );
   }
 }
-
-const Object _unset = Object();

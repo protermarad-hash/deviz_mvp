@@ -113,10 +113,14 @@ class FirebaseCollections {
   static const String serviciiPrestate = 'servicii_prestate';
   static const String clauzeCustomCatalog = 'clauze_custom_catalog';
   // Modul Asociere (partajare profit/pierdere pe Lucrare) — iul 2026.
+  static const String lucrariAsociere = 'lucrari_asociere';
   static const String asocieri = 'asocieri';
   static const String tarifeAsociere = 'tarife_asociere';
   static const String pontajeAsociere = 'pontaje_asociere';
   static const String costuriAsociere = 'costuri_asociere';
   static const String venituriAsociere = 'venituri_asociere';
   static const String deconturiLunareAsociere = 'deconturi_lunare_asociere';
+  static const String deplasariAsociere = 'deplasari_asociere';
+  static const String cazariAsociere = 'cazari_asociere';
+  static const String diurneAsociere = 'diurne_asociere';
 }

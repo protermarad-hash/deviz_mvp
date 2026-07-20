@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import 'pontaj_asociere_models.dart';
 
@@ -14,22 +15,29 @@ import 'pontaj_asociere_models.dart';
 /// integral (vezi PontajAsociereRecord.dataRecunoastereCost).
 class PontajAsociereRepository {
   PontajAsociereRepository._();
-  static final PontajAsociereRepository instance =
-      PontajAsociereRepository._();
+  static final PontajAsociereRepository instance = PontajAsociereRepository._();
 
   static const String _localKey = 'pontaje_asociere_v1';
 
   static String? lastFirestoreError;
   static int lastLocalCount = 0;
+  static DateTime? lastSyncAt;
 
   bool get _isCloud => FirebaseBootstrap.isInitialized;
 
   CollectionReference<Map<String, dynamic>> get _col =>
-      FirebaseFirestore.instance.collection(FirebaseCollections.pontajeAsociere);
+      FirebaseFirestore.instance
+          .collection(FirebaseCollections.pontajeAsociere);
 
   // ── CRUD ─────────────────────────────────────────────────────────────────
 
   Future<void> upsertPontaj(PontajAsociereRecord r) async {
+    final existing = await listLocal();
+    if (existing.any(
+        (item) => item.id != r.id && item.idempotencyKey == r.idempotencyKey)) {
+      throw StateError(
+          'Pontaj duplicat pentru aceeași persoană și activitate.');
+    }
     await _writeLocal(r);
     await OfflineSyncRuntime.instance.queuePontajAsociere(r);
     if (_isCloud) {
@@ -57,8 +65,8 @@ class PontajAsociereRepository {
       if (decoded is! List) return [];
       final items = decoded
           .whereType<Map>()
-          .map((e) =>
-              PontajAsociereRecord.fromMap(Map<String, dynamic>.from(e)))
+          .map(
+              (e) => PontajAsociereRecord.fromMap(Map<String, dynamic>.from(e)))
           .toList();
       lastLocalCount = items.length;
       return items;
@@ -76,22 +84,38 @@ class PontajAsociereRepository {
       final cloud = snap.docs
           .map((d) => PontajAsociereRecord.fromMap({...d.data(), 'id': d.id}))
           .toList();
-      final cloudIds = cloud.map((c) => c.id).toSet();
-      final localOnly = locals.where((l) => !cloudIds.contains(l.id)).toList();
-      for (final r in localOnly) {
-        await OfflineSyncRuntime.instance.queuePontajAsociere(r);
+      final pendingIds = await OfflineSyncRuntime.instance
+          .pendingUpsertEntityIds(CloudEntityType.pontajeAsociere);
+      final localById = {for (final item in locals) item.id: item};
+      final merged = <String, PontajAsociereRecord>{};
+      for (final remote in cloud) {
+        final local = localById[remote.id];
+        merged[remote.id] = local != null &&
+                (pendingIds.contains(remote.id) ||
+                    local.revision > remote.revision)
+            ? local
+            : remote;
+      }
+      for (final local in locals) {
+        if (!merged.containsKey(local.id)) {
+          merged[local.id] = local;
+          await OfflineSyncRuntime.instance.queuePontajAsociere(local);
+        }
       }
       lastFirestoreError = null;
-      return _sort([...cloud, ...localOnly]);
+      lastSyncAt = DateTime.now();
+      final result = _sort(merged.values.toList());
+      await _writeAll(result);
+      return result;
     } catch (e) {
       lastFirestoreError = e.toString();
       return _sort(locals);
     }
   }
 
-  Future<List<PontajAsociereRecord>> listByAsociere(String asociereId) async {
-    final all = await listLocal();
-    return _sort(all.where((r) => r.asociereId == asociereId).toList());
+  Future<List<PontajAsociereRecord>> listByProject(String projectId) async {
+    final all = await listMerged();
+    return _sort(all.where((r) => r.projectId == projectId).toList());
   }
 
   // ── Persistență ───────────────────────────────────────────────────────────
@@ -115,6 +139,14 @@ class PontajAsociereRepository {
     all.removeWhere((r) => r.id == id);
     await prefs.setString(
         _localKey, jsonEncode(all.map((r) => r.toMap()).toList()));
+  }
+
+  Future<void> _writeAll(List<PontajAsociereRecord> records) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _localKey,
+      jsonEncode(records.map((record) => record.toMap()).toList()),
+    );
   }
 
   List<PontajAsociereRecord> _sort(List<PontajAsociereRecord> list) {

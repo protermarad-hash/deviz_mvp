@@ -1,12 +1,4 @@
-/// Model Asociere — partajare profit/pierdere pe o Lucrare specifică, cu
-/// partener extern (subcontractor). Modul nou, independent de
-/// Financiar Parteneri (sold curent per partener) — vezi decizia
-/// arhitecturală: semantic diferite (sold continuu vs. asociere pe contract).
-///
-/// Referință opțională către PartnerRecord (lib/features/partners/), mirror
-/// exact al pattern-ului deja folosit de JobPartner.masterPartnerId —
-/// câmpurile denormalizate rămân editabile chiar dacă partenerExternId e gol
-/// (partener ocazional, fără fișă completă în registru).
+/// Configurația contractuală a unui proiect Asociere independent.
 enum AsociereStatus {
   activa,
   incheiata,
@@ -75,7 +67,7 @@ enum AsociereIncasator {
 class AsociereRecord {
   const AsociereRecord({
     required this.id,
-    required this.lucrareId,
+    required this.lucrareAsociereId,
     required this.cineFactureazaBeneficiarul,
     this.partenerExternId = '',
     this.partenerExternNume = '',
@@ -93,10 +85,15 @@ class AsociereRecord {
     this.status = AsociereStatus.activa,
     required this.createdAt,
     required this.updatedAt,
+    this.createdBy = '',
+    this.updatedBy = '',
+    this.revision = 1,
   });
 
   final String id;
-  final String lucrareId;
+
+  /// Referință exclusivă la proiectul independent `lucrari_asociere`.
+  final String lucrareAsociereId;
 
   /// Cine facturează Beneficiarul și încasează (contractant principal) —
   /// determină direcția rambursării la decont. Vezi [AsociereIncasator].
@@ -125,6 +122,9 @@ class AsociereRecord {
   final AsociereStatus status;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final String createdBy;
+  final String updatedBy;
+  final int revision;
 
   /// Data de la care rezerva de garanție devine eligibilă pentru eliberare
   /// (dataReceptieFinala + durataGarantieLuni), sau null dacă recepția
@@ -159,7 +159,7 @@ class AsociereRecord {
   }) {
     return AsociereRecord(
       id: id,
-      lucrareId: lucrareId,
+      lucrareAsociereId: lucrareAsociereId,
       cineFactureazaBeneficiarul:
           cineFactureazaBeneficiarul ?? this.cineFactureazaBeneficiarul,
       partenerExternId: partenerExternId ?? this.partenerExternId,
@@ -183,13 +183,16 @@ class AsociereRecord {
       status: status ?? this.status,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      createdBy: createdBy,
+      updatedBy: updatedBy,
+      revision: revision,
     );
   }
 
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
       'id': id,
-      'lucrare_id': lucrareId,
+      'lucrare_asociere_id': lucrareAsociereId,
       'cine_factureaza_beneficiarul': cineFactureazaBeneficiarul.value,
       'partener_extern_id': partenerExternId,
       'partener_extern_nume': partenerExternNume,
@@ -207,6 +210,9 @@ class AsociereRecord {
       'status': status.value,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'created_by': createdBy,
+      'updated_by': updatedBy,
+      'revision': revision,
     };
   }
 
@@ -233,7 +239,9 @@ class AsociereRecord {
 
     return AsociereRecord(
       id: pick(const <String>['id']),
-      lucrareId: pick(const <String>['lucrare_id', 'lucrareId', 'jobId']),
+      lucrareAsociereId: pick(
+        const <String>['lucrare_asociere_id', 'lucrareAsociereId'],
+      ),
       // Backward compat: docs create înainte de introducerea câmpului (modul
       // fără UI încă, fără date în producție) → proTerm, comportamentul
       // istoric implicit. La creare din UI câmpul e obligatoriu (constructor
@@ -255,8 +263,7 @@ class AsociereRecord {
         const <String>['partener_extern_telefon', 'partenerExternTelefon'],
       ),
       cotaProTerm: parseDouble(map['cota_pro_term'] ?? map['cotaProTerm'], 0),
-      cotaPartener:
-          parseDouble(map['cota_partener'] ?? map['cotaPartener'], 0),
+      cotaPartener: parseDouble(map['cota_partener'] ?? map['cotaPartener'], 0),
       pragAprobareRON: parseDouble(
         map['prag_aprobare_ron'] ?? map['pragAprobareRON'],
         1000.0,
@@ -279,10 +286,11 @@ class AsociereRecord {
       dataReceptieFinala:
           DateTime.tryParse((map['data_receptie_finala'] ?? '').toString()),
       status: AsociereStatus.fromValue(map['status']?.toString()),
-      createdAt:
-          DateTime.tryParse((map['created_at'] ?? '').toString()) ?? now,
-      updatedAt:
-          DateTime.tryParse((map['updated_at'] ?? '').toString()) ?? now,
+      createdAt: DateTime.tryParse((map['created_at'] ?? '').toString()) ?? now,
+      updatedAt: DateTime.tryParse((map['updated_at'] ?? '').toString()) ?? now,
+      createdBy: pick(const <String>['created_by', 'createdBy']),
+      updatedBy: pick(const <String>['updated_by', 'updatedBy']),
+      revision: parseInt(map['revision'], 1),
     );
   }
 }

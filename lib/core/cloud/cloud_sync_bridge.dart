@@ -739,6 +739,25 @@ class CloudSyncBridge {
     );
   }
 
+  Future<void> queueLucrareAsociereUpsert(Map<String, dynamic> project) async {
+    final id = (project['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.lucrariAsociere,
+      entityId: id,
+      payload: project,
+    );
+  }
+
+  Future<void> queueLucrareAsociereDelete(String projectId) async {
+    final id = projectId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.lucrariAsociere,
+      entityId: id,
+    );
+  }
+
   Future<void> queueAsociereUpsert(Map<String, dynamic> asociere) async {
     final id = (asociere['id'] ?? '').toString();
     if (id.isEmpty) return;
@@ -851,5 +870,41 @@ class CloudSyncBridge {
       entityType: CloudEntityType.deconturiLunareAsociere,
       entityId: id,
     );
+  }
+
+  Future<void> queueDeplasareAsociereUpsert(Map<String, dynamic> value) =>
+      _queueAsociereOperational(CloudEntityType.deplasariAsociere, value);
+
+  Future<void> queueCazareAsociereUpsert(Map<String, dynamic> value) =>
+      _queueAsociereOperational(CloudEntityType.cazariAsociere, value);
+
+  Future<void> queueDiurnaAsociereUpsert(Map<String, dynamic> value) =>
+      _queueAsociereOperational(CloudEntityType.diurneAsociere, value);
+
+  Future<void> queueDeplasareAsociereDelete(String id) =>
+      _deleteAsociereOperational(CloudEntityType.deplasariAsociere, id);
+
+  Future<void> queueCazareAsociereDelete(String id) =>
+      _deleteAsociereOperational(CloudEntityType.cazariAsociere, id);
+
+  Future<void> queueDiurnaAsociereDelete(String id) =>
+      _deleteAsociereOperational(CloudEntityType.diurneAsociere, id);
+
+  Future<void> _queueAsociereOperational(
+    CloudEntityType type,
+    Map<String, dynamic> value,
+  ) async {
+    final id = (value['id'] ?? '').toString().trim();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(entityType: type, entityId: id, payload: value);
+  }
+
+  Future<void> _deleteAsociereOperational(
+    CloudEntityType type,
+    String rawId,
+  ) async {
+    final id = rawId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(entityType: type, entityId: id);
   }
 }

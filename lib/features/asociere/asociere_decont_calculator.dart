@@ -160,7 +160,6 @@ List<CostAsociereRecord> costuriCareBlocheazaDecont(
       .where((c) =>
           c.dataApartenentaLuna.year == an &&
           c.dataApartenentaLuna.month == luna &&
-          c.necesitaAprobare &&
-          !c.esteAprobatIntegral)
+          !c.esteAprobat)
       .toList();
 }

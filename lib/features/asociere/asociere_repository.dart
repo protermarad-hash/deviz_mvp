@@ -7,9 +7,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/cloud/cloud_sync_models.dart';
 import 'asociere_models.dart';
 
-/// Repository pentru asocieri (partajare profit/pierdere pe Lucrare).
+/// Repository pentru configurația contractuală a proiectelor Asociere.
 /// Pattern standard (mirror crm_repository.dart): local → queue → Firestore
 /// fire-and-forget. Query Firestore fără .orderBy() — sortare în Dart.
 class AsociereRepository {
@@ -20,6 +21,7 @@ class AsociereRepository {
 
   static String? lastFirestoreError;
   static int lastLocalCount = 0;
+  static int lastFirestoreCount = -1;
 
   bool get _isCloud => FirebaseBootstrap.isInitialized;
 
@@ -70,26 +72,41 @@ class AsociereRepository {
     final locals = await listLocal();
     if (!_isCloud) return _sort(locals);
     try {
+      final pendingIds = await OfflineSyncRuntime.instance
+          .pendingUpsertEntityIds(CloudEntityType.asocieri);
       final snap = await _col.get();
       final cloud = snap.docs
           .map((d) => AsociereRecord.fromMap({...d.data(), 'id': d.id}))
           .toList();
-      final cloudIds = cloud.map((c) => c.id).toSet();
-      final localOnly = locals.where((l) => !cloudIds.contains(l.id)).toList();
+      lastFirestoreCount = cloud.length;
+      final localById = {for (final item in locals) item.id: item};
+      final resolvedCloud = cloud.map((item) {
+        final local = localById[item.id];
+        if (local != null &&
+            (pendingIds.contains(item.id) || local.revision > item.revision)) {
+          return local;
+        }
+        return item;
+      }).toList(growable: false);
+      final cloudIds = cloud.map((item) => item.id).toSet();
+      final localOnly =
+          locals.where((item) => !cloudIds.contains(item.id)).toList();
       for (final r in localOnly) {
         await OfflineSyncRuntime.instance.queueAsociere(r);
       }
       lastFirestoreError = null;
-      return _sort([...cloud, ...localOnly]);
+      return _sort([...resolvedCloud, ...localOnly]);
     } catch (e) {
       lastFirestoreError = e.toString();
       return _sort(locals);
     }
   }
 
-  Future<List<AsociereRecord>> listByLucrare(String lucrareId) async {
-    final all = await listLocal();
-    return _sort(all.where((r) => r.lucrareId == lucrareId).toList());
+  Future<List<AsociereRecord>> listByProject(String projectId) async {
+    final all = await listMerged();
+    return _sort(
+      all.where((record) => record.lucrareAsociereId == projectId).toList(),
+    );
   }
 
   Future<AsociereRecord?> getById(String id) async {

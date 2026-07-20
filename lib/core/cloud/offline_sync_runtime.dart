@@ -23,11 +23,15 @@ import '../../features/oferte/firebase_oferte_repository.dart';
 import '../../features/oferte/offer_models.dart';
 import '../../features/partners/partner_models.dart';
 import '../../features/asociere/asociere_models.dart';
+import '../../features/asociere/lucrare_asociere_models.dart';
 import '../../features/asociere/tarif_asociere_models.dart';
 import '../../features/asociere/pontaj_asociere_models.dart';
 import '../../features/asociere/cost_asociere_models.dart';
 import '../../features/asociere/venit_asociere_models.dart';
 import '../../features/asociere/decont_lunar_asociere_models.dart';
+import '../../features/asociere/deplasare_asociere_models.dart';
+import '../../features/asociere/cazare_asociere_models.dart';
+import '../../features/asociere/diurna_asociere_models.dart';
 import '../../features/programari/appointment_models.dart';
 import '../../features/programari/firebase_programari_repository.dart';
 import '../../features/programari/firebase_programare_kit_repository.dart';
@@ -420,6 +424,14 @@ class OfflineSyncRuntime {
 
   // --- Modul Asociere (partajare profit/pierdere pe Lucrare) — iul 2026 ---
 
+  Future<void> queueLucrareAsociere(LucrareAsociereRecord project) async {
+    await _bridge.queueLucrareAsociereUpsert(project.toMap());
+  }
+
+  Future<void> queueLucrareAsociereDelete(String projectId) async {
+    await _bridge.queueLucrareAsociereDelete(projectId);
+  }
+
   Future<void> queueAsociere(AsociereRecord asociere) async {
     await _bridge.queueAsociereUpsert(asociere.toMap());
   }
@@ -466,6 +478,30 @@ class OfflineSyncRuntime {
 
   Future<void> queueDecontLunarAsociereDelete(String decontId) async {
     await _bridge.queueDecontLunarAsociereDelete(decontId);
+  }
+
+  Future<void> queueDeplasareAsociere(DeplasareAsociereRecord value) async {
+    await _bridge.queueDeplasareAsociereUpsert(value.toMap());
+  }
+
+  Future<void> queueDeplasareAsociereDelete(String id) async {
+    await _bridge.queueDeplasareAsociereDelete(id);
+  }
+
+  Future<void> queueCazareAsociere(CazareAsociereRecord value) async {
+    await _bridge.queueCazareAsociereUpsert(value.toMap());
+  }
+
+  Future<void> queueCazareAsociereDelete(String id) async {
+    await _bridge.queueCazareAsociereDelete(id);
+  }
+
+  Future<void> queueDiurnaAsociere(DiurnaAsociereRecord value) async {
+    await _bridge.queueDiurnaAsociereUpsert(value.toMap());
+  }
+
+  Future<void> queueDiurnaAsociereDelete(String id) async {
+    await _bridge.queueDiurnaAsociereDelete(id);
   }
 
   /// Curăță imediat coada: elimină itemele deja sincronizate și cele moarte.
@@ -1022,6 +1058,20 @@ class OfflineSyncRuntime {
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
+            case CloudEntityType.lucrariAsociere:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.lucrariAsociere)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.lucrariAsociere)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
             case CloudEntityType.asocieri:
               if (item.deleted) {
                 await FirebaseFirestore.instance
@@ -1103,6 +1153,28 @@ class OfflineSyncRuntime {
                     .collection(FirebaseCollections.deconturiLunareAsociere)
                     .doc(item.entityId)
                     .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.deplasariAsociere:
+            case CloudEntityType.cazariAsociere:
+            case CloudEntityType.diurneAsociere:
+              final collection = switch (item.entityType) {
+                CloudEntityType.deplasariAsociere =>
+                  FirebaseCollections.deplasariAsociere,
+                CloudEntityType.cazariAsociere =>
+                  FirebaseCollections.cazariAsociere,
+                CloudEntityType.diurneAsociere =>
+                  FirebaseCollections.diurneAsociere,
+                _ => throw StateError('Tip logistic Asociere necunoscut'),
+              };
+              final reference = FirebaseFirestore.instance
+                  .collection(collection)
+                  .doc(item.entityId);
+              if (item.deleted) {
+                await reference.delete();
+              } else {
+                await reference.set(item.payload, SetOptions(merge: true));
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;

@@ -43,12 +43,16 @@ enum CloudEntityType {
   partnerWorkers,
   partnerVehicles,
   // Modul Asociere (partajare profit/pierdere pe Lucrare) — iul 2026.
+  lucrariAsociere,
   asocieri,
   tarifeAsociere,
   pontajeAsociere,
   costuriAsociere,
   venituriAsociere,
   deconturiLunareAsociere,
+  deplasariAsociere,
+  cazariAsociere,
+  diurneAsociere,
   unknown,
 }
 
