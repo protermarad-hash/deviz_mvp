@@ -96,6 +96,8 @@ class DecontLunarAsociereRepository {
       costRecunoscutPartener: current.costRecunoscutPartener,
       rezultat: current.rezultat,
       rambursareDatorataCatre: current.rambursareDatorataCatre,
+      rambursareCosturi: current.rambursareCosturi,
+      distribuireProfitImediata: current.distribuireProfitImediata,
       sumaRambursare: current.sumaRambursare,
       sumaRezervaRetinuta: current.sumaRezervaRetinuta,
       sumaDeAchitatAcum: current.sumaDeAchitatAcum,
@@ -260,7 +262,12 @@ class DecontLunarAsociereRepository {
 
     for (final c in costuri) {
       if (c.categorie == AsociereCostCategorie.manoperaCalculata) continue;
-      if (!_inMonth(c.dataRecunoastereCost, luna, an)) continue;
+      // Recunoscut doar dacă e efectiv recunoscut (aprobat sau fără aprobare)
+      // ȘI aparține lunii după ACEEAȘI regulă ca blocarea (PROBLEMA 2):
+      // CostAsociereRecord.dataApartenentaLuna. Costurile neaprobate care
+      // aparțin lunii au fost deja blocate mai sus (nu se ajunge aici).
+      if (c.dataRecunoastereCost == null) continue;
+      if (!_inMonth(c.dataApartenentaLuna, luna, an)) continue;
       if (c.asociatPlatitor == AsociereParte.proTerm) {
         costPT += c.valoareFaraTva;
       } else {
@@ -289,6 +296,8 @@ class DecontLunarAsociereRepository {
       costRecunoscutPartener: _round2(costPartener),
       rezultat: settle.rezultat,
       rambursareDatorataCatre: settle.rambursareDatorataCatre,
+      rambursareCosturi: settle.rambursareCosturi,
+      distribuireProfitImediata: settle.distribuireProfitImediata,
       sumaRambursare: settle.sumaRambursare,
       sumaRezervaRetinuta: settle.sumaRezervaRetinuta,
       sumaDeAchitatAcum: settle.sumaDeAchitatAcum,

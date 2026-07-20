@@ -124,6 +124,16 @@ class CostAsociereRecord {
     return esteAprobatIntegral ? dataAprobare : null;
   }
 
+  /// Data după care costul APARȚINE unei luni de decont — regulă UNICĂ,
+  /// folosită IDENTIC de blocarea aprobării și de recunoașterea costurilor
+  /// (vezi PROBLEMA 2): `dataRecunoastereCost` dacă există (cost recunoscut:
+  /// fără aprobare → data cheltuielii; aprobat → data aprobării), altfel
+  /// `data` cheltuielii ca fallback DOAR pentru costurile încă neaprobate
+  /// (`dataRecunoastereCost == null`). Astfel un cost e verificat de blocare
+  /// și inclus în recunoaștere pentru EXACT aceeași lună — niciodată două
+  /// criterii diferite.
+  DateTime get dataApartenentaLuna => dataRecunoastereCost ?? data;
+
   /// Regula de calcul a lui `necesitaAprobare` la creare — nu se
   /// recalculează retroactiv. Apelată din repository/UI cu pragul curent
   /// al asocierii (AsociereRecord.pragAprobareRON).

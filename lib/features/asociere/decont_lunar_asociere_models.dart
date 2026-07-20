@@ -69,6 +69,8 @@ class DecontLunarAsociereRecord {
     required this.costRecunoscutPartener,
     required this.rezultat,
     this.rambursareDatorataCatre = AsociereRambursareCatre.niciunul,
+    this.rambursareCosturi = 0,
+    this.distribuireProfitImediata = 0,
     this.sumaRambursare = 0,
     this.sumaRezervaRetinuta = 0,
     this.sumaDeAchitatAcum = 0,
@@ -92,6 +94,19 @@ class DecontLunarAsociereRecord {
   final double rezultat;
 
   final AsociereRambursareCatre rambursareDatorataCatre;
+
+  /// Componentele separate ale settle-up-ului (auditabile), din perspectiva
+  /// părții care NU încasează (primitorul):
+  /// - [rambursareCosturi]: costul recunoscut suportat de primitor, rambursat
+  ///   INTEGRAL și prompt, FĂRĂ reținere de rezervă (≥ 0).
+  /// - [distribuireProfitImediata]: cota primitorului din `rezultat` ce se
+  ///   distribuie ACUM. Dacă profitul e pozitiv → doar partea de plătit imediat
+  ///   (rezerva e scoasă în [sumaRezervaRetinuta]); dacă `rezultat` e negativ
+  ///   (pierdere) → toată cota de pierdere se scade acum (valoare negativă,
+  ///   fără rezervă — nu există profit din care să reții garanție).
+  final double rambursareCosturi;
+  final double distribuireProfitImediata;
+
   final double sumaRambursare;
   final double sumaRezervaRetinuta;
   final double sumaDeAchitatAcum;
@@ -109,6 +124,8 @@ class DecontLunarAsociereRecord {
       'cost_recunoscut_partener': costRecunoscutPartener,
       'rezultat': rezultat,
       'rambursare_datorata_catre': rambursareDatorataCatre.value,
+      'rambursare_costuri': rambursareCosturi,
+      'distribuire_profit_imediata': distribuireProfitImediata,
       'suma_rambursare': sumaRambursare,
       'suma_rezerva_retinuta': sumaRezervaRetinuta,
       'suma_de_achitat_acum': sumaDeAchitatAcum,
@@ -155,6 +172,12 @@ class DecontLunarAsociereRecord {
       rezultat: parseDouble(map['rezultat']),
       rambursareDatorataCatre: AsociereRambursareCatre.fromValue(
         map['rambursare_datorata_catre']?.toString(),
+      ),
+      rambursareCosturi: parseDouble(
+        map['rambursare_costuri'] ?? map['rambursareCosturi'],
+      ),
+      distribuireProfitImediata: parseDouble(
+        map['distribuire_profit_imediata'] ?? map['distribuireProfitImediata'],
       ),
       sumaRambursare:
           parseDouble(map['suma_rambursare'] ?? map['sumaRambursare']),
