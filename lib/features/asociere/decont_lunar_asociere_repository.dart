@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
+import 'asociere_decont_calculator.dart';
 import 'asociere_repository.dart';
 import 'cost_asociere_models.dart';
 import 'cost_asociere_repository.dart';
@@ -234,31 +235,14 @@ class DecontLunarAsociereRepository {
       }
     }
 
-    // 4. Rezultat + settle-up pe cote.
-    final rezultat = veniturIncasatTotal - (costPT + costPartener);
-    final t = costPartener + (asociere.cotaPartener / 100.0) * rezultat;
-
-    AsociereRambursareCatre catre;
-    double sumaRambursare;
-    if (t > 0.005) {
-      catre = AsociereRambursareCatre.partener;
-      sumaRambursare = t;
-    } else if (t < -0.005) {
-      catre = AsociereRambursareCatre.proTerm;
-      sumaRambursare = -t;
-    } else {
-      catre = AsociereRambursareCatre.niciunul;
-      sumaRambursare = 0;
-    }
-
-    // 5. Reținere rezervă (doar la rambursare către partener).
-    double sumaRezervaRetinuta = 0;
-    double sumaDeAchitatAcum = sumaRambursare;
-    if (catre == AsociereRambursareCatre.partener) {
-      sumaRezervaRetinuta =
-          sumaRambursare * (asociere.procentRezervaGarantie / 100.0);
-      sumaDeAchitatAcum = sumaRambursare - sumaRezervaRetinuta;
-    }
+    // 4. Rezultat + settle-up pe cote + reținere rezervă (funcție pură testată).
+    final settle = calculeazaDecontSettleUp(
+      veniturIncasatTotal: veniturIncasatTotal,
+      costRecunoscutProTerm: costPT,
+      costRecunoscutPartener: costPartener,
+      cotaPartener: asociere.cotaPartener,
+      procentRezervaGarantie: asociere.procentRezervaGarantie,
+    );
 
     final record = DecontLunarAsociereRecord(
       id: existing?.id ?? _decontId(asociereId, luna, an),
@@ -268,11 +252,11 @@ class DecontLunarAsociereRepository {
       veniturIncasatTotal: _round2(veniturIncasatTotal),
       costRecunoscutProTerm: _round2(costPT),
       costRecunoscutPartener: _round2(costPartener),
-      rezultat: _round2(rezultat),
-      rambursareDatorataCatre: catre,
-      sumaRambursare: _round2(sumaRambursare),
-      sumaRezervaRetinuta: _round2(sumaRezervaRetinuta),
-      sumaDeAchitatAcum: _round2(sumaDeAchitatAcum),
+      rezultat: settle.rezultat,
+      rambursareDatorataCatre: settle.rambursareDatorataCatre,
+      sumaRambursare: settle.sumaRambursare,
+      sumaRezervaRetinuta: settle.sumaRezervaRetinuta,
+      sumaDeAchitatAcum: settle.sumaDeAchitatAcum,
       status: DecontLunarStatus.draft,
       dataGenerare: DateTime.now(),
     );
