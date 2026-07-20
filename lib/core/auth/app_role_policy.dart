@@ -108,6 +108,7 @@ class AppRolePolicy {
         'agfr',
         'refrigerant_reporting',
         'lucrari',
+        'asocieri',
         'reclamatii',
         'registratura',
         'clienti',
@@ -131,6 +132,7 @@ class AppRolePolicy {
         'agfr',
         'refrigerant_reporting',
         'lucrari',
+        'asocieri',
         'reclamatii',
       };
       return allowed.contains(destinationId);

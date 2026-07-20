@@ -66,6 +66,7 @@ import '../features/crm/crm_repository.dart';
 import '../features/obiective/obiective_page.dart';
 import '../features/analiza/analiza_page.dart';
 import '../features/user_management/user_management_page.dart';
+import '../features/asociere/ui/asociere_module_page.dart';
 
 typedef ShellPageBuilder = Widget Function(BuildContext context);
 
@@ -127,6 +128,7 @@ const List<_ShellSectionDef> _kShellSections = [
       'servicii_prestate',
       'documente',
       'lucrari',
+      'asocieri',
       'mentenanta',
       'scule',
       'pachete_scule',
@@ -341,6 +343,17 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
           fieldAuthUserId: widget.fieldAuthUserId,
           fieldAuthUserLabel: widget.fieldAuthUserLabel,
           fieldAuthTeamId: widget.fieldAuthTeamId,
+        ),
+      ),
+      ShellDestination(
+        id: 'asocieri',
+        label: 'Asocieri',
+        icon: Icons.handshake_outlined,
+        allowedRoles: allRoles,
+        builder: (_) => AsociereModulePage(
+          appRepository: widget.appDataRepository,
+          roleKey: widget.fieldAuthRoleKey,
+          userId: widget.fieldAuthUserId,
         ),
       ),
       ShellDestination(
