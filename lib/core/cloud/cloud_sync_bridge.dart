@@ -738,4 +738,118 @@ class CloudSyncBridge {
       entityId: id,
     );
   }
+
+  Future<void> queueAsociereUpsert(Map<String, dynamic> asociere) async {
+    final id = (asociere['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.asocieri,
+      entityId: id,
+      payload: asociere,
+    );
+  }
+
+  Future<void> queueAsociereDelete(String asociereId) async {
+    final id = asociereId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.asocieri,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueTarifAsociereUpsert(Map<String, dynamic> tarif) async {
+    final id = (tarif['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.tarifeAsociere,
+      entityId: id,
+      payload: tarif,
+    );
+  }
+
+  Future<void> queueTarifAsociereDelete(String tarifId) async {
+    final id = tarifId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.tarifeAsociere,
+      entityId: id,
+    );
+  }
+
+  Future<void> queuePontajAsociereUpsert(Map<String, dynamic> pontaj) async {
+    final id = (pontaj['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.pontajeAsociere,
+      entityId: id,
+      payload: pontaj,
+    );
+  }
+
+  Future<void> queuePontajAsociereDelete(String pontajId) async {
+    final id = pontajId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.pontajeAsociere,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueCostAsociereUpsert(Map<String, dynamic> cost) async {
+    final id = (cost['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.costuriAsociere,
+      entityId: id,
+      payload: cost,
+    );
+  }
+
+  Future<void> queueCostAsociereDelete(String costId) async {
+    final id = costId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.costuriAsociere,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueVenitAsociereUpsert(Map<String, dynamic> venit) async {
+    final id = (venit['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.venituriAsociere,
+      entityId: id,
+      payload: venit,
+    );
+  }
+
+  Future<void> queueVenitAsociereDelete(String venitId) async {
+    final id = venitId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.venituriAsociere,
+      entityId: id,
+    );
+  }
+
+  Future<void> queueDecontLunarAsociereUpsert(Map<String, dynamic> decont) async {
+    final id = (decont['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.deconturiLunareAsociere,
+      entityId: id,
+      payload: decont,
+    );
+  }
+
+  Future<void> queueDecontLunarAsociereDelete(String decontId) async {
+    final id = decontId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.deconturiLunareAsociere,
+      entityId: id,
+    );
+  }
 }
