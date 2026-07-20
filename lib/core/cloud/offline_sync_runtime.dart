@@ -22,6 +22,12 @@ import '../../features/oferte/deviz_articol_template_repository.dart';
 import '../../features/oferte/firebase_oferte_repository.dart';
 import '../../features/oferte/offer_models.dart';
 import '../../features/partners/partner_models.dart';
+import '../../features/asociere/asociere_models.dart';
+import '../../features/asociere/tarif_asociere_models.dart';
+import '../../features/asociere/pontaj_asociere_models.dart';
+import '../../features/asociere/cost_asociere_models.dart';
+import '../../features/asociere/venit_asociere_models.dart';
+import '../../features/asociere/decont_lunar_asociere_models.dart';
 import '../../features/programari/appointment_models.dart';
 import '../../features/programari/firebase_programari_repository.dart';
 import '../../features/programari/firebase_programare_kit_repository.dart';
@@ -410,6 +416,56 @@ class OfflineSyncRuntime {
 
   Future<void> queuePartnerVehicleDelete(String vehicleId) async {
     await _bridge.queuePartnerVehicleDelete(vehicleId);
+  }
+
+  // --- Modul Asociere (partajare profit/pierdere pe Lucrare) — iul 2026 ---
+
+  Future<void> queueAsociere(AsociereRecord asociere) async {
+    await _bridge.queueAsociereUpsert(asociere.toMap());
+  }
+
+  Future<void> queueAsociereDelete(String asociereId) async {
+    await _bridge.queueAsociereDelete(asociereId);
+  }
+
+  Future<void> queueTarifAsociere(TarifAsociereRecord tarif) async {
+    await _bridge.queueTarifAsociereUpsert(tarif.toMap());
+  }
+
+  Future<void> queueTarifAsociereDelete(String tarifId) async {
+    await _bridge.queueTarifAsociereDelete(tarifId);
+  }
+
+  Future<void> queuePontajAsociere(PontajAsociereRecord pontaj) async {
+    await _bridge.queuePontajAsociereUpsert(pontaj.toMap());
+  }
+
+  Future<void> queuePontajAsociereDelete(String pontajId) async {
+    await _bridge.queuePontajAsociereDelete(pontajId);
+  }
+
+  Future<void> queueCostAsociere(CostAsociereRecord cost) async {
+    await _bridge.queueCostAsociereUpsert(cost.toMap());
+  }
+
+  Future<void> queueCostAsociereDelete(String costId) async {
+    await _bridge.queueCostAsociereDelete(costId);
+  }
+
+  Future<void> queueVenitAsociere(VenitAsociereRecord venit) async {
+    await _bridge.queueVenitAsociereUpsert(venit.toMap());
+  }
+
+  Future<void> queueVenitAsociereDelete(String venitId) async {
+    await _bridge.queueVenitAsociereDelete(venitId);
+  }
+
+  Future<void> queueDecontLunarAsociere(DecontLunarAsociereRecord decont) async {
+    await _bridge.queueDecontLunarAsociereUpsert(decont.toMap());
+  }
+
+  Future<void> queueDecontLunarAsociereDelete(String decontId) async {
+    await _bridge.queueDecontLunarAsociereDelete(decontId);
   }
 
   /// Curăță imediat coada: elimină itemele deja sincronizate și cele moarte.
@@ -961,6 +1017,90 @@ class OfflineSyncRuntime {
               } else {
                 await FirebaseFirestore.instance
                     .collection(FirebaseCollections.partnerVehicles)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.asocieri:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.asocieri)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.asocieri)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.tarifeAsociere:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.tarifeAsociere)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.tarifeAsociere)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.pontajeAsociere:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.pontajeAsociere)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.pontajeAsociere)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.costuriAsociere:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.costuriAsociere)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.costuriAsociere)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.venituriAsociere:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.venituriAsociere)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.venituriAsociere)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.deconturiLunareAsociere:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.deconturiLunareAsociere)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.deconturiLunareAsociere)
                     .doc(item.entityId)
                     .set(item.payload, SetOptions(merge: true));
               }
