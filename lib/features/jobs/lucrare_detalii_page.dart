@@ -59,6 +59,7 @@ import '../deviz_tehnic/deviz_tehnic_models.dart';
 import '../deviz_tehnic/deviz_tehnic_repository.dart';
 import 'lucrare_detalii_models.dart';
 import 'lucrare_detalii_widgets.dart';
+import '../asociere/ui/asociere_tab.dart';
 import 'lucrare_format_utils.dart';
 import 'lucrare_import_parser.dart';
 import 'dialogs/partner_dialogs.dart';
@@ -11260,7 +11261,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Widget build(BuildContext context) {
     final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: Scaffold(
         appBar: AppBar(
           title: Column(
@@ -11283,6 +11284,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               Tab(icon: Icon(Icons.euro_outlined), text: 'Economic'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Documente'),
               Tab(icon: Icon(Icons.compare_arrows_outlined), text: 'Situație'),
+              Tab(icon: Icon(Icons.handshake_outlined), text: 'Asociere'),
             ],
           ),
           actions: [
@@ -11365,6 +11367,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   _buildEconomicTab(context),
                   _buildDocumenteTab(context),
                   _buildSituatieTab(context),
+                  AsociereTab(
+                    repository: widget.repository,
+                    lucrareId: _jobSnapshot.id,
+                    roleKey: widget.roleKey,
+                  ),
                 ],
               ),
         floatingActionButton: FloatingActionButton.extended(
