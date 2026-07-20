@@ -1,204 +1,195 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:uuid/uuid.dart';
 
+import '../asociere_operational_common.dart';
 import '../tarif_asociere_models.dart';
 import '../tarif_asociere_repository.dart';
 import 'asociere_string_autocomplete.dart';
 
-/// Tarife unificate per calificare (RON/oră + RON/km), negociate per asociere.
 class TarifeAsocierePage extends StatefulWidget {
-  const TarifeAsocierePage({super.key, required this.asociereId});
-
-  final String asociereId;
+  const TarifeAsocierePage({
+    super.key,
+    required this.projectId,
+    required this.contractId,
+    required this.canEdit,
+  });
+  final String projectId;
+  final String contractId;
+  final bool canEdit;
 
   @override
   State<TarifeAsocierePage> createState() => _TarifeAsocierePageState();
 }
 
 class _TarifeAsocierePageState extends State<TarifeAsocierePage> {
-  final _uuid = const Uuid();
-  List<TarifAsociereRecord> _items = [];
+  List<TarifAsociereRecord> _items = const [];
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(_load);
+    _load();
   }
 
   Future<void> _load() async {
-    final list =
-        await TarifAsociereRepository.instance.listByAsociere(widget.asociereId);
-    if (!mounted) return;
-    setState(() {
-      _items = list;
-      _loading = false;
-    });
-  }
-
-  Future<void> _edit([TarifAsociereRecord? existing]) async {
-    final saved = await showModalBottomSheet<TarifAsociereRecord>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _TarifForm(
-        asociereId: widget.asociereId,
-        uuid: _uuid,
-        existing: existing,
-      ),
-    );
-    if (saved != null) {
-      await TarifAsociereRepository.instance.upsertTarif(saved);
-      await _load();
+    final items =
+        await TarifAsociereRepository.instance.listByProject(widget.projectId);
+    if (mounted) {
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
     }
   }
 
-  void _delete(TarifAsociereRecord t) {
-    setState(() => _items.removeWhere((i) => i.id == t.id));
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Tarif șters.')));
-    TarifAsociereRepository.instance.deleteTarif(t.id).catchError((_) => _load());
-  }
-
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Tarife asociere')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _edit(),
-        icon: const Icon(Icons.add),
-        label: const Text('Tarif'),
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _items.isEmpty
-              ? const Center(
-                  child: Text('Niciun tarif. Adaugă calificări și tarife.'))
-              : ListView.builder(
-                  itemCount: _items.length,
-                  itemBuilder: (_, i) {
-                    final t = _items[i];
-                    return ListTile(
-                      leading: const Icon(Icons.badge_outlined),
-                      title: Text(t.calificare),
-                      subtitle: Text(
-                          '${t.tarifRonOra.toStringAsFixed(2)} RON/oră'
-                          '${t.tarifRonKm > 0 ? ' · ${t.tarifRonKm.toStringAsFixed(2)} RON/km' : ''}'),
-                      onTap: () => _edit(t),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () => _delete(t),
-                      ),
-                    );
-                  },
-                ),
-    );
-  }
-}
+  Widget build(BuildContext context) => Scaffold(
+        floatingActionButton: widget.canEdit
+            ? FloatingActionButton.extended(
+                heroTag: 'asociere_tarif_add',
+                onPressed: () => _openForm(),
+                icon: const Icon(Icons.add),
+                label: const Text('Tarif nou'))
+            : null,
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _items.isEmpty
+                ? const Center(
+                    child: Text(
+                        'Nu există tarife configurate. Pontajele păstrează snapshotul tarifului selectat.'))
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
+                    itemCount: _items.length,
+                    itemBuilder: (context, index) {
+                      final item = _items[index];
+                      return Card(
+                          child: ListTile(
+                        title:
+                            Text('${item.calificare} · ${item.asociat.label}'),
+                        subtitle: Text(
+                            '${item.tarifOra.toStringAsFixed(2)} ${item.moneda}/oră · ${item.tarifKm.toStringAsFixed(2)} ${item.moneda}/km\nValabil de la ${item.valabilDeLa.day}.${item.valabilDeLa.month}.${item.valabilDeLa.year}${item.valabilPanaLa == null ? '' : ' până la ${item.valabilPanaLa!.day}.${item.valabilPanaLa!.month}.${item.valabilPanaLa!.year}'}'),
+                        trailing: item.activ
+                            ? const Icon(Icons.check_circle_outline,
+                                color: Colors.green)
+                            : const Icon(Icons.history),
+                        onTap: widget.canEdit ? () => _openForm(item) : null,
+                      ));
+                    }),
+      );
 
-class _TarifForm extends StatefulWidget {
-  const _TarifForm(
-      {required this.asociereId, required this.uuid, this.existing});
-
-  final String asociereId;
-  final Uuid uuid;
-  final TarifAsociereRecord? existing;
-
-  @override
-  State<_TarifForm> createState() => _TarifFormState();
-}
-
-class _TarifFormState extends State<_TarifForm> {
-  late String _calificare;
-  late final TextEditingController _oraCtrl;
-  late final TextEditingController _kmCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _calificare = widget.existing?.calificare ?? '';
-    _oraCtrl = TextEditingController(
-        text: widget.existing != null
-            ? widget.existing!.tarifRonOra.toString()
-            : '');
-    _kmCtrl = TextEditingController(
-        text: widget.existing != null && widget.existing!.tarifRonKm > 0
-            ? widget.existing!.tarifRonKm.toString()
-            : '');
-  }
-
-  @override
-  void dispose() {
-    _oraCtrl.dispose();
-    _kmCtrl.dispose();
-    super.dispose();
-  }
-
-  double _p(TextEditingController c) =>
-      double.tryParse(c.text.trim().replaceAll(',', '.')) ?? 0;
-
-  void _save() {
-    if (_calificare.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Calificarea e obligatorie.')));
+  Future<void> _openForm([TarifAsociereRecord? old]) async {
+    final result = await showDialog<TarifAsociereRecord>(
+        context: context,
+        builder: (_) => _TarifDialog(
+            projectId: widget.projectId,
+            contractId: widget.contractId,
+            previous: old));
+    if (result == null) return;
+    final errors = result.validate();
+    if (errors.isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(errors.join('\n'))));
+      }
       return;
     }
-    final now = DateTime.now();
-    final e = widget.existing;
-    Navigator.of(context).pop(TarifAsociereRecord(
-      id: e?.id ?? widget.uuid.v4(),
-      asociereId: widget.asociereId,
-      calificare: _calificare.trim(),
-      tarifRonOra: _p(_oraCtrl),
-      tarifRonKm: _p(_kmCtrl),
-      createdAt: e?.createdAt ?? now,
-      updatedAt: now,
-    ));
+    if (old != null) {
+      final closed = old.copyWith(
+          activ: false,
+          valabilPanaLa: DateTime.now().subtract(const Duration(days: 1)),
+          updatedAt: DateTime.now(),
+          revision: old.revision + 1);
+      await TarifAsociereRepository.instance.upsertTarif(closed);
+    }
+    await TarifAsociereRepository.instance.upsertTarif(result);
+    await _load();
   }
+}
+
+class _TarifDialog extends StatefulWidget {
+  const _TarifDialog(
+      {required this.projectId, required this.contractId, this.previous});
+  final String projectId;
+  final String contractId;
+  final TarifAsociereRecord? previous;
+  @override
+  State<_TarifDialog> createState() => _TarifDialogState();
+}
+
+class _TarifDialogState extends State<_TarifDialog> {
+  late final TextEditingController _qualification =
+      TextEditingController(text: widget.previous?.calificare ?? '');
+  late final TextEditingController _hour =
+      TextEditingController(text: '${widget.previous?.tarifOra ?? 0}');
+  late final TextEditingController _km =
+      TextEditingController(text: '${widget.previous?.tarifKm ?? 0}');
+  String _currency = 'RON';
+  String _party = 'pro_term';
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(widget.existing == null ? 'Tarif nou' : 'Editează tarif',
-              style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 16),
+  Widget build(BuildContext context) => AlertDialog(
+        title:
+            Text(widget.previous == null ? 'Tarif nou' : 'Versiune nouă tarif'),
+        content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
           AsociereStringAutocomplete(
-            label: 'Calificare',
-            optiuni: asociereCalificariPredefinite,
-            value: _calificare,
-            onChanged: (v) => _calificare = v,
-          ),
-          const SizedBox(height: 12),
+              label: 'Calificare (căutare)',
+              optiuni: asociereCalificariPredefinite,
+              value: _qualification.text,
+              onChanged: (value) => _qualification.text = value),
+          const SizedBox(height: 10),
           TextField(
-            controller: _oraCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
-            decoration: const InputDecoration(
-                labelText: 'Tarif RON/oră', border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 12),
+              controller: _hour,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                  labelText: 'Tarif/oră', border: OutlineInputBorder())),
+          const SizedBox(height: 10),
           TextField(
-            controller: _kmCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
-            decoration: const InputDecoration(
-                labelText: 'Tarif RON/km (opțional)',
-                border: OutlineInputBorder()),
-          ),
-          const SizedBox(height: 20),
-          FilledButton(onPressed: _save, child: const Text('Salvează')),
+              controller: _km,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                  labelText: 'Tarif/km', border: OutlineInputBorder())),
+          const SizedBox(height: 10),
+          AsociereStringAutocomplete(
+              label: 'Monedă (căutare)',
+              optiuni: const ['RON', 'EUR', 'USD', 'GBP', 'HUF'],
+              value: _currency,
+              onChanged: (value) => _currency = value.toUpperCase()),
+          const SizedBox(height: 10),
+          AsociereStringAutocomplete(
+              label: 'Asociat (căutare)',
+              optiuni: const ['pro_term', 'partener'],
+              value: _party,
+              onChanged: (value) => _party = value),
+        ])),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Renunță')),
+          FilledButton(
+              onPressed: _save, child: const Text('Salvează versiunea'))
         ],
-      ),
-    );
+      );
+
+  void _save() {
+    final now = DateTime.now();
+    Navigator.pop(
+        context,
+        TarifAsociereRecord(
+          id: 'tarif_${now.microsecondsSinceEpoch}',
+          projectId: widget.projectId,
+          contractId: widget.contractId,
+          calificare: _qualification.text.trim(),
+          tarifOra:
+              double.tryParse(_hour.text.replaceAll(',', '.')) ?? double.nan,
+          tarifKm: double.tryParse(_km.text.replaceAll(',', '.')) ?? double.nan,
+          moneda: _currency,
+          asociat: AsociereParteX.fromValue(_party),
+          valabilDeLa: now,
+          createdAt: now,
+          updatedAt: now,
+          revision: (widget.previous?.revision ?? 0) + 1,
+        ));
   }
 }
