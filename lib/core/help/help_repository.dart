@@ -53,6 +53,28 @@ class HelpRepository {
 
   static final List<HelpModule> _defaultContent = [
     HelpModule(
+      moduleId: 'asocieri',
+      titlu: 'Modul Asocieri',
+      descriere: 'Gestionează proiecte complexe executate de PRO TERM împreună cu un singur partener, independent de Lucrările standard și de finanțele legacy.',
+      pasi: [
+        HelpModuleStep(nr: 1, titlu: 'Creează proiectul', descriere: 'Completează formularul în pași și verifică precompletările înainte de salvare.', icon: 'add_business'),
+        HelpModuleStep(nr: 2, titlu: 'Configurează contractul', descriere: 'Verifică partenerul, cotele, pragul de aprobare, rezerva și tarifele versionate.', icon: 'settings'),
+        HelpModuleStep(nr: 3, titlu: 'Înregistrează operațiunile', descriere: 'Adaugă pontaje, deplasări, cazare, diurnă, costuri și venituri.', icon: 'playlist_add'),
+        HelpModuleStep(nr: 4, titlu: 'Verifică și decontează', descriere: 'Folosește Registrul derivat și confirmă decontul numai după verificarea documentelor.', icon: 'fact_check'),
+      ],
+      faq: [
+        HelpModuleFaq(intrebare: 'Apare proiectul în Lucrări?', raspuns: 'Nu. Asocierile sunt proiecte independente și nu creează JobRecord.'),
+        HelpModuleFaq(intrebare: 'Pot confirma în numele Partenerului?', raspuns: 'Nu. Un admin poate doar înregistra o confirmare externă împreună cu actor, timestamp și document.'),
+      ],
+      sfaturi: [
+        'Un cost fără document poate rămâne draft, dar nu poate fi aprobat.',
+        'Tariful dintr-un pontaj confirmat rămâne snapshot și nu se modifică retroactiv.',
+        'Decontul exclude automat intrările neeligibile, neaprobate sau duplicate.',
+      ],
+      versiune: '1.0',
+      updatedAt: DateTime(2026, 7, 20),
+    ),
+    HelpModule(
       moduleId: 'programari',
       titlu: 'Modul Programări',
       descriere: 'Gestionează toate programările de service, montaj și igienizare. '
