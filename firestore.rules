@@ -1,0 +1,331 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function userPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function hasProfile() { return signedIn() && exists(userPath()); }
+    function profile() { return get(userPath()).data; }
+    function role() { return profile().role; }
+    function activeUser() {
+      return signedIn() && hasProfile() && profile().active == true;
+    }
+    function isAdmin() { return activeUser() && role() == 'admin'; }
+    function isOffice() {
+      return activeUser() && role() in ['office', 'birou'];
+    }
+    function isTeamLead() {
+      return activeUser() && role() in ['team_lead', 'teamLeader', 'sefEchipa', 'sef_echipa'];
+    }
+    function isTechnician() {
+      return activeUser() && role() in ['employee', 'technician', 'tehnician', 'angajat'];
+    }
+    function employeeId() {
+      return hasProfile() && profile().keys().hasAny(['employee_id'])
+        ? profile().employee_id : '';
+    }
+    function projectPath(id) {
+      return /databases/$(database)/documents/lucrari_asociere/$(id);
+    }
+    function contractPath(id) {
+      return /databases/$(database)/documents/asocieri/$(id);
+    }
+    function projectExists(id) {
+      return id is string && id.size() > 0 && exists(projectPath(id));
+    }
+    function projectData(id) { return get(projectPath(id)).data; }
+    function assigned(data) {
+      return activeUser() && (
+        (data.keys().hasAny(['assigned_user_ids']) &&
+          data.assigned_user_ids is list &&
+          data.assigned_user_ids.hasAny([request.auth.uid])) ||
+        (employeeId().size() > 0 &&
+          data.keys().hasAny(['assigned_employee_ids']) &&
+          data.assigned_employee_ids is list &&
+          data.assigned_employee_ids.hasAny([employeeId()])) ||
+        (employeeId().size() > 0 && data.manager_id == employeeId()) ||
+        (employeeId().size() > 0 && data.responsabil_id == employeeId())
+      );
+    }
+    function assignedProject(id) {
+      return projectExists(id) && assigned(projectData(id));
+    }
+    function nonEmpty(value) { return value is string && value.size() > 0; }
+    function validRevisionCreate(data) {
+      return data.revision is int && data.revision == 1;
+    }
+    function validRevisionUpdate() {
+      return request.resource.data.revision is int &&
+        resource.data.revision is int &&
+        request.resource.data.revision == resource.data.revision + 1;
+    }
+    function validCreateAudit(data) {
+      return nonEmpty(data.created_at) && nonEmpty(data.updated_at) &&
+        data.created_by == request.auth.uid && data.updated_by == request.auth.uid;
+    }
+    function validUpdateAudit() {
+      return request.resource.data.created_by == resource.data.created_by &&
+        request.resource.data.created_at == resource.data.created_at &&
+        request.resource.data.updated_by == request.auth.uid &&
+        nonEmpty(request.resource.data.updated_at);
+    }
+    function immutable(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+    function validContract(projectId, contractId) {
+      return contractId == null || contractId == '' ||
+        (exists(contractPath(contractId)) &&
+          get(contractPath(contractId)).data.lucrare_asociere_id == projectId);
+    }
+    function safeOperationalProject(data) {
+      return !data.keys().hasAny([
+        'valoare_contractuala', 'cota_pro_term', 'cota_partener',
+        'cine_factureaza_beneficiarul', 'procent_distribuire_intermediara',
+        'procent_rezerva_garantie', 'durata_garantie_luni',
+        'prag_aprobare_cost'
+      ]);
+    }
+
+    // Profilul este sursa server-side a rolului. Utilizatorii nu își pot
+    // acorda singuri un rol superior și nu pot schimba firebase_uid/active.
+    match /users/{userId} {
+      allow get: if isAdmin() || (signedIn() &&
+        (userId == request.auth.uid || resource.data.firebase_uid == request.auth.uid));
+      allow list: if isAdmin();
+      allow create: if isAdmin() || (signedIn() && userId == request.auth.uid &&
+        request.resource.data.firebase_uid == request.auth.uid &&
+        request.resource.data.role in ['employee', 'technician', 'tehnician'] &&
+        request.resource.data.active == true);
+      allow update: if isAdmin() || (signedIn() && userId == request.auth.uid &&
+        immutable(['role', 'active', 'firebase_uid', 'employee_id', 'team_id', 'teamId']));
+      allow delete: if isAdmin();
+    }
+
+    match /lucrari_asociere/{projectId} {
+      allow read: if isAdmin() || isOffice() ||
+        ((isTeamLead() || isTechnician()) && safeOperationalProject(resource.data) && assigned(resource.data));
+      allow create: if (isAdmin() || isOffice()) &&
+        request.resource.data.id == projectId && safeOperationalProject(request.resource.data) &&
+        validRevisionCreate(request.resource.data) && validCreateAudit(request.resource.data) &&
+        request.resource.data.status in ['draft', 'planificare', 'activa', 'suspendata', 'finalizata', 'anulata'] &&
+        request.resource.data.arhivat == false && request.resource.data.active == true;
+      allow update: if (isAdmin() || isOffice()) &&
+        request.resource.data.id == resource.data.id && safeOperationalProject(request.resource.data) &&
+        validRevisionUpdate() && validUpdateAudit() &&
+        immutable(['id', 'created_by', 'created_at']) &&
+        (isAdmin() || immutable(['arhivat', 'active'])) &&
+        (!request.resource.data.arhivat ||
+          (isAdmin() && request.resource.data.status in ['finalizata', 'anulata']));
+      allow delete: if false;
+    }
+
+    match /asocieri/{contractId} {
+      allow read: if isAdmin() || isOffice();
+      allow create: if (isAdmin() || isOffice()) &&
+        request.resource.data.id == contractId &&
+        projectExists(request.resource.data.lucrare_asociere_id) &&
+        validRevisionCreate(request.resource.data) && validCreateAudit(request.resource.data) &&
+        request.resource.data.cota_pro_term is number &&
+        request.resource.data.cota_partener is number &&
+        request.resource.data.cota_pro_term >= 0 && request.resource.data.cota_pro_term <= 100 &&
+        request.resource.data.cota_partener >= 0 && request.resource.data.cota_partener <= 100 &&
+        request.resource.data.cota_pro_term + request.resource.data.cota_partener == 100;
+      allow update: if (isAdmin() || isOffice()) &&
+        validRevisionUpdate() && validUpdateAudit() &&
+        immutable(['id', 'lucrare_asociere_id', 'created_by', 'created_at']) &&
+        (immutable(['cota_pro_term', 'cota_partener']) ||
+          (projectData(resource.data.lucrare_asociere_id).status in ['draft', 'planificare'] &&
+            request.resource.data.cota_pro_term is number &&
+            request.resource.data.cota_partener is number &&
+            request.resource.data.cota_pro_term >= 0 &&
+            request.resource.data.cota_pro_term <= 100 &&
+            request.resource.data.cota_partener >= 0 &&
+            request.resource.data.cota_partener <= 100 &&
+            request.resource.data.cota_pro_term + request.resource.data.cota_partener == 100)) &&
+        resource.data.status != 'incheiata' && resource.data.status != 'reziliata' &&
+        (isAdmin() || projectData(resource.data.lucrare_asociere_id).status in ['draft', 'planificare']);
+      allow delete: if false;
+    }
+
+    match /tarife_asociere/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() &&
+        request.resource.data.id == id &&
+        projectExists(request.resource.data.project_id) &&
+        validContract(request.resource.data.project_id, request.resource.data.contract_id) &&
+        validRevisionCreate(request.resource.data);
+      allow update: if isAdmin() &&
+        request.resource.data.id == id &&
+        projectExists(request.resource.data.project_id) &&
+        validContract(request.resource.data.project_id, request.resource.data.contract_id) &&
+        validRevisionUpdate() &&
+        immutable(['id', 'project_id', 'contract_id', 'created_at']);
+      allow delete: if isAdmin() && resource.data.activ == false;
+    }
+
+    match /pontaje_asociere/{id} {
+      allow read: if isAdmin() || isOffice() ||
+        (isTeamLead() && assignedProject(resource.data.project_id)) ||
+        (isTechnician() && assignedProject(resource.data.project_id) && resource.data.persoana_id == employeeId());
+      allow create: if request.resource.data.id == id &&
+        projectExists(request.resource.data.project_id) &&
+        validContract(request.resource.data.project_id, request.resource.data.contract_id) &&
+        validRevisionCreate(request.resource.data) && validCreateAudit(request.resource.data) &&
+        ((isAdmin() || isOffice()) ||
+          (isTeamLead() && assignedProject(request.resource.data.project_id) &&
+            projectData(request.resource.data.project_id).assigned_employee_ids.hasAny([request.resource.data.persoana_id])) ||
+          (isTechnician() && assignedProject(request.resource.data.project_id) &&
+            request.resource.data.persoana_id == employeeId())) &&
+        (request.resource.data.confirmare_externa_inregistrata == false ||
+          (isAdmin() && request.resource.data.confirmare_externa_actor == request.auth.uid &&
+            nonEmpty(request.resource.data.confirmare_externa_la) &&
+            nonEmpty(request.resource.data.confirmare_document_ref)));
+      allow update: if projectExists(resource.data.project_id) &&
+        validRevisionUpdate() && validUpdateAudit() &&
+        immutable(['id', 'project_id', 'contract_id', 'persoana_id', 'created_by', 'created_at']) &&
+        ((isAdmin() || isOffice()) ||
+          (isTeamLead() && assignedProject(resource.data.project_id)) ||
+          (isTechnician() && assignedProject(resource.data.project_id) && resource.data.persoana_id == employeeId())) &&
+        (!(resource.data.confirmare_interna && resource.data.confirmare_externa_inregistrata) ||
+          immutable(['persoana_name_snapshot', 'angajator', 'calificare', 'data', 'ore',
+            'activitate', 'faza', 'zona', 'tarif_snapshot', 'cost_calculat'])) &&
+        (!request.resource.data.confirmare_externa_inregistrata ||
+          (resource.data.confirmare_externa_inregistrata ||
+            (isAdmin() && request.resource.data.confirmare_externa_actor == request.auth.uid &&
+              nonEmpty(request.resource.data.confirmare_externa_la) &&
+              nonEmpty(request.resource.data.confirmare_document_ref))));
+      allow delete: if isAdmin() && resource.data.status == 'draft';
+    }
+
+    function operationalRead(data) {
+      return isAdmin() || isOffice() ||
+        ((isTeamLead() || isTechnician()) && assignedProject(data.project_id));
+    }
+    function operationalWrite(data) {
+      return isAdmin() || isOffice() ||
+        (isTeamLead() && assignedProject(data.project_id));
+    }
+    function validOperationalCreate(id, data) {
+      return data.id == id && projectExists(data.project_id) &&
+        validRevisionCreate(data) && validCreateAudit(data);
+    }
+    function validOperationalUpdate() {
+      return validRevisionUpdate() && validUpdateAudit() &&
+        immutable(['id', 'project_id', 'created_by', 'created_at']);
+    }
+
+    match /deplasari_asociere/{id} {
+      allow read: if operationalRead(resource.data);
+      allow create: if operationalWrite(request.resource.data) && validOperationalCreate(id, request.resource.data);
+      allow update: if operationalWrite(resource.data) && validOperationalUpdate();
+      allow delete: if isAdmin() && resource.data.status == 'draft';
+    }
+    match /cazari_asociere/{id} {
+      allow read: if operationalRead(resource.data);
+      allow create: if operationalWrite(request.resource.data) && validOperationalCreate(id, request.resource.data) &&
+        (request.resource.data.deplasare_id == '' ||
+          (exists(/databases/$(database)/documents/deplasari_asociere/$(request.resource.data.deplasare_id)) &&
+           get(/databases/$(database)/documents/deplasari_asociere/$(request.resource.data.deplasare_id)).data.project_id == request.resource.data.project_id));
+      allow update: if operationalWrite(resource.data) && validOperationalUpdate() && immutable(['deplasare_id']);
+      allow delete: if isAdmin() && resource.data.status == 'draft';
+    }
+    match /diurne_asociere/{id} {
+      allow read: if (isTechnician() && resource.data.persoana_id == employeeId() && assignedProject(resource.data.project_id)) ||
+        operationalRead(resource.data);
+      allow create: if operationalWrite(request.resource.data) && validOperationalCreate(id, request.resource.data) &&
+        (request.resource.data.deplasare_id == '' ||
+          (exists(/databases/$(database)/documents/deplasari_asociere/$(request.resource.data.deplasare_id)) &&
+           get(/databases/$(database)/documents/deplasari_asociere/$(request.resource.data.deplasare_id)).data.project_id == request.resource.data.project_id));
+      allow update: if operationalWrite(resource.data) && validOperationalUpdate() && immutable(['deplasare_id', 'persoana_id']);
+      allow delete: if isAdmin() && resource.data.status == 'draft';
+    }
+
+    match /costuri_asociere/{id} {
+      allow read: if isAdmin() || isOffice();
+      allow create: if (isAdmin() || isOffice()) && validOperationalCreate(id, request.resource.data) &&
+        validContract(request.resource.data.project_id, request.resource.data.contract_id) &&
+        request.resource.data.status != 'aprobat';
+      allow update: if (isAdmin() || isOffice()) && validOperationalUpdate() &&
+        immutable(['source_type', 'source_id', 'contract_id']) &&
+        (request.resource.data.status != 'aprobat' ||
+          (isAdmin() && nonEmpty(request.resource.data.document_ref) &&
+            nonEmpty(request.resource.data.aprobat_la) &&
+            request.resource.data.aprobat_de == request.auth.uid &&
+            request.resource.data.valoare_proiect is number && request.resource.data.valoare_proiect >= 0 &&
+            request.resource.data.platitor in ['pro_term', 'partener', 'beneficiar'] &&
+            nonEmpty(request.resource.data.categorie)));
+      allow delete: if isAdmin() && resource.data.status == 'draft';
+    }
+
+    match /venituri_asociere/{id} {
+      allow read: if isAdmin() || isOffice();
+      allow create: if (isAdmin() || isOffice()) && validOperationalCreate(id, request.resource.data) &&
+        validContract(request.resource.data.project_id, request.resource.data.contract_id);
+      allow update: if (isAdmin() || isOffice()) && validOperationalUpdate() &&
+        immutable(['contract_id']);
+      allow delete: if isAdmin() && resource.data.status == 'draft';
+    }
+
+    match /deconturi_lunare_asociere/{id} {
+      allow read: if isAdmin() || isOffice();
+      allow create: if (isAdmin() || isOffice()) && request.resource.data.id == id &&
+        projectExists(request.resource.data.project_id) &&
+        validContract(request.resource.data.project_id, request.resource.data.contract_id) &&
+        validRevisionCreate(request.resource.data) &&
+        request.resource.data.generat_de == request.auth.uid &&
+        request.resource.data.status == 'draft';
+      allow update: if (isAdmin() || isOffice()) && validRevisionUpdate() &&
+        immutable(['id', 'project_id', 'contract_id', 'luna', 'an', 'project_snapshot',
+          'contract_snapshot', 'input_ids', 'formula_revision', 'data_generare', 'generat_de']) &&
+        resource.data.status == 'draft' &&
+        (request.resource.data.status == 'draft' ||
+          (isAdmin() && request.resource.data.status == 'confirmat' &&
+            request.resource.data.confirmat_de == request.auth.uid &&
+            nonEmpty(request.resource.data.confirmat_la)));
+      allow delete: if isAdmin() && resource.data.status == 'draft';
+    }
+
+    // Accesul legacy activ era "orice utilizator autentificat". Îl păstrăm
+    // explicit numai pentru colecțiile cunoscute din cod; colecțiile Asociere
+    // și users sunt tratate mai sus, iar orice rădăcină necunoscută este deny.
+    match /{legacyCollection}/{document=**} {
+      allow read, write: if signedIn() && legacyCollection in [
+        'teams', 'appointments', 'appointment_material_kit_templates',
+        'deleted_appointments', 'appointment_history', 'agfr_equipments',
+        'agfr_interventions', 'agfr_reports', 'agfr_weighing_reports',
+        'refrigerant_reporting_records', 'jobs', 'clients', 'partners',
+        'partner_workers', 'partner_vehicles', 'company_profiles', 'offers',
+        'registry_entries', 'registry_settings', 'company_cost_profiles',
+        'offer_labor_templates', 'offer_commercial_clause_templates',
+        'offer_commercial_package_templates', 'materials', 'employees',
+        'vehicles', 'hr_trips', 'hr_travel_orders', 'complaints',
+        'repair_reports', 'warranty_intervention_reports', 'field_photos',
+        'job_site_documents', 'tools', 'tool_handovers', 'tool_categories',
+        'tool_transfer_requests', 'tool_transfer_notifications', 'tool_packages',
+        'tool_package_handovers', 'tool_package_movements',
+        'tool_package_notifications', 'product_catalog_products',
+        'product_catalog_supplier_prices', 'product_catalog_price_lists',
+        'product_catalog_price_list_entries', 'product_catalog_sales',
+        'product_catalog_warranty_certificates', 'hr_rule_sets',
+        'hr_rule_versions', 'hr_employee_profiles', 'hr_contracts',
+        'hr_attendance_entries', 'hr_self_service_attendance_sessions',
+        'hr_leave_types', 'hr_leave_requests', 'hr_monthly_timesheets',
+        'hr_payroll_input_snapshots', 'hr_bonuses', 'hr_deductions',
+        'hr_advances', 'hr_garnishments', 'hr_payroll_calculations',
+        'hr_payroll_runs', 'hr_payslips', 'hr_payroll_accounting_reports',
+        'notifications', 'notification_preferences', 'notification_email_queue',
+        'notification_push_queue', 'notification_device_tokens',
+        'email_server_configs', 'email_delivery_logs', 'field_sales_leads',
+        'field_sales_requests', 'complaint_client_centralizers',
+        'complaint_work_orders', 'partner_transactions',
+        'partner_financial_summary', 'partner_settlements',
+        'deviz_articole_template', 'devize_tehnice', 'devize_filtre_cta',
+        'app_tasks', 'employee_pay_entries', 'employee_payments',
+        'employee_financial_summary', 'employee_settings',
+        'hr_payroll_payments', 'stoc_items', 'stoc_miscari', 'gps_checkins',
+        'echipamente_instalate', 'crm_records', 'obiective_lunare',
+        'mentenanta_contracte', 'mentenanta_interventii', 'servicii_prestate',
+        'clauze_custom_catalog', 'app_config', 'app_settings', 'help_content'
+      ];
+    }
+  }
+}

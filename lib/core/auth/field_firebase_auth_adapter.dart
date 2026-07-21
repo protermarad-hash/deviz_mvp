@@ -110,6 +110,34 @@ class FieldFirebaseAuthAdapter {
 
     final forcedAdmin = email == _forcedAdminEmail;
 
+    // Firestore Rules poate rezolva rolul server-side numai dintr-o cale
+    // deterministă. Profilul canonic este întotdeauna users/{firebaseUid}.
+    final canonical = await _usersCollection.doc(uid).get();
+    if (canonical.exists && canonical.data() != null) {
+      final current = canonical.data()!;
+      final needsAdminUpdate = forcedAdmin &&
+          ((current['role'] ?? '').toString().trim().toLowerCase() != 'admin' ||
+              current['active'] == false);
+      if (needsAdminUpdate) {
+        await canonical.reference.set(
+          <String, dynamic>{
+            'role': 'admin',
+            'active': true,
+            'updatedAt': DateTime.now().toIso8601String(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+      return _fromUserMap(
+        <String, dynamic>{
+          ...current,
+          if (needsAdminUpdate) 'role': 'admin',
+          if (needsAdminUpdate) 'active': true,
+        },
+        fallbackId: uid,
+      );
+    }
+
     final byUid = await _usersCollection
         .where('firebase_uid', isEqualTo: uid)
         .limit(1)
@@ -135,13 +163,12 @@ class FieldFirebaseAuthAdapter {
         if (needsAdminUpdate) 'role': 'admin',
         if (needsAdminUpdate) 'active': true,
       };
+      await _writeCanonicalProfile(uid, refreshed);
       return _fromUserMap(refreshed, fallbackId: doc.id);
     }
 
-    final byEmail = await _usersCollection
-        .where('email', isEqualTo: email)
-        .limit(1)
-        .get();
+    final byEmail =
+        await _usersCollection.where('email', isEqualTo: email).limit(1).get();
     if (byEmail.docs.isNotEmpty) {
       final doc = byEmail.docs.first;
       final current = doc.data();
@@ -159,6 +186,7 @@ class FieldFirebaseAuthAdapter {
         ...current,
         ...patch,
       };
+      await _writeCanonicalProfile(uid, refreshed);
       return _fromUserMap(refreshed, fallbackId: doc.id);
     }
 
@@ -178,6 +206,21 @@ class FieldFirebaseAuthAdapter {
     };
     await _usersCollection.doc(uid).set(newPayload, SetOptions(merge: true));
     return _fromUserMap(newPayload, fallbackId: uid);
+  }
+
+  Future<void> _writeCanonicalProfile(
+    String uid,
+    Map<String, dynamic> source,
+  ) async {
+    await _usersCollection.doc(uid).set(
+      <String, dynamic>{
+        ...source,
+        'id': uid,
+        'firebase_uid': uid,
+        'updatedAt': DateTime.now().toIso8601String(),
+      },
+      SetOptions(merge: true),
+    );
   }
 
   Future<void> upsertUser(FieldAuthUser user) async {
