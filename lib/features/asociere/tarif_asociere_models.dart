@@ -5,6 +5,8 @@ class TarifAsociereRecord {
     required this.id,
     required this.projectId,
     this.contractId = '',
+    this.persoanaId = '',
+    this.persoanaNume = '',
     required this.calificare,
     required this.tarifOra,
     this.tarifKm = 0,
@@ -23,6 +25,11 @@ class TarifAsociereRecord {
   final String id;
   final String projectId;
   final String contractId;
+
+  /// Când e nevid, tariful e INDIVIDUAL (legat de o persoană concretă) și are
+  /// prioritate față de tariful pe calificare. Când e gol, e tarif pe calificare.
+  final String persoanaId;
+  final String persoanaNume;
   final String calificare;
   final double tarifOra;
   final double tarifKm;
@@ -39,6 +46,9 @@ class TarifAsociereRecord {
 
   double get tarifRonOra => tarifOra;
   double get tarifRonKm => tarifKm;
+
+  /// True dacă tariful e legat de o persoană concretă (nu doar de calificare).
+  bool get esteIndividual => persoanaId.trim().isNotEmpty;
 
   bool esteValabilLa(DateTime data) {
     final start =
@@ -72,6 +82,9 @@ class TarifAsociereRecord {
   }
 
   TarifAsociereRecord copyWith({
+    String? persoanaId,
+    String? persoanaNume,
+    String? calificare,
     double? tarifOra,
     double? tarifKm,
     String? moneda,
@@ -88,7 +101,9 @@ class TarifAsociereRecord {
         id: id,
         projectId: projectId,
         contractId: contractId,
-        calificare: calificare,
+        persoanaId: persoanaId ?? this.persoanaId,
+        persoanaNume: persoanaNume ?? this.persoanaNume,
+        calificare: calificare ?? this.calificare,
         tarifOra: tarifOra ?? this.tarifOra,
         tarifKm: tarifKm ?? this.tarifKm,
         moneda: moneda ?? this.moneda,
@@ -109,6 +124,8 @@ class TarifAsociereRecord {
         'id': id,
         'project_id': projectId,
         'contract_id': contractId,
+        'persoana_id': persoanaId,
+        'persoana_nume': persoanaNume,
         'calificare': calificare,
         'tarif_ora': tarifOra,
         'tarif_km': tarifKm,
@@ -130,6 +147,8 @@ class TarifAsociereRecord {
       id: mapText(map, 'id'),
       projectId: mapText(map, 'project_id', 'projectId'),
       contractId: mapText(map, 'contract_id', 'contractId'),
+      persoanaId: mapText(map, 'persoana_id', 'persoanaId'),
+      persoanaNume: mapText(map, 'persoana_nume', 'persoanaNume'),
       calificare: mapText(map, 'calificare'),
       tarifOra: mapDouble(map, 'tarif_ora', 'tarifOra'),
       tarifKm: mapDouble(map, 'tarif_km', 'tarifKm'),
@@ -157,3 +176,111 @@ const asociereCalificariPredefinite = <String>[
   'electrician',
   'necalificat',
 ];
+
+/// Sursa din care a fost rezolvat tariful unui pontaj.
+enum TarifAsociereSursa {
+  /// Tarif legat direct de persoană (are prioritate).
+  individual,
+
+  /// Tarif pe calificare + angajatorul (asociatul) persoanei.
+  calificareAngajator,
+
+  /// Tarif pe calificare, indiferent de angajator.
+  calificare,
+
+  /// Niciun tarif activ găsit → cost 0 neintenționat.
+  lipsa,
+}
+
+extension TarifAsociereSursaX on TarifAsociereSursa {
+  bool get esteLipsa => this == TarifAsociereSursa.lipsa;
+
+  String get mesaj => switch (this) {
+        TarifAsociereSursa.individual =>
+          'Tarif preluat din profilul persoanei.',
+        TarifAsociereSursa.calificareAngajator =>
+          'Nu există tarif individual. A fost utilizat tariful calificării.',
+        TarifAsociereSursa.calificare =>
+          'Nu există tarif individual. A fost utilizat tariful calificării.',
+        TarifAsociereSursa.lipsa => 'Persoana nu are un tarif activ.',
+      };
+
+  String get eticheta => switch (this) {
+        TarifAsociereSursa.individual => 'Tarif individual',
+        TarifAsociereSursa.calificareAngajator ||
+        TarifAsociereSursa.calificare =>
+          'Tarif calificare',
+        TarifAsociereSursa.lipsa => 'Tarif lipsă',
+      };
+}
+
+/// Rezultatul rezolvării unui tarif pentru un pontaj.
+class TarifAsociereRezolutie {
+  const TarifAsociereRezolutie({
+    required this.tarifOra,
+    required this.sursa,
+    this.record,
+  });
+
+  final double tarifOra;
+  final TarifAsociereSursa sursa;
+  final TarifAsociereRecord? record;
+
+  bool get lipsa => sursa.esteLipsa;
+}
+
+/// Rezolvă tariful RON/oră pentru o persoană, în ordinea fallback obligatorie:
+///   1. tarif individual activ pentru persoană;
+///   2. tarif activ pe calificare + angajator;
+///   3. tarif activ pe calificare (orice angajator);
+///   4. lipsă tarif (cost 0 neintenționat).
+///
+/// Funcție PURĂ (fără Firebase) — testabilă direct. `tarife` trebuie să fie deja
+/// filtrate pe proiectul curent.
+TarifAsociereRezolutie rezolvaTarifAsociere({
+  required List<TarifAsociereRecord> tarife,
+  required String persoanaId,
+  required String calificare,
+  required AsociereParte angajator,
+  required DateTime data,
+}) {
+  final person = persoanaId.trim().toLowerCase();
+  final calif = calificare.trim().toLowerCase();
+
+  final valabile = tarife.where((t) => t.esteValabilLa(data)).toList();
+
+  if (person.isNotEmpty) {
+    for (final t in valabile) {
+      if (t.persoanaId.trim().toLowerCase() == person) {
+        return TarifAsociereRezolutie(
+            tarifOra: t.tarifOra,
+            sursa: TarifAsociereSursa.individual,
+            record: t);
+      }
+    }
+  }
+
+  if (calif.isNotEmpty) {
+    for (final t in valabile) {
+      if (!t.esteIndividual &&
+          t.calificare.trim().toLowerCase() == calif &&
+          t.asociat == angajator) {
+        return TarifAsociereRezolutie(
+            tarifOra: t.tarifOra,
+            sursa: TarifAsociereSursa.calificareAngajator,
+            record: t);
+      }
+    }
+    for (final t in valabile) {
+      if (!t.esteIndividual && t.calificare.trim().toLowerCase() == calif) {
+        return TarifAsociereRezolutie(
+            tarifOra: t.tarifOra,
+            sursa: TarifAsociereSursa.calificare,
+            record: t);
+      }
+    }
+  }
+
+  return const TarifAsociereRezolutie(
+      tarifOra: 0, sursa: TarifAsociereSursa.lipsa);
+}

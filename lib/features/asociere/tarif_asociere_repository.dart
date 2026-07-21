@@ -8,6 +8,7 @@ import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
 import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
+import 'asociere_operational_common.dart';
 import 'tarif_asociere_models.dart';
 
 /// Repository pentru tarife per calificare, negociate per-asociere.
@@ -31,14 +32,23 @@ class TarifAsociereRepository {
 
   Future<void> upsertTarif(TarifAsociereRecord r) async {
     final existing = await listLocal();
-    if (existing.any((item) =>
-        item.id != r.id &&
-        item.projectId == r.projectId &&
-        item.calificare.trim().toLowerCase() ==
-            r.calificare.trim().toLowerCase() &&
-        item.asociat == r.asociat &&
-        item.valabilDeLa == r.valabilDeLa)) {
-      throw StateError('Tarif duplicat pentru aceeași calificare și perioadă.');
+    final persoana = r.persoanaId.trim().toLowerCase();
+    if (existing.any((item) {
+      if (item.id == r.id || item.projectId != r.projectId) return false;
+      if (item.valabilDeLa != r.valabilDeLa) return false;
+      if (persoana.isNotEmpty) {
+        // Tarif individual: unic pe (persoană, perioadă).
+        return item.persoanaId.trim().toLowerCase() == persoana;
+      }
+      // Tarif pe calificare: unic pe (calificare, asociat, perioadă).
+      return !item.esteIndividual &&
+          item.calificare.trim().toLowerCase() ==
+              r.calificare.trim().toLowerCase() &&
+          item.asociat == r.asociat;
+    })) {
+      throw StateError(persoana.isNotEmpty
+          ? 'Tarif individual duplicat pentru aceeași persoană și perioadă.'
+          : 'Tarif duplicat pentru aceeași calificare și perioadă.');
     }
     await _writeLocal(r);
     await OfflineSyncRuntime.instance.queueTarifAsociere(r);
@@ -113,17 +123,36 @@ class TarifAsociereRepository {
   }
 
   /// Tariful RON/oră pentru o calificare pe o asociere (0 dacă lipsește).
-  /// Folosit la calculul manoperei din pontaje.
+  /// Păstrat pentru compatibilitate — folosește fallback-ul pe calificare.
   Future<double> tarifOraPentru(
       String projectId, String calificare, DateTime data) async {
+    final rez = await rezolva(
+      projectId: projectId,
+      persoanaId: '',
+      calificare: calificare,
+      angajator: AsociereParte.proTerm,
+      data: data,
+    );
+    return rez.tarifOra;
+  }
+
+  /// Rezolvă tariful pentru o persoană cu fallback pe calificare (vezi
+  /// [rezolvaTarifAsociere]). Returnează și sursa tarifului, pentru mesaje UX.
+  Future<TarifAsociereRezolutie> rezolva({
+    required String projectId,
+    required String persoanaId,
+    required String calificare,
+    required AsociereParte angajator,
+    required DateTime data,
+  }) async {
     final tarife = await listByProject(projectId);
-    final key = calificare.trim().toLowerCase();
-    for (final t in tarife) {
-      if (t.calificare.trim().toLowerCase() == key && t.esteValabilLa(data)) {
-        return t.tarifOra;
-      }
-    }
-    return 0;
+    return rezolvaTarifAsociere(
+      tarife: tarife,
+      persoanaId: persoanaId,
+      calificare: calificare,
+      angajator: angajator,
+      data: data,
+    );
   }
 
   // ── Persistență ───────────────────────────────────────────────────────────

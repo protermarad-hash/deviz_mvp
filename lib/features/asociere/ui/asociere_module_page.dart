@@ -29,6 +29,7 @@ class _AsociereModulePageState extends State<AsociereModulePage> {
     ('proiecte', 'Proiecte', Icons.handshake_outlined),
     ('proiect_nou', 'Proiect nou', Icons.add_business_outlined),
     ('pontaje', 'Pontaje', Icons.timer_outlined),
+    ('personal_tarife', 'Personal & tarife', Icons.badge_outlined),
     ('deplasari', 'Deplasări', Icons.route_outlined),
     ('costuri', 'Costuri', Icons.shopping_cart_outlined),
     ('venituri', 'Venituri', Icons.payments_outlined),
@@ -113,6 +114,7 @@ class _AsociereModulePageState extends State<AsociereModulePage> {
 
   int _tabFor(String id) => switch (id) {
         'pontaje' => 2,
+        'personal_tarife' => 10,
         'deplasari' => 3,
         'costuri' => 4,
         'venituri' => 5,
