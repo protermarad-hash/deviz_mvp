@@ -447,6 +447,8 @@ class _LucrareAsociereFormPageState extends State<LucrareAsociereFormPage> {
                 : AsociereIncasator.proTerm,
         partenerExternId: record.partnerId,
         partenerExternNume: record.partnerNameSnapshot,
+        valoareContractuala: record.valoareContractuala,
+        moneda: record.moneda,
         cotaProTerm: record.cotaProTerm,
         cotaPartener: record.cotaPartener,
         pragAprobareRON: record.pragAprobareCost,

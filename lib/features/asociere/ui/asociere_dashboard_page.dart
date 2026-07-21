@@ -19,8 +19,10 @@ class AsociereDashboardPage extends StatefulWidget {
   const AsociereDashboardPage({
     super.key,
     required this.onQuickAction,
+    required this.canViewFinancial,
   });
   final ValueChanged<String> onQuickAction;
+  final bool canViewFinancial;
 
   @override
   State<AsociereDashboardPage> createState() => _AsociereDashboardPageState();
@@ -41,12 +43,19 @@ class _AsociereDashboardPageState extends State<AsociereDashboardPage> {
   Future<void> _load() async {
     try {
       final values = await Future.wait([
-        LucrareAsociereCloudRepository.instance.listMerged(),
+        LucrareAsociereCloudRepository.instance
+            .listMerged(includeFinancial: widget.canViewFinancial),
         PontajAsociereRepository.instance.listMerged(),
-        CostAsociereRepository.instance.listMerged(),
-        VenitAsociereRepository.instance.listMerged(),
+        widget.canViewFinancial
+            ? CostAsociereRepository.instance.listMerged()
+            : Future.value(<CostAsociereRecord>[]),
+        widget.canViewFinancial
+            ? VenitAsociereRepository.instance.listMerged()
+            : Future.value(<VenitAsociereRecord>[]),
         DeplasareAsociereRepository.instance.listMerged(),
-        DecontLunarAsociereRepository.instance.listMerged(),
+        widget.canViewFinancial
+            ? DecontLunarAsociereRepository.instance.listMerged()
+            : Future.value(<DecontLunarAsociereRecord>[]),
         OfflineSyncRuntime.instance.pendingItemsCount(),
       ]);
       final projects = values[0] as List<LucrareAsociereRecord>;

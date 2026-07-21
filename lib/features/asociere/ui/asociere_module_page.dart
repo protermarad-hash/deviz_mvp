@@ -95,11 +95,17 @@ class _AsociereModulePageState extends State<AsociereModulePage> {
 
   Widget _content() {
     final id = _sections[_index].$1;
-    if (id == 'dashboard') return AsociereDashboardPage(onQuickAction: _quick);
+    if (id == 'dashboard') {
+      return AsociereDashboardPage(
+        onQuickAction: _quick,
+        canViewFinancial: _canViewFinancial,
+      );
+    }
     return LucrariAsocierePage(
         appRepository: widget.appRepository,
         actorId: _actor,
         canManage: _canManage,
+        canViewFinancial: _canViewFinancial,
         canArchive: AsociereAccessPolicy.allows(
             widget.roleKey, AsocierePermission.archive),
         onOpen: (project) => _open(project, _tabFor(id)));

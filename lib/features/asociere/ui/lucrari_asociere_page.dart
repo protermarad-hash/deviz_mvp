@@ -6,6 +6,7 @@ import '../../../core/repositories/app_data_repository.dart';
 import '../lucrare_asociere_cloud_repository.dart';
 import '../lucrare_asociere_local_store.dart';
 import '../lucrare_asociere_models.dart';
+import '../lucrare_asociere_cloud_projection.dart';
 import '../asociere_models.dart';
 import '../asociere_repository.dart';
 import 'asociere_string_autocomplete.dart';
@@ -19,6 +20,7 @@ class LucrariAsocierePage extends StatefulWidget {
     required this.onOpen,
     required this.canManage,
     required this.canArchive,
+    required this.canViewFinancial,
   });
 
   final AppDataRepository appRepository;
@@ -26,6 +28,7 @@ class LucrariAsocierePage extends StatefulWidget {
   final ValueChanged<LucrareAsociereRecord> onOpen;
   final bool canManage;
   final bool canArchive;
+  final bool canViewFinancial;
 
   @override
   State<LucrariAsocierePage> createState() => _LucrariAsocierePageState();
@@ -87,10 +90,15 @@ class _LucrariAsocierePageState extends State<LucrariAsocierePage> {
       _error = null;
     });
     try {
-      final local = await LucrareAsociereCloudRepository.instance.listLocal();
+      final localRaw =
+          await LucrareAsociereCloudRepository.instance.listLocal();
+      final local = widget.canViewFinancial
+          ? localRaw
+          : localRaw.map((item) => item.withoutFinancialData()).toList();
       if (mounted) setState(() => _items = local);
       final values = await Future.wait([
-        LucrareAsociereCloudRepository.instance.listMerged(),
+        LucrareAsociereCloudRepository.instance
+            .listMerged(includeFinancial: widget.canViewFinancial),
         OfflineSyncRuntime.instance.pendingItemsCount(),
       ]);
       if (!mounted) return;
@@ -273,27 +281,63 @@ class _LucrariAsocierePageState extends State<LucrariAsocierePage> {
               }),
         ]),
         const SizedBox(height: 8),
-        Row(children: [
-          Icon(
-              FirebaseBootstrap.isInitialized
-                  ? Icons.cloud_done_outlined
-                  : Icons.cloud_off_outlined,
-              size: 18),
-          const SizedBox(width: 6),
-          Expanded(
-              child: Text(FirebaseBootstrap.isInitialized
-                  ? 'Cloud activ · ultima sincronizare: ${_syncLabel()}'
-                  : 'Offline · datele locale rămân disponibile')),
-          if (_pending > 0) Chip(label: Text('$_pending pending')),
-        ]),
+        ValueListenableBuilder<bool>(
+          valueListenable: FirebaseBootstrap.onlineNotifier,
+          builder: (context, online, _) => Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Icon(
+                  online ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+                  size: 18,
+                ),
+                Text(online ? 'Online' : 'Offline'),
+                if (OfflineSyncRuntime.instance.isSyncing)
+                  const Chip(label: Text('Sincronizare')),
+                if (_pending > 0)
+                  Chip(label: Text('$_pending operații în așteptare')),
+                Text('Ultima sincronizare: ${_syncLabel()}'),
+                if (_pending > 0 ||
+                    OfflineSyncRuntime.instance.lastSyncError != null)
+                  TextButton.icon(
+                    onPressed: _retrySync,
+                    icon: const Icon(Icons.sync, size: 18),
+                    label: const Text('Retry'),
+                  ),
+                if (OfflineSyncRuntime.instance.lastSyncError != null)
+                  const Tooltip(
+                    message:
+                        'Există o operație nesincronizată. Datele locale au fost păstrate.',
+                    child: Icon(Icons.error_outline, color: Colors.red),
+                  ),
+              ],
+            ),
+          ),
+        ),
       ]),
     );
   }
 
   String _syncLabel() {
-    final value = LucrareAsociereCloudRepository.lastSyncAt;
+    final runtimeValue = OfflineSyncRuntime.instance.lastSyncFinishedAt;
+    final repositoryValue = LucrareAsociereCloudRepository.lastSyncAt;
+    final value = runtimeValue == null ||
+            (repositoryValue != null && repositoryValue.isAfter(runtimeValue))
+        ? repositoryValue
+        : runtimeValue;
     if (value == null) return 'neefectuată';
     return '${value.day}.${value.month}.${value.year} ${value.hour}:${value.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _retrySync() async {
+    await FirebaseBootstrap.checkOnline();
+    if (FirebaseBootstrap.isOnline) {
+      await OfflineSyncRuntime.instance.syncPending(force: true);
+    }
+    await _load();
   }
 
   Widget _projectCard(LucrareAsociereRecord item) => Card(
@@ -330,8 +374,9 @@ class _LucrariAsocierePageState extends State<LucrariAsocierePage> {
               LinearProgressIndicator(value: item.progres),
               const SizedBox(height: 8),
               Wrap(spacing: 16, children: [
-                Text(
-                    '${item.valoareContractuala.toStringAsFixed(2)} ${item.moneda}'),
+                if (widget.canViewFinancial)
+                  Text(
+                      '${item.valoareContractuala.toStringAsFixed(2)} ${item.moneda}'),
                 Text(
                     'Perioadă: ${item.dataInceput.day}.${item.dataInceput.month}.${item.dataInceput.year}${item.termenEstimat == null ? '' : ' – ${item.termenEstimat!.day}.${item.termenEstimat!.month}.${item.termenEstimat!.year}'}'),
                 if (item.esteIntarziata)
