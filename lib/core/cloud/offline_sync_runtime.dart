@@ -24,6 +24,7 @@ import '../../features/oferte/offer_models.dart';
 import '../../features/partners/partner_models.dart';
 import '../../features/asociere/asociere_models.dart';
 import '../../features/asociere/lucrare_asociere_models.dart';
+import '../../features/asociere/lucrare_asociere_cloud_projection.dart';
 import '../../features/asociere/tarif_asociere_models.dart';
 import '../../features/asociere/pontaj_asociere_models.dart';
 import '../../features/asociere/cost_asociere_models.dart';
@@ -61,8 +62,13 @@ class OfflineSyncRuntime {
   DateTime? _lastSyncStartedAt;
   DateTime? _lastSyncFinishedAt;
   DateTime? _lastSyncSkipLoggedAt;
+  String? _lastSyncError;
+  int _lastSyncFailedItems = 0;
 
   bool get isSyncing => _isSyncing;
+  DateTime? get lastSyncFinishedAt => _lastSyncFinishedAt;
+  String? get lastSyncError => _lastSyncError;
+  int get lastSyncFailedItems => _lastSyncFailedItems;
 
   Future<int> pendingItemsCount() async {
     try {
@@ -100,18 +106,21 @@ class OfflineSyncRuntime {
   Future<void> queueAppointmentsBatch(List<Appointment> appointments) async {
     if (appointments.isEmpty) return;
     final now = DateTime.now();
-    final items = appointments.map((a) {
-      final id = a.id;
-      final entityId = id.trim().isEmpty ? null : id;
-      if (entityId == null) return null;
-      return CloudSyncItem(
-        id: 'appointments_${entityId}_${now.millisecondsSinceEpoch}',
-        entityType: CloudEntityType.appointments,
-        entityId: entityId,
-        payload: a.toMap(),
-        updatedAt: now,
-      );
-    }).whereType<CloudSyncItem>().toList(growable: false);
+    final items = appointments
+        .map((a) {
+          final id = a.id;
+          final entityId = id.trim().isEmpty ? null : id;
+          if (entityId == null) return null;
+          return CloudSyncItem(
+            id: 'appointments_${entityId}_${now.millisecondsSinceEpoch}',
+            entityType: CloudEntityType.appointments,
+            entityId: entityId,
+            payload: a.toMap(),
+            updatedAt: now,
+          );
+        })
+        .whereType<CloudSyncItem>()
+        .toList(growable: false);
     if (items.isNotEmpty) {
       await _queueRepository.upsertBatch(items);
     }
@@ -211,7 +220,8 @@ class OfflineSyncRuntime {
     await _bridge.queueAgfrEquipmentDelete(equipmentId);
   }
 
-  Future<void> queueAgfrIntervention(AgfrInterventionRecord intervention) async {
+  Future<void> queueAgfrIntervention(
+      AgfrInterventionRecord intervention) async {
     await _bridge.queueAgfrIntervention(intervention.toMap());
   }
 
@@ -377,8 +387,7 @@ class OfflineSyncRuntime {
     await _bridge.queueGpsCheckinUpsert(checkin);
   }
 
-  Future<void> queueEchipamentInstalat(
-      Map<String, dynamic> echipament) async {
+  Future<void> queueEchipamentInstalat(Map<String, dynamic> echipament) async {
     await _bridge.queueEchipamentInstalat(echipament);
   }
 
@@ -425,7 +434,7 @@ class OfflineSyncRuntime {
   // --- Modul Asociere (partajare profit/pierdere pe Lucrare) — iul 2026 ---
 
   Future<void> queueLucrareAsociere(LucrareAsociereRecord project) async {
-    await _bridge.queueLucrareAsociereUpsert(project.toMap());
+    await _bridge.queueLucrareAsociereUpsert(project.toCloudMap());
   }
 
   Future<void> queueLucrareAsociereDelete(String projectId) async {
@@ -472,7 +481,8 @@ class OfflineSyncRuntime {
     await _bridge.queueVenitAsociereDelete(venitId);
   }
 
-  Future<void> queueDecontLunarAsociere(DecontLunarAsociereRecord decont) async {
+  Future<void> queueDecontLunarAsociere(
+      DecontLunarAsociereRecord decont) async {
     await _bridge.queueDecontLunarAsociereUpsert(decont.toMap());
   }
 
@@ -510,12 +520,11 @@ class OfflineSyncRuntime {
     await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
   }
 
-  Future<bool> syncPending() async {
+  Future<bool> syncPending({bool force = false}) async {
     final now = DateTime.now();
     if (_isSyncing) {
       if (_lastSyncSkipLoggedAt == null ||
-          now.difference(_lastSyncSkipLoggedAt!) >
-              const Duration(seconds: 2)) {
+          now.difference(_lastSyncSkipLoggedAt!) > const Duration(seconds: 2)) {
         debugPrint('[Programari] cloud sync skip reason=already_syncing');
         _lastSyncSkipLoggedAt = now;
       }
@@ -526,11 +535,11 @@ class OfflineSyncRuntime {
                 _lastSyncFinishedAt!.isAfter(_lastSyncStartedAt!))
         ? _lastSyncFinishedAt
         : _lastSyncStartedAt;
-    if (lastSyncActivityAt != null &&
+    if (!force &&
+        lastSyncActivityAt != null &&
         now.difference(lastSyncActivityAt) < _minSyncGap) {
       if (_lastSyncSkipLoggedAt == null ||
-          now.difference(_lastSyncSkipLoggedAt!) >
-              const Duration(seconds: 2)) {
+          now.difference(_lastSyncSkipLoggedAt!) > const Duration(seconds: 2)) {
         debugPrint('[Programari] cloud sync skip reason=cooldown');
         _lastSyncSkipLoggedAt = now;
       }
@@ -539,6 +548,8 @@ class OfflineSyncRuntime {
     final stopwatch = Stopwatch()..start();
     _isSyncing = true;
     _lastSyncStartedAt = now;
+    _lastSyncError = null;
+    _lastSyncFailedItems = 0;
     debugPrint('[Programari] cloud sync start');
     try {
       if (!FirebaseBootstrap.isInitialized) {
@@ -568,7 +579,8 @@ class OfflineSyncRuntime {
       final documentsRepository = FirebaseJobSiteDocumentsRepository();
       final teamsRepository = FirebaseEchipeRepository();
       final appointmentsRepository = FirebaseProgramariRepository();
-      final appointmentMaterialKitRepository = FirebaseProgramareKitRepository();
+      final appointmentMaterialKitRepository =
+          FirebaseProgramareKitRepository();
       final clientsRepository = FirebaseClientiRepository();
       final materialsRepository = FirebaseMaterialeRepository();
       final complaintsCollection =
@@ -812,8 +824,7 @@ class OfflineSyncRuntime {
               if (item.deleted) {
                 await templateRepo.deleteFromFirebase(item.entityId);
               } else {
-                final template =
-                    DevizArticolTemplate.fromMap(item.payload);
+                final template = DevizArticolTemplate.fromMap(item.payload);
                 await templateRepo.upsertToFirebase(template);
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
@@ -1065,10 +1076,10 @@ class OfflineSyncRuntime {
                     .doc(item.entityId)
                     .delete();
               } else {
-                await FirebaseFirestore.instance
-                    .collection(FirebaseCollections.lucrariAsociere)
-                    .doc(item.entityId)
-                    .set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(
+                  item,
+                  FirebaseCollections.lucrariAsociere,
+                );
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1079,10 +1090,10 @@ class OfflineSyncRuntime {
                     .doc(item.entityId)
                     .delete();
               } else {
-                await FirebaseFirestore.instance
-                    .collection(FirebaseCollections.asocieri)
-                    .doc(item.entityId)
-                    .set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(
+                  item,
+                  FirebaseCollections.asocieri,
+                );
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1093,10 +1104,10 @@ class OfflineSyncRuntime {
                     .doc(item.entityId)
                     .delete();
               } else {
-                await FirebaseFirestore.instance
-                    .collection(FirebaseCollections.tarifeAsociere)
-                    .doc(item.entityId)
-                    .set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(
+                  item,
+                  FirebaseCollections.tarifeAsociere,
+                );
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1107,10 +1118,10 @@ class OfflineSyncRuntime {
                     .doc(item.entityId)
                     .delete();
               } else {
-                await FirebaseFirestore.instance
-                    .collection(FirebaseCollections.pontajeAsociere)
-                    .doc(item.entityId)
-                    .set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(
+                  item,
+                  FirebaseCollections.pontajeAsociere,
+                );
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1121,10 +1132,10 @@ class OfflineSyncRuntime {
                     .doc(item.entityId)
                     .delete();
               } else {
-                await FirebaseFirestore.instance
-                    .collection(FirebaseCollections.costuriAsociere)
-                    .doc(item.entityId)
-                    .set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(
+                  item,
+                  FirebaseCollections.costuriAsociere,
+                );
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1135,10 +1146,10 @@ class OfflineSyncRuntime {
                     .doc(item.entityId)
                     .delete();
               } else {
-                await FirebaseFirestore.instance
-                    .collection(FirebaseCollections.venituriAsociere)
-                    .doc(item.entityId)
-                    .set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(
+                  item,
+                  FirebaseCollections.venituriAsociere,
+                );
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1149,10 +1160,10 @@ class OfflineSyncRuntime {
                     .doc(item.entityId)
                     .delete();
               } else {
-                await FirebaseFirestore.instance
-                    .collection(FirebaseCollections.deconturiLunareAsociere)
-                    .doc(item.entityId)
-                    .set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(
+                  item,
+                  FirebaseCollections.deconturiLunareAsociere,
+                );
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1174,7 +1185,7 @@ class OfflineSyncRuntime {
               if (item.deleted) {
                 await reference.delete();
               } else {
-                await reference.set(item.payload, SetOptions(merge: true));
+                await _syncVersionedAsociereItem(item, collection);
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
               break;
@@ -1197,6 +1208,12 @@ class OfflineSyncRuntime {
           }
         } catch (error) {
           FirebaseBootstrap.registerRuntimeError(error);
+          if (_isAsociereEntity(item.entityType)) {
+            _lastSyncFailedItems++;
+            _lastSyncError = error is StateError
+                ? error.message.toString()
+                : 'O operație Asociere nu s-a putut sincroniza.';
+          }
           final attemptedAt = DateTime.now();
           await _queueRepository.markItemFailed(
             id: item.id,
@@ -1223,6 +1240,78 @@ class OfflineSyncRuntime {
       _lastSyncFinishedAt = DateTime.now();
     }
   }
+
+  Future<void> _syncVersionedAsociereItem(
+    CloudSyncItem item,
+    String collection,
+  ) async {
+    final revision = (item.payload['revision'] as num?)?.toInt();
+    if (revision == null || revision < 1) {
+      throw StateError('Operație respinsă: revizie locală invalidă.');
+    }
+    final reference =
+        FirebaseFirestore.instance.collection(collection).doc(item.entityId);
+    await FirebaseFirestore.instance.runTransaction((transaction) async {
+      final snapshot = await transaction.get(reference);
+      if (!snapshot.exists) {
+        if (revision != 1) {
+          throw StateError(
+            'Conflict de sincronizare: documentul remote lipsește pentru revizia $revision.',
+          );
+        }
+        transaction.set(reference, item.payload);
+        return;
+      }
+
+      final remote = snapshot.data() ?? const <String, dynamic>{};
+      final remoteRevision = (remote['revision'] as num?)?.toInt();
+      if (remoteRevision == revision && _deepEquals(remote, item.payload)) {
+        return;
+      }
+      if (remoteRevision == null || remoteRevision + 1 != revision) {
+        throw StateError(
+          'Conflict de sincronizare: revizia remote nu corespunde reviziei locale.',
+        );
+      }
+      transaction.set(reference, item.payload);
+    });
+  }
+
+  bool _deepEquals(Object? left, Object? right) {
+    if (identical(left, right) || left == right) return true;
+    if (left is Map && right is Map) {
+      if (left.length != right.length) return false;
+      for (final key in left.keys) {
+        if (!right.containsKey(key) || !_deepEquals(left[key], right[key])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (left is List && right is List) {
+      if (left.length != right.length) return false;
+      for (var index = 0; index < left.length; index++) {
+        if (!_deepEquals(left[index], right[index])) return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  bool _isAsociereEntity(CloudEntityType type) => switch (type) {
+        CloudEntityType.lucrariAsociere ||
+        CloudEntityType.asocieri ||
+        CloudEntityType.tarifeAsociere ||
+        CloudEntityType.pontajeAsociere ||
+        CloudEntityType.costuriAsociere ||
+        CloudEntityType.venituriAsociere ||
+        CloudEntityType.deconturiLunareAsociere ||
+        CloudEntityType.deplasariAsociere ||
+        CloudEntityType.cazariAsociere ||
+        CloudEntityType.diurneAsociere =>
+          true,
+        _ => false,
+      };
 
   DateTime _computeNextRetryAt({
     required DateTime attemptedAt,

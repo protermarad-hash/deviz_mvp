@@ -6,6 +6,8 @@ import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/cloud/cloud_sync_models.dart';
 import 'lucrare_asociere_local_store.dart';
 import 'lucrare_asociere_models.dart';
+import 'lucrare_asociere_cloud_projection.dart';
+import 'asociere_repository.dart';
 
 class LucrareAsociereCloudRepository {
   LucrareAsociereCloudRepository._();
@@ -40,8 +42,13 @@ class LucrareAsociereCloudRepository {
     return _sort(items);
   }
 
-  Future<List<LucrareAsociereRecord>> listMerged() async {
-    final local = await listLocal();
+  Future<List<LucrareAsociereRecord>> listMerged({
+    bool includeFinancial = true,
+  }) async {
+    final localRaw = await listLocal();
+    final local = includeFinancial
+        ? localRaw
+        : localRaw.map((item) => item.withoutFinancialData()).toList();
     if (!FirebaseBootstrap.isInitialized) return local;
     try {
       final pendingIds = await OfflineSyncRuntime.instance
@@ -67,7 +74,19 @@ class LucrareAsociereCloudRepository {
           await OfflineSyncRuntime.instance.queueLucrareAsociere(localItem);
         }
       }
-      final result = _sort(merged.values.toList(growable: false));
+      var result = _sort(merged.values.toList(growable: false));
+      if (includeFinancial) {
+        final contracts = await AsociereRepository.instance.listMerged();
+        final byProject = {
+          for (final contract in contracts)
+            contract.lucrareAsociereId: contract,
+        };
+        result = result
+            .map((item) => byProject[item.id] == null
+                ? item
+                : item.withContract(byProject[item.id]!))
+            .toList(growable: false);
+      }
       await _local.writeAll(result);
       lastFirestoreError = null;
       lastSyncAt = DateTime.now();
@@ -81,7 +100,7 @@ class LucrareAsociereCloudRepository {
   Future<LucrareAsociereRecord> create(LucrareAsociereRecord record) async {
     final errors = record.validate();
     if (errors.isNotEmpty) throw StateError(errors.join('\n'));
-    final existing = await listMerged();
+    final existing = await listMerged(includeFinancial: true);
     if (existing.any((item) =>
         item.id == record.id ||
         item.numar.trim().toLowerCase() == record.numar.trim().toLowerCase())) {
@@ -97,7 +116,7 @@ class LucrareAsociereCloudRepository {
   }) async {
     final errors = record.validate();
     if (errors.isNotEmpty) throw StateError(errors.join('\n'));
-    final local = await listMerged();
+    final local = await listMerged(includeFinancial: true);
     final current = local.where((item) => item.id == record.id).firstOrNull;
     if (current != null && current.revision != expectedRevision) {
       throw StateError(
@@ -131,14 +150,6 @@ class LucrareAsociereCloudRepository {
   Future<void> _persist(LucrareAsociereRecord record) async {
     await _local.upsert(record);
     await OfflineSyncRuntime.instance.queueLucrareAsociere(record);
-    if (FirebaseBootstrap.isInitialized) {
-      _collection
-          .doc(record.id)
-          .set(record.toMap(), SetOptions(merge: true))
-          .catchError((Object error) {
-        lastFirestoreError = '$error';
-      });
-    }
   }
 
   Future<int> forceSyncLocalToCloud() async {

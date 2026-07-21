@@ -266,9 +266,6 @@ class DecontLunarAsociereRepository {
     }
     await _writeAll(items);
     await OfflineSyncRuntime.instance.queueDecontLunarAsociere(record);
-    if (FirebaseBootstrap.isInitialized) {
-      _collection.doc(record.id).set(record.toMap(), SetOptions(merge: true));
-    }
   }
 
   Future<void> _writeAll(List<DecontLunarAsociereRecord> items) async {

@@ -107,12 +107,6 @@ class _LogisticaStore<T> {
     }
     await _writeAll(items);
     await queue(value);
-    if (FirebaseBootstrap.isInitialized) {
-      FirebaseFirestore.instance
-          .collection(collection)
-          .doc(idOf(value))
-          .set(encode(value), SetOptions(merge: true));
-    }
   }
 
   Future<void> _writeAll(List<T> values) async {

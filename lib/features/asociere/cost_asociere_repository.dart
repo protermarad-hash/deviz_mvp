@@ -40,19 +40,11 @@ class CostAsociereRepository {
     }
     await _writeLocal(r);
     await OfflineSyncRuntime.instance.queueCostAsociere(r);
-    if (_isCloud) {
-      _col.doc(r.id).set(r.toMap(), SetOptions(merge: true)).catchError((e) {
-        lastFirestoreError = e.toString();
-      });
-    }
   }
 
   Future<void> deleteCost(String id) async {
     await _deleteLocal(id);
     await OfflineSyncRuntime.instance.queueCostAsociereDelete(id);
-    if (_isCloud) {
-      _col.doc(id).delete().catchError((_) {});
-    }
   }
 
   // ── Citire ───────────────────────────────────────────────────────────────

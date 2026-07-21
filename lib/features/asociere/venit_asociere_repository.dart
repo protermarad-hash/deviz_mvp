@@ -39,19 +39,11 @@ class VenitAsociereRepository {
     }
     await _writeLocal(r);
     await OfflineSyncRuntime.instance.queueVenitAsociere(r);
-    if (_isCloud) {
-      _col.doc(r.id).set(r.toMap(), SetOptions(merge: true)).catchError((e) {
-        lastFirestoreError = e.toString();
-      });
-    }
   }
 
   Future<void> deleteVenit(String id) async {
     await _deleteLocal(id);
     await OfflineSyncRuntime.instance.queueVenitAsociereDelete(id);
-    if (_isCloud) {
-      _col.doc(id).delete().catchError((_) {});
-    }
   }
 
   // ── Citire ───────────────────────────────────────────────────────────────

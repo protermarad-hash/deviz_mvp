@@ -33,19 +33,11 @@ class AsociereRepository {
   Future<void> upsertAsociere(AsociereRecord r) async {
     await _writeLocal(r);
     await OfflineSyncRuntime.instance.queueAsociere(r);
-    if (_isCloud) {
-      _col.doc(r.id).set(r.toMap(), SetOptions(merge: true)).catchError((e) {
-        lastFirestoreError = e.toString();
-      });
-    }
   }
 
   Future<void> deleteAsociere(String id) async {
     await _deleteLocal(id);
     await OfflineSyncRuntime.instance.queueAsociereDelete(id);
-    if (_isCloud) {
-      _col.doc(id).delete().catchError((_) {});
-    }
   }
 
   // ── Citire ───────────────────────────────────────────────────────────────
