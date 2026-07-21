@@ -2394,8 +2394,8 @@ După FIECARE build (orice platformă, orice client), agentul TREBUIE:
 |---|---|---|
 | APK Costel | `build/proventaris-costel-v1.5.2-build53.apk` | 2026-07-03 23:16:52 (bump +53; aapt: ro.proterm.proventaris.costel versionCode 53; libapp.so 996e4fd3) |
 | ZIP Windows Costel | `build/proventaris-windows-costel-v1.5.2-build53.zip` | 2026-07-03 23:17:59 (bump +53; app.so costel f6617a18 confirmat prin eliminare + hash-compare; exe v53) |
-| APK PRO TERM | `build/releases/proterm/android/app-proterm-v1.6.0-build72.apk` | 2026-07-20 23:31 (bump 1.6.0+72; aapt: ro.proterm.proventaris versionCode 72 versionName 1.6.0; SHA256 `516CDACEE60763097F6DB08F6A156BDC304AAF2E6DF025366F2489247483D6A1`; build tag `rel-20260720-2325`; MVP Asociere independent; via scripts/build_proterm.ps1) |
-| ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v1.6.0-build72.zip` | 2026-07-20 23:50 (bump 1.6.0+72; SHA256 `010E6F583109B547C8C65D7ABAEBF56D24DF42F4BF07BB0AC8B62A35566150EF`; app.so cu cache curățat înainte de build; via scripts/build_proterm.ps1) |
+| APK PRO TERM | `build/releases/proterm/android/app-proterm-v1.6.0-build73.apk` | 2026-07-21 09:35 (bump 1.6.0+73; aapt: ro.proterm.proventaris versionCode 73 versionName 1.6.0; SHA256 `d72d11fe3572ca9dca59857a0e8f5b9fb3c647d1cebe82fdb90b0c5cd6b175a2`; build tag `rel-20260721-0927`; securitate Asociere: separare date financiare + concurenta pe revizie + reguli Firestore; via scripts/build_proterm.ps1) |
+| ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v1.6.0-build73.zip` | 2026-07-21 09:47 (bump 1.6.0+73; SHA256 `435c9d95c82c813fc93abea2da98820fa8ba590496bb757503b747086402945c`; cache Windows curatat automat inainte de build; via scripts/build_proterm.ps1) |
 | Windows PRO TERM (folder) | `build/windows/x64/runner/Release/` | 2026-07-20 23:47 (build tag `rel-20260720-2325`; app.so SHA256 `EC4AB339FD082A08C6CEAD2F59829FD127E230462965C9E901CC1A14BDE965B0`; cache Windows curățat automat de build_proterm.ps1 pasul [2/6]) |
 
 ---
