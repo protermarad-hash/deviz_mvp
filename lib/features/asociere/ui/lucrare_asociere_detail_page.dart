@@ -16,6 +16,7 @@ import 'asociere_chart_card.dart';
 import 'decont_asociere_page.dart';
 import 'logistica_asociere_page.dart';
 import 'lucrare_asociere_form_page.dart';
+import 'personal_tarife_asociere_page.dart';
 import 'pontaj_asociere_page.dart';
 import 'registru_asociere_page.dart';
 import 'tarife_asociere_page.dart';
@@ -47,7 +48,7 @@ class _LucrareAsociereDetailPageState extends State<LucrareAsociereDetailPage>
     with SingleTickerProviderStateMixin {
   late LucrareAsociereRecord _project = widget.project;
   late final TabController _tabs = TabController(
-      length: 10, vsync: this, initialIndex: widget.initialTab.clamp(0, 9));
+      length: 11, vsync: this, initialIndex: widget.initialTab.clamp(0, 10));
   AsociereRecord? _contract;
   AsociereAnalytics? _analytics;
   bool _loading = true;
@@ -131,6 +132,7 @@ class _LucrareAsociereDetailPageState extends State<LucrareAsociereDetailPage>
           Tab(text: 'Deconturi'),
           Tab(text: 'Documente'),
           Tab(text: 'Activitate'),
+          Tab(text: 'Personal & tarife'),
         ]),
       ),
       body: _loading
@@ -148,7 +150,10 @@ class _LucrareAsociereDetailPageState extends State<LucrareAsociereDetailPage>
                       appRepository: widget.appRepository,
                       actorId: widget.actorId,
                       canEdit: widget.canManage,
-                      canRegisterExternalConfirmation: widget.isAdmin),
+                      canRegisterExternalConfirmation: widget.isAdmin,
+                      canViewFinancial: widget.canViewFinancial,
+                      canConfigureRates: widget.isAdmin,
+                      onOpenTarife: () => _tabs.animateTo(10)),
                   LogisticaAsocierePage(
                       projectId: _project.id,
                       actorId: widget.actorId,
@@ -188,6 +193,12 @@ class _LucrareAsociereDetailPageState extends State<LucrareAsociereDetailPage>
                       : _restricted(),
                   _documents(),
                   _activity(),
+                  PersonalTarifeAsocierePage(
+                      projectId: _project.id,
+                      contractId: contract.id,
+                      appRepository: widget.appRepository,
+                      canConfigureRates: widget.isAdmin,
+                      canViewFinancial: widget.canViewFinancial),
                 ]),
     );
   }
