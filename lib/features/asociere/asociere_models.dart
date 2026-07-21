@@ -1,68 +1,9 @@
-/// Configurația contractuală a unui proiect Asociere independent.
-enum AsociereStatus {
-  activa,
-  incheiata,
-  reziliata;
+import 'asociere_contract_types.dart';
 
-  String get value {
-    switch (this) {
-      case AsociereStatus.activa:
-        return 'activa';
-      case AsociereStatus.incheiata:
-        return 'incheiata';
-      case AsociereStatus.reziliata:
-        return 'reziliata';
-    }
-  }
-
-  String get label {
-    switch (this) {
-      case AsociereStatus.activa:
-        return 'Activă';
-      case AsociereStatus.incheiata:
-        return 'Încheiată';
-      case AsociereStatus.reziliata:
-        return 'Reziliată';
-    }
-  }
-
-  static AsociereStatus fromValue(String? raw) {
-    switch ((raw ?? '').trim().toLowerCase()) {
-      case 'incheiata':
-        return AsociereStatus.incheiata;
-      case 'reziliata':
-        return AsociereStatus.reziliata;
-      case 'activa':
-      default:
-        return AsociereStatus.activa;
-    }
-  }
-}
-
-/// Cine facturează Beneficiarul și încasează veniturile pe această asociere
-/// (contractantul principal). Determină DIRECȚIA rambursării la decont:
-/// partea care încasează deține numerarul și rambursează cealaltă parte.
-/// - proTerm → PRO TERM e contractant principal (încasează, rambursează
-///   partenerul).
-/// - partener → partenerul e contractant principal (încasează, rambursează
-///   PRO TERM) — ex: contract Madalin/AIR, Art. 8.1 (AIR facturează
-///   Beneficiarul).
-enum AsociereIncasator {
-  proTerm,
-  partener;
-
-  String get value =>
-      this == AsociereIncasator.partener ? 'partener' : 'pro_term';
-
-  String get label =>
-      this == AsociereIncasator.partener ? 'Partener' : 'PRO TERM';
-
-  static AsociereIncasator fromValue(String? raw) {
-    return (raw ?? '').trim().toLowerCase() == 'partener'
-        ? AsociereIncasator.partener
-        : AsociereIncasator.proTerm;
-  }
-}
+// Re-export tipurile contractuale (enum AsociereStatus / AsociereIncasator)
+// extrase în asociere_contract_types.dart, astfel încât consumatorii care
+// importă doar asociere_models.dart să le vadă în continuare (compat retro).
+export 'asociere_contract_types.dart';
 
 class AsociereRecord {
   const AsociereRecord({
@@ -74,6 +15,8 @@ class AsociereRecord {
     this.partenerExternCUI = '',
     this.partenerExternIBAN = '',
     this.partenerExternTelefon = '',
+    this.valoareContractuala = 0,
+    this.moneda = 'RON',
     required this.cotaProTerm,
     required this.cotaPartener,
     this.pragAprobareRON = 1000.0,
@@ -106,6 +49,8 @@ class AsociereRecord {
   final String partenerExternCUI;
   final String partenerExternIBAN;
   final String partenerExternTelefon;
+  final double valoareContractuala;
+  final String moneda;
 
   /// Procente cotă profit/pierdere — trebuie să însumeze 100 (validare la
   /// nivel de UI/repository, NU impusă strict în model).
@@ -146,6 +91,8 @@ class AsociereRecord {
     String? partenerExternCUI,
     String? partenerExternIBAN,
     String? partenerExternTelefon,
+    double? valoareContractuala,
+    String? moneda,
     double? cotaProTerm,
     double? cotaPartener,
     double? pragAprobareRON,
@@ -168,6 +115,8 @@ class AsociereRecord {
       partenerExternIBAN: partenerExternIBAN ?? this.partenerExternIBAN,
       partenerExternTelefon:
           partenerExternTelefon ?? this.partenerExternTelefon,
+      valoareContractuala: valoareContractuala ?? this.valoareContractuala,
+      moneda: moneda ?? this.moneda,
       cotaProTerm: cotaProTerm ?? this.cotaProTerm,
       cotaPartener: cotaPartener ?? this.cotaPartener,
       pragAprobareRON: pragAprobareRON ?? this.pragAprobareRON,
@@ -199,6 +148,8 @@ class AsociereRecord {
       'partener_extern_cui': partenerExternCUI,
       'partener_extern_iban': partenerExternIBAN,
       'partener_extern_telefon': partenerExternTelefon,
+      'valoare_contractuala': valoareContractuala,
+      'moneda': moneda,
       'cota_pro_term': cotaProTerm,
       'cota_partener': cotaPartener,
       'prag_aprobare_ron': pragAprobareRON,
@@ -262,6 +213,13 @@ class AsociereRecord {
       partenerExternTelefon: pick(
         const <String>['partener_extern_telefon', 'partenerExternTelefon'],
       ),
+      valoareContractuala: parseDouble(
+        map['valoare_contractuala'] ?? map['valoareContractuala'],
+        0,
+      ),
+      moneda: pick(const <String>['moneda']).isEmpty
+          ? 'RON'
+          : pick(const <String>['moneda']).toUpperCase(),
       cotaProTerm: parseDouble(map['cota_pro_term'] ?? map['cotaProTerm'], 0),
       cotaPartener: parseDouble(map['cota_partener'] ?? map['cotaPartener'], 0),
       pragAprobareRON: parseDouble(
