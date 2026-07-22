@@ -1,12 +1,15 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import 'core/ai_config_store.dart';
+import 'core/crash_logger.dart';
 import 'core/help/help_repository.dart';
 import 'core/auth/field_auth_repository_factory.dart';
 import 'core/auth/field_auth_service.dart';
@@ -21,7 +24,37 @@ import 'app/field_role_ready_shell.dart';
 import 'app/deviz_ultra_app.dart';
 import 'app/deviz_ultra_bootstrap.dart';
 
-void main() async {
+void main() {
+  // (2) Erori Flutter framework (build/layout/paint etc.) — logate sincron
+  // ÎNAINTE de comportamentul implicit.
+  final FlutterExceptionHandler? previousOnError = FlutterError.onError;
+  FlutterError.onError = (FlutterErrorDetails details) {
+    CrashLogger.log('FlutterError.onError', details.exception, details.stack);
+    if (previousOnError != null) {
+      previousOnError(details);
+    } else {
+      FlutterError.presentError(details);
+    }
+  };
+
+  // (3) Erori native/platformă (ex: Firebase Auth pe thread greșit) — logate
+  // sincron; return true ca să nu propage crash-ul mai departe dacă se poate.
+  PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+    CrashLogger.log('PlatformDispatcher.onError', error, stack);
+    return true;
+  };
+
+  // (1) Tot conținutul main() rulează într-o zonă protejată; orice eroare
+  // necaptată din zonă este scrisă sincron în crash_log.txt.
+  runZonedGuarded<void>(
+    _runApp,
+    (Object error, StackTrace stack) {
+      CrashLogger.log('runZonedGuarded', error, stack);
+    },
+  );
+}
+
+Future<void> _runApp() async {
   WidgetsFlutterBinding.ensureInitialized();
   Intl.defaultLocale = 'ro_RO';
   // Toate 3 inițializările rulează în paralel — reduce startup cu ~300-500ms
