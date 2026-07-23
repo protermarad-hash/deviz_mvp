@@ -9,6 +9,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import 'core/ai_config_store.dart';
+import 'core/boot_trace.dart';
 import 'core/crash_logger.dart';
 import 'core/help/help_repository.dart';
 import 'core/auth/field_auth_repository_factory.dart';
@@ -55,6 +56,8 @@ void main() {
 }
 
 Future<void> _runApp() async {
+  BootTrace.reset();
+  BootTrace.mark('main:start');
   WidgetsFlutterBinding.ensureInitialized();
   Intl.defaultLocale = 'ro_RO';
   // Toate 3 inițializările rulează în paralel — reduce startup cu ~300-500ms
@@ -63,6 +66,10 @@ Future<void> _runApp() async {
     FirebaseBootstrap.initializeSafe(),
     AiConfigStore.load(),
   ]);
+  BootTrace.mark(
+    'main:firebase init=${FirebaseBootstrap.isInitialized} '
+    'online=${FirebaseBootstrap.isOnline}',
+  );
   // Inițializare sistem Help — best-effort (nu blochează startup)
   HelpRepository.instance.initialize().then((_) {
     HelpRepository.instance.seedIfEmpty().catchError((_) {});
@@ -71,6 +78,7 @@ Future<void> _runApp() async {
 
   // Refresh token la login și la fiecare schimbare de stare auth
   FirebaseAuth.instance.authStateChanges().listen((user) {
+    BootTrace.mark('main:authState user=${user != null}');
     if (user != null) {
       user.getIdToken(true).catchError((_) => '');
       _fieldAuthService.promoteCloudSessionIfPossible();
