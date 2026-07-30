@@ -36,14 +36,18 @@ import '../registratura/registry_models.dart';
 import '../registratura/registry_store.dart';
 import '../master/master_local_store.dart';
 import '../partners/partner_models.dart';
-import '../pontaj_lucrari/pontaj_economic_section.dart';
-import '../pontaj_lucrari/pontaj_lucrare_tab.dart';
+// Pontaj zilnic dezactivat din UI prin decizie de produs (2026-07-30).
+// Codul din lib/features/pontaj_lucrari/ rămâne intact și reactivabil —
+// vezi comentariile de la TabBar/TabBarView și din tab-ul Economic.
+// import '../pontaj_lucrari/pontaj_economic_section.dart';
+// import '../pontaj_lucrari/pontaj_lucrare_tab.dart';
 import 'firebase_lucrari_repository.dart';
 import 'firebase_job_site_documents_repository.dart';
 import 'job_models.dart';
 import 'deviz_lucrare_pdf_service.dart';
 import '../../core/integrations/smartbill_service.dart';
 import 'job_partner_models.dart';
+import 'services/lucrare_cost_calc.dart';
 import 'job_site_document_models.dart';
 import 'job_site_document_services.dart';
 import 'job_site_documents_cloud_repository.dart';
@@ -1437,7 +1441,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Widget _buildPartnerProfitSection() {
-    final grossProfit = _estimatedValue - _realTotalCost;
+    // Profit calculat din costul TOTAL unificat (materiale + manoperă
+    // proprie + resurse partenere) — decizie de produs 2026-07-30. Nu e
+    // stocat pe JobRecord (grossProfit se calculează mereu live), deci
+    // schimbarea formulei se reflectă automat la afișare, fără migrare.
+    final grossProfit = LucrareCostCalc.grossProfit(
+      estimatedValue: _estimatedValue,
+      costTotal: _costTotalUnificat,
+    );
     final taxAmount = grossProfit > 0 ? grossProfit * _profitTaxPercent / 100 : 0.0;
     final netProfit = grossProfit - taxAmount;
     final partnerShare = netProfit > 0 ? netProfit * _partnerProfitPercent / 100 : 0.0;
@@ -3493,6 +3504,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final umController = TextEditingController();
     final qtyController = TextEditingController(text: '1');
     final priceController = TextEditingController(text: '0');
+    final realPriceController = TextEditingController(text: '');
 
     final created = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -3603,6 +3615,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: realPriceController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Preț real achiziție (opțional)',
+                    helperText:
+                        'Completează doar dacă diferă de prețul ofertat',
+                  ),
+                ),
               ],
             ),
           ),
@@ -3620,6 +3643,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final price = double.tryParse(
                         priceController.text.replaceAll(',', '.')) ??
                     0;
+                final realPrice = double.tryParse(
+                        realPriceController.text.replaceAll(',', '.')) ??
+                    0;
                 final um = umController.text.trim();
                 final matId = selectedMaterial?.id ??
                     'mat-${DateTime.now().millisecondsSinceEpoch}';
@@ -3630,6 +3656,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   'um': um.isEmpty ? (selectedMaterial?.um ?? '') : um,
                   'qty': qty,
                   'price': price,
+                  'realPrice': realPrice,
                   'total': qty * price,
                 });
               },
@@ -3644,6 +3671,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     umController.dispose();
     qtyController.dispose();
     priceController.dispose();
+    realPriceController.dispose();
     if (created == null) return;
 
     // Dacă materialul nu era în catalog, îl adaugă automat pentru viitoare sugestii
@@ -3712,6 +3740,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         TextEditingController(text: _asDouble(row['qty']).toString());
     final priceController =
         TextEditingController(text: _asDouble(row['price']).toString());
+    final existingRealPrice = _asDouble(row['realPrice']);
+    final realPriceController = TextEditingController(
+        text: existingRealPrice > 0 ? existingRealPrice.toString() : '');
 
     final updated = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -3723,6 +3754,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             final price =
                 double.tryParse(priceController.text.replaceAll(',', '.')) ?? 0;
             return qty * price;
+          }
+
+          double realTotalPreview() {
+            final qty =
+                double.tryParse(qtyController.text.replaceAll(',', '.')) ?? 0;
+            final realPrice = double.tryParse(
+                    realPriceController.text.replaceAll(',', '.')) ??
+                0;
+            return qty * realPrice;
           }
 
           return AlertDialog(
@@ -3837,10 +3877,37 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  TextField(
+                    controller: realPriceController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Preț real achiziție (opțional)',
+                      helperText:
+                          'Completează doar dacă diferă de prețul ofertat',
+                    ),
+                    onChanged: (_) => setDialogState(() {}),
+                  ),
+                  const SizedBox(height: 8),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('Total: ${totalPreview().toStringAsFixed(2)}'),
+                    child: Text(
+                        'Total (ofertat): ${totalPreview().toStringAsFixed(2)}'),
                   ),
+                  if (realTotalPreview() > 0)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Total (preț real): ${realTotalPreview().toStringAsFixed(2)}'
+                        ' (${realTotalPreview() > totalPreview() ? '+' : ''}${(realTotalPreview() - totalPreview()).toStringAsFixed(2)})',
+                        style: TextStyle(
+                          color: realTotalPreview() > totalPreview()
+                              ? Colors.red.shade700
+                              : Colors.green.shade700,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -3859,6 +3926,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   final price = double.tryParse(
                           priceController.text.replaceAll(',', '.')) ??
                       0;
+                  final realPrice = double.tryParse(
+                          realPriceController.text.replaceAll(',', '.')) ??
+                      0;
                   final matId = selectedMaterial?.id ??
                       '${row['materialId'] ?? 'mat-${DateTime.now().millisecondsSinceEpoch}'}';
                   final um = umController.text.trim().isEmpty
@@ -3872,6 +3942,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     'um': um,
                     'qty': qty,
                     'price': price,
+                    'realPrice': realPrice,
                     'total': qty * price,
                   });
                 },
@@ -3887,6 +3958,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     umController.dispose();
     qtyController.dispose();
     priceController.dispose();
+    realPriceController.dispose();
     if (updated == null) return;
 
     // Dacă materialul editat e nou (nu din catalog), adaugă-l în catalog
@@ -4482,13 +4554,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   String get _ownVehiclesCurrency =>
       _currencyLabel(_ownVehicles.map((v) => v.currency));
 
-  double _materialLineTotal(Map<String, dynamic> row) {
-    final explicit = _asDouble(row['total']);
-    if (explicit > 0) {
-      return explicit;
-    }
-    return _asDouble(row['qty']) * _asDouble(row['price']);
-  }
+  double _materialLineTotal(Map<String, dynamic> row) =>
+      LucrareCostCalc.materialLineTotal(row);
+
+  double _materialLineOfferedTotal(Map<String, dynamic> row) =>
+      LucrareCostCalc.materialLineOfferedTotal(row);
+
+  double _materialLineRealVsOfferedDiff(Map<String, dynamic> row) =>
+      LucrareCostCalc.materialLineRealVsOfferedDiff(row);
 
   List<Map<String, dynamic>> _dedupeDropdownOptions(
       List<Map<String, dynamic>> source) {
@@ -4688,6 +4761,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   double get _laborCompleteTotal => _laborTotalCost;
 
   double get _realTotalCost => _materialsTotal + _laborTotalCost;
+
+  /// Cost total unificat: materiale + manoperă proprie + resurse partenere
+  /// (personal + autovehicule partener). Folosit pentru noul chip "Cost
+  /// total lucrare" și pentru formula de profit din "Profit și Partener" —
+  /// spre deosebire de `_realTotalCost`, care rămâne "cost intern" (fără
+  /// parteneri) pentru compatibilitate cu chip-urile/PDF-ul existente.
+  double get _costTotalUnificat => LucrareCostCalc.costTotalUnificat(
+        materialsTotal: _materialsTotal,
+        laborTotal: _laborTotalCost,
+        partnersTotal: _partnersTotal,
+      );
 
   double get _estimatedValue => _jobSnapshot.estimatedValue ?? 0;
 
@@ -10127,6 +10211,139 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
+  Widget _buildOwnResourcesSummaryChips() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _chip('Total ore persoane', _personHoursTotal.toStringAsFixed(2)),
+        _chip('Total ore echipe', _teamHoursTotal.toStringAsFixed(2)),
+        _chip(
+          'Total cost manoperă proprie',
+          '${_laborTotalCost.toStringAsFixed(2)} RON',
+        ),
+      ],
+    );
+  }
+
+  /// Secțiune "Resurse proprii" — vizual simetrică cu "Resurse partener":
+  /// grupează intrările existente din `_labor` (persoană/echipă) în carduri
+  /// cu subtotal, reutilizând complet dialogurile Adaugă/Editează/Șterge
+  /// manoperă (decizie de produs 2026-07-30: extindere `_labor`, nu sistem
+  /// nou).
+  Widget _buildOwnResourcesSection() {
+    if (_labor.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildOwnResourcesSummaryChips(),
+          const SizedBox(height: 10),
+          const Text('Nu există manoperă proprie înregistrată.'),
+        ],
+      );
+    }
+
+    final groups = <String, List<int>>{};
+    for (var i = 0; i < _labor.length; i++) {
+      final whoId =
+          '${_labor[i]['whoId'] ?? _labor[i]['who'] ?? 'necunoscut-$i'}';
+      groups.putIfAbsent(whoId, () => []).add(i);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildOwnResourcesSummaryChips(),
+        const SizedBox(height: 10),
+        ...groups.entries.map((entry) {
+          final indices = entry.value;
+          final firstRow = _labor[indices.first];
+          final workerName = '${firstRow['who'] ?? '-'}';
+          final isTeam = _laborTypeOf(firstRow) == 'team';
+          final groupTotal = indices.fold<double>(
+              0, (sum, i) => sum + _laborTotalLineCost(_labor[i]));
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        isTeam ? Icons.groups_outlined : Icons.person_outline,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          workerName,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      ),
+                      if (!_isTechnician)
+                        _chip(
+                          'Total ${isTeam ? 'echipă' : 'lucrător'}',
+                          '${groupTotal.toStringAsFixed(2)} RON',
+                        ),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  ...indices.map((i) {
+                    final e = _labor[i];
+                    final dateLabel = '${e['date'] ?? '-'}';
+                    final hoursLabel =
+                        _asDouble(e['hours']).toStringAsFixed(2);
+                    final rateValue = _laborRateForRow(e);
+                    final rateLabel = rateValue > 0
+                        ? rateValue.toStringAsFixed(2)
+                        : '0.00 (fallback)';
+                    final costTotalLabel =
+                        _laborTotalLineCost(e).toStringAsFixed(2);
+                    final tripDaysLabel = _formatDecimal(_laborTripDays(e));
+                    final periodLabel = _laborPeriodLabel(e);
+                    final notesLabel = '${e['notes'] ?? ''}'.trim();
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        _isTechnician
+                            ? 'Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
+                            : 'Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Total: $costTotalLabel',
+                      ),
+                      subtitle: Text(
+                        notesLabel.isEmpty
+                            ? dateLabel
+                            : '$dateLabel\nObservații: $notesLabel',
+                      ),
+                      trailing: Wrap(
+                        spacing: 4,
+                        children: [
+                          IconButton(
+                            tooltip: 'Editează',
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: () => _onEditLabor(i),
+                          ),
+                          if (!_isTechnician)
+                            IconButton(
+                              tooltip: 'Șterge',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => _onDeleteLabor(i),
+                            ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
   Widget _buildPartnerResourcesSection() {
     if (_partners.isEmpty) {
       return Column(
@@ -11262,7 +11479,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Widget build(BuildContext context) {
     final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
     return DefaultTabController(
-      length: 6,
+      length: 5,
       child: Scaffold(
         appBar: AppBar(
           title: Column(
@@ -11285,7 +11502,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               Tab(icon: Icon(Icons.euro_outlined), text: 'Economic'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Documente'),
               Tab(icon: Icon(Icons.compare_arrows_outlined), text: 'Situație'),
-              Tab(icon: Icon(Icons.event_note_outlined), text: 'Pontaj'),
+              // Tab Pontaj dezactivat din UI (decizie de produs 2026-07-30);
+              // vezi comentariul de la importuri.
             ],
           ),
           actions: [
@@ -11368,10 +11586,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   _buildEconomicTab(context),
                   _buildDocumenteTab(context),
                   _buildSituatieTab(context),
-                  PontajLucrareTab(
-                    lucrareId: _jobSnapshot.id,
-                    repository: widget.repository,
-                  ),
+                  // Tab PontajLucrareTab dezactivat din UI (decizie de produs
+                  // 2026-07-30); vezi comentariul de la importuri.
                 ],
               ),
         floatingActionButton: FloatingActionButton.extended(
@@ -11741,13 +11957,32 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         children: List<Widget>.generate(_materials.length,
                             (index) {
                           final e = _materials[index];
+                          final realPriceDiff =
+                              _materialLineRealVsOfferedDiff(e);
                           return ListTile(
                             contentPadding: EdgeInsets.zero,
                             title: Text((e['name'] ?? '-').toString()),
-                            subtitle: Text(
-                              _isTechnician
-                                  ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
-                                  : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _isTechnician
+                                      ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
+                                      : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_materialLineOfferedTotal(e).toStringAsFixed(2)}',
+                                ),
+                                if (!_isTechnician && realPriceDiff != 0)
+                                  Text(
+                                    'Preț real: ${_asDouble(e['realPrice']).toStringAsFixed(2)} • '
+                                    '${realPriceDiff > 0 ? 'Depășire' : 'Economie'}: ${realPriceDiff.abs().toStringAsFixed(2)}',
+                                    style: TextStyle(
+                                      color: realPriceDiff > 0
+                                          ? Colors.red.shade700
+                                          : Colors.green.shade700,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                              ],
                             ),
                             trailing: Wrap(
                               spacing: 4,
@@ -11777,67 +12012,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               ),
               _section(
                 context,
-                'Manoperă / ore',
-                _labor.isEmpty
-                    ? const Text('Nu există date.')
-                    : Column(
-                        children:
-                            List<Widget>.generate(_labor.length, (index) {
-                          final e = _labor[index];
-                          final dateLabel = '${e['date'] ?? '-'}';
-                          final hoursLabel =
-                              _asDouble(e['hours']).toStringAsFixed(2);
-                          final rateValue = _laborRateForRow(e);
-                          final rateLabel = rateValue > 0
-                              ? rateValue.toStringAsFixed(2)
-                              : '0.00 (fallback)';
-                          final costOreLabel =
-                              _laborOreCost(e).toStringAsFixed(2);
-                          final costDiurnaLabel =
-                              _laborPerDiemCost(e).toStringAsFixed(2);
-                          final costCazareLabel =
-                              _laborLodgingCost(e).toStringAsFixed(2);
-                          final costTotalLabel =
-                              _laborTotalLineCost(e).toStringAsFixed(2);
-                          final notesLabel = '${e['notes'] ?? ''}'.trim();
-                          final tripDaysLabel =
-                              _formatDecimal(_laborTripDays(e));
-                          final periodLabel = _laborPeriodLabel(e);
-                          return ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text((e['who'] ?? '-').toString()),
-                            subtitle: Text(
-                              _isTechnician
-                                  ? (notesLabel.isEmpty
-                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
-                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
-                                  : (notesLabel.isEmpty
-                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
-                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
-                            ),
-                            trailing: Wrap(
-                              spacing: 4,
-                              children: [
-                                IconButton(
-                                  tooltip: 'Editează',
-                                  icon: const Icon(Icons.edit_outlined),
-                                  onPressed: () => _onEditLabor(index),
-                                ),
-                                if (!_isTechnician)
-                                  IconButton(
-                                    tooltip: 'Șterge',
-                                    icon: const Icon(Icons.delete_outline),
-                                    onPressed: () => _onDeleteLabor(index),
-                                  ),
-                              ],
-                            ),
-                          );
-                        }),
-                      ),
+                'Resurse proprii',
+                _buildOwnResourcesSection(),
                 action: TextButton.icon(
                   onPressed: _onAddLabor,
                   icon: const Icon(Icons.add),
-                  label: const Text('Adaugă ore'),
+                  label: const Text('Adaugă lucrător propriu'),
                 ),
               ),
             ],
@@ -12316,6 +12496,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                           _chip('Cost real total',
                               _realTotalCost.toStringAsFixed(2)),
                           _chip(
+                            'Cost total lucrare (cu parteneri)',
+                            _costTotalUnificat.toStringAsFixed(2),
+                          ),
+                          _chip(
                             'Diferenta estimat vs real',
                             _estimatedVsRealDifference
                                 .toStringAsFixed(2),
@@ -12474,11 +12658,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 ],
               ),
             ),
-            PontajEconomicSection(
-              lucrareId: _jobSnapshot.id,
-              areManoperaVeche: _labor.isNotEmpty ||
-                  _partnerWorkers.any((w) => w.total > 0),
-            ),
+            // PontajEconomicSection dezactivat din UI (decizie de produs
+            // 2026-07-30); vezi comentariul de la importuri.
             if (!_isTechnician)
               _section(
                 context,
@@ -12894,6 +13075,7 @@ const Set<String> _collapsibleSectionTitles = <String>{
   'Materiale furnizate de beneficiar',
   'Manopera / ore',
   'Manoperă / ore',
+  'Resurse proprii',
   'Resurse partener',
   'Autoturisme proprii',
   'Documente asociate',
