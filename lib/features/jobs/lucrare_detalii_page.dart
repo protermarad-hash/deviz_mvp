@@ -67,6 +67,7 @@ import 'lucrare_detalii_models.dart';
 import 'lucrare_detalii_widgets.dart';
 import 'lucrare_format_utils.dart';
 import 'lucrare_import_parser.dart';
+import 'dialogs/multi_day_picker_dialog.dart';
 import 'dialogs/partner_dialogs.dart';
 import 'dialogs/beneficiary_dialogs.dart';
 import 'dialogs/own_vehicle_dialog.dart';
@@ -4074,6 +4075,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     String? selectedWhoId;
     DateTime periodStart = DateTime.now();
     DateTime periodEnd = DateTime.now();
+    // Mod "Zile individuale" (Varianta A, iul 2026): permite bifarea unor
+    // zile neconsecutive (ex: luni + miercuri + vineri) în loc de un
+    // interval continuu — generează câte o intrare _labor per zi la salvare.
+    bool multiDayMode = false;
+    Set<DateTime> selectedDays = {};
     final hoursController = TextEditingController(text: '8');
     final hoursPerDayController = TextEditingController(text: '8');
     final tripDaysController = TextEditingController(text: '0');
@@ -4094,8 +4100,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       if (periodEnd.isBefore(periodStart)) {
         periodEnd = periodStart;
       }
-      final tripDays =
-          _laborPeriodDays(periodStart: periodStart, periodEnd: periodEnd);
+      final tripDays = multiDayMode
+          ? selectedDays.length.toDouble()
+          : _laborPeriodDays(periodStart: periodStart, periodEnd: periodEnd);
       final hoursPerDay = _sanitizeLaborHoursPerDay(hoursPerDayController.text);
       hoursPerDayController.text = _formatDecimal(hoursPerDay);
       hoursController.text = _formatDecimal(tripDays * hoursPerDay);
@@ -4108,7 +4115,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
     syncComputedValues();
 
-    final created = await showDialog<Map<String, dynamic>>(
+    final createdList = await showDialog<List<Map<String, dynamic>>>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
@@ -4179,56 +4186,120 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     }),
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: periodStart,
-                              firstDate: DateTime(DateTime.now().year - 5),
-                              lastDate: DateTime(DateTime.now().year + 5),
-                            );
-                            if (picked == null) return;
-                            setDialogState(() {
-                              periodStart = picked;
-                              syncComputedValues();
-                            });
-                          },
-                          icon: const Icon(Icons.calendar_today),
-                          label: Text('Start: ${_formatDate(periodStart)}'),
-                        ),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('Interval'),
+                        icon: Icon(Icons.date_range_outlined),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: periodEnd.isBefore(periodStart)
-                                  ? periodStart
-                                  : periodEnd,
-                              // FIX contradicție (iul 2026): firstDate legat de
-                              // periodStart (default = azi) bloca vizual zilele
-                              // din trecut dacă Sfârșit era ales înainte de
-                              // Start. syncComputedValues() clamps oricum
-                              // periodEnd la periodStart dacă rezultă invers.
-                              firstDate: DateTime(DateTime.now().year - 5),
-                              lastDate: DateTime(DateTime.now().year + 5),
-                            );
-                            if (picked == null) return;
-                            setDialogState(() {
-                              periodEnd = picked;
-                              syncComputedValues();
-                            });
-                          },
-                          icon: const Icon(Icons.event_available_outlined),
-                          label: Text('Sfârșit: ${_formatDate(periodEnd)}'),
-                        ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('Zile individuale'),
+                        icon: Icon(Icons.event_repeat_outlined),
                       ),
                     ],
+                    selected: {multiDayMode},
+                    onSelectionChanged: (value) => setDialogState(() {
+                      multiDayMode = value.first;
+                      syncComputedValues();
+                    }),
                   ),
+                  const SizedBox(height: 8),
+                  if (!multiDayMode)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: periodStart,
+                                firstDate: DateTime(DateTime.now().year - 5),
+                                lastDate: DateTime(DateTime.now().year + 5),
+                              );
+                              if (picked == null) return;
+                              setDialogState(() {
+                                periodStart = picked;
+                                syncComputedValues();
+                              });
+                            },
+                            icon: const Icon(Icons.calendar_today),
+                            label: Text('Start: ${_formatDate(periodStart)}'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: periodEnd.isBefore(periodStart)
+                                    ? periodStart
+                                    : periodEnd,
+                                // FIX contradicție (iul 2026): firstDate legat de
+                                // periodStart (default = azi) bloca vizual zilele
+                                // din trecut dacă Sfârșit era ales înainte de
+                                // Start. syncComputedValues() clamps oricum
+                                // periodEnd la periodStart dacă rezultă invers.
+                                firstDate: DateTime(DateTime.now().year - 5),
+                                lastDate: DateTime(DateTime.now().year + 5),
+                              );
+                              if (picked == null) return;
+                              setDialogState(() {
+                                periodEnd = picked;
+                                syncComputedValues();
+                              });
+                            },
+                            icon: const Icon(Icons.event_available_outlined),
+                            label: Text('Sfârșit: ${_formatDate(periodEnd)}'),
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final picked = await showMultiDayPickerDialog(
+                              context,
+                              initialSelection: selectedDays,
+                              firstDate: DateTime(DateTime.now().year - 5),
+                              lastDate: DateTime(DateTime.now().year + 5),
+                            );
+                            if (picked == null) return;
+                            setDialogState(() {
+                              selectedDays = picked;
+                              syncComputedValues();
+                            });
+                          },
+                          icon: const Icon(Icons.event_repeat_outlined),
+                          label: Text(selectedDays.isEmpty
+                              ? 'Selectează zile'
+                              : '${selectedDays.length} zile selectate'),
+                        ),
+                        if (selectedDays.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: (selectedDays.toList()..sort())
+                                .map((d) => Chip(
+                                      label: Text(_formatDate(d)),
+                                      visualDensity: VisualDensity.compact,
+                                      onDeleted: () => setDialogState(() {
+                                        selectedDays = {...selectedDays}
+                                          ..remove(d);
+                                        syncComputedValues();
+                                      }),
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                      ],
+                    ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -4373,6 +4444,44 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     .where((o) => o['id'] == normalizedSelection)
                     .toList();
                 if (selected.isEmpty) return;
+                final autoRate = _laborRateForWhoId(
+                  normalizedSelection,
+                  type: normalizedSelection.startsWith('team:')
+                      ? 'team'
+                      : 'person',
+                  whoLabel: '${selected.first['label'] ?? '-'}',
+                );
+                final manualRate = double.tryParse(
+                        manualRateController.text.replaceAll(',', '.')) ??
+                    0;
+                final rate = manualRate > 0 ? manualRate : autoRate;
+
+                if (multiDayMode) {
+                  if (selectedDays.isEmpty) {
+                    _snack('Selectează cel puțin o zi.');
+                    return;
+                  }
+                  final hoursPerDay =
+                      _sanitizeLaborHoursPerDay(hoursPerDayController.text);
+                  final entries = _laborCalc.buildMultiDayLaborEntries(
+                    selectedDays: selectedDays,
+                    whoId: normalizedSelection,
+                    whoLabel: '${selected.first['label'] ?? '-'}',
+                    type: normalizedSelection.startsWith('team:')
+                        ? 'team'
+                        : 'person',
+                    hoursPerDay: hoursPerDay,
+                    hourlyRate: rate,
+                    includeDiurna: includeDiurna,
+                    diurnaPerDay: selectedPerDiemPerDay,
+                    includeCazare: includeCazare,
+                    cazarePerNoapte: selectedLodgingPerDay,
+                    notes: notesController.text.trim(),
+                  );
+                  Navigator.of(context).pop(entries);
+                  return;
+                }
+
                 if (periodEnd.isBefore(periodStart)) {
                   periodEnd = periodStart;
                 }
@@ -4386,49 +4495,40 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final valoareCazarePeNoapte = selectedLodgingPerDay;
                 final zileDiurna = includeDiurna ? tripDays : 0.0;
                 final noptiCazare = includeCazare ? tripDays : 0.0;
-                final autoRate = _laborRateForWhoId(
-                  normalizedSelection,
-                  type: normalizedSelection.startsWith('team:')
-                      ? 'team'
-                      : 'person',
-                  whoLabel: '${selected.first['label'] ?? '-'}',
-                );
-                final manualRate = double.tryParse(
-                        manualRateController.text.replaceAll(',', '.')) ??
-                    0;
-                final rate = manualRate > 0 ? manualRate : autoRate;
                 final costOre = hours * rate;
                 final costDiurna = zileDiurna * valoareDiurnaPeZi;
                 final costCazare = noptiCazare * valoareCazarePeNoapte;
-                Navigator.of(context).pop({
-                  'id': 'job-labor-${DateTime.now().millisecondsSinceEpoch}',
-                  'jobId': _jobSnapshot.id,
-                  'whoId': normalizedSelection,
-                  'type': normalizedSelection.startsWith('team:')
-                      ? 'team'
-                      : 'person',
-                  'whoLabel': '${selected.first['label'] ?? '-'}',
-                  'who': '${selected.first['label'] ?? '-'}',
-                  'date': _formatDate(periodStart),
-                  'periodStartDate': _encodeLaborPeriodDate(periodStart),
-                  'periodEndDate': _encodeLaborPeriodDate(periodEnd),
-                  'hoursPerDay':
-                      _sanitizeLaborHoursPerDay(hoursPerDayController.text),
-                  'hours': hours,
-                  'hourlyRate': rate,
-                  'tripDays': tripDays,
-                  'includeDiurna': includeDiurna,
-                  'includeCazare': includeCazare,
-                  'zileDiurna': zileDiurna,
-                  'valoareDiurnaPeZi': valoareDiurnaPeZi,
-                  'noptiCazare': noptiCazare,
-                  'valoareCazarePeNoapte': valoareCazarePeNoapte,
-                  'costOre': costOre,
-                  'costDiurna': costDiurna,
-                  'costCazare': costCazare,
-                  'costTotalLinie': costOre + costDiurna + costCazare,
-                  'notes': notesController.text.trim(),
-                });
+                Navigator.of(context).pop([
+                  {
+                    'id': 'job-labor-${DateTime.now().millisecondsSinceEpoch}',
+                    'jobId': _jobSnapshot.id,
+                    'whoId': normalizedSelection,
+                    'type': normalizedSelection.startsWith('team:')
+                        ? 'team'
+                        : 'person',
+                    'whoLabel': '${selected.first['label'] ?? '-'}',
+                    'who': '${selected.first['label'] ?? '-'}',
+                    'date': _formatDate(periodStart),
+                    'periodStartDate': _encodeLaborPeriodDate(periodStart),
+                    'periodEndDate': _encodeLaborPeriodDate(periodEnd),
+                    'hoursPerDay':
+                        _sanitizeLaborHoursPerDay(hoursPerDayController.text),
+                    'hours': hours,
+                    'hourlyRate': rate,
+                    'tripDays': tripDays,
+                    'includeDiurna': includeDiurna,
+                    'includeCazare': includeCazare,
+                    'zileDiurna': zileDiurna,
+                    'valoareDiurnaPeZi': valoareDiurnaPeZi,
+                    'noptiCazare': noptiCazare,
+                    'valoareCazarePeNoapte': valoareCazarePeNoapte,
+                    'costOre': costOre,
+                    'costDiurna': costDiurna,
+                    'costCazare': costCazare,
+                    'costTotalLinie': costOre + costDiurna + costCazare,
+                    'notes': notesController.text.trim(),
+                  }
+                ]);
               },
               child: const Text('Adaugă'),
             ),
@@ -4446,13 +4546,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     valoareCazareController.dispose();
     notesController.dispose();
     manualRateController.dispose();
-    if (created == null) return;
+    if (createdList == null || createdList.isEmpty) return;
 
-    final next = <Map<String, dynamic>>[..._labor, created];
+    final next = <Map<String, dynamic>>[..._labor, ...createdList];
     await _saveLaborRows(next);
+    final who = '${createdList.first['who'] ?? '-'}';
     await _appendJournal(
       action: 'labor_added',
-      message: 'Manopera adaugata: ${created['who'] ?? '-'}',
+      message: createdList.length == 1
+          ? 'Manopera adaugata: $who'
+          : 'Manopera adaugata: $who (${createdList.length} zile individuale)',
     );
   }
 

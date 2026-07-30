@@ -65,6 +65,62 @@ class LucrareLaborCalculator {
     return end.difference(start).inDays.toDouble() + 1;
   }
 
+  /// Generează câte o intrare `_labor` distinctă pentru fiecare zi din
+  /// `selectedDays` (posibil neconsecutive — ex: luni + miercuri + vineri),
+  /// spre deosebire de `laborPeriodDays` care presupune un interval continuu.
+  /// Fiecare zi primește aceleași ore/zi, tarif, diurnă și cazare — doar
+  /// data diferă. Id-uri unice garantate prin index + dată (nu doar
+  /// timestamp de creare, care ar coincide pentru toate intrările generate
+  /// în aceeași buclă sincronă).
+  List<Map<String, dynamic>> buildMultiDayLaborEntries({
+    required Set<DateTime> selectedDays,
+    required String whoId,
+    required String whoLabel,
+    required String type,
+    required double hoursPerDay,
+    required double hourlyRate,
+    required bool includeDiurna,
+    required double diurnaPerDay,
+    required bool includeCazare,
+    required double cazarePerNoapte,
+    String notes = '',
+  }) {
+    final sortedDays = selectedDays.map(_dateOnly).toSet().toList()
+      ..sort((a, b) => a.compareTo(b));
+    final costOre = hoursPerDay * hourlyRate;
+    final costDiurna = includeDiurna ? diurnaPerDay : 0.0;
+    final costCazare = includeCazare ? cazarePerNoapte : 0.0;
+    return List<Map<String, dynamic>>.generate(sortedDays.length, (index) {
+      final day = sortedDays[index];
+      return <String, dynamic>{
+        'id': 'job-labor-${day.millisecondsSinceEpoch}-$index',
+        'jobId': jobId,
+        'whoId': whoId,
+        'type': type,
+        'whoLabel': whoLabel,
+        'who': whoLabel,
+        'date': _formatDate(day),
+        'periodStartDate': _encodeLaborPeriodDate(day),
+        'periodEndDate': _encodeLaborPeriodDate(day),
+        'hoursPerDay': hoursPerDay,
+        'hours': hoursPerDay,
+        'hourlyRate': hourlyRate,
+        'tripDays': 1.0,
+        'includeDiurna': includeDiurna,
+        'includeCazare': includeCazare,
+        'zileDiurna': includeDiurna ? 1.0 : 0.0,
+        'valoareDiurnaPeZi': diurnaPerDay,
+        'noptiCazare': includeCazare ? 1.0 : 0.0,
+        'valoareCazarePeNoapte': cazarePerNoapte,
+        'costOre': costOre,
+        'costDiurna': costDiurna,
+        'costCazare': costCazare,
+        'costTotalLinie': costOre + costDiurna + costCazare,
+        'notes': notes,
+      };
+    });
+  }
+
   double sanitizeLaborHoursPerDay(dynamic raw) {
     final value = _asDouble(raw);
     return value > 0 ? value : 8.0;
