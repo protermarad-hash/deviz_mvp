@@ -36,6 +36,7 @@ import '../registratura/registry_models.dart';
 import '../registratura/registry_store.dart';
 import '../master/master_local_store.dart';
 import '../partners/partner_models.dart';
+import '../pontaj_lucrari/pontaj_lucrare_tab.dart';
 import 'firebase_lucrari_repository.dart';
 import 'firebase_job_site_documents_repository.dart';
 import 'job_models.dart';
@@ -11260,7 +11261,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Widget build(BuildContext context) {
     final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: Scaffold(
         appBar: AppBar(
           title: Column(
@@ -11283,6 +11284,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               Tab(icon: Icon(Icons.euro_outlined), text: 'Economic'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Documente'),
               Tab(icon: Icon(Icons.compare_arrows_outlined), text: 'Situație'),
+              Tab(icon: Icon(Icons.event_note_outlined), text: 'Pontaj'),
             ],
           ),
           actions: [
@@ -11365,6 +11367,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   _buildEconomicTab(context),
                   _buildDocumenteTab(context),
                   _buildSituatieTab(context),
+                  PontajLucrareTab(
+                    lucrareId: _jobSnapshot.id,
+                    repository: widget.repository,
+                  ),
                 ],
               ),
         floatingActionButton: FloatingActionButton.extended(
