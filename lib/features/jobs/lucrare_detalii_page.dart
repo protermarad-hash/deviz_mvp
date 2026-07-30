@@ -11939,6 +11939,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               ),
             ),
             // ── Tracking execuție: nou (ofertă sursă) vs vechi (manual) ─
+            // "Materiale asociate" rămâne condiționată de absența liniilor
+            // din ofertă — _buildLiniiTracking randează deja liniile de
+            // materiale/transport/utilaj importate din ofertă (categorie
+            // != 'manopera'); afișarea simultană ar produce două liste de
+            // materiale diferite pe același ecran.
             if (_jobSnapshot.liniiPlanificate.isNotEmpty)
               _buildLiniiTracking(context)
             else if (_jobSnapshot.sourceOfferId.isNotEmpty ||
@@ -11947,7 +11952,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               // Lucrare convertită din ofertă (link forward sau detectat invers),
               // dar liniile nu au fost importate încă
               _buildRepopulareCard(context)
-            else ...[
+            else
               _section(
                 context,
                 'Materiale asociate',
@@ -12010,17 +12015,23 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   label: const Text('Adaugă material'),
                 ),
               ),
-              _section(
-                context,
-                'Resurse proprii',
-                _buildOwnResourcesSection(),
-                action: TextButton.icon(
-                  onPressed: _onAddLabor,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Adaugă lucrător propriu'),
-                ),
+            // "Resurse proprii" (manoperă proprie manuală introdusă prin
+            // _labor) e independentă de sistemul de tracking per-linie din
+            // ofertă — liniiPlanificate nu are granularitate lucrător/oră/
+            // tarif, deci nu există risc de dublare. Randată necondiționat,
+            // la fel ca "Resurse partener" mai jos — o lucrare convertită
+            // din ofertă tot poate avea manoperă proprie introdusă manual
+            // (decizie de produs 2026-07-30, corectare regresie).
+            _section(
+              context,
+              'Resurse proprii',
+              _buildOwnResourcesSection(),
+              action: TextButton.icon(
+                onPressed: _onAddLabor,
+                icon: const Icon(Icons.add),
+                label: const Text('Adaugă lucrător propriu'),
               ),
-            ],
+            ),
             _section(
               context,
               'Echipamente furnizate de beneficiar',
