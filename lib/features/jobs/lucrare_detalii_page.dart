@@ -4086,6 +4086,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final noptiCazareController = TextEditingController(text: '0');
     final valoareCazareController = TextEditingController(text: '0');
     final notesController = TextEditingController();
+    // FIX 2 (iul 2026) — tarif manual, simetric cu 'Tarif negociat / oră' din
+    // showPartnerWorkerDialog. Gol/0 = fallback automat _laborRateForWhoId.
+    final manualRateController = TextEditingController(text: '0');
 
     void syncComputedValues() {
       if (periodEnd.isBefore(periodStart)) {
@@ -4249,6 +4252,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  TextField(
+                    controller: manualRateController,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Tarif orar (opțional)',
+                      helperText:
+                          'Gol sau 0 = calcul automat din tariful angajatului/echipei',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
@@ -4367,13 +4381,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final valoareCazarePeNoapte = selectedLodgingPerDay;
                 final zileDiurna = includeDiurna ? tripDays : 0.0;
                 final noptiCazare = includeCazare ? tripDays : 0.0;
-                final rate = _laborRateForWhoId(
+                final autoRate = _laborRateForWhoId(
                   normalizedSelection,
                   type: normalizedSelection.startsWith('team:')
                       ? 'team'
                       : 'person',
                   whoLabel: '${selected.first['label'] ?? '-'}',
                 );
+                final manualRate = double.tryParse(
+                        manualRateController.text.replaceAll(',', '.')) ??
+                    0;
+                final rate = manualRate > 0 ? manualRate : autoRate;
                 final costOre = hours * rate;
                 final costDiurna = zileDiurna * valoareDiurnaPeZi;
                 final costCazare = noptiCazare * valoareCazarePeNoapte;
@@ -4422,6 +4440,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     noptiCazareController.dispose();
     valoareCazareController.dispose();
     notesController.dispose();
+    manualRateController.dispose();
     if (created == null) return;
 
     final next = <Map<String, dynamic>>[..._labor, created];
@@ -5185,6 +5204,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     bool includeCazare = _laborIncludeLodging(row);
     final notesController =
         TextEditingController(text: '${row['notes'] ?? ''}');
+    // FIX 2 (iul 2026) — tarif manual, simetric cu 'Tarif negociat / oră' din
+    // showPartnerWorkerDialog. Precompletat cu tariful curent al liniei;
+    // gol/0 = fallback automat _laborRateForWhoId.
+    final manualRateController = TextEditingController(
+      text: _asDouble(row['hourlyRate']).toString(),
+    );
 
     void syncComputedValues() {
       if (periodEnd.isBefore(periodStart)) {
@@ -5340,6 +5365,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  TextField(
+                    controller: manualRateController,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Tarif orar (opțional)',
+                      helperText:
+                          'Gol sau 0 = calcul automat din tariful angajatului/echipei',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Row(
                     children: [
                       Expanded(
@@ -5477,13 +5513,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final normalizedDaysPerDiem = includeDiurnaNow ? tripDays : 0.0;
                 final normalizedNightsLodging =
                     includeCazareNow ? tripDays : 0.0;
-                final rate = _laborRateForWhoId(
+                final autoRate = _laborRateForWhoId(
                   normalizedSelection,
                   type: normalizedSelection.startsWith('team:')
                       ? 'team'
                       : 'person',
                   whoLabel: '${selected.first['label'] ?? '-'}',
                 );
+                final manualRate = double.tryParse(
+                        manualRateController.text.replaceAll(',', '.')) ??
+                    0;
+                final rate = manualRate > 0 ? manualRate : autoRate;
                 final costOre = hours * rate;
                 final costDiurna = normalizedDaysPerDiem * valoareDiurnaPeZi;
                 final costCazare =
@@ -5534,6 +5574,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     noptiCazareController.dispose();
     valoareCazareController.dispose();
     notesController.dispose();
+    manualRateController.dispose();
     if (updated == null) return;
 
     final next = [..._labor];
@@ -11478,7 +11519,19 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   @override
   Widget build(BuildContext context) {
     final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
-    return DefaultTabController(
+    // FIX cache stale (iul 2026): orice ieșire din pagină (back button, gest
+    // sistem, buton back automat din AppBar) trebuie să întoarcă la JobsPage
+    // ultimul _jobSnapshot (labor/parteneri/vehicule/documente actualizate),
+    // nu doar la apăsarea explicită de Editează. Butonul Editează face pop
+    // direct cu 'edit' — acel apel ocolește PopScope (Navigator.pop explicit
+    // nu trece prin onPopInvokedWithResult), deci rămâne neschimbat.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        Navigator.of(context).pop(_jobSnapshot);
+      },
+      child: DefaultTabController(
       length: 5,
       child: Scaffold(
         appBar: AppBar(
@@ -11596,6 +11649,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           label: const Text('Task lucru'),
           tooltip: 'Adaugă etapă / task lucrat',
         ),
+      ),
       ),
     );
   }
