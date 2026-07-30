@@ -18,6 +18,7 @@ class MasterEmployee {
     this.dailyAllowance = 0.0,
     this.defaultLodgingCost = 0.0,
     this.requiresLodgingByDefault = false,
+    this.tarifZilnic,
   });
 
   final String id;
@@ -32,6 +33,10 @@ class MasterEmployee {
   final double dailyAllowance;
   final double defaultLodgingCost;
   final bool requiresLodgingByDefault;
+
+  /// Tarif zilnic pentru pontajul pe lucrări (iul 2026).
+  /// Nullable — angajații existenți fără câmp rămân valizi (null = necompletat).
+  final double? tarifZilnic;
 
   // English aliases used by newer modules.
   double get monthlyCost => costLunar;
@@ -66,6 +71,7 @@ class MasterEmployee {
         'dailyAllowance': dailyAllowance,
         'defaultLodgingCost': defaultLodgingCost,
         'requiresLodgingByDefault': requiresLodgingByDefault,
+        if (tarifZilnic != null) 'tarifZilnic': tarifZilnic,
       };
 
   factory MasterEmployee.fromMap(Map<String, dynamic> map) {
@@ -163,6 +169,13 @@ class MasterEmployee {
         map['requiresLodgingByDefault'] ?? map['requires_lodging_by_default'],
         fallback: false,
       ),
+      // Backward-compat: documente vechi fără câmp → null (necompletat).
+      tarifZilnic: (() {
+        final raw = map['tarifZilnic'] ?? map['tarif_zilnic'];
+        if (raw == null) return null;
+        final value = parseDouble(raw);
+        return value > 0 ? value : null;
+      })(),
     );
   }
 }
