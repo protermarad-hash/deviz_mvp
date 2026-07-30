@@ -10687,6 +10687,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     _saveLiniiPlanificate(linii);
   }
 
+  void _updateLiniePretReal(String lineId, double value) {
+    final linii = List<JobLine>.from(_jobSnapshot.liniiPlanificate);
+    final idx = linii.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    linii[idx] = linii[idx].copyWith(pretUnitarReal: value);
+    _saveLiniiPlanificate(linii);
+  }
+
   Future<void> _applyProgresGlobal(double percent) async {
     final linii = _jobSnapshot.liniiPlanificate.map((l) {
       final qty = double.parse(
@@ -10876,6 +10884,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   ? linie.cantitateReala.toStringAsFixed(2)
                   : '',
             );
+            final isMaterial = linie.categorie == 'material';
+            final pretRealCtrl = TextEditingController(
+              text: linie.pretUnitarReal > 0
+                  ? linie.pretUnitarReal.toStringAsFixed(2)
+                  : '',
+            );
             final categorieIcon = switch (linie.categorie) {
               'manopera' => Icons.engineering_outlined,
               'transport' => Icons.local_shipping_outlined,
@@ -10979,6 +10993,74 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         ),
                       ],
                     ),
+                    if (isMaterial && !_isTechnician) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (linie.pretUnitarOferta > 0)
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Preț ofertat: ${linie.pretUnitarOferta.toStringAsFixed(2)} RON/${linie.um}',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant),
+                                  ),
+                                  if (linie.cantitateReala > 0 &&
+                                      linie.pretUnitarReal > 0)
+                                    Text(
+                                      '${linie.diferenta >= 0 ? 'Depășire' : 'Economie'}: '
+                                      '${linie.diferenta.abs().toStringAsFixed(2)} RON',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: linie.diferenta > 0
+                                            ? Colors.red.shade700
+                                            : Colors.green.shade700,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          SizedBox(
+                            width: 160,
+                            child: TextField(
+                              controller: pretRealCtrl,
+                              keyboardType: const TextInputType
+                                  .numberWithOptions(decimal: true),
+                              textCapitalization: TextCapitalization.none,
+                              decoration: const InputDecoration(
+                                labelText: 'Preț achiziție real (RON/UM)',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                              onSubmitted: (v) {
+                                final val = double.tryParse(
+                                    v.trim().replaceAll(',', '.'));
+                                if (val != null && val >= 0) {
+                                  _updateLiniePretReal(linie.id, val);
+                                }
+                              },
+                              onEditingComplete: () {
+                                final val = double.tryParse(pretRealCtrl.text
+                                    .trim()
+                                    .replaceAll(',', '.'));
+                                if (val != null && val >= 0) {
+                                  _updateLiniePretReal(linie.id, val);
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     if (linie.observatii.trim().isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
