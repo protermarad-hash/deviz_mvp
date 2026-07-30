@@ -4209,7 +4209,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                               initialDate: periodEnd.isBefore(periodStart)
                                   ? periodStart
                                   : periodEnd,
-                              firstDate: periodStart,
+                              // FIX contradicție (iul 2026): firstDate legat de
+                              // periodStart (default = azi) bloca vizual zilele
+                              // din trecut dacă Sfârșit era ales înainte de
+                              // Start. syncComputedValues() clamps oricum
+                              // periodEnd la periodStart dacă rezultă invers.
+                              firstDate: DateTime(DateTime.now().year - 5),
                               lastDate: DateTime(DateTime.now().year + 5),
                             );
                             if (picked == null) return;
@@ -5322,7 +5327,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                               initialDate: periodEnd.isBefore(periodStart)
                                   ? periodStart
                                   : periodEnd,
-                              firstDate: periodStart,
+                              // FIX contradicție (iul 2026): firstDate legat de
+                              // periodStart (default = azi) bloca vizual zilele
+                              // din trecut dacă Sfârșit era ales înainte de
+                              // Start. syncComputedValues() clamps oricum
+                              // periodEnd la periodStart dacă rezultă invers.
+                              firstDate: DateTime(DateTime.now().year - 5),
                               lastDate: DateTime(DateTime.now().year + 5),
                             );
                             if (picked == null) return;
