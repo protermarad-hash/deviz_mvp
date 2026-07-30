@@ -36,6 +36,7 @@ import '../registratura/registry_models.dart';
 import '../registratura/registry_store.dart';
 import '../master/master_local_store.dart';
 import '../partners/partner_models.dart';
+import '../pontaj_lucrari/pontaj_economic_section.dart';
 import '../pontaj_lucrari/pontaj_lucrare_tab.dart';
 import 'firebase_lucrari_repository.dart';
 import 'firebase_job_site_documents_repository.dart';
@@ -12472,6 +12473,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   ),
                 ],
               ),
+            ),
+            PontajEconomicSection(
+              lucrareId: _jobSnapshot.id,
+              areManoperaVeche: _labor.isNotEmpty ||
+                  _partnerWorkers.any((w) => w.total > 0),
             ),
             if (!_isTechnician)
               _section(
