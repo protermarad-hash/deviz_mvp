@@ -412,6 +412,14 @@ class OfflineSyncRuntime {
     await _bridge.queuePartnerVehicleDelete(vehicleId);
   }
 
+  Future<void> queuePontajZiLucrareUpsert(Map<String, dynamic> pontaj) async {
+    await _bridge.queuePontajZiLucrareUpsert(pontaj);
+  }
+
+  Future<void> queuePontajZiLucrareDelete(String pontajId) async {
+    await _bridge.queuePontajZiLucrareDelete(pontajId);
+  }
+
   /// Curăță imediat coada: elimină itemele deja sincronizate și cele moarte.
   /// Se apelează la startup pentru a elibera rapid JSON-ul acumulat.
   Future<void> cleanupQueue() async {
@@ -961,6 +969,20 @@ class OfflineSyncRuntime {
               } else {
                 await FirebaseFirestore.instance
                     .collection(FirebaseCollections.partnerVehicles)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.pontajZileLucrari:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.pontajZileLucrari)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.pontajZileLucrari)
                     .doc(item.entityId)
                     .set(item.payload, SetOptions(merge: true));
               }
