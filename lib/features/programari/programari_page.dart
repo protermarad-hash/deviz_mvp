@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/design_system/app_tokens.dart';
 import '../../core/design_system/widgets/app_card.dart';
+import '../../core/design_system/widgets/app_status_chip.dart';
 import '../../core/document_file_service.dart';
 import '../../core/romanian_holidays.dart';
 import '../../core/pdf_actions_helper.dart';
@@ -61,6 +62,7 @@ import 'appointment_status_utils.dart';
 import 'programari_models.dart';
 import 'programari_utils.dart';
 import 'programari_calendar_placement.dart';
+import 'programari_echipe_grouping.dart';
 import 'programari_slots.dart';
 import 'servicii/serviciu_prestat_models.dart';
 import 'servicii/firebase_serviciu_prestat_repository.dart';
@@ -90,6 +92,7 @@ import '../../core/services/gps_checkin_service.dart';
 import '../stoc/stoc_repository.dart';
 
 part 'widgets/programari_calendar_view.dart';
+part 'widgets/programari_calendar_view_echipe.dart';
 part 'dialogs/appointment_form_dialog.dart';
 part 'panels/appointment_details_panel.dart';
 
@@ -102,6 +105,7 @@ enum _EmployeeScopeMode {
 enum _ProgramariViewMode {
   list,
   calendar,
+  echipe,
 }
 
 enum _AppointmentQuickDocumentAction {
@@ -882,9 +886,10 @@ class _ProgramariPageState extends State<ProgramariPage> {
     if (!mounted) return;
     _setStateLogged('load preferences', () {
       if (rawView.isNotEmpty) {
-        _viewMode = rawView == _ProgramariViewMode.list.name
-            ? _ProgramariViewMode.list
-            : _ProgramariViewMode.calendar;
+        _viewMode = _ProgramariViewMode.values.firstWhere(
+          (mode) => mode.name == rawView,
+          orElse: () => _ProgramariViewMode.calendar,
+        );
       }
       _plannerBaseStartHour = startHour.clamp(0, 23);
       _plannerBaseEndHour = endHour.clamp(startHour.clamp(0, 23) + 1, 24);
@@ -4588,6 +4593,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
                     label: Text('Calendar'),
                     icon: Icon(Icons.calendar_view_day_outlined),
                   ),
+                  ButtonSegment<_ProgramariViewMode>(
+                    value: _ProgramariViewMode.echipe,
+                    label: Text('Pe echipe'),
+                    icon: Icon(Icons.groups_outlined),
+                  ),
                 ],
                 selected: <_ProgramariViewMode>{_viewMode},
                 onSelectionChanged: (selection) {
@@ -6877,9 +6887,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
 
     final filteredItems = _filteredItems;
-    final items = _viewMode == _ProgramariViewMode.calendar
-        ? filteredItems
-        : _listItemsForDisplay(filteredItems);
+    final items = _viewMode == _ProgramariViewMode.list
+        ? _listItemsForDisplay(filteredItems)
+        : filteredItems;
     final screenWidth = MediaQuery.sizeOf(context).width;
     final showInlineSidePanel = screenWidth >= 1280;
     final sideDrawerWidth = screenWidth >= 900 ? 360.0 : screenWidth * 0.92;
@@ -7000,7 +7010,9 @@ class _ProgramariPageState extends State<ProgramariPage> {
             Expanded(
               child: _viewMode == _ProgramariViewMode.calendar
                   ? _buildCalendarView(items)
-                  : items.isEmpty
+                  : _viewMode == _ProgramariViewMode.echipe
+                      ? _buildCalendarViewEchipe(items)
+                      : items.isEmpty
                       ? Center(
                           child: Padding(
                             padding: const EdgeInsets.all(24),
