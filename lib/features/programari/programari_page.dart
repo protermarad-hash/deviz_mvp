@@ -10,6 +10,8 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/design_system/app_tokens.dart';
+import '../../core/design_system/widgets/app_card.dart';
 import '../../core/document_file_service.dart';
 import '../../core/romanian_holidays.dart';
 import '../../core/pdf_actions_helper.dart';

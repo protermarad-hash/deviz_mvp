@@ -81,7 +81,7 @@ extension _ProgramariAppointmentDetailsPanelX on _ProgramariPageState {
                       ),
                     );
                   }),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpacing.md),
                   _formSection(
                     dialogContext,
                     title: 'Contact si locatie',
@@ -107,7 +107,7 @@ extension _ProgramariAppointmentDetailsPanelX on _ProgramariPageState {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: AppSpacing.xs),
                       _detailLine('Beneficiar real', clientLabel),
                       if (!_isEmployeeRole &&
                           (item.contractingClientId.trim().isNotEmpty ||

@@ -536,7 +536,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: AppSpacing.sm),
                       _formSection(
                         context,
                         title: 'Programare',
@@ -1000,7 +1000,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                       ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
                               ),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: AppSpacing.sm),
                               Wrap(
                                 spacing: 8,
                                 runSpacing: 8,
@@ -1031,7 +1031,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                     ),
                                 ],
                               ),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: AppSpacing.sm),
                               Builder(builder: (context) {
                                 // Derive the preview color the same way
                                 // _appointmentAccentColor does at runtime.
@@ -1120,7 +1120,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                           ],
                         ],
                       ),
-                                  const SizedBox(height: 16),
+                                  const SizedBox(height: AppSpacing.md),
                                 ],
                               ),
                             ),
@@ -1130,7 +1130,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: AppSpacing.sm),
                       _formSection(
                         context,
                         title: 'Alocare',
@@ -1228,7 +1228,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: AppSpacing.sm),
                           _selectionSummaryWrap(
                             labels: _teamNamesFromIds(selectedAssignedTeamIds),
                             icon: Icons.groups_outlined,
@@ -1297,7 +1297,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: AppSpacing.sm),
                           _selectionSummaryWrap(
                             labels: _employeeNamesFromIds(
                               selectedAssignedEmployeeIds,
@@ -1360,7 +1360,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                 children: [
                                   const Icon(Icons.warning_amber_rounded,
                                       color: Colors.orange, size: 18),
-                                  const SizedBox(width: 8),
+                                  const SizedBox(width: AppSpacing.sm),
                                   Expanded(
                                     child: Text(
                                       'Suprapunere cu ${conflicting.length} programare(i) ale aceleiasi echipe:\n'
@@ -1373,7 +1373,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                               ),
                               if (suggested != null &&
                                   suggested != selectedStart) ...[
-                                const SizedBox(height: 8),
+                                const SizedBox(height: AppSpacing.sm),
                                 Wrap(
                                   spacing: 8,
                                   children: [
@@ -1401,7 +1401,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                   ],
                                 ),
                               ],
-                              const SizedBox(height: 4),
+                              const SizedBox(height: AppSpacing.xs),
                               Text(
                                 'Poti continua si programa in paralel.',
                                 style: Theme.of(context)
@@ -1513,7 +1513,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: AppSpacing.sm),
                               Expanded(
                                 flex: 2,
                                 child: DropdownButtonFormField<String>(
@@ -1617,7 +1617,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                 onChanged: (_) => setDialogState(() {}),
                               ),
                               if (previewMaterialKit != null) ...[
-                                const SizedBox(height: 8),
+                                const SizedBox(height: AppSpacing.sm),
                                 Text(
                                   previewMaterialKit.description.trim().isEmpty
                                       ? 'Reteta selectata: ${previewMaterialKit.name}'
@@ -1656,7 +1656,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                           ),
                                     ],
                                   ),
-                                  const SizedBox(height: 16),
+                                  const SizedBox(height: AppSpacing.md),
                                 ],
                               ),
                             ),
@@ -1666,7 +1666,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const SizedBox(height: 8),
+                                  const SizedBox(height: AppSpacing.sm),
                                   if (_canManageAppointmentFinancials) ...[
                             _formSection(
                               context,
@@ -1691,7 +1691,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                         onChanged: (_) => setDialogState(() {}),
                                       ),
                                     ),
-                                    const SizedBox(width: 8),
+                                    const SizedBox(width: AppSpacing.sm),
                                     Expanded(
                                       flex: 2,
                                       child: DropdownButtonFormField<String>(
@@ -1845,21 +1845,20 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                         ),
                                       );
 
-                                  return Card(
+                                  return AppCard(
                                     margin: EdgeInsets.zero,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            'Profitabilitate estimată',
+                                    padding: const EdgeInsets.all(12),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Profitabilitate estimată',
                                             style: Theme.of(context)
                                                 .textTheme
                                                 .titleSmall,
                                           ),
-                                          const SizedBox(height: 8),
+                                          const SizedBox(height: AppSpacing.sm),
                                           profRow(
                                             'Cost materiale:',
                                             '${costMat.toStringAsFixed(2)} RON',
@@ -1913,7 +1912,6 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                           ),
                                         ],
                                       ),
-                                    ),
                                   );
                                 }),
                               ],
@@ -1995,7 +1993,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                     onChanged: (_) => setDialogState(() {}),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: AppSpacing.sm),
                                 Expanded(
                                   flex: 2,
                                   child: DropdownButtonFormField<String>(
@@ -2143,7 +2141,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                     onChanged: (_) => setDialogState(() {}),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: AppSpacing.sm),
                                 Expanded(
                                   flex: 2,
                                   child: DropdownButtonFormField<String>(
@@ -2287,7 +2285,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                                               : emp.name,
                                                         ),
                                                       ),
-                                                      const SizedBox(width: 8),
+                                                      const SizedBox(width: AppSpacing.sm),
                                                       SizedBox(
                                                         width: 130,
                                                         child: TextField(
@@ -2374,7 +2372,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                                           ],
                                                         ),
                                                       ),
-                                                      const SizedBox(width: 8),
+                                                      const SizedBox(width: AppSpacing.sm),
                                                       SizedBox(
                                                         width: 130,
                                                         child: Text(
@@ -2414,7 +2412,7 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                       }),
                                     ],
                                   ),
-                                  const SizedBox(height: 16),
+                                  const SizedBox(height: AppSpacing.md),
                                 ],
                               ),
                             ),

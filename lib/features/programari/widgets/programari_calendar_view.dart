@@ -278,12 +278,11 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
             if (_showCalendarControlPanel)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-                child: Card(
+                child: AppCard(
                   margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    child: Wrap(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  child: Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -419,24 +418,21 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                     ),
                   ),
                 ),
-              ),
             if (allVisibleItems.isEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.event_available_outlined),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'Nu exista programari pentru ${_calendarRangeLabel(visibleDays)}. Apasa pe un slot din planner pentru creare rapida.',
-                          ),
+                child: AppCard(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.event_available_outlined),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Nu exista programari pentru ${_calendarRangeLabel(visibleDays)}. Apasa pe un slot din planner pentru creare rapida.',
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -763,7 +759,7 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                         ),
                       ],
                     ],
-                    const SizedBox(height: 4),
+                    const SizedBox(height: AppSpacing.xs),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Container(
@@ -1007,7 +1003,7 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                         ],
                       ),
                       if (showTimeLine) ...[
-                        const SizedBox(height: 4),
+                        const SizedBox(height: AppSpacing.xs),
                         Text(
                           '${_formatTime(start)} - ${_formatTime(end)} • ${_durationLabel(end.difference(start))}',
                           maxLines: 1,
@@ -1020,7 +1016,7 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                         ),
                       ],
                       if (showSecondaryLine) ...[
-                        const SizedBox(height: 4),
+                        const SizedBox(height: AppSpacing.xs),
                         Text(
                           secondary,
                           maxLines: 1,
