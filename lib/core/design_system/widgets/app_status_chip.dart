@@ -25,11 +25,17 @@ class AppStatusChip extends StatelessWidget {
     required this.label,
     required this.status,
     this.icon,
+    this.customColor,
   });
 
   final String label;
   final AppStatusKind status;
   final IconData? icon;
+
+  /// Override opțional al culorii semantice din [status] — folosit pentru
+  /// badge-uri care nu au un status de flux propriu-zis (ex: recurență).
+  /// Fără el, comportamentul existent (mapare pe [AppStatusKind]) e neschimbat.
+  final Color? customColor;
 
   Color _colorFor(AppStatusKind status, ColorScheme scheme) {
     switch (status) {
@@ -53,7 +59,7 @@ class AppStatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = _colorFor(status, scheme);
+    final color = customColor ?? _colorFor(status, scheme);
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.sm,

@@ -28,4 +28,24 @@ void main() {
     expect(find.byIcon(Icons.check_circle), findsOneWidget);
     expect(find.text('Finalizată'), findsOneWidget);
   });
+
+  testWidgets('AppStatusChip cu customColor suprascrie culoarea semantică a statusului', (tester) async {
+    await tester.pumpWidget(
+      wrap(
+        const AppStatusChip(
+          label: 'Anual',
+          status: AppStatusKind.neutral,
+          icon: Icons.repeat,
+          customColor: Colors.purple,
+        ),
+      ),
+    );
+    expect(find.text('Anual'), findsOneWidget);
+    final container = tester.widget<Container>(find.byType(Container).first);
+    final decoration = container.decoration as BoxDecoration;
+    final borderColor = decoration.border is Border
+        ? (decoration.border as Border).top.color
+        : null;
+    expect(borderColor, Colors.purple.withValues(alpha: 0.5));
+  });
 }

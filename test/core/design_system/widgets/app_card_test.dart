@@ -46,4 +46,36 @@ void main() {
     await tester.pumpWidget(wrap(const AppCard(child: Text('static'))));
     expect(find.byType(InkWell), findsNothing);
   });
+
+  testWidgets('AppCard elevated:false (default) does not use Container/BoxShadow variant', (tester) async {
+    await tester.pumpWidget(wrap(const AppCard(child: Text('flat'))));
+    expect(find.byType(Card), findsOneWidget);
+  });
+
+  testWidgets('AppCard elevated:true renders accent bar + responds to tap', (tester) async {
+    var tapped = false;
+    await tester.pumpWidget(
+      wrap(
+        AppCard(
+          elevated: true,
+          accentColor: Colors.teal,
+          onTap: () => tapped = true,
+          child: const Text('elevated'),
+        ),
+      ),
+    );
+    expect(find.text('elevated'), findsOneWidget);
+    expect(find.byType(Card), findsNothing);
+    expect(find.byType(InkWell), findsOneWidget);
+    await tester.tap(find.byType(InkWell));
+    await tester.pump();
+    expect(tapped, isTrue);
+  });
+
+  testWidgets('AppCard elevated:true without accentColor falls back to colorScheme.primary', (tester) async {
+    await tester.pumpWidget(
+      wrap(const AppCard(elevated: true, child: Text('fara culoare custom'))),
+    );
+    expect(find.text('fara culoare custom'), findsOneWidget);
+  });
 }

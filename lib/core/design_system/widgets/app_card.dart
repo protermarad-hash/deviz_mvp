@@ -13,6 +13,8 @@ class AppCard extends StatelessWidget {
     this.margin,
     this.onTap,
     this.color,
+    this.elevated = false,
+    this.accentColor,
   });
 
   final Widget child;
@@ -20,6 +22,15 @@ class AppCard extends StatelessWidget {
   final EdgeInsetsGeometry? margin;
   final VoidCallback? onTap;
   final Color? color;
+
+  /// Variantă "elevated cards" (aug 2026): umbră pronunțată colorată după
+  /// [accentColor] + bară de accent pe marginea stângă. Implicit `false` —
+  /// păstrează exact comportamentul plat existent peste tot în aplicație.
+  final bool elevated;
+
+  /// Culoarea barei de accent + umbrei când [elevated] e `true`. Fără
+  /// [accentColor], se folosește `colorScheme.primary`.
+  final Color? accentColor;
 
   @override
   Widget build(BuildContext context) {
@@ -32,16 +43,50 @@ class AppCard extends StatelessWidget {
 
     final content = Padding(padding: padding, child: child);
 
-    return Card(
+    if (!elevated) {
+      return Card(
+        margin: margin ?? EdgeInsets.zero,
+        color: color,
+        child: onTap != null
+            ? InkWell(
+                onTap: onTap,
+                borderRadius: borderRadius,
+                child: content,
+              )
+            : content,
+      );
+    }
+
+    final accent = accentColor ?? Theme.of(context).colorScheme.primary;
+    return Container(
       margin: margin ?? EdgeInsets.zero,
-      color: color,
-      child: onTap != null
-          ? InkWell(
-              onTap: onTap,
-              borderRadius: borderRadius,
-              child: content,
-            )
-          : content,
+      decoration: BoxDecoration(
+        color: color ?? Theme.of(context).colorScheme.surface,
+        borderRadius: borderRadius,
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: 0.22),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(width: 4, color: accent),
+                Expanded(child: content),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
