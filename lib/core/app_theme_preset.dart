@@ -1,56 +1,61 @@
 import 'package:flutter/material.dart';
 
+/// Etapa "elevated cards + gradient" (aug 2026): înlocuiește complet cele 5
+/// presetări vechi (atelier/aurora/forest/graphite/proTerm). Profilurile din
+/// Firestore salvate cu valorile vechi NU sunt migrate activ — `fromValue()`
+/// nu le mai recunoaște (niciun preset nou nu refolosește un `value` vechi)
+/// și cad automat pe fallback-ul implicit `proTermSignature`.
 enum AppThemePreset {
-  atelier,
-  aurora,
-  forest,
-  graphite,
-  proTerm,
+  proTermSignature,
+  oceanDepth,
+  copperSlate,
+  violetCircuit,
+  crimsonSteel,
 }
 
 extension AppThemePresetX on AppThemePreset {
   String get value {
     switch (this) {
-      case AppThemePreset.atelier:
-        return 'atelier';
-      case AppThemePreset.aurora:
-        return 'aurora';
-      case AppThemePreset.forest:
-        return 'forest';
-      case AppThemePreset.graphite:
-        return 'graphite';
-      case AppThemePreset.proTerm:
-        return 'pro_term';
+      case AppThemePreset.proTermSignature:
+        return 'pro_term_signature';
+      case AppThemePreset.oceanDepth:
+        return 'ocean_depth';
+      case AppThemePreset.copperSlate:
+        return 'copper_slate';
+      case AppThemePreset.violetCircuit:
+        return 'violet_circuit';
+      case AppThemePreset.crimsonSteel:
+        return 'crimson_steel';
     }
   }
 
   String get label {
     switch (this) {
-      case AppThemePreset.atelier:
-        return 'Atelier Indigo';
-      case AppThemePreset.aurora:
-        return 'Aurora Slate';
-      case AppThemePreset.forest:
-        return 'Forest Copper';
-      case AppThemePreset.graphite:
-        return 'Graphite Mono';
-      case AppThemePreset.proTerm:
-        return 'ProVentaris Signature';
+      case AppThemePreset.proTermSignature:
+        return 'PRO TERM Signature';
+      case AppThemePreset.oceanDepth:
+        return 'Ocean Depth';
+      case AppThemePreset.copperSlate:
+        return 'Copper Slate';
+      case AppThemePreset.violetCircuit:
+        return 'Violet Circuit';
+      case AppThemePreset.crimsonSteel:
+        return 'Crimson Steel';
     }
   }
 
   String get description {
     switch (this) {
-      case AppThemePreset.atelier:
-        return 'Aspect editorial modern, echilibrat pentru uz zilnic.';
-      case AppThemePreset.aurora:
-        return 'Paletă rece, premium, cu accente curate și tehnice.';
-      case AppThemePreset.forest:
-        return 'Tonuri naturale și industriale, potrivite pentru operare.';
-      case AppThemePreset.graphite:
-        return 'Interfață neutră, contrastată, orientată spre densitate mare de informații.';
-      case AppThemePreset.proTerm:
-        return 'Temă ProVentaris cu roșu de impact, albastru tehnic și accente reci inspirate din identitatea HVAC.';
+      case AppThemePreset.proTermSignature:
+        return 'Temă implicită PRO TERM — roșu de impact, albastru tehnic și accente reci inspirate din identitatea HVAC.';
+      case AppThemePreset.oceanDepth:
+        return 'Tonuri de teal profund și albastru electric, aspect tehnic și răcoros.';
+      case AppThemePreset.copperSlate:
+        return 'Cupru cald combinat cu gri ardezie — aspect industrial, robust.';
+      case AppThemePreset.violetCircuit:
+        return 'Violet electric cu accente cyan — aspect modern, high-tech.';
+      case AppThemePreset.crimsonSteel:
+        return 'Roșu crimson cu gri oțel — contrast puternic, aspect premium.';
     }
   }
 
@@ -61,7 +66,7 @@ extension AppThemePresetX on AppThemePreset {
         return preset;
       }
     }
-    return AppThemePreset.proTerm;
+    return AppThemePreset.proTermSignature;
   }
 }
 
@@ -72,12 +77,25 @@ class AppBrandTheme extends ThemeExtension<AppBrandTheme> {
     required this.shellAccentGradient,
     required this.shellLineColor,
     required this.shellGlow,
+    required this.heroGradient,
   });
 
+  /// Fundal pastel/deschis — folosit pentru zone MARI cu text închis peste
+  /// (ex: header-ul de navigație din shell, preview-ul de temă din setări).
   final LinearGradient shellHeaderGradient;
+
+  /// Gradient saturat pentru elemente mici de accent (cerc decorativ,
+  /// pastilă "Preview", FAB) — text ALB peste el.
   final LinearGradient shellAccentGradient;
   final Color shellLineColor;
   final Color shellGlow;
+
+  /// Gradient bold pe 2 culori (primary → primary închis) — dedicat noilor
+  /// header-e "elevated" (`AppGradientHeader`), care folosesc text ALB.
+  /// Extensie a sistemului existent de gradient-uri, NU un sistem paralel:
+  /// [shellHeaderGradient] rămâne fundalul pastel pentru shell/preview,
+  /// [heroGradient] e varianta saturată pentru header-e de pagină.
+  final LinearGradient heroGradient;
 
   @override
   AppBrandTheme copyWith({
@@ -85,12 +103,14 @@ class AppBrandTheme extends ThemeExtension<AppBrandTheme> {
     LinearGradient? shellAccentGradient,
     Color? shellLineColor,
     Color? shellGlow,
+    LinearGradient? heroGradient,
   }) {
     return AppBrandTheme(
       shellHeaderGradient: shellHeaderGradient ?? this.shellHeaderGradient,
       shellAccentGradient: shellAccentGradient ?? this.shellAccentGradient,
       shellLineColor: shellLineColor ?? this.shellLineColor,
       shellGlow: shellGlow ?? this.shellGlow,
+      heroGradient: heroGradient ?? this.heroGradient,
     );
   }
 
@@ -151,6 +171,30 @@ class AppBrandTheme extends ThemeExtension<AppBrandTheme> {
       shellLineColor:
           Color.lerp(shellLineColor, other.shellLineColor, t) ?? shellLineColor,
       shellGlow: Color.lerp(shellGlow, other.shellGlow, t) ?? shellGlow,
+      heroGradient: LinearGradient(
+        colors: List<Color>.generate(
+          heroGradient.colors.length,
+          (index) =>
+              Color.lerp(
+                heroGradient.colors[index],
+                other.heroGradient.colors[index],
+                t,
+              ) ??
+              heroGradient.colors[index],
+        ),
+        begin: Alignment.lerp(
+              _asAlignment(heroGradient.begin),
+              _asAlignment(other.heroGradient.begin),
+              t,
+            ) ??
+            _asAlignment(heroGradient.begin),
+        end: Alignment.lerp(
+              _asAlignment(heroGradient.end),
+              _asAlignment(other.heroGradient.end),
+              t,
+            ) ??
+            _asAlignment(heroGradient.end),
+      ),
     );
   }
 
@@ -168,6 +212,7 @@ class _AppThemeTokens {
     required this.scaffold,
     required this.surface,
     required this.headerGradient,
+    required this.heroGradient,
     required this.accentGradient,
     required this.lineColor,
     required this.glow,
@@ -180,6 +225,7 @@ class _AppThemeTokens {
   final Color scaffold;
   final Color surface;
   final LinearGradient headerGradient;
+  final LinearGradient heroGradient;
   final LinearGradient accentGradient;
   final Color lineColor;
   final Color glow;
@@ -287,6 +333,7 @@ ThemeData buildAppTheme(AppThemePreset preset) {
         shellAccentGradient: tokens.accentGradient,
         shellLineColor: tokens.lineColor,
         shellGlow: tokens.glow,
+        heroGradient: tokens.heroGradient,
       ),
     ],
   );
@@ -301,100 +348,125 @@ ThemeData buildAppTheme(AppThemePreset preset) {
 
 _AppThemeTokens _tokensForPreset(AppThemePreset preset) {
   switch (preset) {
-    case AppThemePreset.atelier:
-      return _AppThemeTokens(
-        seed: const Color(0xFF4F46E5),
-        primary: const Color(0xFF3940D1),
-        secondary: const Color(0xFF14B8A6),
-        tertiary: const Color(0xFFF59E0B),
-        scaffold: const Color(0xFFF5F7FD),
-        surface: Colors.white,
-        headerGradient: const LinearGradient(
-          colors: [Color(0xFFEEF2FF), Color(0xFFE0F2FE), Color(0xFFFFFFFF)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        accentGradient: const LinearGradient(
-          colors: [Color(0xFF3B82F6), Color(0xFF14B8A6)],
-        ),
-        lineColor: const Color(0xFFBFDBFE),
-        glow: const Color(0x553B82F6),
-      );
-    case AppThemePreset.aurora:
-      return _AppThemeTokens(
-        seed: const Color(0xFF0F766E),
-        primary: const Color(0xFF0F766E),
-        secondary: const Color(0xFF2563EB),
-        tertiary: const Color(0xFF7C3AED),
-        scaffold: const Color(0xFFF3F8FA),
-        surface: const Color(0xFFFFFFFF),
-        headerGradient: const LinearGradient(
-          colors: [Color(0xFFE6FFFB), Color(0xFFEFF6FF), Color(0xFFFFFFFF)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        accentGradient: const LinearGradient(
-          colors: [Color(0xFF0F766E), Color(0xFF2563EB)],
-        ),
-        lineColor: const Color(0xFF99F6E4),
-        glow: const Color(0x5538BDF8),
-      );
-    case AppThemePreset.forest:
-      return _AppThemeTokens(
-        seed: const Color(0xFF355E3B),
-        primary: const Color(0xFF355E3B),
-        secondary: const Color(0xFFB45309),
-        tertiary: const Color(0xFF0F766E),
-        scaffold: const Color(0xFFF6F5EF),
-        surface: const Color(0xFFFFFCF6),
-        headerGradient: const LinearGradient(
-          colors: [Color(0xFFEEF6EA), Color(0xFFFFF3E0), Color(0xFFFFFFFF)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        accentGradient: const LinearGradient(
-          colors: [Color(0xFF355E3B), Color(0xFFB45309)],
-        ),
-        lineColor: const Color(0xFFD6D3B1),
-        glow: const Color(0x5565A30D),
-      );
-    case AppThemePreset.graphite:
-      return _AppThemeTokens(
-        seed: const Color(0xFF334155),
-        primary: const Color(0xFF334155),
-        secondary: const Color(0xFF0F766E),
-        tertiary: const Color(0xFF7C2D12),
-        scaffold: const Color(0xFFF3F4F6),
-        surface: const Color(0xFFFFFFFF),
-        headerGradient: const LinearGradient(
-          colors: [Color(0xFFE5E7EB), Color(0xFFF8FAFC), Color(0xFFFFFFFF)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        accentGradient: const LinearGradient(
-          colors: [Color(0xFF111827), Color(0xFF475569)],
-        ),
-        lineColor: const Color(0xFFD1D5DB),
-        glow: const Color(0x55222633),
-      );
-    case AppThemePreset.proTerm:
+    case AppThemePreset.proTermSignature:
       return _AppThemeTokens(
         seed: const Color(0xFFE10613),
         primary: const Color(0xFFE10613),
         secondary: const Color(0xFF0057B8),
         tertiary: const Color(0xFF66C4FF),
-        scaffold: const Color(0xFFF4F8FE),
+        scaffold: const Color(0xFFF4F6FA),
         surface: const Color(0xFFFFFFFF),
         headerGradient: const LinearGradient(
           colors: [Color(0xFFFFF4F4), Color(0xFFEAF4FF), Color(0xFFFFFFFF)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
+        heroGradient: const LinearGradient(
+          colors: [Color(0xFFE10613), Color(0xFFA80410)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         accentGradient: const LinearGradient(
-          colors: [Color(0xFFE10613), Color(0xFF0057B8), Color(0xFF66C4FF)],
+          colors: [Color(0xFF0057B8), Color(0xFF003D82)],
         ),
         lineColor: const Color(0xFFB8D7F5),
-        glow: const Color(0x330057B8),
+        glow: const Color(0x55E10613),
+      );
+    case AppThemePreset.oceanDepth:
+      return _AppThemeTokens(
+        seed: const Color(0xFF0F766E),
+        primary: const Color(0xFF0F766E),
+        secondary: const Color(0xFF2563EB),
+        tertiary: const Color(0xFF93C5FD),
+        scaffold: const Color(0xFFF0FDFA),
+        surface: const Color(0xFFFFFFFF),
+        headerGradient: const LinearGradient(
+          colors: [Color(0xFFF0FDFA), Color(0xFFEFF6FF), Color(0xFFFFFFFF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        heroGradient: const LinearGradient(
+          colors: [Color(0xFF0F766E), Color(0xFF134E4A)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        accentGradient: const LinearGradient(
+          colors: [Color(0xFF2563EB), Color(0xFF1E3A8A)],
+        ),
+        lineColor: const Color(0xFF99F6E4),
+        glow: const Color(0x550F766E),
+      );
+    case AppThemePreset.copperSlate:
+      return _AppThemeTokens(
+        seed: const Color(0xFFB45309),
+        primary: const Color(0xFFB45309),
+        secondary: const Color(0xFF475569),
+        tertiary: const Color(0xFF94A3B8),
+        scaffold: const Color(0xFFFFFBEB),
+        surface: const Color(0xFFFFFFFF),
+        headerGradient: const LinearGradient(
+          colors: [Color(0xFFFFFBEB), Color(0xFFF8FAFC), Color(0xFFFFFFFF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        heroGradient: const LinearGradient(
+          colors: [Color(0xFFB45309), Color(0xFF78350F)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        accentGradient: const LinearGradient(
+          colors: [Color(0xFF475569), Color(0xFF1E293B)],
+        ),
+        lineColor: const Color(0xFFFDE68A),
+        glow: const Color(0x55B45309),
+      );
+    case AppThemePreset.violetCircuit:
+      return _AppThemeTokens(
+        seed: const Color(0xFF6D28D9),
+        primary: const Color(0xFF6D28D9),
+        secondary: const Color(0xFF0891B2),
+        tertiary: const Color(0xFF67E8F9),
+        scaffold: const Color(0xFFFAF5FF),
+        surface: const Color(0xFFFFFFFF),
+        headerGradient: const LinearGradient(
+          colors: [Color(0xFFFAF5FF), Color(0xFFECFEFF), Color(0xFFFFFFFF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        heroGradient: const LinearGradient(
+          colors: [Color(0xFF6D28D9), Color(0xFF4C1D95)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        accentGradient: const LinearGradient(
+          colors: [Color(0xFF0891B2), Color(0xFF164E63)],
+        ),
+        lineColor: const Color(0xFFDDD6FE),
+        glow: const Color(0x556D28D9),
+      );
+    case AppThemePreset.crimsonSteel:
+      return _AppThemeTokens(
+        seed: const Color(0xFFBE123C),
+        primary: const Color(0xFFBE123C),
+        secondary: const Color(0xFF334155),
+        tertiary: const Color(0xFF94A3B8),
+        scaffold: const Color(0xFFFFF1F2),
+        surface: const Color(0xFFFFFFFF),
+        headerGradient: const LinearGradient(
+          colors: [Color(0xFFFFF1F2), Color(0xFFF8FAFC), Color(0xFFFFFFFF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        heroGradient: const LinearGradient(
+          colors: [Color(0xFFBE123C), Color(0xFF881337)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        accentGradient: const LinearGradient(
+          colors: [Color(0xFF334155), Color(0xFF0F172A)],
+        ),
+        lineColor: const Color(0xFFFECDD3),
+        glow: const Color(0x55BE123C),
       );
   }
 }

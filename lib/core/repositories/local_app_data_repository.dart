@@ -5400,7 +5400,7 @@ class LocalAppDataRepository implements AppDataRepository {
         profile.contactName.trim().isNotEmpty ||
         profile.address.trim().isNotEmpty ||
         profile.logoBase64.trim().isNotEmpty ||
-        profile.appThemePreset != AppThemePreset.proTerm;
+        profile.appThemePreset != AppThemePreset.proTermSignature;
   }
 
   Map<String, dynamic> _companyProfileToCloudMap(CompanyProfile profile) {

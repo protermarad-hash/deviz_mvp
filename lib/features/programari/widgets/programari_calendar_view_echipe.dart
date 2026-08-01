@@ -165,7 +165,12 @@ extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
     final start = item.effectiveStartDateTime;
     final end = item.effectiveEndDateTime;
     final accent = _appointmentAccentColor(item);
+    final avatarData = _avatarDataForAppointment(item);
+    final isRecurring = item.recurrenceRule != 'none' &&
+        item.recurrenceRule.trim().isNotEmpty;
     return AppCard(
+      elevated: true,
+      accentColor: accent,
       padding: const EdgeInsets.all(AppSpacing.sm),
       onTap: () => _openDetails(item),
       child: Column(
@@ -174,15 +179,6 @@ extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 4,
-                height: 32,
-                margin: const EdgeInsets.only(right: AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: accent,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
               Expanded(
                 child: Text(
                   titleOrClient,
@@ -191,6 +187,10 @@ extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
+              if (isRecurring) ...[
+                Icon(Icons.repeat, size: 14, color: accent),
+                const SizedBox(width: AppSpacing.xs),
+              ],
             ],
           ),
           const SizedBox(height: AppSpacing.xs),
@@ -202,9 +202,17 @@ extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
             ),
           ),
           const SizedBox(height: AppSpacing.xs),
-          AppStatusChip(
-            label: _statusLabel(item.status),
-            status: _appStatusKindFor(item),
+          Row(
+            children: [
+              AppStatusChip(
+                label: _statusLabel(item.status),
+                status: _appStatusKindFor(item),
+              ),
+              if (avatarData.isNotEmpty) ...[
+                const SizedBox(width: AppSpacing.sm),
+                AppTeamAvatarStack(avatars: avatarData, size: 20, maxVisible: 3),
+              ],
+            ],
           ),
         ],
       ),

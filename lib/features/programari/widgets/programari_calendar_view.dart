@@ -905,6 +905,9 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
     final mutedForeground = Theme.of(context).colorScheme.onSurfaceVariant;
     final background = _appointmentSurfaceColor(item);
     final itemClient = _resolvedClientName(item.clientId, item.clientName);
+    final isRecurring = item.recurrenceRule != 'none' &&
+        item.recurrenceRule.trim().isNotEmpty;
+    final avatarData = _avatarDataForAppointment(item);
     final laneSpacing = placement.laneCount > 1 ? 6.0 : 0.0;
     final laneWidth = placement.laneCount == 1
         ? columnWidth
@@ -934,7 +937,8 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
       child: Card(
         color: background,
         margin: const EdgeInsets.symmetric(vertical: 3),
-        elevation: compact ? 0 : 1,
+        elevation: compact ? 0 : 6,
+        shadowColor: accent.withValues(alpha: 0.55),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
@@ -1016,6 +1020,14 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                         ),
                       ],
                       if (showSecondaryLine) ...[
+                        if (isRecurring || avatarData.isNotEmpty) ...[
+                          const SizedBox(height: AppSpacing.xs),
+                          CalendarCardMetaRow(
+                            isRecurring: isRecurring,
+                            avatars: avatarData,
+                            accentColor: accent,
+                          ),
+                        ],
                         const SizedBox(height: AppSpacing.xs),
                         Text(
                           secondary,

@@ -25,11 +25,17 @@ class AppStatusChip extends StatelessWidget {
     required this.label,
     required this.status,
     this.icon,
+    this.customColor,
   });
 
   final String label;
   final AppStatusKind status;
   final IconData? icon;
+
+  /// Override opțional al culorii semantice din [status] — folosit pentru
+  /// badge-uri care nu au un status de flux propriu-zis (ex: recurență).
+  /// Fără el, comportamentul existent (mapare pe [AppStatusKind]) e neschimbat.
+  final Color? customColor;
 
   Color _colorFor(AppStatusKind status, ColorScheme scheme) {
     switch (status) {
@@ -40,7 +46,10 @@ class AppStatusChip extends StatelessWidget {
       case AppStatusKind.finalizata:
         return const Color(0xFF15803D);
       case AppStatusKind.amanata:
-        return const Color(0xFF6B7280);
+        // Gri mai închis decât Gray 500 (0xFF6B7280) — la fundal mai saturat
+        // (alpha 0.22 mai jos), gri-ul deschis pica sub prag de contrast
+        // lizibil. Aceeași nuanță (gri), doar mai intensă.
+        return const Color(0xFF4B5563);
       case AppStatusKind.anulata:
         return const Color(0xFFDC2626);
       case AppStatusKind.info:
@@ -53,16 +62,20 @@ class AppStatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = _colorFor(status, scheme);
+    final color = customColor ?? _colorFor(status, scheme);
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.sm,
         vertical: 4,
       ),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
+        // Fundal mai saturat (0.12 -> 0.22) la cererea explicită de "culori
+        // mai pronunțate" pe chip-urile de status — text-ul rămâne la
+        // culoarea plină (nediluată), deci contrastul crește proporțional
+        // cu saturația fundalului, nu scade.
+        color: color.withValues(alpha: 0.22),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
+        border: Border.all(color: color.withValues(alpha: 0.6)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
