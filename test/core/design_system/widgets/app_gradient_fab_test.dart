@@ -48,4 +48,41 @@ void main() {
     await tester.pump();
     expect(find.byIcon(Icons.add), findsOneWidget);
   });
+
+  // Regresie reprodusă în producție: sub constrângeri loose-dar-mărginite
+  // (exact ce oferă Scaffold slotului floatingActionButton), varianta
+  // extended (cu label) devenea bară full-width din cauza Center-ului din
+  // interior. IntrinsicWidth trebuie să forțeze dimensionarea după conținut.
+  testWidgets(
+      'AppGradientFab extins NU se întinde pe toată lățimea sub constrângeri loose (regresie fix)',
+      (tester) async {
+    await tester.pumpWidget(
+      wrap(
+        Center(
+          child: AppGradientFab(
+            icon: Icons.add,
+            label: 'Adaugă',
+            onPressed: () {},
+          ),
+        ),
+      ),
+    );
+    final size = tester.getSize(find.byType(AppGradientFab));
+    // Ecranul de test standard e 800×600 — un FAB extins real are ~150-180px.
+    expect(size.width, lessThan(220));
+  });
+
+  testWidgets(
+      'AppGradientFab icon-only păstrează lățimea fixă 56 sub aceleași constrângeri',
+      (tester) async {
+    await tester.pumpWidget(
+      wrap(
+        Center(
+          child: AppGradientFab(icon: Icons.add, onPressed: () {}),
+        ),
+      ),
+    );
+    final size = tester.getSize(find.byType(AppGradientFab));
+    expect(size.width, 56);
+  });
 }

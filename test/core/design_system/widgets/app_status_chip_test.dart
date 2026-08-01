@@ -46,6 +46,6 @@ void main() {
     final borderColor = decoration.border is Border
         ? (decoration.border as Border).top.color
         : null;
-    expect(borderColor, Colors.purple.withValues(alpha: 0.5));
+    expect(borderColor, Colors.purple.withValues(alpha: 0.6));
   });
 }

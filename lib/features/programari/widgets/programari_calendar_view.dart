@@ -905,6 +905,9 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
     final mutedForeground = Theme.of(context).colorScheme.onSurfaceVariant;
     final background = _appointmentSurfaceColor(item);
     final itemClient = _resolvedClientName(item.clientId, item.clientName);
+    final isRecurring = item.recurrenceRule != 'none' &&
+        item.recurrenceRule.trim().isNotEmpty;
+    final avatarData = _avatarDataForAppointment(item);
     final laneSpacing = placement.laneCount > 1 ? 6.0 : 0.0;
     final laneWidth = placement.laneCount == 1
         ? columnWidth
@@ -982,14 +985,7 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                               ),
                             ),
                           ),
-                          if (showStatusChip &&
-                              item.recurrenceRule != 'none' &&
-                              item.recurrenceRule.trim().isNotEmpty) ...[
-                            Icon(Icons.repeat, size: 13, color: accent),
-                            const SizedBox(width: 4),
-                          ],
-                          if (showStatusChip) ...[
-                            _buildCalendarCardAvatars(item),
+                          if (showStatusChip)
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 6,
@@ -1008,7 +1004,6 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                                 ),
                               ),
                             ),
-                          ],
                         ],
                       ),
                       if (showTimeLine) ...[
@@ -1025,6 +1020,14 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                         ),
                       ],
                       if (showSecondaryLine) ...[
+                        if (isRecurring || avatarData.isNotEmpty) ...[
+                          const SizedBox(height: AppSpacing.xs),
+                          CalendarCardMetaRow(
+                            isRecurring: isRecurring,
+                            avatars: avatarData,
+                            accentColor: accent,
+                          ),
+                        ],
                         const SizedBox(height: AppSpacing.xs),
                         Text(
                           secondary,
@@ -1083,17 +1086,6 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildCalendarCardAvatars(Appointment item) {
-    final avatars = _avatarDataForAppointment(item);
-    if (avatars.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: AppTeamAvatarStack(avatars: avatars, size: 18, maxVisible: 2),
     );
   }
 

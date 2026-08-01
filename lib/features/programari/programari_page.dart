@@ -18,6 +18,7 @@ import '../../core/design_system/widgets/app_gradient_header.dart';
 import '../../core/design_system/widgets/app_stat_pill.dart';
 import '../../core/design_system/widgets/app_team_avatar_stack.dart';
 import '../../core/design_system/widgets/app_gradient_fab.dart';
+import 'widgets/calendar_card_meta_row.dart';
 import '../../core/document_file_service.dart';
 import '../../core/romanian_holidays.dart';
 import '../../core/pdf_actions_helper.dart';
@@ -2757,7 +2758,16 @@ class _ProgramariPageState extends State<ProgramariPage> {
 
   /// Header "elevated" al paginii Programări — statistici calculate LIVE din
   /// `_filteredItems` (respectă filtrele active), NU hardcodate.
+  ///
+  /// ASCUNS complet în modul Calendar: planner-ul e cel mai sensibil la
+  /// spațiul vertical disponibil (regresie confirmată — header-ul consuma
+  /// ~147px fix, identic pe orice ecran, reducând rândurile orare vizibile).
+  /// În Listă/Pe echipe rămâne complet (cu stat pills), unde nu concurează
+  /// cu o grilă orară.
   Widget _buildProgramariGradientHeader() {
+    if (_viewMode == _ProgramariViewMode.calendar) {
+      return const SizedBox.shrink();
+    }
     final items = _filteredItems;
     final now = DateTime.now();
     final todayStart = _dateOnly(now);
@@ -7013,7 +7023,11 @@ class _ProgramariPageState extends State<ProgramariPage> {
         ? _listItemsForDisplay(filteredItems)
         : filteredItems;
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final showInlineSidePanel = screenWidth >= 1280;
+    // În modul Calendar, panoul lateral inline e forțat OFF (devine drawer)
+    // indiferent de lățime — planner-ul e cel mai sensibil la spațiul
+    // orizontal disponibil (coloane de zi cu lățime minimă fixă 176/240pt).
+    final showInlineSidePanel =
+        screenWidth >= 1280 && _viewMode != _ProgramariViewMode.calendar;
     final sideDrawerWidth = screenWidth >= 900 ? 360.0 : screenWidth * 0.92;
 
     return Scaffold(
