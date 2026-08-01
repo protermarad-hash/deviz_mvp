@@ -593,10 +593,33 @@ class _JobsPageState extends State<JobsPage> {
     return null;
   }
 
+  /// FIX cache stale (iul 2026): înlocuiește punctual intrarea din _jobs cu
+  /// ultima versiune a lucrării (labor/parteneri/vehicule/documente), fără
+  /// reload complet. Se aplică simetric pentru toate categoriile — sursa e
+  /// job-ul complet întors de LucrareDetaliiPage la orice ieșire din ecran,
+  /// nu doar la 'edit' (vezi PopScope în lucrare_detalii_page.dart).
+  void _applyJobUpdate(JobRecord updated) {
+    if (!mounted) return;
+    final idx = _jobs.indexWhere((j) => j.id == updated.id);
+    if (idx == -1) return;
+    final nextJobs = List<JobRecord>.from(_jobs);
+    nextJobs[idx] = updated;
+    nextJobs.sort(_compareJobsByStatus);
+    final filteredJobs = _computeFilteredJobs(
+      jobs: nextJobs,
+      clients: _clients,
+      clientLabelById: _clientLabelById,
+    );
+    setState(() {
+      _jobs = nextJobs;
+      _filteredJobs = filteredJobs;
+    });
+  }
+
   Future<void> _openJobDetails(JobRecord job) async {
     var currentJob = job;
     while (mounted) {
-      final action = await Navigator.of(context).push<String>(
+      final result = await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => LucrareDetaliiPage(
             repository: _repository,
@@ -606,7 +629,12 @@ class _JobsPageState extends State<JobsPage> {
           ),
         ),
       );
-      if (action != 'edit') {
+      if (!mounted) return;
+      if (result is JobRecord) {
+        currentJob = result;
+        _applyJobUpdate(result);
+      }
+      if (result != 'edit') {
         break;
       }
       final saved = await _openJobForm(existing: currentJob);

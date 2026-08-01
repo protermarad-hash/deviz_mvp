@@ -583,6 +583,11 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         ? ''
         : widget.existing!.defaultLodgingCost.toStringAsFixed(2),
   );
+  late final TextEditingController _tarifZilnic = TextEditingController(
+    text: widget.existing?.tarifZilnic == null
+        ? ''
+        : widget.existing!.tarifZilnic!.toStringAsFixed(2),
+  );
 
   bool _active = true;
   bool _requiresLodgingByDefault = false;
@@ -615,6 +620,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _oreLunareStandard.dispose();
     _dailyAllowance.dispose();
     _defaultLodgingCost.dispose();
+    _tarifZilnic.dispose();
     super.dispose();
   }
 
@@ -713,6 +719,14 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                     labelText: 'Cost cazare implicit / noapte'),
               ),
               const SizedBox(height: 8),
+              TextField(
+                controller: _tarifZilnic,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                    labelText: 'Tarif zilnic pontaj (opțional)'),
+              ),
+              const SizedBox(height: 8),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Necesită cazare implicită'),
@@ -772,6 +786,11 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 dailyAllowance: dailyAllowance,
                 defaultLodgingCost: defaultLodgingCost,
                 requiresLodgingByDefault: _requiresLodgingByDefault,
+                tarifZilnic: (() {
+                  final value = double.tryParse(
+                      _tarifZilnic.text.trim().replaceAll(',', '.'));
+                  return (value != null && value > 0) ? value : null;
+                })(),
               ),
             );
           },

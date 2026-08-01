@@ -738,4 +738,23 @@ class CloudSyncBridge {
       entityId: id,
     );
   }
+
+  Future<void> queuePontajZiLucrareUpsert(Map<String, dynamic> pontaj) async {
+    final id = (pontaj['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.pontajZileLucrari,
+      entityId: id,
+      payload: pontaj,
+    );
+  }
+
+  Future<void> queuePontajZiLucrareDelete(String pontajId) async {
+    final id = pontajId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.pontajZileLucrari,
+      entityId: id,
+    );
+  }
 }

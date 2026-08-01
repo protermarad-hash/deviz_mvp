@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 
 import '../core/auth_session.dart';
+import '../core/boot_trace.dart';
 import '../core/cloud/firebase_bootstrap.dart';
 import '../core/cloud/offline_sync_runtime.dart';
 
@@ -48,11 +49,14 @@ class _DevizUltraBootstrapAppState extends State<DevizUltraBootstrapApp>
   }
 
   Future<void> _initializeBootstrap() async {
+    BootTrace.mark('bootstrap:session.initialize begin');
     await _session.initialize();
+    BootTrace.mark('bootstrap:session.initialize done');
     // Curăță IMEDIAT coada de sync: elimină itemele vechi (sincronizate/moarte).
     // Fără aceasta, operațiile JSON pe coada mare blochează UI la prima utilizare.
     unawaited(OfflineSyncRuntime.instance.cleanupQueue());
     // syncPending rulează în fundal - nu blochează UI-ul la startup
+    BootTrace.mark('bootstrap:syncPending dispatch');
     unawaited(OfflineSyncRuntime.instance.syncPending());
   }
 

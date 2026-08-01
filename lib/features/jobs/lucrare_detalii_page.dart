@@ -36,12 +36,18 @@ import '../registratura/registry_models.dart';
 import '../registratura/registry_store.dart';
 import '../master/master_local_store.dart';
 import '../partners/partner_models.dart';
+// Pontaj zilnic dezactivat din UI prin decizie de produs (2026-07-30).
+// Codul din lib/features/pontaj_lucrari/ rămâne intact și reactivabil —
+// vezi comentariile de la TabBar/TabBarView și din tab-ul Economic.
+// import '../pontaj_lucrari/pontaj_economic_section.dart';
+// import '../pontaj_lucrari/pontaj_lucrare_tab.dart';
 import 'firebase_lucrari_repository.dart';
 import 'firebase_job_site_documents_repository.dart';
 import 'job_models.dart';
 import 'deviz_lucrare_pdf_service.dart';
 import '../../core/integrations/smartbill_service.dart';
 import 'job_partner_models.dart';
+import 'services/lucrare_cost_calc.dart';
 import 'job_site_document_models.dart';
 import 'job_site_document_services.dart';
 import 'job_site_documents_cloud_repository.dart';
@@ -61,6 +67,7 @@ import 'lucrare_detalii_models.dart';
 import 'lucrare_detalii_widgets.dart';
 import 'lucrare_format_utils.dart';
 import 'lucrare_import_parser.dart';
+import 'dialogs/multi_day_picker_dialog.dart';
 import 'dialogs/partner_dialogs.dart';
 import 'dialogs/beneficiary_dialogs.dart';
 import 'dialogs/own_vehicle_dialog.dart';
@@ -1435,7 +1442,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   }
 
   Widget _buildPartnerProfitSection() {
-    final grossProfit = _estimatedValue - _realTotalCost;
+    // Profit calculat din costul TOTAL unificat (materiale + manoperă
+    // proprie + resurse partenere) — decizie de produs 2026-07-30. Nu e
+    // stocat pe JobRecord (grossProfit se calculează mereu live), deci
+    // schimbarea formulei se reflectă automat la afișare, fără migrare.
+    final grossProfit = LucrareCostCalc.grossProfit(
+      estimatedValue: _estimatedValue,
+      costTotal: _costTotalUnificat,
+    );
     final taxAmount = grossProfit > 0 ? grossProfit * _profitTaxPercent / 100 : 0.0;
     final netProfit = grossProfit - taxAmount;
     final partnerShare = netProfit > 0 ? netProfit * _partnerProfitPercent / 100 : 0.0;
@@ -3491,6 +3505,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final umController = TextEditingController();
     final qtyController = TextEditingController(text: '1');
     final priceController = TextEditingController(text: '0');
+    final realPriceController = TextEditingController(text: '');
 
     final created = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -3601,6 +3616,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: realPriceController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Preț real achiziție (opțional)',
+                    helperText:
+                        'Completează doar dacă diferă de prețul ofertat',
+                  ),
+                ),
               ],
             ),
           ),
@@ -3618,6 +3644,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final price = double.tryParse(
                         priceController.text.replaceAll(',', '.')) ??
                     0;
+                final realPrice = double.tryParse(
+                        realPriceController.text.replaceAll(',', '.')) ??
+                    0;
                 final um = umController.text.trim();
                 final matId = selectedMaterial?.id ??
                     'mat-${DateTime.now().millisecondsSinceEpoch}';
@@ -3628,6 +3657,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   'um': um.isEmpty ? (selectedMaterial?.um ?? '') : um,
                   'qty': qty,
                   'price': price,
+                  'realPrice': realPrice,
                   'total': qty * price,
                 });
               },
@@ -3642,6 +3672,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     umController.dispose();
     qtyController.dispose();
     priceController.dispose();
+    realPriceController.dispose();
     if (created == null) return;
 
     // Dacă materialul nu era în catalog, îl adaugă automat pentru viitoare sugestii
@@ -3710,6 +3741,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         TextEditingController(text: _asDouble(row['qty']).toString());
     final priceController =
         TextEditingController(text: _asDouble(row['price']).toString());
+    final existingRealPrice = _asDouble(row['realPrice']);
+    final realPriceController = TextEditingController(
+        text: existingRealPrice > 0 ? existingRealPrice.toString() : '');
 
     final updated = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -3721,6 +3755,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
             final price =
                 double.tryParse(priceController.text.replaceAll(',', '.')) ?? 0;
             return qty * price;
+          }
+
+          double realTotalPreview() {
+            final qty =
+                double.tryParse(qtyController.text.replaceAll(',', '.')) ?? 0;
+            final realPrice = double.tryParse(
+                    realPriceController.text.replaceAll(',', '.')) ??
+                0;
+            return qty * realPrice;
           }
 
           return AlertDialog(
@@ -3835,10 +3878,37 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     ],
                   ),
                   const SizedBox(height: 8),
+                  TextField(
+                    controller: realPriceController,
+                    keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Preț real achiziție (opțional)',
+                      helperText:
+                          'Completează doar dacă diferă de prețul ofertat',
+                    ),
+                    onChanged: (_) => setDialogState(() {}),
+                  ),
+                  const SizedBox(height: 8),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('Total: ${totalPreview().toStringAsFixed(2)}'),
+                    child: Text(
+                        'Total (ofertat): ${totalPreview().toStringAsFixed(2)}'),
                   ),
+                  if (realTotalPreview() > 0)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Total (preț real): ${realTotalPreview().toStringAsFixed(2)}'
+                        ' (${realTotalPreview() > totalPreview() ? '+' : ''}${(realTotalPreview() - totalPreview()).toStringAsFixed(2)})',
+                        style: TextStyle(
+                          color: realTotalPreview() > totalPreview()
+                              ? Colors.red.shade700
+                              : Colors.green.shade700,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -3857,6 +3927,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   final price = double.tryParse(
                           priceController.text.replaceAll(',', '.')) ??
                       0;
+                  final realPrice = double.tryParse(
+                          realPriceController.text.replaceAll(',', '.')) ??
+                      0;
                   final matId = selectedMaterial?.id ??
                       '${row['materialId'] ?? 'mat-${DateTime.now().millisecondsSinceEpoch}'}';
                   final um = umController.text.trim().isEmpty
@@ -3870,6 +3943,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     'um': um,
                     'qty': qty,
                     'price': price,
+                    'realPrice': realPrice,
                     'total': qty * price,
                   });
                 },
@@ -3885,6 +3959,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     umController.dispose();
     qtyController.dispose();
     priceController.dispose();
+    realPriceController.dispose();
     if (updated == null) return;
 
     // Dacă materialul editat e nou (nu din catalog), adaugă-l în catalog
@@ -4000,6 +4075,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     String? selectedWhoId;
     DateTime periodStart = DateTime.now();
     DateTime periodEnd = DateTime.now();
+    // Mod "Zile individuale" (Varianta A, iul 2026): permite bifarea unor
+    // zile neconsecutive (ex: luni + miercuri + vineri) în loc de un
+    // interval continuu — generează câte o intrare _labor per zi la salvare.
+    bool multiDayMode = false;
+    Set<DateTime> selectedDays = {};
     final hoursController = TextEditingController(text: '8');
     final hoursPerDayController = TextEditingController(text: '8');
     final tripDaysController = TextEditingController(text: '0');
@@ -4012,13 +4092,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     final noptiCazareController = TextEditingController(text: '0');
     final valoareCazareController = TextEditingController(text: '0');
     final notesController = TextEditingController();
+    // FIX 2 (iul 2026) — tarif manual, simetric cu 'Tarif negociat / oră' din
+    // showPartnerWorkerDialog. Gol/0 = fallback automat _laborRateForWhoId.
+    final manualRateController = TextEditingController(text: '0');
 
     void syncComputedValues() {
       if (periodEnd.isBefore(periodStart)) {
         periodEnd = periodStart;
       }
-      final tripDays =
-          _laborPeriodDays(periodStart: periodStart, periodEnd: periodEnd);
+      final tripDays = multiDayMode
+          ? selectedDays.length.toDouble()
+          : _laborPeriodDays(periodStart: periodStart, periodEnd: periodEnd);
       final hoursPerDay = _sanitizeLaborHoursPerDay(hoursPerDayController.text);
       hoursPerDayController.text = _formatDecimal(hoursPerDay);
       hoursController.text = _formatDecimal(tripDays * hoursPerDay);
@@ -4031,7 +4115,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
     syncComputedValues();
 
-    final created = await showDialog<Map<String, dynamic>>(
+    final createdList = await showDialog<List<Map<String, dynamic>>>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
@@ -4102,51 +4186,120 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     }),
                   ),
                   const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('Interval'),
+                        icon: Icon(Icons.date_range_outlined),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('Zile individuale'),
+                        icon: Icon(Icons.event_repeat_outlined),
+                      ),
+                    ],
+                    selected: {multiDayMode},
+                    onSelectionChanged: (value) => setDialogState(() {
+                      multiDayMode = value.first;
+                      syncComputedValues();
+                    }),
+                  ),
+                  const SizedBox(height: 8),
+                  if (!multiDayMode)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: periodStart,
+                                firstDate: DateTime(DateTime.now().year - 5),
+                                lastDate: DateTime(DateTime.now().year + 5),
+                              );
+                              if (picked == null) return;
+                              setDialogState(() {
+                                periodStart = picked;
+                                syncComputedValues();
+                              });
+                            },
+                            icon: const Icon(Icons.calendar_today),
+                            label: Text('Start: ${_formatDate(periodStart)}'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: periodEnd.isBefore(periodStart)
+                                    ? periodStart
+                                    : periodEnd,
+                                // FIX contradicție (iul 2026): firstDate legat de
+                                // periodStart (default = azi) bloca vizual zilele
+                                // din trecut dacă Sfârșit era ales înainte de
+                                // Start. syncComputedValues() clamps oricum
+                                // periodEnd la periodStart dacă rezultă invers.
+                                firstDate: DateTime(DateTime.now().year - 5),
+                                lastDate: DateTime(DateTime.now().year + 5),
+                              );
+                              if (picked == null) return;
+                              setDialogState(() {
+                                periodEnd = picked;
+                                syncComputedValues();
+                              });
+                            },
+                            icon: const Icon(Icons.event_available_outlined),
+                            label: Text('Sfârșit: ${_formatDate(periodEnd)}'),
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        OutlinedButton.icon(
                           onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: periodStart,
+                            final picked = await showMultiDayPickerDialog(
+                              context,
+                              initialSelection: selectedDays,
                               firstDate: DateTime(DateTime.now().year - 5),
                               lastDate: DateTime(DateTime.now().year + 5),
                             );
                             if (picked == null) return;
                             setDialogState(() {
-                              periodStart = picked;
+                              selectedDays = picked;
                               syncComputedValues();
                             });
                           },
-                          icon: const Icon(Icons.calendar_today),
-                          label: Text('Start: ${_formatDate(periodStart)}'),
+                          icon: const Icon(Icons.event_repeat_outlined),
+                          label: Text(selectedDays.isEmpty
+                              ? 'Selectează zile'
+                              : '${selectedDays.length} zile selectate'),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: periodEnd.isBefore(periodStart)
-                                  ? periodStart
-                                  : periodEnd,
-                              firstDate: periodStart,
-                              lastDate: DateTime(DateTime.now().year + 5),
-                            );
-                            if (picked == null) return;
-                            setDialogState(() {
-                              periodEnd = picked;
-                              syncComputedValues();
-                            });
-                          },
-                          icon: const Icon(Icons.event_available_outlined),
-                          label: Text('Sfârșit: ${_formatDate(periodEnd)}'),
-                        ),
-                      ),
-                    ],
-                  ),
+                        if (selectedDays.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: (selectedDays.toList()..sort())
+                                .map((d) => Chip(
+                                      label: Text(_formatDate(d)),
+                                      visualDensity: VisualDensity.compact,
+                                      onDeleted: () => setDialogState(() {
+                                        selectedDays = {...selectedDays}
+                                          ..remove(d);
+                                        syncComputedValues();
+                                      }),
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                      ],
+                    ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -4173,6 +4326,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: manualRateController,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Tarif orar (opțional)',
+                      helperText:
+                          'Gol sau 0 = calcul automat din tariful angajatului/echipei',
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -4280,6 +4444,44 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     .where((o) => o['id'] == normalizedSelection)
                     .toList();
                 if (selected.isEmpty) return;
+                final autoRate = _laborRateForWhoId(
+                  normalizedSelection,
+                  type: normalizedSelection.startsWith('team:')
+                      ? 'team'
+                      : 'person',
+                  whoLabel: '${selected.first['label'] ?? '-'}',
+                );
+                final manualRate = double.tryParse(
+                        manualRateController.text.replaceAll(',', '.')) ??
+                    0;
+                final rate = manualRate > 0 ? manualRate : autoRate;
+
+                if (multiDayMode) {
+                  if (selectedDays.isEmpty) {
+                    _snack('Selectează cel puțin o zi.');
+                    return;
+                  }
+                  final hoursPerDay =
+                      _sanitizeLaborHoursPerDay(hoursPerDayController.text);
+                  final entries = _laborCalc.buildMultiDayLaborEntries(
+                    selectedDays: selectedDays,
+                    whoId: normalizedSelection,
+                    whoLabel: '${selected.first['label'] ?? '-'}',
+                    type: normalizedSelection.startsWith('team:')
+                        ? 'team'
+                        : 'person',
+                    hoursPerDay: hoursPerDay,
+                    hourlyRate: rate,
+                    includeDiurna: includeDiurna,
+                    diurnaPerDay: selectedPerDiemPerDay,
+                    includeCazare: includeCazare,
+                    cazarePerNoapte: selectedLodgingPerDay,
+                    notes: notesController.text.trim(),
+                  );
+                  Navigator.of(context).pop(entries);
+                  return;
+                }
+
                 if (periodEnd.isBefore(periodStart)) {
                   periodEnd = periodStart;
                 }
@@ -4293,45 +4495,40 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final valoareCazarePeNoapte = selectedLodgingPerDay;
                 final zileDiurna = includeDiurna ? tripDays : 0.0;
                 final noptiCazare = includeCazare ? tripDays : 0.0;
-                final rate = _laborRateForWhoId(
-                  normalizedSelection,
-                  type: normalizedSelection.startsWith('team:')
-                      ? 'team'
-                      : 'person',
-                  whoLabel: '${selected.first['label'] ?? '-'}',
-                );
                 final costOre = hours * rate;
                 final costDiurna = zileDiurna * valoareDiurnaPeZi;
                 final costCazare = noptiCazare * valoareCazarePeNoapte;
-                Navigator.of(context).pop({
-                  'id': 'job-labor-${DateTime.now().millisecondsSinceEpoch}',
-                  'jobId': _jobSnapshot.id,
-                  'whoId': normalizedSelection,
-                  'type': normalizedSelection.startsWith('team:')
-                      ? 'team'
-                      : 'person',
-                  'whoLabel': '${selected.first['label'] ?? '-'}',
-                  'who': '${selected.first['label'] ?? '-'}',
-                  'date': _formatDate(periodStart),
-                  'periodStartDate': _encodeLaborPeriodDate(periodStart),
-                  'periodEndDate': _encodeLaborPeriodDate(periodEnd),
-                  'hoursPerDay':
-                      _sanitizeLaborHoursPerDay(hoursPerDayController.text),
-                  'hours': hours,
-                  'hourlyRate': rate,
-                  'tripDays': tripDays,
-                  'includeDiurna': includeDiurna,
-                  'includeCazare': includeCazare,
-                  'zileDiurna': zileDiurna,
-                  'valoareDiurnaPeZi': valoareDiurnaPeZi,
-                  'noptiCazare': noptiCazare,
-                  'valoareCazarePeNoapte': valoareCazarePeNoapte,
-                  'costOre': costOre,
-                  'costDiurna': costDiurna,
-                  'costCazare': costCazare,
-                  'costTotalLinie': costOre + costDiurna + costCazare,
-                  'notes': notesController.text.trim(),
-                });
+                Navigator.of(context).pop([
+                  {
+                    'id': 'job-labor-${DateTime.now().millisecondsSinceEpoch}',
+                    'jobId': _jobSnapshot.id,
+                    'whoId': normalizedSelection,
+                    'type': normalizedSelection.startsWith('team:')
+                        ? 'team'
+                        : 'person',
+                    'whoLabel': '${selected.first['label'] ?? '-'}',
+                    'who': '${selected.first['label'] ?? '-'}',
+                    'date': _formatDate(periodStart),
+                    'periodStartDate': _encodeLaborPeriodDate(periodStart),
+                    'periodEndDate': _encodeLaborPeriodDate(periodEnd),
+                    'hoursPerDay':
+                        _sanitizeLaborHoursPerDay(hoursPerDayController.text),
+                    'hours': hours,
+                    'hourlyRate': rate,
+                    'tripDays': tripDays,
+                    'includeDiurna': includeDiurna,
+                    'includeCazare': includeCazare,
+                    'zileDiurna': zileDiurna,
+                    'valoareDiurnaPeZi': valoareDiurnaPeZi,
+                    'noptiCazare': noptiCazare,
+                    'valoareCazarePeNoapte': valoareCazarePeNoapte,
+                    'costOre': costOre,
+                    'costDiurna': costDiurna,
+                    'costCazare': costCazare,
+                    'costTotalLinie': costOre + costDiurna + costCazare,
+                    'notes': notesController.text.trim(),
+                  }
+                ]);
               },
               child: const Text('Adaugă'),
             ),
@@ -4348,13 +4545,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     noptiCazareController.dispose();
     valoareCazareController.dispose();
     notesController.dispose();
-    if (created == null) return;
+    manualRateController.dispose();
+    if (createdList == null || createdList.isEmpty) return;
 
-    final next = <Map<String, dynamic>>[..._labor, created];
+    final next = <Map<String, dynamic>>[..._labor, ...createdList];
     await _saveLaborRows(next);
+    final who = '${createdList.first['who'] ?? '-'}';
     await _appendJournal(
       action: 'labor_added',
-      message: 'Manopera adaugata: ${created['who'] ?? '-'}',
+      message: createdList.length == 1
+          ? 'Manopera adaugata: $who'
+          : 'Manopera adaugata: $who (${createdList.length} zile individuale)',
     );
   }
 
@@ -4480,13 +4681,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   String get _ownVehiclesCurrency =>
       _currencyLabel(_ownVehicles.map((v) => v.currency));
 
-  double _materialLineTotal(Map<String, dynamic> row) {
-    final explicit = _asDouble(row['total']);
-    if (explicit > 0) {
-      return explicit;
-    }
-    return _asDouble(row['qty']) * _asDouble(row['price']);
-  }
+  double _materialLineTotal(Map<String, dynamic> row) =>
+      LucrareCostCalc.materialLineTotal(row);
+
+  double _materialLineOfferedTotal(Map<String, dynamic> row) =>
+      LucrareCostCalc.materialLineOfferedTotal(row);
+
+  double _materialLineRealVsOfferedDiff(Map<String, dynamic> row) =>
+      LucrareCostCalc.materialLineRealVsOfferedDiff(row);
 
   List<Map<String, dynamic>> _dedupeDropdownOptions(
       List<Map<String, dynamic>> source) {
@@ -4686,6 +4888,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   double get _laborCompleteTotal => _laborTotalCost;
 
   double get _realTotalCost => _materialsTotal + _laborTotalCost;
+
+  /// Cost total unificat: materiale + manoperă proprie + resurse partenere
+  /// (personal + autovehicule partener). Folosit pentru noul chip "Cost
+  /// total lucrare" și pentru formula de profit din "Profit și Partener" —
+  /// spre deosebire de `_realTotalCost`, care rămâne "cost intern" (fără
+  /// parteneri) pentru compatibilitate cu chip-urile/PDF-ul existente.
+  double get _costTotalUnificat => LucrareCostCalc.costTotalUnificat(
+        materialsTotal: _materialsTotal,
+        laborTotal: _laborTotalCost,
+        partnersTotal: _partnersTotal,
+      );
 
   double get _estimatedValue => _jobSnapshot.estimatedValue ?? 0;
 
@@ -5099,6 +5312,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     bool includeCazare = _laborIncludeLodging(row);
     final notesController =
         TextEditingController(text: '${row['notes'] ?? ''}');
+    // FIX 2 (iul 2026) — tarif manual, simetric cu 'Tarif negociat / oră' din
+    // showPartnerWorkerDialog. Precompletat cu tariful curent al liniei;
+    // gol/0 = fallback automat _laborRateForWhoId.
+    final manualRateController = TextEditingController(
+      text: _asDouble(row['hourlyRate']).toString(),
+    );
 
     void syncComputedValues() {
       if (periodEnd.isBefore(periodStart)) {
@@ -5211,7 +5430,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                               initialDate: periodEnd.isBefore(periodStart)
                                   ? periodStart
                                   : periodEnd,
-                              firstDate: periodStart,
+                              // FIX contradicție (iul 2026): firstDate legat de
+                              // periodStart (default = azi) bloca vizual zilele
+                              // din trecut dacă Sfârșit era ales înainte de
+                              // Start. syncComputedValues() clamps oricum
+                              // periodEnd la periodStart dacă rezultă invers.
+                              firstDate: DateTime(DateTime.now().year - 5),
                               lastDate: DateTime(DateTime.now().year + 5),
                             );
                             if (picked == null) return;
@@ -5252,6 +5476,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: manualRateController,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Tarif orar (opțional)',
+                      helperText:
+                          'Gol sau 0 = calcul automat din tariful angajatului/echipei',
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -5391,13 +5626,17 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final normalizedDaysPerDiem = includeDiurnaNow ? tripDays : 0.0;
                 final normalizedNightsLodging =
                     includeCazareNow ? tripDays : 0.0;
-                final rate = _laborRateForWhoId(
+                final autoRate = _laborRateForWhoId(
                   normalizedSelection,
                   type: normalizedSelection.startsWith('team:')
                       ? 'team'
                       : 'person',
                   whoLabel: '${selected.first['label'] ?? '-'}',
                 );
+                final manualRate = double.tryParse(
+                        manualRateController.text.replaceAll(',', '.')) ??
+                    0;
+                final rate = manualRate > 0 ? manualRate : autoRate;
                 final costOre = hours * rate;
                 final costDiurna = normalizedDaysPerDiem * valoareDiurnaPeZi;
                 final costCazare =
@@ -5448,6 +5687,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     noptiCazareController.dispose();
     valoareCazareController.dispose();
     notesController.dispose();
+    manualRateController.dispose();
     if (updated == null) return;
 
     final next = [..._labor];
@@ -10125,6 +10365,139 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
+  Widget _buildOwnResourcesSummaryChips() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        _chip('Total ore persoane', _personHoursTotal.toStringAsFixed(2)),
+        _chip('Total ore echipe', _teamHoursTotal.toStringAsFixed(2)),
+        _chip(
+          'Total cost manoperă proprie',
+          '${_laborTotalCost.toStringAsFixed(2)} RON',
+        ),
+      ],
+    );
+  }
+
+  /// Secțiune "Resurse proprii" — vizual simetrică cu "Resurse partener":
+  /// grupează intrările existente din `_labor` (persoană/echipă) în carduri
+  /// cu subtotal, reutilizând complet dialogurile Adaugă/Editează/Șterge
+  /// manoperă (decizie de produs 2026-07-30: extindere `_labor`, nu sistem
+  /// nou).
+  Widget _buildOwnResourcesSection() {
+    if (_labor.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildOwnResourcesSummaryChips(),
+          const SizedBox(height: 10),
+          const Text('Nu există manoperă proprie înregistrată.'),
+        ],
+      );
+    }
+
+    final groups = <String, List<int>>{};
+    for (var i = 0; i < _labor.length; i++) {
+      final whoId =
+          '${_labor[i]['whoId'] ?? _labor[i]['who'] ?? 'necunoscut-$i'}';
+      groups.putIfAbsent(whoId, () => []).add(i);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildOwnResourcesSummaryChips(),
+        const SizedBox(height: 10),
+        ...groups.entries.map((entry) {
+          final indices = entry.value;
+          final firstRow = _labor[indices.first];
+          final workerName = '${firstRow['who'] ?? '-'}';
+          final isTeam = _laborTypeOf(firstRow) == 'team';
+          final groupTotal = indices.fold<double>(
+              0, (sum, i) => sum + _laborTotalLineCost(_labor[i]));
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        isTeam ? Icons.groups_outlined : Icons.person_outline,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          workerName,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      ),
+                      if (!_isTechnician)
+                        _chip(
+                          'Total ${isTeam ? 'echipă' : 'lucrător'}',
+                          '${groupTotal.toStringAsFixed(2)} RON',
+                        ),
+                    ],
+                  ),
+                  const Divider(height: 20),
+                  ...indices.map((i) {
+                    final e = _labor[i];
+                    final dateLabel = '${e['date'] ?? '-'}';
+                    final hoursLabel =
+                        _asDouble(e['hours']).toStringAsFixed(2);
+                    final rateValue = _laborRateForRow(e);
+                    final rateLabel = rateValue > 0
+                        ? rateValue.toStringAsFixed(2)
+                        : '0.00 (fallback)';
+                    final costTotalLabel =
+                        _laborTotalLineCost(e).toStringAsFixed(2);
+                    final tripDaysLabel = _formatDecimal(_laborTripDays(e));
+                    final periodLabel = _laborPeriodLabel(e);
+                    final notesLabel = '${e['notes'] ?? ''}'.trim();
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        _isTechnician
+                            ? 'Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
+                            : 'Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Total: $costTotalLabel',
+                      ),
+                      subtitle: Text(
+                        notesLabel.isEmpty
+                            ? dateLabel
+                            : '$dateLabel\nObservații: $notesLabel',
+                      ),
+                      trailing: Wrap(
+                        spacing: 4,
+                        children: [
+                          IconButton(
+                            tooltip: 'Editează',
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: () => _onEditLabor(i),
+                          ),
+                          if (!_isTechnician)
+                            IconButton(
+                              tooltip: 'Șterge',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => _onDeleteLabor(i),
+                            ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
   Widget _buildPartnerResourcesSection() {
     if (_partners.isEmpty) {
       return Column(
@@ -10427,6 +10800,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     _saveLiniiPlanificate(linii);
   }
 
+  void _updateLiniePretReal(String lineId, double value) {
+    final linii = List<JobLine>.from(_jobSnapshot.liniiPlanificate);
+    final idx = linii.indexWhere((l) => l.id == lineId);
+    if (idx < 0) return;
+    linii[idx] = linii[idx].copyWith(pretUnitarReal: value);
+    _saveLiniiPlanificate(linii);
+  }
+
   Future<void> _applyProgresGlobal(double percent) async {
     final linii = _jobSnapshot.liniiPlanificate.map((l) {
       final qty = double.parse(
@@ -10616,6 +10997,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   ? linie.cantitateReala.toStringAsFixed(2)
                   : '',
             );
+            final isMaterial = linie.categorie == 'material';
+            final pretRealCtrl = TextEditingController(
+              text: linie.pretUnitarReal > 0
+                  ? linie.pretUnitarReal.toStringAsFixed(2)
+                  : '',
+            );
             final categorieIcon = switch (linie.categorie) {
               'manopera' => Icons.engineering_outlined,
               'transport' => Icons.local_shipping_outlined,
@@ -10719,6 +11106,74 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         ),
                       ],
                     ),
+                    if (isMaterial && !_isTechnician) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (linie.pretUnitarOferta > 0)
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Preț ofertat: ${linie.pretUnitarOferta.toStringAsFixed(2)} RON/${linie.um}',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant),
+                                  ),
+                                  if (linie.cantitateReala > 0 &&
+                                      linie.pretUnitarReal > 0)
+                                    Text(
+                                      '${linie.diferenta >= 0 ? 'Depășire' : 'Economie'}: '
+                                      '${linie.diferenta.abs().toStringAsFixed(2)} RON',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: linie.diferenta > 0
+                                            ? Colors.red.shade700
+                                            : Colors.green.shade700,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          SizedBox(
+                            width: 160,
+                            child: TextField(
+                              controller: pretRealCtrl,
+                              keyboardType: const TextInputType
+                                  .numberWithOptions(decimal: true),
+                              textCapitalization: TextCapitalization.none,
+                              decoration: const InputDecoration(
+                                labelText: 'Preț achiziție real (RON/UM)',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                              onSubmitted: (v) {
+                                final val = double.tryParse(
+                                    v.trim().replaceAll(',', '.'));
+                                if (val != null && val >= 0) {
+                                  _updateLiniePretReal(linie.id, val);
+                                }
+                              },
+                              onEditingComplete: () {
+                                final val = double.tryParse(pretRealCtrl.text
+                                    .trim()
+                                    .replaceAll(',', '.'));
+                                if (val != null && val >= 0) {
+                                  _updateLiniePretReal(linie.id, val);
+                                }
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     if (linie.observatii.trim().isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 4),
@@ -11259,7 +11714,19 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   @override
   Widget build(BuildContext context) {
     final client = widget.clientName.trim().isEmpty ? '-' : widget.clientName;
-    return DefaultTabController(
+    // FIX cache stale (iul 2026): orice ieșire din pagină (back button, gest
+    // sistem, buton back automat din AppBar) trebuie să întoarcă la JobsPage
+    // ultimul _jobSnapshot (labor/parteneri/vehicule/documente actualizate),
+    // nu doar la apăsarea explicită de Editează. Butonul Editează face pop
+    // direct cu 'edit' — acel apel ocolește PopScope (Navigator.pop explicit
+    // nu trece prin onPopInvokedWithResult), deci rămâne neschimbat.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        Navigator.of(context).pop(_jobSnapshot);
+      },
+      child: DefaultTabController(
       length: 5,
       child: Scaffold(
         appBar: AppBar(
@@ -11283,6 +11750,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               Tab(icon: Icon(Icons.euro_outlined), text: 'Economic'),
               Tab(icon: Icon(Icons.folder_outlined), text: 'Documente'),
               Tab(icon: Icon(Icons.compare_arrows_outlined), text: 'Situație'),
+              // Tab Pontaj dezactivat din UI (decizie de produs 2026-07-30);
+              // vezi comentariul de la importuri.
             ],
           ),
           actions: [
@@ -11365,6 +11834,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   _buildEconomicTab(context),
                   _buildDocumenteTab(context),
                   _buildSituatieTab(context),
+                  // Tab PontajLucrareTab dezactivat din UI (decizie de produs
+                  // 2026-07-30); vezi comentariul de la importuri.
                 ],
               ),
         floatingActionButton: FloatingActionButton.extended(
@@ -11373,6 +11844,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           label: const Text('Task lucru'),
           tooltip: 'Adaugă etapă / task lucrat',
         ),
+      ),
       ),
     );
   }
@@ -11716,6 +12188,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               ),
             ),
             // ── Tracking execuție: nou (ofertă sursă) vs vechi (manual) ─
+            // "Materiale asociate" rămâne condiționată de absența liniilor
+            // din ofertă — _buildLiniiTracking randează deja liniile de
+            // materiale/transport/utilaj importate din ofertă (categorie
+            // != 'manopera'); afișarea simultană ar produce două liste de
+            // materiale diferite pe același ecran.
             if (_jobSnapshot.liniiPlanificate.isNotEmpty)
               _buildLiniiTracking(context)
             else if (_jobSnapshot.sourceOfferId.isNotEmpty ||
@@ -11724,7 +12201,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
               // Lucrare convertită din ofertă (link forward sau detectat invers),
               // dar liniile nu au fost importate încă
               _buildRepopulareCard(context)
-            else ...[
+            else
               _section(
                 context,
                 'Materiale asociate',
@@ -11734,13 +12211,32 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         children: List<Widget>.generate(_materials.length,
                             (index) {
                           final e = _materials[index];
+                          final realPriceDiff =
+                              _materialLineRealVsOfferedDiff(e);
                           return ListTile(
                             contentPadding: EdgeInsets.zero,
                             title: Text((e['name'] ?? '-').toString()),
-                            subtitle: Text(
-                              _isTechnician
-                                  ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
-                                  : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_asDouble(e['total']).toStringAsFixed(2)}',
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _isTechnician
+                                      ? 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0}'
+                                      : 'UM: ${e['um'] ?? '-'} • Cantitate: ${e['qty'] ?? 0} • Preț unitar: ${e['price'] ?? 0} • Total: ${_materialLineOfferedTotal(e).toStringAsFixed(2)}',
+                                ),
+                                if (!_isTechnician && realPriceDiff != 0)
+                                  Text(
+                                    'Preț real: ${_asDouble(e['realPrice']).toStringAsFixed(2)} • '
+                                    '${realPriceDiff > 0 ? 'Depășire' : 'Economie'}: ${realPriceDiff.abs().toStringAsFixed(2)}',
+                                    style: TextStyle(
+                                      color: realPriceDiff > 0
+                                          ? Colors.red.shade700
+                                          : Colors.green.shade700,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                              ],
                             ),
                             trailing: Wrap(
                               spacing: 4,
@@ -11768,72 +12264,23 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                   label: const Text('Adaugă material'),
                 ),
               ),
-              _section(
-                context,
-                'Manoperă / ore',
-                _labor.isEmpty
-                    ? const Text('Nu există date.')
-                    : Column(
-                        children:
-                            List<Widget>.generate(_labor.length, (index) {
-                          final e = _labor[index];
-                          final dateLabel = '${e['date'] ?? '-'}';
-                          final hoursLabel =
-                              _asDouble(e['hours']).toStringAsFixed(2);
-                          final rateValue = _laborRateForRow(e);
-                          final rateLabel = rateValue > 0
-                              ? rateValue.toStringAsFixed(2)
-                              : '0.00 (fallback)';
-                          final costOreLabel =
-                              _laborOreCost(e).toStringAsFixed(2);
-                          final costDiurnaLabel =
-                              _laborPerDiemCost(e).toStringAsFixed(2);
-                          final costCazareLabel =
-                              _laborLodgingCost(e).toStringAsFixed(2);
-                          final costTotalLabel =
-                              _laborTotalLineCost(e).toStringAsFixed(2);
-                          final notesLabel = '${e['notes'] ?? ''}'.trim();
-                          final tripDaysLabel =
-                              _formatDecimal(_laborTripDays(e));
-                          final periodLabel = _laborPeriodLabel(e);
-                          return ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text((e['who'] ?? '-').toString()),
-                            subtitle: Text(
-                              _isTechnician
-                                  ? (notesLabel.isEmpty
-                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel'
-                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel\nObservații: $notesLabel')
-                                  : (notesLabel.isEmpty
-                                      ? '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel'
-                                      : '$dateLabel • Perioadă: $periodLabel • Zile: $tripDaysLabel • Ore: $hoursLabel • Tarif: $rateLabel • Cost ore: $costOreLabel • Cost diurnă: $costDiurnaLabel • Cost cazare: $costCazareLabel • Cost total: $costTotalLabel\nObservații: $notesLabel'),
-                            ),
-                            trailing: Wrap(
-                              spacing: 4,
-                              children: [
-                                IconButton(
-                                  tooltip: 'Editează',
-                                  icon: const Icon(Icons.edit_outlined),
-                                  onPressed: () => _onEditLabor(index),
-                                ),
-                                if (!_isTechnician)
-                                  IconButton(
-                                    tooltip: 'Șterge',
-                                    icon: const Icon(Icons.delete_outline),
-                                    onPressed: () => _onDeleteLabor(index),
-                                  ),
-                              ],
-                            ),
-                          );
-                        }),
-                      ),
-                action: TextButton.icon(
-                  onPressed: _onAddLabor,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Adaugă ore'),
-                ),
+            // "Resurse proprii" (manoperă proprie manuală introdusă prin
+            // _labor) e independentă de sistemul de tracking per-linie din
+            // ofertă — liniiPlanificate nu are granularitate lucrător/oră/
+            // tarif, deci nu există risc de dublare. Randată necondiționat,
+            // la fel ca "Resurse partener" mai jos — o lucrare convertită
+            // din ofertă tot poate avea manoperă proprie introdusă manual
+            // (decizie de produs 2026-07-30, corectare regresie).
+            _section(
+              context,
+              'Resurse proprii',
+              _buildOwnResourcesSection(),
+              action: TextButton.icon(
+                onPressed: _onAddLabor,
+                icon: const Icon(Icons.add),
+                label: const Text('Adaugă lucrător propriu'),
               ),
-            ],
+            ),
             _section(
               context,
               'Echipamente furnizate de beneficiar',
@@ -12309,6 +12756,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                           _chip('Cost real total',
                               _realTotalCost.toStringAsFixed(2)),
                           _chip(
+                            'Cost total lucrare (cu parteneri)',
+                            _costTotalUnificat.toStringAsFixed(2),
+                          ),
+                          _chip(
                             'Diferenta estimat vs real',
                             _estimatedVsRealDifference
                                 .toStringAsFixed(2),
@@ -12467,6 +12918,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 ],
               ),
             ),
+            // PontajEconomicSection dezactivat din UI (decizie de produs
+            // 2026-07-30); vezi comentariul de la importuri.
             if (!_isTechnician)
               _section(
                 context,
@@ -12882,6 +13335,7 @@ const Set<String> _collapsibleSectionTitles = <String>{
   'Materiale furnizate de beneficiar',
   'Manopera / ore',
   'Manoperă / ore',
+  'Resurse proprii',
   'Resurse partener',
   'Autoturisme proprii',
   'Documente asociate',

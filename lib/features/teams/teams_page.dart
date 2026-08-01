@@ -250,6 +250,7 @@ class _TeamsPageState extends State<TeamsPage> {
       dailyAllowance: source.dailyAllowance,
       defaultLodgingCost: source.defaultLodgingCost,
       requiresLodgingByDefault: source.requiresLodgingByDefault,
+      tarifZilnic: source.tarifZilnic,
     );
   }
 
