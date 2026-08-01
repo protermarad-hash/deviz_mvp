@@ -1310,13 +1310,13 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
   }) {
     final scheme = Theme.of(context).colorScheme;
     final brand = Theme.of(context).extension<AppBrandTheme>();
-    final preset =
-        DevizThemeScope.maybeOf(context)?.preset ?? AppThemePreset.atelier;
+    final preset = DevizThemeScope.maybeOf(context)?.preset ??
+        AppThemePreset.proTermSignature;
     final companyName = profile.companyName.trim().isEmpty
         ? 'ProVentaris'
         : profile.companyName.trim();
     final logoBytes = _tryDecodeLogo(profile.logoBase64);
-    final isProTerm = preset == AppThemePreset.proTerm;
+    final isProTerm = preset == AppThemePreset.proTermSignature;
 
     return Container(
       margin: EdgeInsets.fromLTRB(

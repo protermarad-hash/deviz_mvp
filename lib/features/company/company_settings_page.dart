@@ -58,7 +58,7 @@ class _CompanySettingsPageState extends State<CompanySettingsPage> {
   final _agfrTechnicianCertificateNumber = TextEditingController();
   final _agfrCompanyAuthorizationNumber = TextEditingController();
   String _logoBase64 = '';
-  AppThemePreset _appThemePreset = AppThemePreset.proTerm;
+  AppThemePreset _appThemePreset = AppThemePreset.proTermSignature;
   bool _askEveryTime = false;
   PdfVisualTemplate _pdfVisualTemplate = PdfVisualTemplate.classic;
   String _defaultPdfFolder = '';
@@ -628,10 +628,10 @@ class _CompanySettingsPageState extends State<CompanySettingsPage> {
                 )
                 .toList(growable: false),
           ),
-          if (_appThemePreset == AppThemePreset.proTerm) ...[
+          if (_appThemePreset == AppThemePreset.proTermSignature) ...[
             const SizedBox(height: 10),
             Text(
-              'Presetul ProVentaris Signature pune accent pe rosu energic, albastru tehnic si accente reci inspirate din logo-ul HVAC.',
+              'Presetul PRO TERM Signature pune accent pe rosu energic, albastru tehnic si accente reci inspirate din logo-ul HVAC.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],

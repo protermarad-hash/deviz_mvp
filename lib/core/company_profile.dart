@@ -18,7 +18,7 @@ class CompanyProfile {
     this.city = '',
     this.county = '',
     this.logoBase64 = '',
-    this.appThemePreset = AppThemePreset.proTerm,
+    this.appThemePreset = AppThemePreset.proTermSignature,
     this.pdfExportSettings = const PdfExportSettings(),
     this.smartBillSettings = const SmartBillSettings(),
     this.currency = 'RON',
