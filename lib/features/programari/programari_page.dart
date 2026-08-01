@@ -10,9 +10,14 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/app_theme_preset.dart';
 import '../../core/design_system/app_tokens.dart';
 import '../../core/design_system/widgets/app_card.dart';
 import '../../core/design_system/widgets/app_status_chip.dart';
+import '../../core/design_system/widgets/app_gradient_header.dart';
+import '../../core/design_system/widgets/app_stat_pill.dart';
+import '../../core/design_system/widgets/app_team_avatar_stack.dart';
+import '../../core/design_system/widgets/app_gradient_fab.dart';
 import '../../core/document_file_service.dart';
 import '../../core/romanian_holidays.dart';
 import '../../core/pdf_actions_helper.dart';
@@ -2729,6 +2734,152 @@ class _ProgramariPageState extends State<ProgramariPage> {
     return '';
   }
 
+  /// Avatare pentru [AppTeamAvatarStack] — inițiale angajat + culoarea
+  /// echipei din care face parte (fallback: `colorScheme.primary`).
+  List<AppAvatarData> _avatarDataForAppointment(Appointment item) {
+    final cs = Theme.of(context).colorScheme;
+    return _appointmentEmployeeIds(item).map((employeeId) {
+      final employee = _employeeById(employeeId);
+      final name = (employee?.name.trim().isNotEmpty ?? false)
+          ? employee!.name.trim()
+          : employeeId;
+      final initials = name
+          .split(RegExp(r'\s+'))
+          .where((w) => w.isNotEmpty)
+          .take(2)
+          .map((w) => w[0].toUpperCase())
+          .join();
+      final teamId = _teamIdFromEmployee(employeeId);
+      final color = _teamColorById[teamId] ?? cs.primary;
+      return AppAvatarData(label: initials.isEmpty ? '?' : initials, color: color);
+    }).toList(growable: false);
+  }
+
+  /// Header "elevated" al paginii Programări — statistici calculate LIVE din
+  /// `_filteredItems` (respectă filtrele active), NU hardcodate.
+  Widget _buildProgramariGradientHeader() {
+    final items = _filteredItems;
+    final now = DateTime.now();
+    final todayStart = _dateOnly(now);
+    final todayEnd = todayStart.add(const Duration(days: 1));
+    final weekStart = _startOfWeekMonday(now);
+    final weekEnd = weekStart.add(const Duration(days: 7));
+
+    var todayCount = 0;
+    var inCursCount = 0;
+    var weekCount = 0;
+    for (final item in items) {
+      final start = item.effectiveStartDateTime;
+      final end = item.effectiveEndDateTime;
+      if (start.isBefore(todayEnd) && end.isAfter(todayStart)) {
+        todayCount++;
+      }
+      if (start.isBefore(weekEnd) && end.isAfter(weekStart)) {
+        weekCount++;
+      }
+      if (_normalizeStatusValue(item.status) == 'in_curs') {
+        inCursCount++;
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: AppGradientHeader(
+        title: 'Programări',
+        subtitle: '${items.length} rezultate pentru filtrele curente',
+        icon: Icons.event_outlined,
+        stats: [
+          AppStatPill(
+            value: '$todayCount',
+            label: 'Azi',
+            icon: Icons.today_outlined,
+          ),
+          AppStatPill(
+            value: '$inCursCount',
+            label: 'În curs',
+            icon: Icons.timelapse_outlined,
+          ),
+          AppStatPill(
+            value: '$weekCount',
+            label: 'Săptămâna',
+            icon: Icons.date_range_outlined,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Selector de mod "pastilă" — segmentul activ pe gradient
+  /// (`AppBrandTheme.shellAccentGradient`), înlocuiește `SegmentedButton`.
+  Widget _buildViewModePillSelector() {
+    final cs = Theme.of(context).colorScheme;
+    final brand = Theme.of(context).extension<AppBrandTheme>();
+    final gradient = brand?.shellAccentGradient;
+
+    Widget segment(_ProgramariViewMode mode, String label, IconData icon) {
+      final active = _viewMode == mode;
+      return InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () {
+          setState(() {
+            _viewMode = mode;
+            if (mode != _ProgramariViewMode.calendar) {
+              _showCalendarControlPanel = false;
+            }
+          });
+          _persistViewModePreference(mode);
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            gradient: active ? gradient : null,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: active ? Colors.white : cs.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: active ? Colors.white : cs.onSurfaceVariant,
+                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          segment(_ProgramariViewMode.list, 'Listă', Icons.view_agenda_outlined),
+          segment(
+            _ProgramariViewMode.calendar,
+            'Calendar',
+            Icons.calendar_view_day_outlined,
+          ),
+          segment(_ProgramariViewMode.echipe, 'Pe echipe', Icons.groups_outlined),
+        ],
+      ),
+    );
+  }
+
   // Returnează din cache — calculat o singură dată când se schimbă datele/filtrele
   List<Appointment> get _filteredItems => _cachedFilteredItems;
 
@@ -4581,36 +4732,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
             runSpacing: 8,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              SegmentedButton<_ProgramariViewMode>(
-                segments: const <ButtonSegment<_ProgramariViewMode>>[
-                  ButtonSegment<_ProgramariViewMode>(
-                    value: _ProgramariViewMode.list,
-                    label: Text('Lista'),
-                    icon: Icon(Icons.view_agenda_outlined),
-                  ),
-                  ButtonSegment<_ProgramariViewMode>(
-                    value: _ProgramariViewMode.calendar,
-                    label: Text('Calendar'),
-                    icon: Icon(Icons.calendar_view_day_outlined),
-                  ),
-                  ButtonSegment<_ProgramariViewMode>(
-                    value: _ProgramariViewMode.echipe,
-                    label: Text('Pe echipe'),
-                    icon: Icon(Icons.groups_outlined),
-                  ),
-                ],
-                selected: <_ProgramariViewMode>{_viewMode},
-                onSelectionChanged: (selection) {
-                  final next = selection.first;
-                  setState(() {
-                    _viewMode = next;
-                    if (next != _ProgramariViewMode.calendar) {
-                      _showCalendarControlPanel = false;
-                    }
-                  });
-                  _persistViewModePreference(next);
-                },
-              ),
+              _buildViewModePillSelector(),
               if (_viewMode == _ProgramariViewMode.calendar)
                 FilledButton.tonalIcon(
                   onPressed: () {
@@ -6980,12 +7102,10 @@ class _ProgramariPageState extends State<ProgramariPage> {
               ),
             ),
       floatingActionButton: _canCreateOperationalAppointments
-          ? FloatingActionButton.extended(
+          ? AppGradientFab(
               onPressed: () => _openEditor(),
-              icon: const Icon(Icons.add),
-              label: const Text('Adaugă'),
-              backgroundColor: const Color(0xFFC62828),
-              foregroundColor: Colors.white,
+              icon: Icons.add,
+              label: 'Adaugă',
             )
           : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
@@ -6998,6 +7118,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
         ),
         mainContent: Column(
           children: [
+            _buildProgramariGradientHeader(),
             AnimatedCrossFade(
               duration: const Duration(milliseconds: 250),
               crossFadeState: _barraCollapsed
@@ -7076,19 +7197,15 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                 _canCreateAdministrativeAppointments;
                             final accentColor = _appointmentAccentColor(item);
                             final cardColor = _appointmentSurfaceColor(item);
+                            final avatarData = _avatarDataForAppointment(item);
 
-                            return Card(
+                            return AppCard(
+                              elevated: true,
+                              accentColor: accentColor,
                               color: cardColor,
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                                side: BorderSide(
-                                  color: accentColor.withValues(alpha: 0.35),
-                                ),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(14),
-                                child: Column(
+                              padding: const EdgeInsets.all(14),
+                              margin: EdgeInsets.zero,
+                              child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Row(
@@ -7106,16 +7223,20 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                                 ),
                                           ),
                                         ),
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          width: 12,
-                                          height: 12,
-                                          decoration: BoxDecoration(
-                                            color: accentColor,
-                                            shape: BoxShape.circle,
+                                        if (avatarData.isNotEmpty) ...[
+                                          AppTeamAvatarStack(avatars: avatarData),
+                                          const SizedBox(width: 8),
+                                        ],
+                                        if (item.recurrenceRule != 'none' &&
+                                            item.recurrenceRule.trim().isNotEmpty) ...[
+                                          const AppStatusChip(
+                                            label: 'Anual',
+                                            status: AppStatusKind.neutral,
+                                            icon: Icons.repeat,
+                                            customColor: Colors.deepPurple,
                                           ),
-                                        ),
-                                        const SizedBox(width: 8),
+                                          const SizedBox(width: 8),
+                                        ],
                                         _statusChip(item.status),
                                         const SizedBox(width: 8),
                                         _buildQuickDocumentMenu(
@@ -7465,7 +7586,6 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                     ),
                                   ],
                                 ),
-                              ),
                             );
                           },
                         ),

@@ -934,7 +934,8 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
       child: Card(
         color: background,
         margin: const EdgeInsets.symmetric(vertical: 3),
-        elevation: compact ? 0 : 1,
+        elevation: compact ? 0 : 6,
+        shadowColor: accent.withValues(alpha: 0.55),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
@@ -981,7 +982,14 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                               ),
                             ),
                           ),
-                          if (showStatusChip)
+                          if (showStatusChip &&
+                              item.recurrenceRule != 'none' &&
+                              item.recurrenceRule.trim().isNotEmpty) ...[
+                            Icon(Icons.repeat, size: 13, color: accent),
+                            const SizedBox(width: 4),
+                          ],
+                          if (showStatusChip) ...[
+                            _buildCalendarCardAvatars(item),
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 6,
@@ -1000,6 +1008,7 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                                 ),
                               ),
                             ),
+                          ],
                         ],
                       ),
                       if (showTimeLine) ...[
@@ -1074,6 +1083,17 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildCalendarCardAvatars(Appointment item) {
+    final avatars = _avatarDataForAppointment(item);
+    if (avatars.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: AppTeamAvatarStack(avatars: avatars, size: 18, maxVisible: 2),
     );
   }
 
