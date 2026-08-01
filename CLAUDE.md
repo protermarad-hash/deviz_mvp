@@ -2394,9 +2394,9 @@ După FIECARE build (orice platformă, orice client), agentul TREBUIE:
 |---|---|---|
 | APK Costel | `build/proventaris-costel-v1.5.2-build53.apk` | 2026-07-03 23:16:52 (bump +53; aapt: ro.proterm.proventaris.costel versionCode 53; libapp.so 996e4fd3) |
 | ZIP Windows Costel | `build/proventaris-windows-costel-v1.5.2-build53.zip` | 2026-07-03 23:17:59 (bump +53; app.so costel f6617a18 confirmat prin eliminare + hash-compare; exe v53) |
-| APK PRO TERM | `build/releases/proterm/android/app-proterm-v1.6.1-build79.apk` | 2026-07-30 15:53 (bump 1.6.1+79 — build de TEST branch feature/pontaj-zilnic-lucrari; aapt: ro.proterm.proventaris versionCode 79 versionName 1.6.1; SHA256 `A475D7D74F184B54343CB6285D70718A523F52CEC5B72A2F72AC53600FE8AF27`; build tag `rel-20260730-1546`; secțiune 'Manopera din pontaj' tab Economic; via scripts/build_proterm.ps1; NEPUBLICAT) |
-| ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v1.6.1-build79.zip` | 2026-07-30 16:01 (bump 1.6.1+79 — build de TEST; SHA256 `BF82CA76A907022907FF2C6BD0E1BE5247FEBB37001C0BE36B62A71658FD261F`; cache Windows curățat automat înainte de build; via scripts/build_proterm.ps1; NEPUBLICAT) |
-| Windows PRO TERM (folder) | `build/windows/x64/runner/Release/` | 2026-07-30 15:57 (build tag `rel-20260730-1546`; app.so SHA256 `6A2A92A034667E48FD06C3AD1511523769344CB06DA182B58224A919DF49B7A4`; cache Windows curățat automat de build_proterm.ps1 pasul [2/6]) |
+| APK PRO TERM | `build/releases/proterm/android/app-proterm-v1.6.1-build83.apk` | 2026-07-31 07:55 (bump 1.6.1+83 — build de TEST peste 32984c2, branch feature/pontaj-zilnic-lucrari; dart analyze 0 erori, flutter test 154/154; aapt: ro.proterm.proventaris versionCode 83 versionName 1.6.1; SHA256 `4E7365BE82D8B098B63B4756FC8303FD010CCB26ED5AC8A0C5EC217D98DCC8C8`; build tag `rel-20260731-0747`; via scripts/build_proterm.ps1; NEPUBLICAT) |
+| ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v1.6.1-build83.zip` | 2026-07-31 08:03 (bump 1.6.1+83 — build de TEST; SHA256 `5EF6A09AADFE6C5647931A35071BF952BACE69659EA2DC3A0FE18FE594E816C9`; cache Windows curățat automat înainte de build; via scripts/build_proterm.ps1; NEPUBLICAT) |
+| Windows PRO TERM (folder) | `build/windows/x64/runner/Release/` | 2026-07-31 07:59 (build tag `rel-20260731-0747`; app.so SHA256 `E9D84CDD9AA63F19528425F98177F3C86FC142422FCE762F3C51DBF1E419C5DE`; cache Windows curățat automat de build_proterm.ps1 pasul [2/6]) |
 
 ---
 
