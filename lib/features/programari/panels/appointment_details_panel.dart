@@ -51,7 +51,10 @@ extension _ProgramariAppointmentDetailsPanelX on _ProgramariPageState {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      _statusChip(item.status),
+                      AppStatusChip(
+                        label: _statusLabel(item.status),
+                        status: _appStatusKindFor(item),
+                      ),
                       if (!_isEmployeeRole) _appointmentColorChip(item),
                       if (!_isEmployeeRole) _linkedDocumentsChip(item),
                       _buildQuickDocumentMenu(item),

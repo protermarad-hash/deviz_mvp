@@ -12,6 +12,7 @@ class AppCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(AppSpacing.md),
     this.margin,
     this.onTap,
+    this.onLongPress,
     this.color,
     this.elevated = false,
     this.accentColor,
@@ -21,6 +22,7 @@ class AppCard extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry? margin;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final Color? color;
 
   /// Variantă "elevated cards" (aug 2026): umbră pronunțată colorată după
@@ -39,7 +41,7 @@ class AppCard extends StatelessWidget {
     final borderRadius = shape is RoundedRectangleBorder &&
             shape.borderRadius is BorderRadius
         ? shape.borderRadius as BorderRadius
-        : BorderRadius.circular(24);
+        : AppElevatedCardStyle.borderRadius;
 
     final content = Padding(padding: padding, child: child);
 
@@ -47,9 +49,10 @@ class AppCard extends StatelessWidget {
       return Card(
         margin: margin ?? EdgeInsets.zero,
         color: color,
-        child: onTap != null
+        child: onTap != null || onLongPress != null
             ? InkWell(
                 onTap: onTap,
+                onLongPress: onLongPress,
                 borderRadius: borderRadius,
                 child: content,
               )
@@ -63,13 +66,7 @@ class AppCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: color ?? Theme.of(context).colorScheme.surface,
         borderRadius: borderRadius,
-        boxShadow: [
-          BoxShadow(
-            color: accent.withValues(alpha: 0.22),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        boxShadow: AppElevatedCardStyle.shadow(accent),
       ),
       child: ClipRRect(
         borderRadius: borderRadius,
@@ -77,10 +74,14 @@ class AppCard extends StatelessWidget {
           color: Colors.transparent,
           child: InkWell(
             onTap: onTap,
+            onLongPress: onLongPress,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Container(width: 4, color: accent),
+                Container(
+                  width: AppElevatedCardStyle.accentBarWidth,
+                  color: accent,
+                ),
                 Expanded(child: content),
               ],
             ),
