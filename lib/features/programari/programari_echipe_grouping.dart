@@ -53,3 +53,42 @@ Map<String, List<Appointment>> groupAppointmentsByTeam(
   }
   return grouped;
 }
+
+/// Clasificator pur pentru drag & drop între coloane de echipă (etapa 3,
+/// testat: `test/programari_echipe_grouping_test.dart`). Primește lista
+/// curentă de echipe asignate ale programării trase (`currentTeamIds`,
+/// ordinea rezultată din [Appointment.resolvedAssignedTeamIds]) și
+/// coloana sursă/țintă a drag-ului, apoi întoarce noua listă de echipe.
+///
+/// Reguli (decizie de produs, etapa 3):
+/// - `sourceColumnId == targetColumnId` → no-op, întoarce `currentTeamIds`
+///   neschimbat (evită scrieri inutile în coada offline).
+/// - Drop pe coloana unei echipe reale: elimină [sourceColumnId] din listă
+///   (dacă era o echipă reală, nu [kUnassignedTeamColumnId]) și adaugă
+///   [targetColumnId] dacă nu era deja prezent. Restul echipelor rămân
+///   neatinse (ex: A+C, tragi din A în B → rezultat B+C).
+/// - Drop pe [kUnassignedTeamColumnId]: elimină doar [sourceColumnId] din
+///   listă, fără să adauge nimic (coloana Neasignat nu e o echipă reală).
+/// - Drag din [kUnassignedTeamColumnId] către o echipă: lista sursă era
+///   goală, doar adaugă [targetColumnId].
+List<String> reassignTeamOnDrop({
+  required List<String> currentTeamIds,
+  required String sourceColumnId,
+  required String targetColumnId,
+}) {
+  if (sourceColumnId == targetColumnId) {
+    return currentTeamIds;
+  }
+
+  final result = <String>[
+    for (final id in currentTeamIds)
+      if (id != sourceColumnId) id,
+  ];
+
+  if (targetColumnId != kUnassignedTeamColumnId &&
+      !result.contains(targetColumnId)) {
+    result.add(targetColumnId);
+  }
+
+  return result;
+}

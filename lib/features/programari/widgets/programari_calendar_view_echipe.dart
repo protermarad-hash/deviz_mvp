@@ -3,7 +3,8 @@ part of '../programari_page.dart';
 /// Vizualizare "Pe echipe" — coloane de calendar pe ECHIPĂ (nu pe angajat
 /// individual), cu o coloană finală "Neasignat" pentru programările fără
 /// echipă cunoscută. Mod ADĂUGAT lângă planner-ul existent (coloane de zi),
-/// NU îl înlocuiește. FĂRĂ drag & drop — doar vizualizare (etapă separată).
+/// NU îl înlocuiește. Suportă drag & drop între coloane (etapa 3) — vezi
+/// [reassignTeamOnDrop] pentru regula de reasignare.
 /// Extension (nu mixin) pentru a evita circularitatea "on ClassItself";
 /// `part of` păstrează accesul complet la starea privată a paginii.
 extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
@@ -84,81 +85,138 @@ extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
   Widget _buildEchipeColumn(_EchipeColumnData column) {
     final cs = Theme.of(context).colorScheme;
     final headerColor = column.color ?? cs.primary;
-    return Container(
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: headerColor.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: headerColor.withValues(alpha: 0.14),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(14),
-              ),
+    return DragTarget<_EchipeDragPayload>(
+      onWillAcceptWithDetails: (details) =>
+          details.data.sourceColumnId != column.id,
+      onAcceptWithDetails: (details) =>
+          _handleEchipeTeamDrop(details.data, column.id),
+      builder: (context, candidateData, rejectedData) {
+        final isDropTarget = candidateData.isNotEmpty;
+        return Container(
+          decoration: BoxDecoration(
+            color: isDropTarget
+                ? headerColor.withValues(alpha: 0.10)
+                : cs.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isDropTarget
+                  ? headerColor
+                  : headerColor.withValues(alpha: 0.3),
+              width: isDropTarget ? 2 : 1,
             ),
-            child: Row(
-              children: [
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(
-                    color: headerColor,
-                    shape: BoxShape.circle,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: headerColor.withValues(alpha: 0.14),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(14),
                   ),
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
+                child: Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        color: headerColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        column.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: headerColor,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${column.items.length}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: headerColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Rând separat pentru indicatorul de zonă de drop — NICIODATĂ
+              // în Row-ul de titlu de mai sus (regresia "elevated cards" din
+              // trecut a fost cauzată exact de asta).
+              if (isDropTarget)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  color: headerColor.withValues(alpha: 0.14),
                   child: Text(
-                    column.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    'Plasează aici pentru a reasigna',
                     style: TextStyle(
-                      fontWeight: FontWeight.w800,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
                       color: headerColor,
                     ),
                   ),
                 ),
-                Text(
-                  '${column.items.length}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: headerColor,
-                  ),
-                ),
-              ],
-            ),
+              Flexible(
+                child: column.items.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        child: Text(
+                          'Nicio programare.',
+                          style: TextStyle(color: cs.onSurfaceVariant),
+                        ),
+                      )
+                    : ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: const EdgeInsets.all(AppSpacing.sm),
+                        itemCount: column.items.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: AppSpacing.sm),
+                        itemBuilder: (context, index) =>
+                            _buildEchipeAppointmentCard(
+                          column.items[index],
+                          sourceColumnId: column.id,
+                        ),
+                      ),
+              ),
+            ],
           ),
-          Flexible(
-            child: column.items.isEmpty
-                ? Padding(
-                    padding: const EdgeInsets.all(AppSpacing.md),
-                    child: Text(
-                      'Nicio programare.',
-                      style: TextStyle(color: cs.onSurfaceVariant),
-                    ),
-                  )
-                : ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.all(AppSpacing.sm),
-                    itemCount: column.items.length,
-                    separatorBuilder: (_, __) =>
-                        const SizedBox(height: AppSpacing.sm),
-                    itemBuilder: (context, index) =>
-                        _buildEchipeAppointmentCard(column.items[index]),
-                  ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildEchipeAppointmentCard(Appointment item) {
+  Widget _buildEchipeAppointmentCard(
+    Appointment item, {
+    required String sourceColumnId,
+  }) {
+    final card = _buildEchipeAppointmentCardContent(item);
+    return LongPressDraggable<_EchipeDragPayload>(
+      data: _EchipeDragPayload(item: item, sourceColumnId: sourceColumnId),
+      delay: const Duration(milliseconds: 300),
+      feedback: AppDragGhostCard(
+        width: 284,
+        child: _buildEchipeAppointmentCardContent(item),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: card),
+      child: card,
+    );
+  }
+
+  Widget _buildEchipeAppointmentCardContent(Appointment item) {
     final clientLabel = _resolvedClientName(item.clientId, item.clientName);
     final titleOrClient =
         item.title.trim().isNotEmpty ? item.title : clientLabel;
@@ -218,6 +276,72 @@ extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
       ),
     );
   }
+
+  /// Aplică regula pură [reassignTeamOnDrop] la programarea trasă, apoi
+  /// salvează optimist: actualizare imediată din `_items` (pattern mirror
+  /// pe cel de la `_showClientDataEditDialog`), `saveAppointment` fire-and-
+  /// forget în fundal, cu revenire la starea anterioară + notificare vizuală
+  /// la eroare.
+  void _handleEchipeTeamDrop(
+    _EchipeDragPayload payload,
+    String targetColumnId,
+  ) {
+    if (payload.sourceColumnId == targetColumnId) {
+      return; // no-op explicit — evită scrieri inutile în coada offline
+    }
+
+    final item = payload.item;
+    final previousIndex = _items.indexWhere((a) => a.id == item.id);
+    if (previousIndex < 0) return;
+    final previous = _items[previousIndex];
+
+    final newTeamIds = reassignTeamOnDrop(
+      currentTeamIds: item.resolvedAssignedTeamIds,
+      sourceColumnId: payload.sourceColumnId,
+      targetColumnId: targetColumnId,
+    );
+    // Aceeași regulă de derivare a teamId legacy ca în
+    // appointment_form_dialog.dart (enforcedAssignedTeamIds → teamId).
+    final newTeamId = newTeamIds.isNotEmpty ? newTeamIds.first : '';
+    final updated = item.copyWith(
+      teamId: newTeamId,
+      assignedTeamIds: newTeamIds,
+    );
+
+    _setStateLogged('echipe drag&drop reassign team', () {
+      final list = List.of(_items);
+      list[previousIndex] = updated;
+      _items = list;
+      _updateFilteredCache();
+    });
+
+    widget.repository.saveAppointment(updated).catchError((e) {
+      if (!mounted) return;
+      _setStateLogged('echipe drag&drop revert', () {
+        final idx = _items.indexWhere((a) => a.id == item.id);
+        if (idx >= 0) {
+          final list = List.of(_items);
+          list[idx] = previous;
+          _items = list;
+          _updateFilteredCache();
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Eroare la reasignarea echipei: $e')),
+      );
+    });
+  }
+}
+
+/// Payload de drag pentru vizualizarea "Pe echipe" — reține atât programarea
+/// trasă, cât și coloana EXACTĂ din care a pornit drag-ul. Necesar pentru că
+/// o programare cu 2+ echipe apare duplicată (același obiect) în mai multe
+/// coloane simultan — `sourceColumnId` nu poate fi dedus doar din item.
+class _EchipeDragPayload {
+  const _EchipeDragPayload({required this.item, required this.sourceColumnId});
+
+  final Appointment item;
+  final String sourceColumnId;
 }
 
 class _EchipeColumnData {

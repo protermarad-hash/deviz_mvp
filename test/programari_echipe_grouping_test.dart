@@ -113,4 +113,71 @@ void main() {
       );
     });
   });
+
+  group('reassignTeamOnDrop — drag & drop între coloane de echipă', () {
+    test('A+C, tragi din A în B → rezultat B+C (restul echipelor neatinse)', () {
+      final result = reassignTeamOnDrop(
+        currentTeamIds: const ['echipa-a', 'echipa-c'],
+        sourceColumnId: 'echipa-a',
+        targetColumnId: 'echipa-b',
+      );
+      expect(result, containsAll(['echipa-b', 'echipa-c']));
+      expect(result, isNot(contains('echipa-a')));
+      expect(result.length, 2);
+    });
+
+    test('drag din coloană echipă → Neasignat: elimină doar echipa sursă, nu adaugă nimic', () {
+      final result = reassignTeamOnDrop(
+        currentTeamIds: const ['echipa-a'],
+        sourceColumnId: 'echipa-a',
+        targetColumnId: kUnassignedTeamColumnId,
+      );
+      expect(result, isEmpty);
+    });
+
+    test('drag din Neasignat → echipă B: lista era goală, doar adaugă B', () {
+      final result = reassignTeamOnDrop(
+        currentTeamIds: const [],
+        sourceColumnId: kUnassignedTeamColumnId,
+        targetColumnId: 'echipa-b',
+      );
+      expect(result, ['echipa-b']);
+    });
+
+    test('source == target: no-op explicit, întoarce lista neschimbată', () {
+      final result = reassignTeamOnDrop(
+        currentTeamIds: const ['echipa-a', 'echipa-c'],
+        sourceColumnId: 'echipa-a',
+        targetColumnId: 'echipa-a',
+      );
+      expect(result, ['echipa-a', 'echipa-c']);
+    });
+
+    test('source == target == Neasignat: no-op explicit', () {
+      final result = reassignTeamOnDrop(
+        currentTeamIds: const [],
+        sourceColumnId: kUnassignedTeamColumnId,
+        targetColumnId: kUnassignedTeamColumnId,
+      );
+      expect(result, isEmpty);
+    });
+
+    test('listă goală, drag dintr-o echipă (caz defensiv) → target adăugat, fără crash', () {
+      final result = reassignTeamOnDrop(
+        currentTeamIds: const [],
+        sourceColumnId: 'echipa-a',
+        targetColumnId: 'echipa-b',
+      );
+      expect(result, ['echipa-b']);
+    });
+
+    test('drop pe o echipă deja prezentă în listă (A+B, tragi din A în B) → doar B rămâne', () {
+      final result = reassignTeamOnDrop(
+        currentTeamIds: const ['echipa-a', 'echipa-b'],
+        sourceColumnId: 'echipa-a',
+        targetColumnId: 'echipa-b',
+      );
+      expect(result, ['echipa-b']);
+    });
+  });
 }
