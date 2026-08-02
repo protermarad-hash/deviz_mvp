@@ -863,7 +863,9 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                     for (final placement in placements)
                       _calendarBlock(
                         placement,
+                        day: day,
                         startHour: startHour,
+                        endHour: endHour,
                         hourHeight: hourHeight,
                         columnWidth: constraints.maxWidth,
                       ),
@@ -879,18 +881,27 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
 
   Widget _calendarBlock(
     CalendarPlacement placement, {
+    required DateTime day,
     required int startHour,
+    required int endHour,
     required double hourHeight,
     required double columnWidth,
   }) {
     final item = placement.item;
     final start = placement.visualStart;
     final end = placement.visualEnd;
-    final startMinutes = (start.hour - startHour) * 60 + start.minute;
-    final endMinutes = (end.hour - startHour) * 60 + end.minute;
-    final top = startMinutes / 60 * hourHeight;
-    final rawHeight = (endMinutes - startMinutes) / 60 * hourHeight;
+    final geometry = CalendarBlockGeometry.compute(
+      placement: placement,
+      day: day,
+      startHour: startHour,
+      endHour: endHour,
+    );
+    final top = geometry.startMinutes / 60 * hourHeight;
+    final rawHeight =
+        (geometry.endMinutes - geometry.startMinutes) / 60 * hourHeight;
     final height = rawHeight < 48 ? 48.0 : rawHeight;
+    final continuesBefore = geometry.continuesBefore;
+    final continuesAfter = geometry.continuesAfter;
     final compact = height < 82;
     final veryCompact = height < 64;
     final title = item.title.trim().isEmpty
@@ -929,121 +940,136 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
     final showAddressLine =
         showSecondaryLine && placement.laneCount == 1 && height >= 152;
 
+    Widget continuationIndicator({required bool atTop}) {
+      return Positioned(
+        top: atTop ? 2 : null,
+        bottom: atTop ? null : 2,
+        left: 0,
+        right: 0,
+        child: IgnorePointer(
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Icon(
+                atTop ? Icons.expand_less : Icons.expand_more,
+                size: 12,
+                color: Theme.of(context).colorScheme.surface,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Positioned(
       top: top,
       left: leftInset,
       right: rightInset,
       height: height,
-      child: Card(
-        color: background,
-        margin: const EdgeInsets.symmetric(vertical: 3),
-        elevation: compact ? 0 : 6,
-        shadowColor: accent.withValues(alpha: 0.55),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(
-            color: accent.withValues(alpha: 0.45),
-            width: 1.1,
+      child: Stack(
+        children: [
+          Card(
+            color: background,
+          margin: const EdgeInsets.symmetric(vertical: 3),
+          elevation: compact ? 0 : 6,
+          shadowColor: accent.withValues(alpha: 0.55),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(
+              color: accent.withValues(alpha: 0.45),
+              width: 1.1,
+            ),
           ),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: () => _openDetails(item),
-          onLongPress: _canCreateAdministrativeAppointments
-              ? () => _openEditor(appointment: item)
-              : null,
-          child: Row(
-            children: [
-              Container(
-                width: compact ? 5 : 7,
-                decoration: BoxDecoration(
-                  color: accent,
-                  borderRadius: const BorderRadius.horizontal(
-                    left: Radius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _openDetails(item),
+            onLongPress: _canCreateAdministrativeAppointments
+                ? () => _openEditor(appointment: item)
+                : null,
+            child: Row(
+              children: [
+                Container(
+                  width: compact ? 5 : 7,
+                  decoration: BoxDecoration(
+                    color: accent,
+                    borderRadius: const BorderRadius.horizontal(
+                      left: Radius.circular(14),
+                    ),
                   ),
                 ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.all(veryCompact ? 7 : (compact ? 8 : 10)),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              title,
-                              maxLines: compact || height < 136 ? 1 : 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontWeight: FontWeight.w700,
-                                color: foreground,
-                                height: 1.1,
-                              ),
-                            ),
-                          ),
-                          if (showStatusChip)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                color: accent.withValues(alpha: 0.14),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
+                Expanded(
+                  child: Padding(
+                    padding: EdgeInsets.all(veryCompact ? 7 : (compact ? 8 : 10)),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
                               child: Text(
-                                _statusLabel(item.status),
+                                title,
+                                maxLines: compact || height < 136 ? 1 : 2,
+                                overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  fontSize: 11,
                                   fontWeight: FontWeight.w700,
-                                  color: accent,
+                                  color: foreground,
+                                  height: 1.1,
                                 ),
                               ),
                             ),
-                        ],
-                      ),
-                      if (showTimeLine) ...[
-                        const SizedBox(height: AppSpacing.xs),
-                        Text(
-                          '${_formatTime(start)} - ${_formatTime(end)} • ${_durationLabel(end.difference(start))}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: foreground,
-                            fontWeight: FontWeight.w600,
-                            fontSize: veryCompact ? 11.5 : null,
-                          ),
-                        ),
-                      ],
-                      if (showSecondaryLine) ...[
-                        if (isRecurring || avatarData.isNotEmpty) ...[
-                          const SizedBox(height: AppSpacing.xs),
-                          CalendarCardMetaRow(
-                            isRecurring: isRecurring,
-                            avatars: avatarData,
-                            accentColor: accent,
-                          ),
-                        ],
-                        const SizedBox(height: AppSpacing.xs),
-                        Text(
-                          secondary,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: mutedForeground,
-                                    fontWeight: FontWeight.w600,
+                            if (showStatusChip)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: accent.withValues(alpha: 0.14),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  _statusLabel(item.status),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: accent,
                                   ),
+                                ),
+                              ),
+                          ],
                         ),
-                        if (showAssignmentSummary) ...[
-                          const SizedBox(height: 3),
+                        if (showTimeLine) ...[
+                          const SizedBox(height: AppSpacing.xs),
                           Text(
-                            assignmentSummary,
-                            maxLines: height >= 164 ? 2 : 1,
+                            '${_formatTime(start)} - ${_formatTime(end)} • ${_durationLabel(end.difference(start))}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: foreground,
+                              fontWeight: FontWeight.w600,
+                              fontSize: veryCompact ? 11.5 : null,
+                            ),
+                          ),
+                        ],
+                        if (showSecondaryLine) ...[
+                          if (isRecurring || avatarData.isNotEmpty) ...[
+                            const SizedBox(height: AppSpacing.xs),
+                            CalendarCardMetaRow(
+                              isRecurring: isRecurring,
+                              avatars: avatarData,
+                              accentColor: accent,
+                            ),
+                          ],
+                          const SizedBox(height: AppSpacing.xs),
+                          Text(
+                            secondary,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style:
                                 Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -1051,40 +1077,56 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                                       fontWeight: FontWeight.w600,
                                     ),
                           ),
-                        ],
-                        if (showClientLine) ...[
-                          const SizedBox(height: 3),
-                          Text(
-                            itemClient,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style:
-                                Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: foreground,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                          ),
-                          if (showAddressLine) ...[
+                          if (showAssignmentSummary) ...[
                             const SizedBox(height: 3),
                             Text(
-                              _detailAddress(item),
-                              maxLines: height >= 176 ? 2 : 1,
+                              assignmentSummary,
+                              maxLines: height >= 164 ? 2 : 1,
                               overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(color: mutedForeground),
+                              style:
+                                  Theme.of(context).textTheme.bodySmall?.copyWith(
+                                        color: mutedForeground,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                             ),
+                          ],
+                          if (showClientLine) ...[
+                            const SizedBox(height: 3),
+                            Text(
+                              itemClient,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  Theme.of(context).textTheme.bodySmall?.copyWith(
+                                        color: foreground,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                            ),
+                            if (showAddressLine) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                _detailAddress(item),
+                                maxLines: height >= 176 ? 2 : 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: mutedForeground),
+                              ),
+                            ],
                           ],
                         ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
+          ),
+          if (continuesBefore) continuationIndicator(atTop: true),
+          if (continuesAfter) continuationIndicator(atTop: false),
+        ],
       ),
     );
   }
