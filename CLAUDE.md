@@ -2397,6 +2397,8 @@ După FIECARE build (orice platformă, orice client), agentul TREBUIE:
 | APK PRO TERM | `build/releases/proterm/android/app-proterm-v1.6.1-build83.apk` | 2026-07-31 07:55 (bump 1.6.1+83 — build de TEST peste 32984c2, branch feature/pontaj-zilnic-lucrari; dart analyze 0 erori, flutter test 154/154; aapt: ro.proterm.proventaris versionCode 83 versionName 1.6.1; SHA256 `4E7365BE82D8B098B63B4756FC8303FD010CCB26ED5AC8A0C5EC217D98DCC8C8`; build tag `rel-20260731-0747`; via scripts/build_proterm.ps1; NEPUBLICAT) |
 | ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v1.6.1-build83.zip` | 2026-07-31 08:03 (bump 1.6.1+83 — build de TEST; SHA256 `5EF6A09AADFE6C5647931A35071BF952BACE69659EA2DC3A0FE18FE594E816C9`; cache Windows curățat automat înainte de build; via scripts/build_proterm.ps1; NEPUBLICAT) |
 | Windows PRO TERM (folder) | `build/windows/x64/runner/Release/` | 2026-07-31 07:59 (build tag `rel-20260731-0747`; app.so SHA256 `E9D84CDD9AA63F19528425F98177F3C86FC142422FCE762F3C51DBF1E419C5DE`; cache Windows curățat automat de build_proterm.ps1 pasul [2/6]) |
+| APK PRO TERM | `build/releases/proterm/android/app-proterm-v1.7.0-build88.apk` | 2026-08-02 17:47 (versiune neschimbată din commit a828ee4 — 1.7.0+88; dart analyze 0 erori, flutter test 208/208; aapt: ro.proterm.proventaris versionCode 88 versionName 1.7.0; 103MB; build tag `rel-20260802-1736`; via scripts/build_proterm.ps1; NEPUBLICAT) |
+| ZIP Windows PRO TERM | `build/releases/proterm/windows/proventaris-windows-v1.7.0-build88.zip` | 2026-08-02 18:00 (bump inexistent, versiune 1.7.0+88 nefolosită anterior; 65MB; cache Windows curățat automat înainte de build; build tag `rel-20260802-1736`; via scripts/build_proterm.ps1; NEPUBLICAT) |
 
 ---
 

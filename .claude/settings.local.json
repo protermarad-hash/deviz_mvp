@@ -103,7 +103,19 @@
       "Bash(grep -cn \"ListView\\(\" lib/features/programari/programari_page.dart lib/features/jobs/jobs_page.dart lib/features/jobs/lucrare_detalii_page.dart)",
       "Bash(grep -cn \"ListView.builder\\\\|ListView.separated\" lib/features/programari/programari_page.dart lib/features/jobs/jobs_page.dart lib/features/jobs/lucrare_detalii_page.dart)",
       "Bash(grep -cn \"SingleChildScrollView\" lib/features/programari/programari_page.dart lib/features/jobs/jobs_page.dart lib/features/jobs/lucrare_detalii_page.dart)",
-      "Bash(grep -cn \"\\\\.map\\(\" lib/features/programari/programari_page.dart)"
+      "Bash(grep -cn \"\\\\.map\\(\" lib/features/programari/programari_page.dart)",
+      "PowerShell(Select-String -Path pubspec.yaml -Pattern '^version:'; git log --oneline -1; git merge-base --is-ancestor d6dafa7 HEAD; echo \"ancestor check exit: $LASTEXITCODE\")",
+      "PowerShell(powershell -ExecutionPolicy Bypass -File scripts\\\\build_proterm.ps1)",
+      "PowerShell($aapt = Get-ChildItem \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\build-tools\" -Filter aapt.exe -Recurse -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName; Write-Host \"aapt: $aapt\"; & $aapt dump badging build\\\\releases\\\\proterm\\\\android\\\\app-proterm-v1.6.0-build78.apk | Select-String -Pattern \"^package:\")",
+      "PowerShell(Get-ChildItem build\\\\app\\\\outputs\\\\flutter-apk | Select-Object Name, Length, LastWriteTime; $aapt = Get-ChildItem \"$env:LOCALAPPDATA\\\\Android\\\\Sdk\\\\build-tools\" -Recurse -Filter aapt.exe -ErrorAction SilentlyContinue | Select-Object -Last 1 -ExpandProperty FullName; $aapt)",
+      "Bash(/c/Users/Lenovo/AppData/Local/Android/Sdk/build-tools/36.1.0/aapt.exe dump *)",
+      "Bash(certutil -hashfile \"build\\\\releases\\\\proterm\\\\android\\\\app-proterm-v1.6.1-build82.apk\" SHA256)",
+      "Bash(certutil -hashfile \"build\\\\releases\\\\proterm\\\\windows\\\\proventaris-windows-v1.6.1-build82.zip\" SHA256)",
+      "Bash(certutil -hashfile \"build\\\\releases\\\\proterm\\\\android\\\\app-proterm-v1.6.1-build81.apk\" SHA256)",
+      "PowerShell(Tee-Object *)",
+      "Bash(cp lib/features/programari/programari_page.dart lib/features/programari/programari_page.dart.bak_faza1_calendar)",
+      "Bash(mkdir -p lib/features/programari/widgets)",
+      "Bash(\"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local/Android/Sdk/build-tools/36.1.0/aapt.exe\" dump *)"
     ]
   }
 }
