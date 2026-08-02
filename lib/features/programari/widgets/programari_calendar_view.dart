@@ -934,39 +934,17 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
       left: leftInset,
       right: rightInset,
       height: height,
-      child: Card(
+      child: AppCard(
+        elevated: true,
+        accentColor: accent,
         color: background,
         margin: const EdgeInsets.symmetric(vertical: 3),
-        elevation: compact ? 0 : 6,
-        shadowColor: accent.withValues(alpha: 0.55),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(
-            color: accent.withValues(alpha: 0.45),
-            width: 1.1,
-          ),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: () => _openDetails(item),
-          onLongPress: _canCreateAdministrativeAppointments
-              ? () => _openEditor(appointment: item)
-              : null,
-          child: Row(
-            children: [
-              Container(
-                width: compact ? 5 : 7,
-                decoration: BoxDecoration(
-                  color: accent,
-                  borderRadius: const BorderRadius.horizontal(
-                    left: Radius.circular(14),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.all(veryCompact ? 7 : (compact ? 8 : 10)),
-                  child: Column(
+        padding: EdgeInsets.all(veryCompact ? 7 : (compact ? 8 : 10)),
+        onTap: () => _openDetails(item),
+        onLongPress: _canCreateAdministrativeAppointments
+            ? () => _openEditor(appointment: item)
+            : null,
+        child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -986,23 +964,9 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                             ),
                           ),
                           if (showStatusChip)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 3,
-                              ),
-                              decoration: BoxDecoration(
-                                color: accent.withValues(alpha: 0.14),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                _statusLabel(item.status),
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: accent,
-                                ),
-                              ),
+                            AppStatusChip(
+                              label: _statusLabel(item.status),
+                              status: _appStatusKindFor(item),
                             ),
                         ],
                       ),
@@ -1080,11 +1044,6 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                       ],
                     ],
                   ),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

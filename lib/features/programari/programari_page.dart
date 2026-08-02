@@ -2226,38 +2226,6 @@ class _ProgramariPageState extends State<ProgramariPage> {
     return '${duration.inMinutes} min';
   }
 
-  Color _statusBackgroundColor(String statusRaw) {
-    switch (_normalizeStatusValue(statusRaw)) {
-      case 'in_curs':
-        return Colors.orange.shade100;
-      case 'finalizata':
-        return Colors.green.shade100;
-      case 'amanata':
-        return Colors.amber.shade100;
-      case 'anulata':
-        return Colors.red.shade100;
-      case 'planificata':
-      default:
-        return Colors.blue.shade100;
-    }
-  }
-
-  Color _statusForegroundColor(String statusRaw) {
-    switch (_normalizeStatusValue(statusRaw)) {
-      case 'in_curs':
-        return Colors.orange.shade900;
-      case 'finalizata':
-        return Colors.green.shade900;
-      case 'amanata':
-        return Colors.amber.shade900;
-      case 'anulata':
-        return Colors.red.shade900;
-      case 'planificata':
-      default:
-        return Colors.blue.shade900;
-    }
-  }
-
   // O(1) lookup — înlocuiește for-loop O(n) care cauza jank la scroll
   ClientRecord? _clientRecordById(String clientId) {
     final id = clientId.trim();
@@ -4437,24 +4405,6 @@ class _ProgramariPageState extends State<ProgramariPage> {
     }
 
     return actions;
-  }
-
-  Widget _statusChip(String statusRaw) {
-    final label = _statusLabel(statusRaw);
-    return Chip(
-      backgroundColor: _statusBackgroundColor(statusRaw),
-      side: BorderSide(
-        color: _statusForegroundColor(statusRaw).withValues(alpha: 0.2),
-      ),
-      label: Text(
-        label,
-        style: TextStyle(
-          color: _statusForegroundColor(statusRaw),
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      visualDensity: VisualDensity.compact,
-    );
   }
 
   Widget _appointmentColorChip(Appointment item) {
@@ -7252,7 +7202,10 @@ class _ProgramariPageState extends State<ProgramariPage> {
                                           ),
                                           const SizedBox(width: 8),
                                         ],
-                                        _statusChip(item.status),
+                                        AppStatusChip(
+                                          label: _statusLabel(item.status),
+                                          status: _appStatusKindFor(item),
+                                        ),
                                         const SizedBox(width: 8),
                                         _buildQuickDocumentMenu(
                                           item,
