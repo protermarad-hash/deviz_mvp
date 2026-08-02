@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/cloud/firebase_bootstrap.dart';
+import '../../../core/design_system/widgets/app_card.dart';
 import 'firebase_serviciu_prestat_repository.dart';
 import 'serviciu_prestat_models.dart';
 
@@ -282,14 +283,21 @@ class _ServiciiPrestatePageState extends State<ServiciiPrestatePage> {
     final pretLabel = s.pretSugerat > 0
         ? '${s.pretSugerat.toStringAsFixed(2)} ${s.moneda}'
         : 'Fără preț';
-    return Card(
+    // Accent: reia semantica activ/inactiv deja folosită pentru iconița si
+    // textul serviciului (nu exista alt camp de tip status/prioritate pe
+    // ServiciuPrestat).
+    final accentColor = s.activ
+        ? Theme.of(context).colorScheme.primary
+        : Theme.of(context).disabledColor;
+    return AppCard(
+      elevated: true,
+      accentColor: accentColor,
       margin: const EdgeInsets.only(bottom: 10),
+      padding: EdgeInsets.zero,
       child: ListTile(
         leading: Icon(
           Icons.design_services_outlined,
-          color: s.activ
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(context).disabledColor,
+          color: accentColor,
         ),
         title: Text(
           s.denumire,
