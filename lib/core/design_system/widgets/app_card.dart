@@ -75,15 +75,29 @@ class AppCard extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             onLongPress: onLongPress,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  width: AppElevatedCardStyle.accentBarWidth,
-                  color: accent,
-                ),
-                Expanded(child: content),
-              ],
+            // IntrinsicHeight OBLIGATORIU aici: fără el, Row-ul de mai jos
+            // primește constrângere de înălțime nemărginită de fiecare
+            // dată când AppCard e plasat într-un ListView/ListView.builder
+            // sau ca și copil ne-Expanded al unui Column (ambele dau
+            // înălțime infinită copiilor, comportament normal Flutter) —
+            // combinat cu crossAxisAlignment.stretch, asta arunca
+            // "BoxConstraints forces an infinite height" (debug) sau
+            // randa cardul complet invizibil (release, assert-urile sunt
+            // eliminate) — vezi regresia din build91 pe Rețete kituri și
+            // Parteneri. IntrinsicHeight calculează întâi înălțimea
+            // finită din conținut, iar stretch se aplică apoi pe acea
+            // înălțime, nu pe infinit.
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    width: AppElevatedCardStyle.accentBarWidth,
+                    color: accent,
+                  ),
+                  Expanded(child: content),
+                ],
+              ),
             ),
           ),
         ),
