@@ -229,6 +229,7 @@ extension _ProgramariCalendarEchipeViewX on _ProgramariPageState {
     return AppCard(
       elevated: true,
       accentColor: accent,
+      color: _appointmentSurfaceColor(item),
       padding: const EdgeInsets.all(AppSpacing.sm),
       onTap: () => _openDetails(item),
       child: Column(

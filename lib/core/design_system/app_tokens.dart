@@ -38,3 +38,28 @@ class AppTypography {
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           );
 }
+
+/// Rețeta vizuală a variantei "elevated" de [AppCard] — radius, umbră și
+/// bara de accent. Sursă unică de adevăr: orice card elevated (Programări
+/// Listă/Calendar/Pe echipe și viitori consumatori) citește de aici, nu
+/// redefinește valorile local.
+class AppElevatedCardStyle {
+  const AppElevatedCardStyle._();
+
+  static const double cornerRadius = 24;
+  static final BorderRadius borderRadius = BorderRadius.circular(cornerRadius);
+
+  static const double shadowAlpha = 0.22;
+  static const double shadowBlurRadius = 18;
+  static const Offset shadowOffset = Offset(0, 8);
+
+  static const double accentBarWidth = 4;
+
+  static List<BoxShadow> shadow(Color accent) => [
+        BoxShadow(
+          color: accent.withValues(alpha: shadowAlpha),
+          blurRadius: shadowBlurRadius,
+          offset: shadowOffset,
+        ),
+      ];
+}

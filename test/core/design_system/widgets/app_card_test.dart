@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:devizpro_ultra/core/design_system/app_tokens.dart';
 import 'package:devizpro_ultra/core/design_system/widgets/app_card.dart';
 
 void main() {
@@ -78,4 +79,55 @@ void main() {
     );
     expect(find.text('fara culoare custom'), findsOneWidget);
   });
+
+  testWidgets('AppCard onLongPress este apelat fără onTap', (tester) async {
+    var longPressed = false;
+    await tester.pumpWidget(
+      wrap(
+        AppCard(
+          elevated: true,
+          onLongPress: () => longPressed = true,
+          child: const Text('long-press'),
+        ),
+      ),
+    );
+    await tester.longPress(find.byType(InkWell));
+    await tester.pump();
+    expect(longPressed, isTrue);
+  });
+
+  testWidgets(
+    'AppCard elevated:true respectă rețeta AppElevatedCardStyle (radius, umbră, bară accent) — sursă unică folosită și de planner/Pe echipe',
+    (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          const AppCard(
+            elevated: true,
+            accentColor: Colors.teal,
+            child: Text('rețetă'),
+          ),
+        ),
+      );
+
+      final container = tester.widget<Container>(
+        find.ancestor(
+          of: find.byType(ClipRRect),
+          matching: find.byType(Container),
+        ),
+      );
+      final decoration = container.decoration as BoxDecoration;
+      expect(decoration.borderRadius, AppElevatedCardStyle.borderRadius);
+      expect(
+        decoration.boxShadow,
+        AppElevatedCardStyle.shadow(Colors.teal),
+      );
+
+      final bar = tester.widget<Container>(
+        find
+            .descendant(of: find.byType(Row), matching: find.byType(Container))
+            .first,
+      );
+      expect(bar.constraints?.maxWidth, AppElevatedCardStyle.accentBarWidth);
+    },
+  );
 }

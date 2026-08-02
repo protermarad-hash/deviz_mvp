@@ -972,157 +972,113 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
       height: height,
       child: Stack(
         children: [
-          Card(
+          AppCard(
+            elevated: true,
+            accentColor: accent,
             color: background,
-          margin: const EdgeInsets.symmetric(vertical: 3),
-          elevation: compact ? 0 : 6,
-          shadowColor: accent.withValues(alpha: 0.55),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-            side: BorderSide(
-              color: accent.withValues(alpha: 0.45),
-              width: 1.1,
-            ),
-          ),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
+            margin: const EdgeInsets.symmetric(vertical: 3),
+            padding: EdgeInsets.all(veryCompact ? 7 : (compact ? 8 : 10)),
             onTap: () => _openDetails(item),
             onLongPress: _canCreateAdministrativeAppointments
                 ? () => _openEditor(appointment: item)
                 : null,
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: compact ? 5 : 7,
-                  decoration: BoxDecoration(
-                    color: accent,
-                    borderRadius: const BorderRadius.horizontal(
-                      left: Radius.circular(14),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.all(veryCompact ? 7 : (compact ? 8 : 10)),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                title,
-                                maxLines: compact || height < 136 ? 1 : 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: foreground,
-                                  height: 1.1,
-                                ),
-                              ),
-                            ),
-                            if (showStatusChip)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 3,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: accent.withValues(alpha: 0.14),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Text(
-                                  _statusLabel(item.status),
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: accent,
-                                  ),
-                                ),
-                              ),
-                          ],
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: compact || height < 136 ? 1 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: foreground,
+                          height: 1.1,
                         ),
-                        if (showTimeLine) ...[
-                          const SizedBox(height: AppSpacing.xs),
-                          Text(
-                            '${_formatTime(start)} - ${_formatTime(end)} • ${_durationLabel(end.difference(start))}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: foreground,
-                              fontWeight: FontWeight.w600,
-                              fontSize: veryCompact ? 11.5 : null,
-                            ),
-                          ),
-                        ],
-                        if (showSecondaryLine) ...[
-                          if (isRecurring || avatarData.isNotEmpty) ...[
-                            const SizedBox(height: AppSpacing.xs),
-                            CalendarCardMetaRow(
-                              isRecurring: isRecurring,
-                              avatars: avatarData,
-                              accentColor: accent,
-                            ),
-                          ],
-                          const SizedBox(height: AppSpacing.xs),
-                          Text(
-                            secondary,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style:
-                                Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: mutedForeground,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                          ),
-                          if (showAssignmentSummary) ...[
-                            const SizedBox(height: 3),
-                            Text(
-                              assignmentSummary,
-                              maxLines: height >= 164 ? 2 : 1,
-                              overflow: TextOverflow.ellipsis,
-                              style:
-                                  Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: mutedForeground,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                            ),
-                          ],
-                          if (showClientLine) ...[
-                            const SizedBox(height: 3),
-                            Text(
-                              itemClient,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style:
-                                  Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: foreground,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                            ),
-                            if (showAddressLine) ...[
-                              const SizedBox(height: 3),
-                              Text(
-                                _detailAddress(item),
-                                maxLines: height >= 176 ? 2 : 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(color: mutedForeground),
-                              ),
-                            ],
-                          ],
-                        ],
-                      ],
+                      ),
+                    ),
+                    if (showStatusChip)
+                      AppStatusChip(
+                        label: _statusLabel(item.status),
+                        status: _appStatusKindFor(item),
+                      ),
+                  ],
+                ),
+                if (showTimeLine) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    '${_formatTime(start)} - ${_formatTime(end)} • ${_durationLabel(end.difference(start))}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: foreground,
+                      fontWeight: FontWeight.w600,
+                      fontSize: veryCompact ? 11.5 : null,
                     ),
                   ),
-                ),
+                ],
+                if (showSecondaryLine) ...[
+                  if (isRecurring || avatarData.isNotEmpty) ...[
+                    const SizedBox(height: AppSpacing.xs),
+                    CalendarCardMetaRow(
+                      isRecurring: isRecurring,
+                      avatars: avatarData,
+                      accentColor: accent,
+                    ),
+                  ],
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    secondary,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: mutedForeground,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  if (showAssignmentSummary) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      assignmentSummary,
+                      maxLines: height >= 164 ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: mutedForeground,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                  ],
+                  if (showClientLine) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      itemClient,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: foreground,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    if (showAddressLine) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        _detailAddress(item),
+                        maxLines: height >= 176 ? 2 : 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: mutedForeground),
+                      ),
+                    ],
+                  ],
+                ],
               ],
             ),
-          ),
           ),
           if (continuesBefore) continuationIndicator(atTop: true),
           if (continuesAfter) continuationIndicator(atTop: false),
