@@ -6,11 +6,13 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
+import '../../core/design_system/widgets/app_card.dart';
 import '../../core/pdf_font_bundle.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import 'appointment_models.dart';
+import 'widgets/programari_sumar_card.dart';
 
 // ---------------------------------------------------------------------------
 // Perioadă
@@ -572,30 +574,30 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
         Row(
           children: [
             Expanded(
-              child: _SumarCard(
+              child: ProgramariSumarCard(
                 label: 'Total comisioane',
                 value: '${_totalDePlatit.toStringAsFixed(2)} RON',
                 icon: Icons.handshake_outlined,
-                color: Theme.of(context).colorScheme.primary,
+                accentColor: Theme.of(context).colorScheme.primary,
                 sub: '${items.length} programări',
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _SumarCard(
+              child: ProgramariSumarCard(
                 label: 'Deja plătit',
                 value: '${_totalPlatit.toStringAsFixed(2)} RON',
                 icon: Icons.check_circle_outline,
-                color: Colors.green.shade700,
+                accentColor: Colors.green.shade700,
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _SumarCard(
+              child: ProgramariSumarCard(
                 label: 'Rest de plătit',
                 value: '${_totalRestExecutant.toStringAsFixed(2)} RON',
                 icon: Icons.warning_amber_outlined,
-                color: _totalRestExecutant > 0
+                accentColor: _totalRestExecutant > 0
                     ? Colors.red.shade700
                     : Colors.green.shade700,
               ),
@@ -657,30 +659,30 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
         Row(
           children: [
             Expanded(
-              child: _SumarCard(
+              child: ProgramariSumarCard(
                 label: 'Total de încasat',
                 value: '${_totalDeIncasat.toStringAsFixed(2)} RON',
                 icon: Icons.receipt_long_outlined,
-                color: Theme.of(context).colorScheme.primary,
+                accentColor: Theme.of(context).colorScheme.primary,
                 sub: '${items.length} programări',
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _SumarCard(
+              child: ProgramariSumarCard(
                 label: 'Deja încasat',
                 value: '${_totalIncasat.toStringAsFixed(2)} RON',
                 icon: Icons.check_circle_outline,
-                color: Colors.green.shade700,
+                accentColor: Colors.green.shade700,
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _SumarCard(
+              child: ProgramariSumarCard(
                 label: 'Rest de încasat',
                 value: '${_totalRestContractant.toStringAsFixed(2)} RON',
                 icon: Icons.hourglass_empty_outlined,
-                color: _totalRestContractant > 0
+                accentColor: _totalRestContractant > 0
                     ? Colors.orange.shade700
                     : Colors.green.shade700,
               ),
@@ -1100,67 +1102,70 @@ class _SumarPartenerCard extends StatelessWidget {
         : Colors.green.shade700;
     final canAct = onSave != null && sumar.restDePlatit > 0;
 
-    return Card(
+    return AppCard(
+      elevated: true,
+      // Accent: reia "restColor" deja calculat mai sus pentru textul de
+      // rest de plată/încasat (roșu/portocaliu = mai e de plată, verde =
+      // decontat) — aceeași sursă logică, doar aplicată și cardului.
+      accentColor: restColor,
       margin: const EdgeInsets.only(bottom: 6),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(sumar.name,
-                          style: Theme.of(context).textTheme.titleSmall),
-                      Text('${sumar.nrProgramari} programări',
-                          style: Theme.of(context).textTheme.bodySmall),
-                    ],
-                  ),
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Total: ${sumar.totalValoare.toStringAsFixed(2)} RON',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    Text(
-                      isReceivable
-                          ? 'Rest de încasat: ${sumar.restDePlatit.toStringAsFixed(2)} RON'
-                          : 'Rest de plătit: ${sumar.restDePlatit.toStringAsFixed(2)} RON',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: restColor,
-                            fontWeight: FontWeight.bold,
-                          ),
-                    ),
+                    Text(sumar.name,
+                        style: Theme.of(context).textTheme.titleSmall),
+                    Text('${sumar.nrProgramari} programări',
+                        style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),
-              ],
-            ),
-            if (canAct) ...[
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton.tonalIcon(
-                  onPressed: () => _showBulkDialog(context),
-                  icon: Icon(
-                    isReceivable ? Icons.receipt_long_outlined : Icons.send_outlined,
-                    size: 16,
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    'Total: ${sumar.totalValoare.toStringAsFixed(2)} RON',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  label: Text(
+                  Text(
                     isReceivable
-                        ? 'Înregistrează încasare (${sumar.restDePlatit.toStringAsFixed(0)} RON)'
-                        : 'Plătește (${sumar.restDePlatit.toStringAsFixed(0)} RON)',
+                        ? 'Rest de încasat: ${sumar.restDePlatit.toStringAsFixed(2)} RON'
+                        : 'Rest de plătit: ${sumar.restDePlatit.toStringAsFixed(2)} RON',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: restColor,
+                          fontWeight: FontWeight.bold,
+                        ),
                   ),
-                  style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
-                ),
+                ],
               ),
             ],
+          ),
+          if (canAct) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.tonalIcon(
+                onPressed: () => _showBulkDialog(context),
+                icon: Icon(
+                  isReceivable ? Icons.receipt_long_outlined : Icons.send_outlined,
+                  size: 16,
+                ),
+                label: Text(
+                  isReceivable
+                      ? 'Înregistrează încasare (${sumar.restDePlatit.toStringAsFixed(0)} RON)'
+                      : 'Plătește (${sumar.restDePlatit.toStringAsFixed(0)} RON)',
+                ),
+                style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+              ),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -1601,57 +1606,6 @@ class _RandProgramareContractantState
                       ),
                 ),
               ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SumarCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final String sub;
-  final IconData icon;
-  final Color color;
-
-  const _SumarCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    this.sub = '',
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 16, color: color),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(label,
-                      style: Theme.of(context).textTheme.labelMedium),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            if (sub.isNotEmpty)
-              Text(sub,
-                  style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
       ),

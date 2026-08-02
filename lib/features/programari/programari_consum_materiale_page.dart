@@ -13,6 +13,7 @@ import '../../core/repositories/local_app_data_repository.dart';
 import '../master/master_local_store.dart';
 import 'appointment_models.dart';
 import '../../core/widgets/help_button.dart';
+import 'widgets/programari_sumar_card.dart';
 import '../../core/help_content.dart';
 
 // ---------------------------------------------------------------------------
@@ -829,27 +830,27 @@ class _ProgramariConsumMaterialePageState
     return LayoutBuilder(
       builder: (context, constraints) {
         final isMobile = constraints.maxWidth < 700;
-        final c1 = _SumarCard(
+        final c1 = ProgramariSumarCard(
           label: 'Cost total',
           value: '${_totalCostMateriale.toStringAsFixed(2)} RON',
           icon: Icons.payments_outlined,
-          color: Colors.orange.shade700,
+          accentColor: Colors.orange.shade700,
           sub: '${_filtratePerioada.length} progr.',
         );
-        final c2 = _SumarCard(
+        final c2 = ProgramariSumarCard(
           label: 'Materiale distincte',
           value: '${agregate.length}',
           icon: Icons.inventory_2_outlined,
-          color: colorScheme.primary,
+          accentColor: colorScheme.primary,
           sub: '${cuMat.length} cu mat.',
         );
-        final c3 = _SumarCard(
+        final c3 = ProgramariSumarCard(
           label: 'Cost mediu',
           value: cuMat.isEmpty
               ? '— RON'
               : '${(_totalCostMateriale / cuMat.length).toStringAsFixed(2)} RON',
           icon: Icons.calculate_outlined,
-          color: colorScheme.secondary,
+          accentColor: colorScheme.secondary,
           sub: '/ programare',
         );
         if (isMobile) {
@@ -1265,67 +1266,6 @@ class _Legenda extends StatelessWidget {
         const SizedBox(width: 4),
         Text(label, style: Theme.of(context).textTheme.labelSmall),
       ],
-    );
-  }
-}
-
-class _SumarCard extends StatelessWidget {
-  const _SumarCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    this.sub = '',
-  });
-
-  final String label;
-  final String value;
-  final String sub;
-  final IconData icon;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 15, color: color),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: Theme.of(context).textTheme.labelMedium,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            if (sub.isNotEmpty)
-              Text(
-                sub,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.6),
-                    ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }
