@@ -780,7 +780,11 @@ class _ProgramariProfitabilitatePageState
           label: 'Profit net',
           value: '${_totalProfit.toStringAsFixed(2)} RON',
           icon: Icons.trending_up_outlined,
-          accentColor: _totalProfit >= 0 ? Colors.green.shade700 : Colors.red,
+          // WCAG AA (fundal alb, 14sp bold): green.shade700 = 4.12:1
+          // (pică) -> shade800 = 5.12:1; Colors.red simplu (shade500) =
+          // 3.68:1 (pică) -> shade700 = 4.98:1.
+          accentColor:
+              _totalProfit >= 0 ? Colors.green.shade800 : Colors.red.shade700,
           sub: _totalCostMateriale > 0 && _totalIncasat > 0
               ? 'Marjă: ${((_totalProfit / _totalIncasat) * 100).toStringAsFixed(1)}%'
               : '',

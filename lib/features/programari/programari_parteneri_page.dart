@@ -588,7 +588,9 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
                 label: 'Deja plătit',
                 value: '${_totalPlatit.toStringAsFixed(2)} RON',
                 icon: Icons.check_circle_outline,
-                accentColor: Colors.green.shade700,
+                // shade800, nu shade700 -> 4.12:1 pică sub AA (4.5:1) la
+                // 14sp bold; shade800 = 5.12:1.
+                accentColor: Colors.green.shade800,
               ),
             ),
             const SizedBox(width: 8),
@@ -599,7 +601,7 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
                 icon: Icons.warning_amber_outlined,
                 accentColor: _totalRestExecutant > 0
                     ? Colors.red.shade700
-                    : Colors.green.shade700,
+                    : Colors.green.shade800,
               ),
             ),
           ],
@@ -673,7 +675,7 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
                 label: 'Deja încasat',
                 value: '${_totalIncasat.toStringAsFixed(2)} RON',
                 icon: Icons.check_circle_outline,
-                accentColor: Colors.green.shade700,
+                accentColor: Colors.green.shade800,
               ),
             ),
             const SizedBox(width: 8),
@@ -682,9 +684,12 @@ class _ProgramariParteneriPageState extends State<ProgramariParteneriPage>
                 label: 'Rest de încasat',
                 value: '${_totalRestContractant.toStringAsFixed(2)} RON',
                 icon: Icons.hourglass_empty_outlined,
+                // deepOrange.shade900, nu orange.shade700/900 -> orange.
+                // shade700 = 2.70:1, shade900 = 3.79:1, ambele pică sub AA;
+                // deepOrange.shade900 = 5.60:1, trece.
                 accentColor: _totalRestContractant > 0
-                    ? Colors.orange.shade700
-                    : Colors.green.shade700,
+                    ? Colors.deepOrange.shade900
+                    : Colors.green.shade800,
               ),
             ),
           ],
@@ -1097,9 +1102,12 @@ class _SumarPartenerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Contrast WCAG AA (4.5:1) pe fundal alb, la 14sp bold: orange.shade700
+    // = 2.70:1 (pică), deepOrange.shade900 = 5.60:1 (trece); red.shade700 =
+    // 4.98:1 (trece); green.shade700 = 4.12:1 (pică), shade800 = 5.12:1.
     final restColor = sumar.restDePlatit > 0
-        ? (isReceivable ? Colors.orange.shade700 : Colors.red.shade700)
-        : Colors.green.shade700;
+        ? (isReceivable ? Colors.deepOrange.shade900 : Colors.red.shade700)
+        : Colors.green.shade800;
     final canAct = onSave != null && sumar.restDePlatit > 0;
 
     return AppCard(

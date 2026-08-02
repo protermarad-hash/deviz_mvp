@@ -834,7 +834,10 @@ class _ProgramariConsumMaterialePageState
           label: 'Cost total',
           value: '${_totalCostMateriale.toStringAsFixed(2)} RON',
           icon: Icons.payments_outlined,
-          accentColor: Colors.orange.shade700,
+          // WCAG AA (fundal alb, 14sp bold): orange.shade700 = 2.70:1,
+          // orange.shade900 = 3.79:1 — ambele pică; deepOrange.shade900 =
+          // 5.60:1, trece.
+          accentColor: Colors.deepOrange.shade900,
           sub: '${_filtratePerioada.length} progr.',
         );
         final c2 = ProgramariSumarCard(
