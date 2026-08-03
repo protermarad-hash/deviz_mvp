@@ -75,29 +75,42 @@ class AppCard extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             onLongPress: onLongPress,
-            // IntrinsicHeight OBLIGATORIU aici: fără el, Row-ul de mai jos
-            // primește constrângere de înălțime nemărginită de fiecare
-            // dată când AppCard e plasat într-un ListView/ListView.builder
-            // sau ca și copil ne-Expanded al unui Column (ambele dau
-            // înălțime infinită copiilor, comportament normal Flutter) —
-            // combinat cu crossAxisAlignment.stretch, asta arunca
-            // "BoxConstraints forces an infinite height" (debug) sau
-            // randa cardul complet invizibil (release, assert-urile sunt
-            // eliminate) — vezi regresia din build91 pe Rețete kituri și
-            // Parteneri. IntrinsicHeight calculează întâi înălțimea
-            // finită din conținut, iar stretch se aplică apoi pe acea
-            // înălțime, nu pe infinit.
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    width: AppElevatedCardStyle.accentBarWidth,
-                    color: accent,
-                  ),
-                  Expanded(child: content),
-                ],
-              ),
+            // LayoutBuilder OBLIGATORIU aici — IntrinsicHeight trebuie
+            // aplicat DOAR când înălțimea primită e nemărginită (ListView/
+            // ListView.builder, sau copil ne-Expanded al unui Column — dau
+            // înălțime infinită copiilor, comportament normal Flutter),
+            // caz în care Row(crossAxisAlignment: stretch) de mai jos ar
+            // arunca altfel "BoxConstraints forces an infinite height"
+            // (debug) sau ar reda cardul complet invizibil (release, fără
+            // assert-uri) — vezi regresia din build91 pe Rețete kituri și
+            // Parteneri.
+            //
+            // Când înălțimea primită e MĂRGINITĂ (bounded) — fie tight
+            // (Positioned(height:) direct), fie loose (copil ne-poziționat
+            // al unui Stack intermediar, ex. badge-urile "continuă" din
+            // planner-ul Calendar, min=0/max=h) — IntrinsicHeight NU
+            // trebuie aplicat: el ignoră max-ul disponibil și impune
+            // înălțimea intrinsecă a conținutului, strângând cardul la
+            // conținut în loc să umple h — vezi regresia din build93 pe
+            // cardurile din Calendar (Size(_, 58.0) în loc de
+            // Size(_, 200.0)). Fără IntrinsicHeight, Row+stretch umple deja
+            // corect nativ orice constrângere mărginită (tight sau loose).
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final row = Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      width: AppElevatedCardStyle.accentBarWidth,
+                      color: accent,
+                    ),
+                    Expanded(child: content),
+                  ],
+                );
+                return constraints.hasBoundedHeight
+                    ? row
+                    : IntrinsicHeight(child: row);
+              },
             ),
           ),
         ),
