@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/design_system/widgets/app_card.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/widgets/help_button.dart';
 import '../../core/help_content.dart';
@@ -193,8 +194,16 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
                         ),
                       ),
                     for (final component in components)
-                      Card(
+                      AppCard(
+                        elevated: true,
+                        // Accent: reia semantica Fix/Variabil deja afisata
+                        // in subtitlul cardului (nu exista alt camp de tip
+                        // status pe componenta de kit).
+                        accentColor: component.isVariableLength
+                            ? Theme.of(context).colorScheme.secondary
+                            : Theme.of(context).colorScheme.primary,
                         margin: const EdgeInsets.only(bottom: 8),
+                        padding: EdgeInsets.zero,
                         child: ListTile(
                           title: Text(component.name),
                           subtitle: Text(
@@ -493,7 +502,15 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Card(
+                  child: AppCard(
+                    elevated: true,
+                    // Accent: sursa datelor (cloud = culoare principala,
+                    // cache local = culoare secundara — nu e o eroare, doar
+                    // un fallback offline intentionat).
+                    accentColor: _dataSourceLabel == 'cloud'
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.tertiary,
+                    padding: EdgeInsets.zero,
                     child: ListTile(
                       leading: const Icon(Icons.info_outline),
                       title: Text(
@@ -541,8 +558,17 @@ class _ProgramareKituriPageState extends State<ProgramareKituriPage> {
                                       ) *
                                       component.unitCost),
                             );
-                            return Card(
+                            return AppCard(
+                              elevated: true,
+                              // Accent: reia acelasi semnal Fix/Variabil ca
+                              // la cardurile de componenta (kitul are cel
+                              // putin o componenta variabila -> secondary),
+                              // pentru consistenta vizuala pe toata pagina.
+                              accentColor: variableItems > 0
+                                  ? Theme.of(context).colorScheme.secondary
+                                  : Theme.of(context).colorScheme.primary,
                               margin: const EdgeInsets.only(bottom: 12),
+                              padding: EdgeInsets.zero,
                               child: ListTile(
                                 isThreeLine: true,
                                 title: Text(item.name),

@@ -11,6 +11,7 @@ import '../../core/pdf_save_service.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import 'appointment_models.dart';
+import 'widgets/programari_sumar_card.dart';
 
 // ---------------------------------------------------------------------------
 // Perioadă selector
@@ -761,25 +762,29 @@ class _ProgramariProfitabilitatePageState
     return LayoutBuilder(
       builder: (context, constraints) {
         final isMobile = constraints.maxWidth < 700;
-        final c1 = _SumarCard(
+        final c1 = ProgramariSumarCard(
           label: 'Încasat',
           value: '${_totalIncasat.toStringAsFixed(2)} RON',
           icon: Icons.payments_outlined,
-          color: colorScheme.primary,
+          accentColor: colorScheme.primary,
           sub: '$_nrCuIncasare programări',
         );
-        final c2 = _SumarCard(
+        final c2 = ProgramariSumarCard(
           label: 'Cost materiale',
           value: '${_totalCostMateriale.toStringAsFixed(2)} RON',
           icon: Icons.inventory_2_outlined,
-          color: colorScheme.secondary,
+          accentColor: colorScheme.secondary,
           sub: '${_filtratePerioada.length} total',
         );
-        final c3 = _SumarCard(
+        final c3 = ProgramariSumarCard(
           label: 'Profit net',
           value: '${_totalProfit.toStringAsFixed(2)} RON',
           icon: Icons.trending_up_outlined,
-          color: _totalProfit >= 0 ? Colors.green.shade700 : Colors.red,
+          // WCAG AA (fundal alb, 14sp bold): green.shade700 = 4.12:1
+          // (pică) -> shade800 = 5.12:1; Colors.red simplu (shade500) =
+          // 3.68:1 (pică) -> shade700 = 4.98:1.
+          accentColor:
+              _totalProfit >= 0 ? Colors.green.shade800 : Colors.red.shade700,
           sub: _totalCostMateriale > 0 && _totalIncasat > 0
               ? 'Marjă: ${((_totalProfit / _totalIncasat) * 100).toStringAsFixed(1)}%'
               : '',
@@ -1313,58 +1318,6 @@ class _Legenda extends StatelessWidget {
   }
 }
 
-class _SumarCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final String sub;
-  final IconData icon;
-  final Color color;
-
-  const _SumarCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    this.sub = '',
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 16, color: color),
-                const SizedBox(width: 6),
-                Text(
-                  label,
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            if (sub.isNotEmpty)
-              Text(
-                sub,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _StatChip extends StatelessWidget {
   final String label;
