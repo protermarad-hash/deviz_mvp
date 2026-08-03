@@ -54,7 +54,7 @@ void main() {
       expect(text, contains('12:00'));
     });
 
-    test('zi intermediară completă: NU repetă "00:00 - 00:00", arată durata totală', () {
+    test('zi intermediară completă: "Continuă până <data reală de final>", nu ore brute', () {
       final text = CalendarBlockTimeLabel.build(
         continuesBefore: true,
         continuesAfter: true,
@@ -65,11 +65,16 @@ void main() {
         durationLabel: durationLabel,
       );
 
-      // NU trebuie să conțină textul greșit "00:00 - 00:00 • 24h".
+      // NU trebuie să conțină textul greșit "00:00 - 00:00 • 24h", nici o
+      // durată brută în ore (ex. "504h") — orientat pe dată, nu pe ore.
       expect(text, isNot(contains('00:00 - 00:00')));
       expect(text, isNot(contains('24h')));
+      expect(text, isNot(contains('h ')));
+      expect(text, isNot(contains(durationLabel(totalDuration))));
+      // Formatul nou exact: "Continuă până 24.08.2026".
+      expect(text, 'Continuă până 24.08.2026');
       expect(text, contains('Continuă'));
-      expect(text, contains(durationLabel(totalDuration)));
+      expect(text, contains('24.08.2026'));
     });
 
     test('ultima zi: data/ora reală de start + ora reală de final', () {
