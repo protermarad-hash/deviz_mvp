@@ -663,11 +663,11 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                             spacing: 8,
                             runSpacing: 8,
                             children: [
-                              Chip(
-                                avatar: const Icon(Icons.timelapse, size: 16),
-                                label: Text(
-                                  'Durata: ${_durationLabel(selectedEnd.difference(selectedStart))}',
-                                ),
+                              AppStatusChip(
+                                label:
+                                    'Durata: ${_durationLabel(selectedEnd.difference(selectedStart))}',
+                                status: AppStatusKind.neutral,
+                                icon: Icons.timelapse,
                               ),
                               ActionChip(
                                 label: const Text('1 ora'),
@@ -705,9 +705,10 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                 ),
                               ),
                               if (selectedEnd.isBefore(selectedStart))
-                                const Chip(
-                                  avatar: Icon(Icons.error_outline, size: 16),
-                                  label: Text('Interval invalid'),
+                                const AppStatusChip(
+                                  label: 'Interval invalid',
+                                  status: AppStatusKind.anulata,
+                                  icon: Icons.error_outline,
                                 ),
                             ],
                           ),
@@ -1846,6 +1847,10 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                                       );
 
                                   return AppCard(
+                                    elevated: true,
+                                    accentColor: profit >= 0
+                                        ? Colors.green.shade800
+                                        : Colors.red.shade700,
                                     margin: EdgeInsets.zero,
                                     padding: const EdgeInsets.all(12),
                                     child: Column(
