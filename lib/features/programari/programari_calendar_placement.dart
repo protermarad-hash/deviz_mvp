@@ -71,3 +71,48 @@ class CalendarBlockGeometry {
     );
   }
 }
+
+/// Textul de interval/durată afișat pe cardul din planner (linia de sub
+/// titlu). FOLOSEȘTE intervalul REAL al programării
+/// (`effectiveStart`/`effectiveEnd`), NU `placement.visualStart`/
+/// `visualEnd` (clipate pe ziua randată — corecte doar pentru geometria
+/// verticală din [CalendarBlockGeometry], nu pentru text). Pe zilele
+/// intermediare/parțiale ale unei programări multi-zi, folosirea valorilor
+/// clipate producea texte greșite (ex. "09:00 - 00:00 • 15h" în loc de
+/// intervalul real — regresie confirmată vizual, build92).
+class CalendarBlockTimeLabel {
+  const CalendarBlockTimeLabel._();
+
+  static String build({
+    required bool continuesBefore,
+    required bool continuesAfter,
+    required DateTime effectiveStart,
+    required DateTime effectiveEnd,
+    required String Function(DateTime value) formatTime,
+    required String Function(DateTime value) formatDate,
+    required String Function(Duration duration) durationLabel,
+  }) {
+    final totalDuration = effectiveEnd.difference(effectiveStart);
+    if (!continuesBefore && !continuesAfter) {
+      // Programare pe o singură zi — neschimbat.
+      return '${formatTime(effectiveStart)} - ${formatTime(effectiveEnd)} • '
+          '${durationLabel(totalDuration)}';
+    }
+    if (continuesBefore && continuesAfter) {
+      // Zi intermediară, complet acoperită de bară: orele exacte sunt deja
+      // vizibile pe prima/ultima zi + indicatorul "continuă" (▸/▾) —
+      // repetarea lor identică pe fiecare zi intermediară nu adaugă
+      // informație, doar durata totală.
+      return 'Continuă • ${durationLabel(totalDuration)} total';
+    }
+    if (!continuesBefore && continuesAfter) {
+      // Prima zi: ora reală de start + data/ora reală unde se termină
+      // programarea (nu "până la miezul nopții").
+      return '${formatTime(effectiveStart)} → '
+          '${formatDate(effectiveEnd)} ${formatTime(effectiveEnd)}';
+    }
+    // Ultima zi: data/ora reală de start + ora reală de final.
+    return '${formatDate(effectiveStart)} ${formatTime(effectiveStart)} → '
+        '${formatTime(effectiveEnd)}';
+  }
+}

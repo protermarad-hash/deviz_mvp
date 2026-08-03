@@ -888,8 +888,6 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
     required double columnWidth,
   }) {
     final item = placement.item;
-    final start = placement.visualStart;
-    final end = placement.visualEnd;
     final geometry = CalendarBlockGeometry.compute(
       placement: placement,
       day: day,
@@ -902,6 +900,22 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
     final height = rawHeight < 48 ? 48.0 : rawHeight;
     final continuesBefore = geometry.continuesBefore;
     final continuesAfter = geometry.continuesAfter;
+    // Textul afișat pe card FOLOSEȘTE intervalul real al programării
+    // (effectiveStart/EndDateTime), NU placement.visualStart/visualEnd
+    // (clipate pe ziua curentă — corecte DOAR pentru geometria de mai sus,
+    // top/height). Altfel, pe zilele intermediare/parțiale ale unei
+    // programări multi-zi, ora de final clipată cade la miezul nopții și
+    // produce texte greșite (ex: "09:00 - 00:00 • 15h" în loc de
+    // intervalul real — regresie confirmată vizual, build92).
+    final timeLineText = CalendarBlockTimeLabel.build(
+      continuesBefore: continuesBefore,
+      continuesAfter: continuesAfter,
+      effectiveStart: item.effectiveStartDateTime,
+      effectiveEnd: item.effectiveEndDateTime,
+      formatTime: _formatTime,
+      formatDate: _formatDate,
+      durationLabel: _durationLabel,
+    );
     final compact = height < 82;
     final veryCompact = height < 64;
     final title = item.title.trim().isEmpty
@@ -1011,7 +1025,7 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                 if (showTimeLine) ...[
                   const SizedBox(height: AppSpacing.xs),
                   Text(
-                    '${_formatTime(start)} - ${_formatTime(end)} • ${_durationLabel(end.difference(start))}',
+                    timeLineText,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
