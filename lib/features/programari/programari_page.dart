@@ -4747,38 +4747,48 @@ class _ProgramariPageState extends State<ProgramariPage> {
     );
   }
 
+  /// Secțiune de grup titrată, folosită atât în panoul de detalii
+  /// (`appointment_details_panel.dart`) cât și în dialogul de creare/editare
+  /// (`appointment_form_dialog.dart`, 12 apeluri) — sursă unică pentru
+  /// ambele. Restilizat cu `AppCard(elevated:true)` (aug 2026, Lot 3).
+  ///
+  /// `accentColor`: nu există un câmp de status/tip per secțiune (titlurile
+  /// sunt eterogene — "Programare", "Recurență", "Materiale folosite" etc.,
+  /// fără o semantică comună) — folosim `colorScheme.primary` ca accent
+  /// unic, consecvent pentru toate cele 16 secțiuni. Decizie deliberată,
+  /// nu implicit/gri din lipsă de alta mai bună.
   Widget _formSection(
     BuildContext context, {
     required String title,
     String? helper,
     required List<Widget> children,
   }) {
-    return Container(
+    return SizedBox(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-          ),
-          if ((helper ?? '').trim().isNotEmpty) ...[
-            const SizedBox(height: 4),
+      child: AppCard(
+        elevated: true,
+        accentColor: Theme.of(context).colorScheme.primary,
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Text(
-              helper!.trim(),
-              style: Theme.of(context).textTheme.bodySmall,
+              title,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
             ),
+            if ((helper ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                helper!.trim(),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 10),
+            ...children,
           ],
-          const SizedBox(height: 10),
-          ...children,
-        ],
+        ),
       ),
     );
   }

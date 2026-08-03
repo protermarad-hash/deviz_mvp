@@ -58,15 +58,16 @@ extension _ProgramariAppointmentDetailsPanelX on _ProgramariPageState {
                       if (!_isEmployeeRole) _appointmentColorChip(item),
                       if (!_isEmployeeRole) _linkedDocumentsChip(item),
                       _buildQuickDocumentMenu(item),
-                      Chip(
-                        avatar: const Icon(Icons.timelapse, size: 16),
-                        label: Text(_durationLabel(item.effectiveDuration)),
+                      AppStatusChip(
+                        label: _durationLabel(item.effectiveDuration),
+                        status: AppStatusKind.neutral,
+                        icon: Icons.timelapse,
                       ),
                       if (!_isEmployeeRole)
-                        Chip(
-                          avatar: const Icon(Icons.group_outlined, size: 16),
-                          label: Text(teamLabel),
-                          visualDensity: VisualDensity.compact,
+                        AppStatusChip(
+                          label: teamLabel,
+                          status: AppStatusKind.neutral,
+                          icon: Icons.group_outlined,
                         ),
                     ],
                   ),
