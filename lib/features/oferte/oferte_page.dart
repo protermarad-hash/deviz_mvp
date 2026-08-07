@@ -35,7 +35,9 @@ import 'offer_standard_catalog_service.dart';
 import 'oferte_cloud_repository.dart';
 import 'bnr_exchange_rate_service.dart';
 import 'deviz_articole_baza_page.dart';
+import 'oferte_dialogs/offer_commercial_clause_template_editor_dialog.dart';
 import 'oferte_dialogs/offer_commercial_package_template_editor_dialog.dart';
+import 'oferte_dialogs/offer_labor_template_editor_dialog.dart';
 import '../../core/help/help_module_button.dart';
 import '../../core/widgets/client_autocomplete_field.dart';
 
@@ -4471,7 +4473,7 @@ class _OfferLaborTemplatesDialogState
   Future<void> _editTemplate([OfferLaborTemplate? existing]) async {
     final saved = await showDialog<OfferLaborTemplate>(
       context: context,
-      builder: (context) => _OfferLaborTemplateEditorDialog(existing: existing),
+      builder: (context) => OfferLaborTemplateEditorDialog(existing: existing),
     );
     if (saved == null || _saving) {
       return;
@@ -4584,229 +4586,6 @@ class _OfferLaborTemplatesDialogState
   }
 }
 
-class _OfferLaborTemplateEditorDialog extends StatefulWidget {
-  const _OfferLaborTemplateEditorDialog({this.existing});
-
-  final OfferLaborTemplate? existing;
-
-  @override
-  State<_OfferLaborTemplateEditorDialog> createState() =>
-      _OfferLaborTemplateEditorDialogState();
-}
-
-class _OfferLaborTemplateEditorDialogState
-    extends State<_OfferLaborTemplateEditorDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _categoryController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _unitController = TextEditingController();
-  final _quantityController = TextEditingController();
-  final _unitPriceController = TextEditingController();
-  final _includedServicesController = TextEditingController();
-  final _suggestedProductKeywordsController = TextEditingController();
-  final _notesController = TextEditingController();
-  bool _isActive = true;
-
-  @override
-  void initState() {
-    super.initState();
-    final existing = widget.existing;
-    if (existing != null) {
-      _nameController.text = existing.name;
-      _categoryController.text = existing.category;
-      _descriptionController.text = existing.description;
-      _unitController.text = existing.unit;
-      _quantityController.text = existing.defaultQuantity.toStringAsFixed(2);
-      _unitPriceController.text = existing.defaultUnitPrice.toStringAsFixed(2);
-      _includedServicesController.text = existing.includedServices;
-      _suggestedProductKeywordsController.text =
-          existing.suggestedProductKeywords;
-      _notesController.text = existing.notes;
-      _isActive = existing.isActive;
-    } else {
-      _categoryController.text = 'servicii_baza';
-      _unitController.text = 'ore';
-      _quantityController.text = '1';
-      _unitPriceController.text = '0';
-    }
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _categoryController.dispose();
-    _descriptionController.dispose();
-    _unitController.dispose();
-    _quantityController.dispose();
-    _unitPriceController.dispose();
-    _includedServicesController.dispose();
-    _suggestedProductKeywordsController.dispose();
-    _notesController.dispose();
-    super.dispose();
-  }
-
-  double _asDouble(String raw, [double fallback = 0]) {
-    return double.tryParse(raw.replaceAll(',', '.').trim()) ?? fallback;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(
-        widget.existing == null
-            ? 'Adaugă șablon manoperă'
-            : 'Editează șablon manoperă',
-      ),
-      content: SizedBox(
-        width: 640,
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _nameController,
-                  decoration: const InputDecoration(labelText: 'Denumire'),
-                  validator: (value) {
-                    if ((value ?? '').trim().isEmpty) {
-                      return 'Completează denumirea.';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _categoryController,
-                  decoration: const InputDecoration(
-                    labelText: 'Categorie serviciu',
-                    helperText:
-                        'Exemple: montaj, traseu_frigorific, pif, servicii_baza',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _descriptionController,
-                  maxLines: 3,
-                  decoration: const InputDecoration(labelText: 'Descriere'),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        textCapitalization: TextCapitalization.sentences,
-                        controller: _unitController,
-                        decoration: const InputDecoration(labelText: 'UM'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _quantityController,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'Cantitate implicită',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _unitPriceController,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        decoration: const InputDecoration(
-                          labelText: 'Preț unitar implicit',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _includedServicesController,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Servicii incluse implicite',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _suggestedProductKeywordsController,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Cuvinte-cheie sugestie produse',
-                    helperText:
-                        'Separate prin virgula: ex. aer conditionat, 12000 btu, inverter',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _notesController,
-                  maxLines: 3,
-                  decoration: const InputDecoration(
-                    labelText: 'Conditii comerciale / note',
-                  ),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: _isActive,
-                  onChanged: (value) => setState(() => _isActive = value),
-                  title: const Text('Activ'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Renunță'),
-        ),
-        FilledButton(
-          onPressed: () {
-            if (!_formKey.currentState!.validate()) {
-              return;
-            }
-            final now = DateTime.now();
-            Navigator.of(context).pop(
-              OfferLaborTemplate(
-                id: widget.existing?.id ??
-                    'labor-template-${now.microsecondsSinceEpoch}',
-                name: _nameController.text.trim(),
-                category: _categoryController.text.trim(),
-                description: _descriptionController.text.trim(),
-                unit: _unitController.text.trim().isEmpty
-                    ? 'ore'
-                    : _unitController.text.trim(),
-                defaultQuantity: _asDouble(_quantityController.text, 1),
-                defaultUnitPrice: _asDouble(_unitPriceController.text, 0),
-                isActive: _isActive,
-                notes: _notesController.text.trim(),
-                includedServices: _includedServicesController.text.trim(),
-                suggestedProductKeywords:
-                    _suggestedProductKeywordsController.text.trim(),
-                createdAt: widget.existing?.createdAt ?? now,
-                updatedAt: now,
-              ),
-            );
-          },
-          child: const Text('Salvează'),
-        ),
-      ],
-    );
-  }
-}
 
 class _OfferCommercialClauseTemplatesDialog extends StatefulWidget {
   const _OfferCommercialClauseTemplatesDialog({
@@ -4830,7 +4609,7 @@ class _OfferCommercialClauseTemplatesDialogState
     final saved = await showDialog<OfferCommercialClauseTemplate>(
       context: context,
       builder: (context) =>
-          _OfferCommercialClauseTemplateEditorDialog(existing: existing),
+          OfferCommercialClauseTemplateEditorDialog(existing: existing),
     );
     if (saved == null || _saving) {
       return;
@@ -4913,131 +4692,6 @@ class _OfferCommercialClauseTemplatesDialogState
   }
 }
 
-class _OfferCommercialClauseTemplateEditorDialog extends StatefulWidget {
-  const _OfferCommercialClauseTemplateEditorDialog({this.existing});
-
-  final OfferCommercialClauseTemplate? existing;
-
-  @override
-  State<_OfferCommercialClauseTemplateEditorDialog> createState() =>
-      _OfferCommercialClauseTemplateEditorDialogState();
-}
-
-class _OfferCommercialClauseTemplateEditorDialogState
-    extends State<_OfferCommercialClauseTemplateEditorDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _titleController = TextEditingController();
-  final _contentController = TextEditingController();
-  final _categoryController = TextEditingController();
-  bool _isActive = true;
-
-  @override
-  void initState() {
-    super.initState();
-    final existing = widget.existing;
-    if (existing != null) {
-      _titleController.text = existing.title;
-      _contentController.text = existing.content;
-      _categoryController.text = existing.category;
-      _isActive = existing.isActive;
-    }
-  }
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _contentController.dispose();
-    _categoryController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(
-        widget.existing == null
-            ? 'Adaugă șablon comercial'
-            : 'Editează șablon comercial',
-      ),
-      content: SizedBox(
-        width: 640,
-        child: Form(
-          key: _formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _titleController,
-                  decoration: const InputDecoration(labelText: 'Titlu'),
-                  validator: (value) {
-                    if ((value ?? '').trim().isEmpty) {
-                      return 'Completează titlul.';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _categoryController,
-                  decoration: const InputDecoration(labelText: 'Categorie'),
-                ),
-                const SizedBox(height: 8),
-                TextFormField(
-                  textCapitalization: TextCapitalization.sentences,
-                  controller: _contentController,
-                  maxLines: 6,
-                  decoration: const InputDecoration(labelText: 'Conținut'),
-                  validator: (value) {
-                    if ((value ?? '').trim().isEmpty) {
-                      return 'Completează conținutul.';
-                    }
-                    return null;
-                  },
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: _isActive,
-                  onChanged: (value) => setState(() => _isActive = value),
-                  title: const Text('Activ'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Renunță'),
-        ),
-        FilledButton(
-          onPressed: () {
-            if (!_formKey.currentState!.validate()) {
-              return;
-            }
-            final now = DateTime.now();
-            Navigator.of(context).pop(
-              OfferCommercialClauseTemplate(
-                id: widget.existing?.id ??
-                    'clause-template-${now.microsecondsSinceEpoch}',
-                title: _titleController.text.trim(),
-                content: _contentController.text.trim(),
-                isActive: _isActive,
-                category: _categoryController.text.trim(),
-                createdAt: widget.existing?.createdAt ?? now,
-                updatedAt: now,
-              ),
-            );
-          },
-          child: const Text('Salvează'),
-        ),
-      ],
-    );
-  }
-}
 
 class _OfferCommercialPackageTemplatesDialog extends StatefulWidget {
   const _OfferCommercialPackageTemplatesDialog({
