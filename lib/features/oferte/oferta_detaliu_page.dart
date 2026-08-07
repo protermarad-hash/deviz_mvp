@@ -54,6 +54,7 @@ import '../../core/widgets/client_info_card.dart';
 import '../crm/crm_models.dart';
 import '../crm/crm_repository.dart';
 import 'oferte_dialogs/offer_commercial_package_picker_dialog.dart';
+import 'oferta_detaliu/oferta_detaliu_formatting_mixin.dart';
 
 class OfertaDetaliuPage extends StatefulWidget {
   const OfertaDetaliuPage({
@@ -89,12 +90,14 @@ class OfertaDetaliuPage extends StatefulWidget {
   State<OfertaDetaliuPage> createState() => _OfertaDetaliuPageState();
 }
 
-class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
+class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
+    with OffertaDetaliuFormattingMixin {
   static const int _maxInlineAttachmentBytes = 550 * 1024;
 
   late final RegistryService _registryService;
   late final AiAssistantService _aiAssistantService;
-  late OfferRecord _offer;
+  @override
+  late OfferRecord offer;
   bool _saving = false;
   bool _exportingPdf = false;
   bool _converting = false;
@@ -131,7 +134,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     super.initState();
     _registryService = RegistryService(widget.repository);
     _aiAssistantService = AiAssistantService(repository: widget.repository);
-    _offer = widget.initialOffer;
+    offer = widget.initialOffer;
     _loadPdfTemplatePreference();
     _loadLaborResources();
     _loadPartnerCatalog();
@@ -237,100 +240,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     });
   }
 
-  String _formatDate(DateTime? value) {
-    if (value == null) return '-';
-    final day = value.day.toString().padLeft(2, '0');
-    final month = value.month.toString().padLeft(2, '0');
-    return '$day.$month.${value.year}';
-  }
-
-  String _moneyCommercial(double ronAmount) {
-    return OfferCurrencyConverter.formatMoney(
-      ronAmount: ronAmount,
-      currency: _offer.currency,
-      effectiveRate: _offer.effectiveExchangeRate,
-    );
-  }
-
-  OfferPriceDisplayMode get _priceDisplayMode => _offer.priceDisplayMode;
-
-  double get _vatMultiplier => 1 + (_offer.vatPercent / 100);
-
-  double _amountWithVat(double amountWithoutVat) {
-    return amountWithoutVat * _vatMultiplier;
-  }
-
-  String _priceDisplayModeLabel() => _priceDisplayMode.label;
-
-  String _priceDisplayExplanation() {
-    switch (_priceDisplayMode) {
-      case OfferPriceDisplayMode.withoutVat:
-        return 'Prețurile sunt exprimate fără TVA.';
-      case OfferPriceDisplayMode.withVat:
-        return 'Prețurile sunt exprimate cu TVA inclus.';
-      case OfferPriceDisplayMode.both:
-        return 'Prețurile sunt afișate atât fără TVA, cât și cu TVA.';
-    }
-  }
-
-  String _displayAmount(double amountWithoutVat) {
-    final withoutVat = _moneyCommercial(amountWithoutVat);
-    final withVat = _moneyCommercial(_amountWithVat(amountWithoutVat));
-    switch (_priceDisplayMode) {
-      case OfferPriceDisplayMode.withoutVat:
-        return withoutVat;
-      case OfferPriceDisplayMode.withVat:
-        return withVat;
-      case OfferPriceDisplayMode.both:
-        return '$withoutVat fără TVA | $withVat cu TVA';
-    }
-  }
-
-  String _displaySingleAmount(double amountWithoutVat) {
-    final withoutVat = _moneyCommercial(amountWithoutVat);
-    final withVat = _moneyCommercial(_amountWithVat(amountWithoutVat));
-    switch (_priceDisplayMode) {
-      case OfferPriceDisplayMode.withoutVat:
-        return withoutVat;
-      case OfferPriceDisplayMode.withVat:
-        return withVat;
-      case OfferPriceDisplayMode.both:
-        return '$withoutVat | $withVat';
-    }
-  }
-
-  String _displayAmountWithLabels(
-    double amountWithoutVat, {
-    String withoutVatLabel = 'Fără TVA',
-    String withVatLabel = 'Cu TVA',
-  }) {
-    final withoutVat = _moneyCommercial(amountWithoutVat);
-    final withVat = _moneyCommercial(_amountWithVat(amountWithoutVat));
-    switch (_priceDisplayMode) {
-      case OfferPriceDisplayMode.withoutVat:
-        return withoutVat;
-      case OfferPriceDisplayMode.withVat:
-        return withVat;
-      case OfferPriceDisplayMode.both:
-        return '$withoutVatLabel: $withoutVat | $withVatLabel: $withVat';
-    }
-  }
-
-  String _rateLabel() {
-    final currency = OfferCurrencyConverter.normalizeCurrency(_offer.currency);
-    if (!OfferCurrencyConverter.requiresRate(currency)) return '-';
-    final base = _offer.exchangeRateSource == OfferExchangeRateSource.bnr
-        ? _offer.bnrRate
-        : _offer.manualRate;
-    final source = _offer.exchangeRateSource.label;
-    final commission = _offer.exchangeCommissionPercent.toStringAsFixed(2);
-    final effective = _offer.effectiveExchangeRate > 0
-        ? _offer.effectiveExchangeRate.toStringAsFixed(4)
-        : '-';
-    final baseLabel = base > 0 ? base.toStringAsFixed(4) : '-';
-    return '$source | baza $baseLabel | comision $commission% | efectiv $effective';
-  }
-
   String _laborResourceSummary(OfferLineItem line) {
     String section(
       String title,
@@ -363,16 +272,16 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   List<OfferLineItem> get _sortedLines {
-    final lines = [..._offer.lines];
+    final lines = [...offer.lines];
     lines.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
     return lines;
   }
 
   List<OfferLineItem> get _commercialLines =>
-      buildCommercialOfferLines(_offer.lines);
+      buildCommercialOfferLines(offer.lines);
 
   List<OfferLineItem> get _internalLaborLines =>
-      buildInternalLaborDetailLines(_offer.lines);
+      buildInternalLaborDetailLines(offer.lines);
 
   double get _internalVehicleEstimatedCost {
     return _internalLaborLines.fold<double>(0, (sum, line) {
@@ -463,13 +372,13 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   List<OfferPartnerWorker> _partnerWorkersFor(String partnerId) {
-    return _offer.partnerWorkers
+    return offer.partnerWorkers
         .where((item) => item.partnerId == partnerId)
         .toList(growable: false);
   }
 
   List<OfferPartnerVehicle> _partnerVehiclesFor(String partnerId) {
-    return _offer.partnerVehicles
+    return offer.partnerVehicles
         .where((item) => item.partnerId == partnerId)
         .toList(growable: false);
   }
@@ -516,10 +425,10 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   double get _partnerWorkersTotal =>
-      _offer.partnerWorkers.fold<double>(0, (sum, item) => sum + item.total);
+      offer.partnerWorkers.fold<double>(0, (sum, item) => sum + item.total);
 
   double get _partnerVehiclesTotal =>
-      _offer.partnerVehicles.fold<double>(0, (sum, item) => sum + item.total);
+      offer.partnerVehicles.fold<double>(0, (sum, item) => sum + item.total);
 
   double get _partnersTotal => _partnerWorkersTotal + _partnerVehiclesTotal;
 
@@ -534,14 +443,14 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   String get _partnerWorkersCurrency =>
-      _currencyLabel(_offer.partnerWorkers.map((item) => item.currency));
+      _currencyLabel(offer.partnerWorkers.map((item) => item.currency));
 
   String get _partnerVehiclesCurrency =>
-      _currencyLabel(_offer.partnerVehicles.map((item) => item.currency));
+      _currencyLabel(offer.partnerVehicles.map((item) => item.currency));
 
   String get _partnersCurrency => _currencyLabel([
-        ..._offer.partnerWorkers.map((item) => item.currency),
-        ..._offer.partnerVehicles.map((item) => item.currency),
+        ...offer.partnerWorkers.map((item) => item.currency),
+        ...offer.partnerVehicles.map((item) => item.currency),
       ]);
 
   double get _internalLaborEstimatedCost {
@@ -561,9 +470,9 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   double _estimatedCommercialValueForDirectCost(double directCost) {
     if (directCost <= 0) return 0;
-    if (_offer.subtotalDirect <= 0) return directCost;
-    final markupShare = (_offer.regieValue + _offer.profitValue) *
-        (directCost / _offer.subtotalDirect);
+    if (offer.subtotalDirect <= 0) return directCost;
+    final markupShare = (offer.regieValue + offer.profitValue) *
+        (directCost / offer.subtotalDirect);
     return directCost + markupShare;
   }
 
@@ -573,25 +482,25 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   double get _estimatedLaborMargin =>
       _estimatedCommercialLaborValue - _internalLaborEstimatedCost;
 
-  double get _estimatedInterventionCost => _offer.subtotalDirect;
+  double get _estimatedInterventionCost => offer.subtotalDirect;
 
-  double get _offeredPriceWithoutVat => _offer.subtotalComercial;
+  double get _offeredPriceWithoutVat => offer.subtotalComercial;
 
   double get _estimatedCommercialMargin =>
       _offeredPriceWithoutVat - _estimatedInterventionCost;
 
   OfferLineItem _commercialLineForDisplay(OfferLineItem source) {
-    final currency = OfferCurrencyConverter.normalizeCurrency(_offer.currency);
+    final currency = OfferCurrencyConverter.normalizeCurrency(offer.currency);
     if (!OfferCurrencyConverter.requiresRate(currency)) return source;
     final convertedUnitPrice = OfferCurrencyConverter.convertRonToOfferCurrency(
       ronAmount: source.unitPrice,
       currency: currency,
-      effectiveRate: _offer.effectiveExchangeRate,
+      effectiveRate: offer.effectiveExchangeRate,
     );
     final convertedTotal = OfferCurrencyConverter.convertRonToOfferCurrency(
       ronAmount: source.effectiveLineTotal,
       currency: currency,
-      effectiveRate: _offer.effectiveExchangeRate,
+      effectiveRate: offer.effectiveExchangeRate,
     );
     if (source.lineType == OfferLineType.manopera) {
       return source.copyWith(
@@ -630,11 +539,11 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     }
     final totals = OfferRecord.computeTotals(
       lines: normalized,
-      vatPercent: _offer.vatPercent,
-      regiePercent: _offer.regiePercent,
-      profitPercent: _offer.profitPercent,
+      vatPercent: offer.vatPercent,
+      regiePercent: offer.regiePercent,
+      profitPercent: offer.profitPercent,
     );
-    return _offer.copyWith(
+    return offer.copyWith(
       lines: normalized,
       materialSubtotal: totals.materialSubtotal,
       laborSubtotal: totals.laborSubtotal,
@@ -670,11 +579,11 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   String _resolveClientName() {
-    if (_offer.clientName.trim().isNotEmpty) {
-      return _offer.clientName.trim();
+    if (offer.clientName.trim().isNotEmpty) {
+      return offer.clientName.trim();
     }
     for (final item in widget.clients) {
-      if (item.id == _offer.clientId) return item.name;
+      if (item.id == offer.clientId) return item.name;
     }
     return '-';
   }
@@ -689,22 +598,22 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   String _resolveRecipientEmail() {
-    if (_offer.contactPersonEmail.trim().isNotEmpty) {
-      return _offer.contactPersonEmail.trim();
+    if (offer.contactPersonEmail.trim().isNotEmpty) {
+      return offer.contactPersonEmail.trim();
     }
 
     final clientCandidates = <ClientRecord?>[
-      _clientRecordById(_offer.commercialRecipientClientId),
-      _clientRecordById(_offer.clientId),
-      _clientRecordById(_offer.beneficiaryClientId),
+      _clientRecordById(offer.commercialRecipientClientId),
+      _clientRecordById(offer.clientId),
+      _clientRecordById(offer.beneficiaryClientId),
     ];
     for (final client in clientCandidates.whereType<ClientRecord>()) {
       if (client.email.trim().isNotEmpty) {
         return client.email.trim();
       }
       for (final contact in client.contactPeople) {
-        if (_offer.contactPersonId.trim().isNotEmpty &&
-            contact.id == _offer.contactPersonId.trim() &&
+        if (offer.contactPersonId.trim().isNotEmpty &&
+            contact.id == offer.contactPersonId.trim() &&
             contact.email.trim().isNotEmpty) {
           return contact.email.trim();
         }
@@ -726,8 +635,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     if (currentEmail.isNotEmpty) {
       return currentEmail;
     }
-    if (_offer.createdByUserEmail.trim().isNotEmpty) {
-      return _offer.createdByUserEmail.trim();
+    if (offer.createdByUserEmail.trim().isNotEmpty) {
+      return offer.createdByUserEmail.trim();
     }
     return company.companyName.trim();
   }
@@ -735,15 +644,15 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   String _resolveSenderRole() => 'Departament comercial';
 
   String _resolveJobLabel() {
-    if (_offer.jobCode.trim().isNotEmpty || _offer.jobTitle.trim().isNotEmpty) {
-      final code = _offer.jobCode.trim();
-      final title = _offer.jobTitle.trim();
+    if (offer.jobCode.trim().isNotEmpty || offer.jobTitle.trim().isNotEmpty) {
+      final code = offer.jobCode.trim();
+      final title = offer.jobTitle.trim();
       if (code.isNotEmpty && title.isNotEmpty) return '$code - $title';
       if (code.isNotEmpty) return code;
       if (title.isNotEmpty) return title;
     }
     for (final item in widget.jobs) {
-      if (item.id != _offer.jobId) continue;
+      if (item.id != offer.jobId) continue;
       if (item.jobCode.trim().isNotEmpty && item.title.trim().isNotEmpty) {
         return '${item.jobCode} - ${item.title}';
       }
@@ -772,20 +681,20 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   Future<void> _saveOperationalMetadata(OfferRecord next) async {
     final saved = next.copyWith(updatedAt: DateTime.now());
     await widget.onSaveOffer(saved);
-    setState(() => _offer = saved);
+    setState(() => offer = saved);
   }
 
   /// Automatically updates offer status to [OfferStatus.sent] if it is still
   /// in draft state, so the user doesn't have to change it manually.
   Future<void> _markOfferAsSentIfDraft() async {
-    if (_offer.status == OfferStatus.draft ||
-        _offer.status == OfferStatus.awaiting) {
-      final next = _offer.copyWith(
+    if (offer.status == OfferStatus.draft ||
+        offer.status == OfferStatus.awaiting) {
+      final next = offer.copyWith(
         status: OfferStatus.sent,
         updatedAt: DateTime.now(),
       );
       await widget.onSaveOffer(next);
-      if (mounted) setState(() => _offer = next);
+      if (mounted) setState(() => offer = next);
     }
   }
 
@@ -805,12 +714,12 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     }
     final encoded = base64Encode(bytes);
     final next = isClient
-        ? _offer.copyWith(
+        ? offer.copyWith(
             clientSignatureBase64: encoded,
             agreementAcceptedAt: DateTime.now(),
             clearAgreementAcceptedAt: false,
           )
-        : _offer.copyWith(
+        : offer.copyWith(
             issuerSignatureBase64: encoded,
           );
     await _saveOperationalMetadata(next);
@@ -828,12 +737,12 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   Future<void> _clearSignature({required bool isClient}) async {
     final next = isClient
-        ? _offer.copyWith(
+        ? offer.copyWith(
             clientSignatureBase64: '',
             agreementAcceptedAt: null,
             clearAgreementAcceptedAt: true,
           )
-        : _offer.copyWith(
+        : offer.copyWith(
             issuerSignatureBase64: '',
           );
     await _saveOperationalMetadata(next);
@@ -844,17 +753,17 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   // ---------------------------------------------------------------------------
 
   List<OfferAcceptanceClause> _resolvedAcceptanceClauses() {
-    if (_offer.acceptanceClauses.isNotEmpty) return _offer.acceptanceClauses;
+    if (offer.acceptanceClauses.isNotEmpty) return offer.acceptanceClauses;
     // Generează clauze default cu totalul ofertei (CU TVA), convertit în
     // moneda ofertei — identic cu caseta „VALOARE TOTALĂ" din formular.
     final totalStr = OfferCurrencyConverter.convertRonToOfferCurrency(
-      ronAmount: _offer.totalValue,
-      currency: _offer.currency,
-      effectiveRate: _offer.effectiveExchangeRate,
+      ronAmount: offer.totalValue,
+      currency: offer.currency,
+      effectiveRate: offer.effectiveExchangeRate,
     ).toStringAsFixed(2);
     return OfferAcceptanceClause.defaults(
       totalLabel: totalStr,
-      currency: OfferCurrencyConverter.normalizeCurrency(_offer.currency),
+      currency: OfferCurrencyConverter.normalizeCurrency(offer.currency),
     );
   }
 
@@ -875,7 +784,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     final current = [...base, ...extra];
     final updated = await OfferAcceptanceClausesDialog.show(context, current);
     if (updated == null || !mounted) return;
-    final next = _offer.copyWith(acceptanceClauses: updated);
+    final next = offer.copyWith(acceptanceClauses: updated);
     await _saveOperationalMetadata(next);
   }
 
@@ -888,7 +797,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     );
     if (bytes == null || !mounted) return;
     final b64 = base64Encode(bytes);
-    final next = _offer.copyWith(
+    final next = offer.copyWith(
       acceptanceFormSignatureBase64: b64,
       acceptanceFormSignedAt: DateTime.now(),
     );
@@ -896,7 +805,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   Future<void> _clearAcceptanceSignature() async {
-    final next = _offer.copyWith(
+    final next = offer.copyWith(
       acceptanceFormSignatureBase64: '',
       clearAcceptanceFormSignedAt: true,
     );
@@ -905,15 +814,15 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   Widget _buildAcceptanceFormCard() {
     final cs = Theme.of(context).colorScheme;
-    final isSigned = _offer.isAcceptanceSigned;
-    final signedDate = isSigned && _offer.acceptanceFormSignedAt != null
-        ? _formatDate(_offer.acceptanceFormSignedAt)
+    final isSigned = offer.isAcceptanceSigned;
+    final signedDate = isSigned && offer.acceptanceFormSignedAt != null
+        ? formatDate(offer.acceptanceFormSignedAt)
         : null;
 
     // Decodează semnătura pentru preview
     Uint8List? sigBytes;
-    if (isSigned && _offer.acceptanceFormSignatureBase64.isNotEmpty) {
-      sigBytes = _decodeSignature(_offer.acceptanceFormSignatureBase64);
+    if (isSigned && offer.acceptanceFormSignatureBase64.isNotEmpty) {
+      sigBytes = _decodeSignature(offer.acceptanceFormSignatureBase64);
     }
 
     return Card(
@@ -1126,8 +1035,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     }
     buffer.write(
       'UM: ${line.unit} • Cantitate: ${line.quantity.toStringAsFixed(2)}'
-      ' • Preț unitar: ${_displayAmountWithLabels(sourceLine.unitPrice, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}'
-      ' • Total linie: ${_displayAmountWithLabels(sourceLine.effectiveLineTotal, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}',
+      ' • Preț unitar: ${displayAmountWithLabels(sourceLine.unitPrice, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}'
+      ' • Total linie: ${displayAmountWithLabels(sourceLine.effectiveLineTotal, withoutVatLabel: 'fără TVA', withVatLabel: 'cu TVA')}',
     );
     if (sourceLine.lineType == OfferLineType.manopera &&
         sourceLine.laborSourceMode == OfferLaborSourceMode.standard) {
@@ -1138,10 +1047,10 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     return buffer.toString();
   }
 
-  bool get _isFrozen => _offer.isConverted;
+  bool get _isFrozen => offer.isConverted;
 
   void _showFrozenMessage() {
-    final jobId = _offer.convertedToJobId.trim();
+    final jobId = offer.convertedToJobId.trim();
     final suffix = jobId.isEmpty ? '' : ' Lucrarea generata este $jobId.';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1153,7 +1062,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   }
 
   JobRecord? _findConvertedJob() {
-    final jobId = _offer.convertedToJobId.trim();
+    final jobId = offer.convertedToJobId.trim();
     if (jobId.isEmpty) return null;
     for (final item in widget.jobs) {
       if (item.id == jobId) return item;
@@ -1167,7 +1076,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Lucrarea generata pentru oferta ${_offer.offerNumber} nu a fost gasita in lista curenta.',
+            'Lucrarea generata pentru oferta ${offer.offerNumber} nu a fost gasita in lista curenta.',
           ),
         ),
       );
@@ -1200,7 +1109,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     // Update optimist: UI reflectă imediat modificarea, indiferent de rezultatul salvării
     setState(() {
       _saving = true;
-      _offer = updated;
+      offer = updated;
     });
     try {
       await widget.onSaveOffer(updated);
@@ -1219,23 +1128,23 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   ClientRecord? _findOfferClient() {
     for (final item in widget.clients) {
-      if (item.id == _offer.clientId) return item;
+      if (item.id == offer.clientId) return item;
     }
     return null;
   }
 
   JobRecord? _findOfferJob() {
     for (final item in widget.jobs) {
-      if (item.id == _offer.jobId) return item;
+      if (item.id == offer.jobId) return item;
     }
     return null;
   }
 
   ClientRecord? _resolveSmartBillBillingClient() {
     final candidates = <ClientRecord?>[
-      _clientRecordById(_offer.commercialRecipientClientId),
-      _clientRecordById(_offer.clientId),
-      _clientRecordById(_offer.beneficiaryClientId),
+      _clientRecordById(offer.commercialRecipientClientId),
+      _clientRecordById(offer.clientId),
+      _clientRecordById(offer.beneficiaryClientId),
     ];
     for (final candidate in candidates.whereType<ClientRecord>()) {
       return candidate;
@@ -1251,7 +1160,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     if (!mounted) {
       return;
     }
-    setState(() => _offer = next);
+    setState(() => offer = next);
     if ((snackMessage ?? '').trim().isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(snackMessage!)),
@@ -1267,7 +1176,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     try {
       final profile = await widget.repository.loadCompanyProfile();
       final updated = await _smartBillSyncService.issueEstimate(
-        offer: _offer,
+        offer: offer,
         companyProfile: profile,
         billingClient: _resolveSmartBillBillingClient(),
       );
@@ -1277,7 +1186,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
             'Proforma SmartBill a fost emisa: ${updated.smartBillEstimate.seriesName}${updated.smartBillEstimate.number}.',
       );
     } catch (error) {
-      final failed = _smartBillSyncService.markEstimateSyncError(_offer, error);
+      final failed = _smartBillSyncService.markEstimateSyncError(offer, error);
       await _persistSmartBillState(failed);
       if (!mounted) {
         return;
@@ -1300,7 +1209,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     try {
       final profile = await widget.repository.loadCompanyProfile();
       final updated = await _smartBillSyncService.issueInvoice(
-        offer: _offer,
+        offer: offer,
         companyProfile: profile,
         billingClient: _resolveSmartBillBillingClient(),
       );
@@ -1310,7 +1219,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
             'Factura SmartBill a fost emisa: ${updated.smartBillInvoice.seriesName}${updated.smartBillInvoice.number}.',
       );
     } catch (error) {
-      final failed = _smartBillSyncService.markInvoiceSyncError(_offer, error);
+      final failed = _smartBillSyncService.markInvoiceSyncError(offer, error);
       await _persistSmartBillState(failed);
       if (!mounted) {
         return;
@@ -1333,7 +1242,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     try {
       final profile = await widget.repository.loadCompanyProfile();
       final updated = await _smartBillSyncService.refreshInvoicePaymentStatus(
-        offer: _offer,
+        offer: offer,
         companyProfile: profile,
       );
       await _persistSmartBillState(
@@ -1341,7 +1250,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
         snackMessage: 'Statusul facturii SmartBill a fost actualizat.',
       );
     } catch (error) {
-      final failed = _smartBillSyncService.markInvoiceSyncError(_offer, error);
+      final failed = _smartBillSyncService.markInvoiceSyncError(offer, error);
       await _persistSmartBillState(failed);
       if (!mounted) {
         return;
@@ -1392,7 +1301,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
   Future<void> _emiteBonConsum() async {
     // Extrage materialele din ofertă (linii de tip material cu cantitate > 0)
     final materiale = <BonConsumArticol>[];
-    for (final line in _offer.lines) {
+    for (final line in offer.lines) {
       if (line.lineType != OfferLineType.material) continue;
       if (line.name.trim().isEmpty) continue;
       if (line.quantity <= 0) continue;
@@ -1438,10 +1347,10 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     }
 
     if (!mounted) return;
-    final titlu = _offer.offerNumber.trim().isNotEmpty
-        ? 'Ofertă ${_offer.offerNumber}'
-        : _offer.title.trim().isNotEmpty
-            ? _offer.title.trim()
+    final titlu = offer.offerNumber.trim().isNotEmpty
+        ? 'Ofertă ${offer.offerNumber}'
+        : offer.title.trim().isNotEmpty
+            ? offer.title.trim()
             : 'Ofertă client';
 
     final response = await showDialog<SmartBillConsumptionNoteResponse>(
@@ -1476,7 +1385,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       return document.syncStatus.label;
     }
     final issuedAt =
-        document.issuedAt == null ? '' : ' • ${_formatDate(document.issuedAt)}';
+        document.issuedAt == null ? '' : ' • ${formatDate(document.issuedAt)}';
     final suffix = document.isDraft ? ' • ciorna' : '';
     return '${document.syncStatus.label} • ${document.seriesName}${document.number}$issuedAt$suffix';
   }
@@ -1588,7 +1497,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
                 ),
                 OutlinedButton.icon(
                   onPressed: (_smartBillRefreshingStatus ||
-                          !_offer.smartBillInvoice.hasDocument)
+                          !offer.smartBillInvoice.hasDocument)
                       ? null
                       : _refreshSmartBillInvoiceStatus,
                   icon: const Icon(Icons.sync_outlined),
@@ -1596,8 +1505,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
                 ),
               ],
             ),
-            _buildSmartBillDocumentTile(_offer.smartBillEstimate),
-            _buildSmartBillDocumentTile(_offer.smartBillInvoice),
+            _buildSmartBillDocumentTile(offer.smartBillEstimate),
+            _buildSmartBillDocumentTile(offer.smartBillInvoice),
           ],
         ),
       ),
@@ -1610,16 +1519,16 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     return AiAssistantRuntimeContext(
       contextType: AiAssistantContextType.offers,
       module: 'oferte',
-      entityId: _offer.id,
-      entityLabel: _offer.offerNumber,
+      entityId: offer.id,
+      entityLabel: offer.offerNumber,
       userId: widget.currentUserEmail?.trim() ?? '',
-      contextLabel: 'Oferta ${_offer.offerNumber}',
+      contextLabel: 'Oferta ${offer.offerNumber}',
       primaryData: <String, dynamic>{
-        ..._offer.toMap(),
+        ...offer.toMap(),
         'type': 'offer',
       },
       relatedData: <String, dynamic>{
-        'offer': _offer.toMap(),
+        'offer': offer.toMap(),
         'client': client?.toMap() ?? <String, dynamic>{},
         'job': job?.toMap() ?? <String, dynamic>{},
       },
@@ -1636,7 +1545,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
 
   Future<void> _openMaterialNecessar() async {
     // Collect only material lines
-    final materialLines = _offer.lines
+    final materialLines = offer.lines
         .where((l) => l.lineType == OfferLineType.material)
         .toList(growable: false);
 
@@ -1678,9 +1587,9 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     String buildText() {
       final buf = StringBuffer();
       buf.writeln('NECESAR MATERIALE');
-      buf.writeln('Oferta: ${_offer.offerNumber}');
+      buf.writeln('Oferta: ${offer.offerNumber}');
       buf.writeln(
-          'Data: ${_offer.createdAt.day.toString().padLeft(2, '0')}.${_offer.createdAt.month.toString().padLeft(2, '0')}.${_offer.createdAt.year}');
+          'Data: ${offer.createdAt.day.toString().padLeft(2, '0')}.${offer.createdAt.month.toString().padLeft(2, '0')}.${offer.createdAt.year}');
       buf.writeln();
       buf.writeln('Nr.  Denumire${' ' * 40}Cant.   UM');
       buf.writeln('-' * 70);
@@ -1856,7 +1765,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       return false;
     }
     if (targetKey != 'offer_notes') return false;
-    final next = _offer.copyWith(
+    final next = offer.copyWith(
       notes: content.trim(),
       updatedAt: DateTime.now(),
     );
@@ -1875,7 +1784,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       _showFrozenMessage();
       return;
     }
-    TipDocumentDeviz selected = _offer.tipDocument;
+    TipDocumentDeviz selected = offer.tipDocument;
     final result = await showDialog<TipDocumentDeviz>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1913,8 +1822,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
         ),
       ),
     );
-    if (result == null || result == _offer.tipDocument) return;
-    final next = _offer.copyWith(
+    if (result == null || result == offer.tipDocument) return;
+    final next = offer.copyWith(
       tipDocument: result,
       updatedAt: DateTime.now(),
     );
@@ -1928,15 +1837,15 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
     }
     final edit = widget.onEditOffer;
     if (edit == null) return;
-    final updated = await edit(_offer);
+    final updated = await edit(offer);
     if (!mounted || updated == null) return;
-    setState(() => _offer = updated);
+    setState(() => offer = updated);
   }
 
   Future<void> _duplicateOffer() async {
     final duplicate = widget.onDuplicateOffer;
     if (duplicate == null) return;
-    final created = await duplicate(_offer);
+    final created = await duplicate(offer);
     if (!mounted || created == null) {
       return;
     }
@@ -1965,9 +1874,9 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       _showFrozenMessage();
       return;
     }
-    if (_offer.status == newStatus) return;
+    if (offer.status == newStatus) return;
 
-    final next = _offer.copyWith(
+    final next = offer.copyWith(
       status: newStatus,
       updatedAt: DateTime.now(),
     );
@@ -2052,7 +1961,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage> {
       await showDialog<bool>(
         context: context,
         builder: (context) => OfferEmailSendDialog(
-          offer: _offer,
+          offer: offer,
           company: company,
           currentUserEmail: widget.currentUserEmail ?? '',
           initialRecipientEmail: _resolveRecipientEmail(),
@@ -2373,17 +2282,17 @@ if (Test-Path \$attachment) {
         });
       }
 
-      final pdfFileName = OfferPdfService.exportFileName(_offer);
+      final pdfFileName = OfferPdfService.exportFileName(offer);
       final attachments = <Map<String, dynamic>>[
         await _buildQueueAttachmentForOfferPdf(
           pdfBytes: pdfBytes,
           fileName: pdfFileName,
-          sourceEntityId: _offer.id,
+          sourceEntityId: offer.id,
         ),
       ];
 
       final templateData = OfferEmailTemplate.buildComplete(
-        offer: _offer,
+        offer: offer,
         company: company,
         currentUserEmail: widget.currentUserEmail ?? '',
         currentUserName: _resolveSenderName(company),
@@ -2396,16 +2305,16 @@ if (Test-Path \$attachment) {
         recipientEmail: recipientEmail.trim(),
         recipientName: _resolveClientName(),
         subject: subject.trim().isEmpty
-            ? OfferEmailTemplate.subject(offerNumber: _offer.offerNumber)
+            ? OfferEmailTemplate.subject(offerNumber: offer.offerNumber)
             : subject.trim(),
         bodyText: bodyText,
         bodyHtml: bodyHtml.trim().isEmpty ? templateData.htmlBody : bodyHtml,
         attachments: attachments,
         inlineAssets: inlineAssets,
         sourceModule: 'oferte',
-        sourceEntityId: _offer.id,
+        sourceEntityId: offer.id,
         eventType: NotificationEventType.documentGenerated,
-        metadata: {'offer_number': _offer.offerNumber},
+        metadata: {'offer_number': offer.offerNumber},
       );
 
       if (!mounted) return true;
@@ -2512,7 +2421,7 @@ if (Test-Path \$attachment) {
     PdfVisualTemplate? template,
     bool forceRegenerate = false,
   }) async {
-    final currentPath = _offer.pdfPath.trim();
+    final currentPath = offer.pdfPath.trim();
     final profile = company ?? await widget.repository.loadCompanyProfile();
     final resolvedTemplate = template ?? _resolvedPdfTemplate(profile);
     final shouldRegenerate = forceRegenerate ||
@@ -2524,21 +2433,21 @@ if (Test-Path \$attachment) {
       return currentPath;
     }
 
-    final issuer = (_offer.createdByUserEmail.trim().isNotEmpty
-            ? _offer.createdByUserEmail
+    final issuer = (offer.createdByUserEmail.trim().isNotEmpty
+            ? offer.createdByUserEmail
             : (widget.currentUserEmail ?? ''))
         .trim();
     final branding = DocumentBrandingData.fromCompanyProfile(profile);
     final path = await OfferPdfService.export(
       repository: widget.repository,
-      offer: _offer,
+      offer: offer,
       clientLabel: _resolveClientName(),
       jobLabel: _resolveJobLabel(),
       issuerLabel: issuer.isEmpty ? '-' : issuer,
       branding: branding,
       template: resolvedTemplate,
     );
-    final next = _offer.copyWith(
+    final next = offer.copyWith(
       pdfPath: path,
       updatedAt: DateTime.now(),
     );
@@ -2553,7 +2462,7 @@ if (Test-Path \$attachment) {
       return;
     }
     final ctrl =
-        TextEditingController(text: _offer.vatPercent.toStringAsFixed(2));
+        TextEditingController(text: offer.vatPercent.toStringAsFixed(2));
     final result = await showDialog<double>(
       context: context,
       builder: (context) => AlertDialog(
@@ -2586,9 +2495,9 @@ if (Test-Path \$attachment) {
     );
     ctrl.dispose();
     if (result == null) return;
-    final next = _offer.copyWith(
+    final next = offer.copyWith(
       vatPercent: result,
-      lines: _offer.lines,
+      lines: offer.lines,
     );
     await _persistOffer(next);
   }
@@ -2599,18 +2508,18 @@ if (Test-Path \$attachment) {
     try {
       final companyProfile = await widget.repository.loadCompanyProfile();
       final selectedTemplate = _resolvedPdfTemplate(companyProfile);
-      final issuer = (_offer.createdByUserEmail.trim().isNotEmpty
-              ? _offer.createdByUserEmail
+      final issuer = (offer.createdByUserEmail.trim().isNotEmpty
+              ? offer.createdByUserEmail
               : (widget.currentUserEmail ?? ''))
           .trim();
       final branding = DocumentBrandingData.fromCompanyProfile(
         companyProfile,
       );
       String path = '';
-      var offerForActions = _offer;
+      var offerForActions = offer;
       if (share) {
         await OfferPdfService.share(
-          offer: _offer,
+          offer: offer,
           clientLabel: _resolveClientName(),
           jobLabel: _resolveJobLabel(),
           issuerLabel: issuer.isEmpty ? '-' : issuer,
@@ -2621,7 +2530,7 @@ if (Test-Path \$attachment) {
       } else {
         path = await OfferPdfService.export(
           repository: widget.repository,
-          offer: _offer,
+          offer: offer,
           clientLabel: _resolveClientName(),
           jobLabel: _resolveJobLabel(),
           issuerLabel: issuer.isEmpty ? '-' : issuer,
@@ -2631,7 +2540,7 @@ if (Test-Path \$attachment) {
         );
         // Curăță TOATE fișierele PDF vechi ale acestei oferte din același director.
         // Previne acumularea de fișiere și caching-ul viewer-ului Android.
-        _cleanupOldOfferPdfs(newPath: path, offer: _offer);
+        _cleanupOldOfferPdfs(newPath: path, offer: offer);
         offerForActions = offerForActions.copyWith(
           pdfPath: path,
           hasAcceptancePage: true,
@@ -2642,19 +2551,19 @@ if (Test-Path \$attachment) {
       var successMessage = share
           ? 'Documentul a fost trimis catre share sheet.'
           : 'PDF oferta generat: $path';
-      if (!share && _offer.registryEntryId.trim().isEmpty) {
+      if (!share && offer.registryEntryId.trim().isEmpty) {
         try {
           final entry = await _registryService.registerOffer(
-            offerId: _offer.id,
-            documentNumber: _offer.offerNumber.trim().isEmpty
-                ? _offer.id
-                : _offer.offerNumber,
-            title: _offer.title.trim().isEmpty
-                ? 'Oferta client ${_offer.offerNumber}'
-                : _offer.title.trim(),
-            clientId: _offer.clientId,
+            offerId: offer.id,
+            documentNumber: offer.offerNumber.trim().isEmpty
+                ? offer.id
+                : offer.offerNumber,
+            title: offer.title.trim().isEmpty
+                ? 'Oferta client ${offer.offerNumber}'
+                : offer.title.trim(),
+            clientId: offer.clientId,
             recipientName: _resolveClientName(),
-            documentDate: _offer.issueDate,
+            documentDate: offer.issueDate,
             filePath: path,
             fileName: path.split(RegExp(r'[\\/]')).last,
             notes: 'Oferta client inregistrata automat la primul export PDF.',
@@ -2672,10 +2581,10 @@ if (Test-Path \$attachment) {
               'PDF oferta generat, dar inregistrarea in Registratura a esuat: $registryError';
         }
       }
-      if (!share || offerForActions != _offer) {
+      if (!share || offerForActions != offer) {
         await widget.onSaveOffer(offerForActions);
         if (!mounted) return;
-        setState(() => _offer = offerForActions);
+        setState(() => offer = offerForActions);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2812,7 +2721,7 @@ if (Test-Path \$attachment) {
     try {
       await DocumentFileService.shareFile(
         filePath,
-        subject: 'Oferta ${_offer.offerNumber.trim()}'.trim(),
+        subject: 'Oferta ${offer.offerNumber.trim()}'.trim(),
         text: 'PDF oferta generat din aplicatie.',
       );
       if (!mounted) return;
@@ -2828,8 +2737,8 @@ if (Test-Path \$attachment) {
   }
 
   bool get _canConvertToJob =>
-      _offer.status == OfferStatus.accepted &&
-      _offer.convertedToJobId.trim().isEmpty &&
+      offer.status == OfferStatus.accepted &&
+      offer.convertedToJobId.trim().isEmpty &&
       widget.onConvertToJob != null;
 
   Future<void> _convertToJob() async {
@@ -2837,10 +2746,10 @@ if (Test-Path \$attachment) {
     if (action == null || !_canConvertToJob || _converting) return;
     setState(() => _converting = true);
     try {
-      final updated = await action(_offer);
+      final updated = await action(offer);
       if (!mounted) return;
       if (updated != null) {
-        setState(() => _offer = updated);
+        setState(() => offer = updated);
       }
     } finally {
       if (mounted) {
@@ -2988,7 +2897,7 @@ if (Test-Path \$attachment) {
       ...laborLines,
     ];
 
-    final existingClauses = [..._offer.commercialClauses];
+    final existingClauses = [...offer.commercialClauses];
     final clauseTitles = existingClauses
         .map((item) => item.title.trim().toLowerCase())
         .where((item) => item.isNotEmpty)
@@ -3894,7 +3803,7 @@ if (Test-Path \$attachment) {
     final created = await _showPartnerDialog();
     if (created == null) return;
     await _persistOffer(
-      _offer.copyWith(partners: [..._offer.partners, created]),
+      offer.copyWith(partners: [...offer.partners, created]),
     );
   }
 
@@ -3906,8 +3815,8 @@ if (Test-Path \$attachment) {
     final updated = await _showPartnerDialog(existing: partner);
     if (updated == null) return;
     await _persistOffer(
-      _offer.copyWith(
-        partners: _offer.partners
+      offer.copyWith(
+        partners: offer.partners
             .map((item) => item.id == updated.id ? updated : item)
             .toList(growable: false),
       ),
@@ -3940,14 +3849,14 @@ if (Test-Path \$attachment) {
     );
     if (confirm != true) return;
     await _persistOffer(
-      _offer.copyWith(
-        partners: _offer.partners
+      offer.copyWith(
+        partners: offer.partners
             .where((item) => item.id != partner.id)
             .toList(growable: false),
-        partnerWorkers: _offer.partnerWorkers
+        partnerWorkers: offer.partnerWorkers
             .where((item) => item.partnerId != partner.id)
             .toList(growable: false),
-        partnerVehicles: _offer.partnerVehicles
+        partnerVehicles: offer.partnerVehicles
             .where((item) => item.partnerId != partner.id)
             .toList(growable: false),
       ),
@@ -3962,8 +3871,8 @@ if (Test-Path \$attachment) {
     final created = await _showPartnerWorkerDialog(partner: partner);
     if (created == null) return;
     await _persistOffer(
-      _offer.copyWith(
-        partnerWorkers: [..._offer.partnerWorkers, created],
+      offer.copyWith(
+        partnerWorkers: [...offer.partnerWorkers, created],
       ),
     );
   }
@@ -3982,8 +3891,8 @@ if (Test-Path \$attachment) {
     );
     if (updated == null) return;
     await _persistOffer(
-      _offer.copyWith(
-        partnerWorkers: _offer.partnerWorkers
+      offer.copyWith(
+        partnerWorkers: offer.partnerWorkers
             .map((item) => item.id == updated.id ? updated : item)
             .toList(growable: false),
       ),
@@ -3996,8 +3905,8 @@ if (Test-Path \$attachment) {
       return;
     }
     await _persistOffer(
-      _offer.copyWith(
-        partnerWorkers: _offer.partnerWorkers
+      offer.copyWith(
+        partnerWorkers: offer.partnerWorkers
             .where((item) => item.id != worker.id)
             .toList(growable: false),
       ),
@@ -4012,8 +3921,8 @@ if (Test-Path \$attachment) {
     final created = await _showPartnerVehicleDialog(partner: partner);
     if (created == null) return;
     await _persistOffer(
-      _offer.copyWith(
-        partnerVehicles: [..._offer.partnerVehicles, created],
+      offer.copyWith(
+        partnerVehicles: [...offer.partnerVehicles, created],
       ),
     );
   }
@@ -4032,8 +3941,8 @@ if (Test-Path \$attachment) {
     );
     if (updated == null) return;
     await _persistOffer(
-      _offer.copyWith(
-        partnerVehicles: _offer.partnerVehicles
+      offer.copyWith(
+        partnerVehicles: offer.partnerVehicles
             .map((item) => item.id == updated.id ? updated : item)
             .toList(growable: false),
       ),
@@ -4046,8 +3955,8 @@ if (Test-Path \$attachment) {
       return;
     }
     await _persistOffer(
-      _offer.copyWith(
-        partnerVehicles: _offer.partnerVehicles
+      offer.copyWith(
+        partnerVehicles: offer.partnerVehicles
             .where((item) => item.id != vehicle.id)
             .toList(growable: false),
       ),
@@ -4055,7 +3964,7 @@ if (Test-Path \$attachment) {
   }
 
   Widget _buildPartnerSection() {
-    if (_offer.partners.isEmpty) {
+    if (offer.partners.isEmpty) {
       return const Card(
         child: Padding(
           padding: EdgeInsets.all(12),
@@ -4067,10 +3976,10 @@ if (Test-Path \$attachment) {
     return ListView.separated(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      itemCount: _offer.partners.length,
+      itemCount: offer.partners.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
-        final partner = _offer.partners[index];
+        final partner = offer.partners[index];
         final workers = _partnerWorkersFor(partner.id);
         final vehicles = _partnerVehiclesFor(partner.id);
         final workerCurrency =
@@ -4276,7 +4185,7 @@ if (Test-Path \$attachment) {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('${_offer.offerNumber} - Detaliu ofertă'),
+        title: Text('${offer.offerNumber} - Detaliu ofertă'),
         // Bara de progres la baza AppBar-ului când se salvează sau se exportă PDF
         bottom: (_saving || _exportingPdf)
             ? PreferredSize(
@@ -4412,7 +4321,7 @@ if (Test-Path \$attachment) {
                   dense: true,
                 ),
               ),
-              if (_offer.complaintId.trim().isNotEmpty)
+              if (offer.complaintId.trim().isNotEmpty)
                 PopupMenuItem(
                   value: 'share',
                   enabled: !(_saving || _exportingPdf || _converting),
@@ -4423,7 +4332,7 @@ if (Test-Path \$attachment) {
                     dense: true,
                   ),
                 ),
-              if (_offer.isConverted)
+              if (offer.isConverted)
                 PopupMenuItem(
                   value: 'lucrare',
                   enabled: !(_saving || _exportingPdf || _converting),
@@ -4520,39 +4429,39 @@ if (Test-Path \$attachment) {
                       children: [
                         Chip(
                           label: Text(
-                            _offer.isConverted
+                            offer.isConverted
                                 ? 'Status: Convertită'
-                                : 'Status: ${_offer.status.label}',
+                                : 'Status: ${offer.status.label}',
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w600,
                               fontSize: 12,
                             ),
                           ),
-                          backgroundColor: _statusChipColor(_offer),
+                          backgroundColor: _statusChipColor(offer),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            _offer.registryNumber.trim().isEmpty
+                            offer.registryNumber.trim().isEmpty
                                 ? 'Neînregistrată'
-                                : 'Registratură: ${_offer.registryNumber.trim()}',
+                                : 'Registratură: ${offer.registryNumber.trim()}',
                             style: TextStyle(
-                              color: _offer.registryNumber.trim().isEmpty
+                              color: offer.registryNumber.trim().isEmpty
                                   ? Colors.orange.shade900
                                   : Colors.green.shade900,
                               fontWeight: FontWeight.w600,
                               fontSize: 12,
                             ),
                           ),
-                          backgroundColor: _offer.registryNumber.trim().isEmpty
+                          backgroundColor: offer.registryNumber.trim().isEmpty
                               ? Colors.orange.shade100
                               : Colors.green.shade100,
                           visualDensity: VisualDensity.compact,
                         ),
                       ],
                     ),
-                    if (!_offer.isConverted) ...[
+                    if (!offer.isConverted) ...[
                       const SizedBox(height: 12),
                       Text(
                         'Status rapid',
@@ -4563,9 +4472,9 @@ if (Test-Path \$attachment) {
                         spacing: 8,
                         runSpacing: 8,
                         children: OfferStatus.values.map((status) {
-                          final selected = _offer.status == status;
+                          final selected = offer.status == status;
                           final chipColor =
-                              _statusChipColor(_offer.copyWith(status: status));
+                              _statusChipColor(offer.copyWith(status: status));
                           return ChoiceChip(
                             label: Text(
                               status.label,
@@ -4609,8 +4518,8 @@ if (Test-Path \$attachment) {
                       spacing: 16,
                       runSpacing: 8,
                       children: [
-                        _kv('Numar oferta', _offer.offerNumber),
-                        _kv('Titlu', _offer.title),
+                        _kv('Numar oferta', offer.offerNumber),
+                        _kv('Titlu', offer.title),
                         _kv('Client', _resolveClientName()),
                         // Card detalii identificare client
                         if (_findOfferClient() != null)
@@ -4622,90 +4531,90 @@ if (Test-Path \$attachment) {
                               showTitle: false,
                             ),
                           ),
-                        if (_offer.commercialRecipientName.trim().isNotEmpty)
+                        if (offer.commercialRecipientName.trim().isNotEmpty)
                           _kv(
                             'Destinatar comercial / platitor',
-                            _offer.commercialRecipientName.trim(),
+                            offer.commercialRecipientName.trim(),
                           ),
-                        if (_offer.beneficiaryName.trim().isNotEmpty)
-                          _kv('Beneficiar real', _offer.beneficiaryName.trim()),
+                        if (offer.beneficiaryName.trim().isNotEmpty)
+                          _kv('Beneficiar real', offer.beneficiaryName.trim()),
                         _kv(
                           'Departament',
-                          _offer.departmentName.trim().isEmpty
+                          offer.departmentName.trim().isEmpty
                               ? '-'
-                              : _offer.departmentName.trim(),
+                              : offer.departmentName.trim(),
                         ),
                         _kv(
                           'Persoana de contact',
-                          _offer.contactPersonName.trim().isEmpty
+                          offer.contactPersonName.trim().isEmpty
                               ? '-'
-                              : _offer.contactPersonName.trim(),
+                              : offer.contactPersonName.trim(),
                         ),
                         _kv(
                           'Contact email',
-                          _offer.contactPersonEmail.trim().isEmpty
+                          offer.contactPersonEmail.trim().isEmpty
                               ? '-'
-                              : _offer.contactPersonEmail.trim(),
+                              : offer.contactPersonEmail.trim(),
                         ),
                         _kv(
                           'Contact telefon',
-                          _offer.contactPersonPhone.trim().isEmpty
+                          offer.contactPersonPhone.trim().isEmpty
                               ? '-'
-                              : _offer.contactPersonPhone.trim(),
+                              : offer.contactPersonPhone.trim(),
                         ),
                         _kv('Lucrare', _resolveJobLabel()),
-                        if (_offer.complaintNumber.trim().isNotEmpty)
+                        if (offer.complaintNumber.trim().isNotEmpty)
                           _kv('Reclamatie sursa',
-                              _offer.complaintNumber.trim()),
-                        if (_offer.appointmentId.trim().isNotEmpty)
-                          _kv('Programare sursa', _offer.appointmentId.trim()),
+                              offer.complaintNumber.trim()),
+                        if (offer.appointmentId.trim().isNotEmpty)
+                          _kv('Programare sursa', offer.appointmentId.trim()),
                         _kv(
                           'Acord client',
-                          _offer.agreementAcceptedAt == null
+                          offer.agreementAcceptedAt == null
                               ? 'Nesemnat'
-                              : _formatDate(_offer.agreementAcceptedAt),
+                              : formatDate(offer.agreementAcceptedAt),
                         ),
-                        _kv('Status', _displayStatusLabel(_offer)),
+                        _kv('Status', _displayStatusLabel(offer)),
                         _kv(
                           'Registratura',
-                          _offer.registryNumber.trim().isEmpty
+                          offer.registryNumber.trim().isEmpty
                               ? 'neinregistrat'
-                              : _offer.registryNumber.trim(),
+                              : offer.registryNumber.trim(),
                         ),
                         _kv(
                           'Data inregistrare',
-                          _formatDate(_offer.registeredAt),
+                          formatDate(offer.registeredAt),
                         ),
                         _kv(
                           'Conversie in lucrare',
-                          _offer.convertedToJobId.trim().isEmpty
+                          offer.convertedToJobId.trim().isEmpty
                               ? 'Nu'
-                              : 'Da (${_offer.convertedToJobId})',
+                              : 'Da (${offer.convertedToJobId})',
                         ),
                         _kv(
                           'Data conversie',
-                          _formatDate(_offer.convertedAt),
+                          formatDate(offer.convertedAt),
                         ),
-                        _kv('Data emitere', _formatDate(_offer.issueDate)),
-                        _kv('Valabil pana la', _formatDate(_offer.validUntil)),
+                        _kv('Data emitere', formatDate(offer.issueDate)),
+                        _kv('Valabil pana la', formatDate(offer.validUntil)),
                         _kv(
                             'Moneda',
                             OfferCurrencyConverter.normalizeCurrency(
-                                _offer.currency)),
-                        _kv('Curs oferta', _rateLabel()),
+                                offer.currency)),
+                        _kv('Curs oferta', rateLabel()),
                         _kv(
                           'Observatii',
-                          _offer.notes.trim().isEmpty
+                          offer.notes.trim().isEmpty
                               ? '-'
-                              : _offer.notes.trim(),
+                              : offer.notes.trim(),
                         ),
-                        _kv('Afisare preturi', _priceDisplayModeLabel()),
+                        _kv('Afisare preturi', priceDisplayModeLabel()),
                         Row(
                           children: [
                             Expanded(
                               child: _kv(
                                 'Tip document',
-                                _offer.tipDocument.label,
+                                offer.tipDocument.label,
                               ),
                             ),
                             if (!_isFrozen)
@@ -4724,15 +4633,15 @@ if (Test-Path \$attachment) {
                               ),
                           ],
                         ),
-                        if (_offer.pdfPath.trim().isNotEmpty)
-                          _kv('Ultimul PDF', _offer.pdfPath.trim()),
+                        if (offer.pdfPath.trim().isNotEmpty)
+                          _kv('Ultimul PDF', offer.pdfPath.trim()),
                       ],
                     ),
                   ],
                 ),
               ),
             ),
-            if (_offer.complaintId.trim().isNotEmpty)
+            if (offer.complaintId.trim().isNotEmpty)
               Card(
                 color: Theme.of(context)
                     .colorScheme
@@ -4798,31 +4707,31 @@ if (Test-Path \$attachment) {
                       _kv('Tip echipament', _equipmentTypeLabel),
                       _kv(
                           'Brand',
-                          _offer.equipmentBrand.trim().isEmpty
+                          offer.equipmentBrand.trim().isEmpty
                               ? '-'
-                              : _offer.equipmentBrand.trim()),
+                              : offer.equipmentBrand.trim()),
                       _kv(
                           'Model',
-                          _offer.equipmentModel.trim().isEmpty
+                          offer.equipmentModel.trim().isEmpty
                               ? '-'
-                              : _offer.equipmentModel.trim()),
+                              : offer.equipmentModel.trim()),
                       _kv(
                         'Serie unitate exterioara',
-                        _offer.outdoorUnitSerial.trim().isEmpty
+                        offer.outdoorUnitSerial.trim().isEmpty
                             ? '-'
-                            : _offer.outdoorUnitSerial.trim(),
+                            : offer.outdoorUnitSerial.trim(),
                       ),
                       _kv(
                         'Serii unitati interioare',
-                        _offer.indoorUnitSerials.trim().isEmpty
+                        offer.indoorUnitSerials.trim().isEmpty
                             ? '-'
-                            : _offer.indoorUnitSerials.trim(),
+                            : offer.indoorUnitSerials.trim(),
                       ),
                       _kv(
                         'Detalii tehnice',
-                        _offer.equipmentDetails.trim().isEmpty
+                        offer.equipmentDetails.trim().isEmpty
                             ? '-'
-                            : _offer.equipmentDetails.trim(),
+                            : offer.equipmentDetails.trim(),
                       ),
                     ],
                   ),
@@ -4840,7 +4749,7 @@ if (Test-Path \$attachment) {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      _offer.complaintId.trim().isEmpty
+                      offer.complaintId.trim().isEmpty
                           ? 'Semnaturile pot fi folosite pentru confirmarea documentului comercial.'
                           : 'Documentul poate functiona si ca acord pentru interventia provenita din reclamatie.',
                       style: Theme.of(context).textTheme.bodyMedium,
@@ -4852,25 +4761,25 @@ if (Test-Path \$attachment) {
                       children: [
                         Chip(
                           label: Text(
-                            _offer.beneficiaryName.trim().isEmpty
+                            offer.beneficiaryName.trim().isEmpty
                                 ? 'Beneficiar: -'
-                                : 'Beneficiar: ${_offer.beneficiaryName.trim()}',
+                                : 'Beneficiar: ${offer.beneficiaryName.trim()}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            _offer.commercialRecipientName.trim().isEmpty
+                            offer.commercialRecipientName.trim().isEmpty
                                 ? 'Platitor comercial: ${_resolveClientName()}'
-                                : 'Platitor comercial: ${_offer.commercialRecipientName.trim()}',
+                                : 'Platitor comercial: ${offer.commercialRecipientName.trim()}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            _offer.agreementAcceptedAt == null
+                            offer.agreementAcceptedAt == null
                                 ? 'Acord client: in asteptare'
-                                : 'Acord client: ${_formatDate(_offer.agreementAcceptedAt)}',
+                                : 'Acord client: ${formatDate(offer.agreementAcceptedAt)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -4887,11 +4796,11 @@ if (Test-Path \$attachment) {
                                 : (constraints.maxWidth - 12) / 2,
                             child: _signatureCard(
                               title: 'Semnatura client / beneficiar',
-                              raw: _offer.clientSignatureBase64,
+                              raw: offer.clientSignatureBase64,
                               isClient: true,
-                              subtitle: _offer.agreementAcceptedAt == null
+                              subtitle: offer.agreementAcceptedAt == null
                                   ? 'Confirmă acordul pentru execuție.'
-                                  : 'Acord înregistrat la ${_formatDate(_offer.agreementAcceptedAt)}.',
+                                  : 'Acord înregistrat la ${formatDate(offer.agreementAcceptedAt)}.',
                             ),
                           ),
                           SizedBox(
@@ -4900,7 +4809,7 @@ if (Test-Path \$attachment) {
                                 : (constraints.maxWidth - 12) / 2,
                             child: _signatureCard(
                               title: 'Semnatura emitent / reprezentant firma',
-                              raw: _offer.issuerSignatureBase64,
+                              raw: offer.issuerSignatureBase64,
                               isClient: false,
                               subtitle:
                                   'Semnatura emitentului pentru documentul comercial.',
@@ -4920,7 +4829,7 @@ if (Test-Path \$attachment) {
             ),
             const SizedBox(height: 12),
             _buildAcceptanceFormCard(),
-            if (_offer.isConverted) ...[
+            if (offer.isConverted) ...[
               const SizedBox(height: 12),
               Card(
                 child: ListTile(
@@ -4928,7 +4837,7 @@ if (Test-Path \$attachment) {
                   title:
                       const Text('Oferta convertita este blocata operational'),
                   subtitle: Text(
-                    'Oferta a fost deja convertita in lucrare si nu mai poate fi modificata. Lucrare generata: ${_offer.convertedToJobId.trim().isEmpty ? "-" : _offer.convertedToJobId.trim()}',
+                    'Oferta a fost deja convertita in lucrare si nu mai poate fi modificata. Lucrare generata: ${offer.convertedToJobId.trim().isEmpty ? "-" : offer.convertedToJobId.trim()}',
                   ),
                   trailing: OutlinedButton.icon(
                     onPressed: _openConvertedJob,
@@ -4940,7 +4849,7 @@ if (Test-Path \$attachment) {
             ],
             const SizedBox(height: 12),
             Card(
-              color: _offer.complaintId.trim().isNotEmpty
+              color: offer.complaintId.trim().isNotEmpty
                   ? Theme.of(context)
                       .colorScheme
                       .surfaceContainerHighest
@@ -4952,7 +4861,7 @@ if (Test-Path \$attachment) {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _offer.complaintId.trim().isNotEmpty
+                      offer.complaintId.trim().isNotEmpty
                           ? 'Rezumat economic pentru reclamație'
                           : 'Rezumat economic',
                       style: Theme.of(context).textTheme.titleMedium,
@@ -4964,38 +4873,38 @@ if (Test-Path \$attachment) {
                       children: [
                         Chip(
                           label: Text(
-                            'Cost estimat: ${_displayAmount(_estimatedInterventionCost)}',
+                            'Cost estimat: ${displayAmount(_estimatedInterventionCost)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            _priceDisplayMode == OfferPriceDisplayMode.both
-                                ? _displayAmountWithLabels(
+                            priceDisplayMode == OfferPriceDisplayMode.both
+                                ? displayAmountWithLabels(
                                     _offeredPriceWithoutVat,
                                     withoutVatLabel: 'Preț ofertat fără TVA',
                                     withVatLabel: 'Preț ofertat cu TVA',
                                   )
-                                : 'Preț ofertat: ${_displaySingleAmount(_offeredPriceWithoutVat)}',
+                                : 'Preț ofertat: ${displaySingleAmount(_offeredPriceWithoutVat)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
-                        if (_priceDisplayMode == OfferPriceDisplayMode.both)
+                        if (priceDisplayMode == OfferPriceDisplayMode.both)
                           Chip(
                             label: Text(
-                              'TVA (${_offer.vatPercent.toStringAsFixed(2)}%): ${_moneyCommercial(_offer.vatValue)}',
+                              'TVA (${offer.vatPercent.toStringAsFixed(2)}%): ${moneyCommercial(offer.vatValue)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                         Chip(
                           label: Text(
-                            _priceDisplayMode == OfferPriceDisplayMode.both
-                                ? _displayAmountWithLabels(
+                            priceDisplayMode == OfferPriceDisplayMode.both
+                                ? displayAmountWithLabels(
                                     _offeredPriceWithoutVat,
                                     withoutVatLabel: 'Total fără TVA',
                                     withVatLabel: 'Preț final',
                                   )
-                                : '${_priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${_displaySingleAmount(_offeredPriceWithoutVat)}',
+                                : '${priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${displaySingleAmount(_offeredPriceWithoutVat)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -5003,7 +4912,7 @@ if (Test-Path \$attachment) {
                             _offeredPriceWithoutVat > 0)
                           Chip(
                             label: Text(
-                              'Marja estimata: ${_moneyCommercial(_estimatedCommercialMargin)}',
+                              'Marja estimata: ${moneyCommercial(_estimatedCommercialMargin)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
@@ -5011,7 +4920,7 @@ if (Test-Path \$attachment) {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '${_priceDisplayExplanation()} ${_offer.complaintId.trim().isNotEmpty ? 'Cost estimat = subtotal direct calculat din resursele ofertei. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul către plătitorul comercial.' : 'Cost estimat = subtotal direct. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul cu TVA.'}',
+                      '${priceDisplayExplanation()} ${offer.complaintId.trim().isNotEmpty ? 'Cost estimat = subtotal direct calculat din resursele ofertei. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul către plătitorul comercial.' : 'Cost estimat = subtotal direct. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul cu TVA.'}',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -5047,62 +4956,62 @@ if (Test-Path \$attachment) {
                       children: [
                         Chip(
                           label: Text(
-                            'Subtotal materiale: ${_displayAmount(_offer.materialSubtotal)}',
+                            'Subtotal materiale: ${displayAmount(offer.materialSubtotal)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            'Manopera generala: ${_displayAmount(_offer.laborSubtotal)}',
+                            'Manopera generala: ${displayAmount(offer.laborSubtotal)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            'Cost estimat / subtotal direct: ${_displayAmount(_offer.subtotalDirect)}',
+                            'Cost estimat / subtotal direct: ${displayAmount(offer.subtotalDirect)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            'Regie (${_offer.regiePercent.toStringAsFixed(2)}%): ${_displayAmount(_offer.regieValue)}',
+                            'Regie (${offer.regiePercent.toStringAsFixed(2)}%): ${displayAmount(offer.regieValue)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            'Profit (${_offer.profitPercent.toStringAsFixed(2)}%): ${_displayAmount(_offer.profitValue)}',
+                            'Profit (${offer.profitPercent.toStringAsFixed(2)}%): ${displayAmount(offer.profitValue)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            _priceDisplayMode == OfferPriceDisplayMode.both
-                                ? _displayAmountWithLabels(
-                                    _offer.subtotalComercial,
+                            priceDisplayMode == OfferPriceDisplayMode.both
+                                ? displayAmountWithLabels(
+                                    offer.subtotalComercial,
                                     withoutVatLabel: 'Preț ofertat fără TVA',
                                     withVatLabel: 'Preț ofertat cu TVA',
                                   )
-                                : 'Preț ofertat: ${_displaySingleAmount(_offer.subtotalComercial)}',
+                                : 'Preț ofertat: ${displaySingleAmount(offer.subtotalComercial)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
-                        if (_priceDisplayMode == OfferPriceDisplayMode.both)
+                        if (priceDisplayMode == OfferPriceDisplayMode.both)
                           Chip(
                             label: Text(
-                              'TVA (${_offer.vatPercent.toStringAsFixed(2)}%): ${_moneyCommercial(_offer.vatValue)}',
+                              'TVA (${offer.vatPercent.toStringAsFixed(2)}%): ${moneyCommercial(offer.vatValue)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                         Chip(
                           label: Text(
-                            _priceDisplayMode == OfferPriceDisplayMode.both
-                                ? _displayAmountWithLabels(
-                                    _offer.subtotalComercial,
+                            priceDisplayMode == OfferPriceDisplayMode.both
+                                ? displayAmountWithLabels(
+                                    offer.subtotalComercial,
                                     withoutVatLabel: 'Total fără TVA',
                                     withVatLabel: 'Preț final',
                                   )
-                                : '${_priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${_displaySingleAmount(_offer.subtotalComercial)}',
+                                : '${priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${displaySingleAmount(offer.subtotalComercial)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -5110,7 +5019,7 @@ if (Test-Path \$attachment) {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      _priceDisplayExplanation(),
+                      priceDisplayExplanation(),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -5138,19 +5047,19 @@ if (Test-Path \$attachment) {
                           if (_internalLaborLines.isNotEmpty) ...[
                             Chip(
                               label: Text(
-                                'Cost intern estimat: ${_moneyCommercial(_internalLaborEstimatedCost)}',
+                                'Cost intern estimat: ${moneyCommercial(_internalLaborEstimatedCost)}',
                               ),
                               visualDensity: VisualDensity.compact,
                             ),
                             Chip(
                               label: Text(
-                                'Pret comercial estimat: ${_moneyCommercial(_estimatedCommercialLaborValue)}',
+                                'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialLaborValue)}',
                               ),
                               visualDensity: VisualDensity.compact,
                             ),
                             Chip(
                               label: Text(
-                                'Diferenta estimata: ${_moneyCommercial(_estimatedLaborMargin)}',
+                                'Diferenta estimata: ${moneyCommercial(_estimatedLaborMargin)}',
                               ),
                               visualDensity: VisualDensity.compact,
                             ),
@@ -5158,7 +5067,7 @@ if (Test-Path \$attachment) {
                           if (_standardLaborCommercialValue > 0)
                             Chip(
                               label: Text(
-                                'Manopera standard comerciala: ${_moneyCommercial(_standardLaborCommercialValue)}',
+                                'Manopera standard comerciala: ${moneyCommercial(_standardLaborCommercialValue)}',
                               ),
                               visualDensity: VisualDensity.compact,
                             ),
@@ -5194,19 +5103,19 @@ if (Test-Path \$attachment) {
                         children: [
                           Chip(
                             label: Text(
-                              'Cost intern estimat autoturisme: ${_moneyCommercial(_internalVehicleEstimatedCost)}',
+                              'Cost intern estimat autoturisme: ${moneyCommercial(_internalVehicleEstimatedCost)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                           Chip(
                             label: Text(
-                              'Pret comercial estimat: ${_moneyCommercial(_estimatedCommercialVehicleValue)}',
+                              'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialVehicleValue)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                           Chip(
                             label: Text(
-                              'Diferenta estimata: ${_moneyCommercial(_estimatedVehicleMargin)}',
+                              'Diferenta estimata: ${moneyCommercial(_estimatedVehicleMargin)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
@@ -5242,19 +5151,19 @@ if (Test-Path \$attachment) {
                         children: [
                           Chip(
                             label: Text(
-                              'Cost intern estimat scule: ${_moneyCommercial(_internalToolsEstimatedCost)}',
+                              'Cost intern estimat scule: ${moneyCommercial(_internalToolsEstimatedCost)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                           Chip(
                             label: Text(
-                              'Pret comercial estimat: ${_moneyCommercial(_estimatedCommercialToolsValue)}',
+                              'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialToolsValue)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                           Chip(
                             label: Text(
-                              'Diferenta estimata: ${_moneyCommercial(_estimatedToolsMargin)}',
+                              'Diferenta estimata: ${moneyCommercial(_estimatedToolsMargin)}',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
@@ -5271,9 +5180,9 @@ if (Test-Path \$attachment) {
                 ),
               ),
             ],
-            if (_offer.partners.isNotEmpty ||
-                _offer.partnerWorkers.isNotEmpty ||
-                _offer.partnerVehicles.isNotEmpty) ...[
+            if (offer.partners.isNotEmpty ||
+                offer.partnerWorkers.isNotEmpty ||
+                offer.partnerVehicles.isNotEmpty) ...[
               const SizedBox(height: 12),
               Card(
                 child: Padding(
@@ -5343,7 +5252,7 @@ if (Test-Path \$attachment) {
             ),
             const SizedBox(height: 6),
             Text(
-              _priceDisplayExplanation(),
+              priceDisplayExplanation(),
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -5405,7 +5314,7 @@ if (Test-Path \$attachment) {
                   );
                 },
               ),
-            if (_offer.commercialClauses.isNotEmpty) ...[
+            if (offer.commercialClauses.isNotEmpty) ...[
               const SizedBox(height: 14),
               Text(
                 'Servicii incluse / Condiții comerciale',
@@ -5415,10 +5324,10 @@ if (Test-Path \$attachment) {
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: _offer.commercialClauses.length,
+                itemCount: offer.commercialClauses.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
-                  final clause = _offer.commercialClauses[index];
+                  final clause = offer.commercialClauses[index];
                   return Card(
                     child: ListTile(
                       title: Text(
@@ -5496,18 +5405,18 @@ if (Test-Path \$attachment) {
   }
 
   bool get _hasEquipmentData =>
-      _offer.equipmentType.trim().isNotEmpty ||
-      _offer.equipmentBrand.trim().isNotEmpty ||
-      _offer.equipmentModel.trim().isNotEmpty ||
-      _offer.outdoorUnitSerial.trim().isNotEmpty ||
-      _offer.indoorUnitSerials.trim().isNotEmpty ||
-      _offer.equipmentDetails.trim().isNotEmpty;
+      offer.equipmentType.trim().isNotEmpty ||
+      offer.equipmentBrand.trim().isNotEmpty ||
+      offer.equipmentModel.trim().isNotEmpty ||
+      offer.outdoorUnitSerial.trim().isNotEmpty ||
+      offer.indoorUnitSerials.trim().isNotEmpty ||
+      offer.equipmentDetails.trim().isNotEmpty;
 
   String get _equipmentTypeLabel {
-    return ComplaintEquipmentType.fromValue(_offer.equipmentType)?.label ??
-        (_offer.equipmentType.trim().isEmpty
+    return ComplaintEquipmentType.fromValue(offer.equipmentType)?.label ??
+        (offer.equipmentType.trim().isEmpty
             ? '-'
-            : _offer.equipmentType.trim());
+            : offer.equipmentType.trim());
   }
 
   Widget _kv(String label, String value) {
