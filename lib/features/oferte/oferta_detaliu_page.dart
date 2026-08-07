@@ -53,6 +53,7 @@ import '../notifications/notification_models.dart';
 import '../../core/widgets/client_info_card.dart';
 import '../crm/crm_models.dart';
 import '../crm/crm_repository.dart';
+import 'oferte_dialogs/offer_commercial_package_picker_dialog.dart';
 
 class OfertaDetaliuPage extends StatefulWidget {
   const OfertaDetaliuPage({
@@ -2927,7 +2928,7 @@ if (Test-Path \$attachment) {
   Future<void> _addCommercialPackage() async {
     final selected = await showDialog<OfferCommercialPackageTemplate>(
       context: context,
-      builder: (context) => _OfferCommercialPackagePickerDialog(
+      builder: (context) => OfferCommercialPackagePickerDialog(
         items: widget.packageTemplates,
       ),
     );
@@ -5527,49 +5528,3 @@ if (Test-Path \$attachment) {
   }
 }
 
-class _OfferCommercialPackagePickerDialog extends StatelessWidget {
-  const _OfferCommercialPackagePickerDialog({required this.items});
-
-  final List<OfferCommercialPackageTemplate> items;
-
-  @override
-  Widget build(BuildContext context) {
-    final available = items
-        .where((item) => item.isActive)
-        .toList(growable: false)
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    return AlertDialog(
-      title: const Text('Adauga din pachet comercial'),
-      content: SizedBox(
-        width: 720,
-        child: available.isEmpty
-            ? const Center(
-                child: Text('Nu exista pachete comerciale standard active.'),
-              )
-            : ListView.separated(
-                shrinkWrap: true,
-                itemCount: available.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final item = available[index];
-                  return ListTile(
-                    title: Text(item.name),
-                    subtitle: Text(
-                      '${item.description.trim().isEmpty ? '-' : item.description.trim()}\n'
-                      'Materiale: ${item.materials.length} • Manopera standard: ${item.standardLabor.length} • Conditii: ${item.commercialClauses.length}',
-                    ),
-                    isThreeLine: true,
-                    onTap: () => Navigator.of(context).pop(item),
-                  );
-                },
-              ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Renunță'),
-        ),
-      ],
-    );
-  }
-}
