@@ -14,12 +14,10 @@ import '../../core/pdf_document_branding.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/repositories/app_data_repository.dart';
-import '../../core/widgets/anaf_company_autofill_section.dart';
 import '../clients/client_models.dart';
 import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
 import '../jobs/job_models.dart';
 import '../materials/materials_catalog_service.dart';
-import '../partners/partner_models.dart';
 import '../registratura/registry_service.dart';
 import '../reclamatii/complaint_models.dart';
 import '../ai_assistant/ai_assistant_action_catalog.dart';
@@ -38,7 +36,6 @@ import 'offer_email_template.dart';
 import 'offer_labor_calculator.dart';
 import 'offer_labor_resources_catalog_service.dart';
 import 'offer_line_resource_dialog.dart';
-import 'offer_partner_models.dart';
 import 'offer_pdf_service.dart';
 import 'offer_models.dart';
 import 'offer_standard_catalog_models.dart';
@@ -51,6 +48,7 @@ import '../crm/crm_repository.dart';
 import 'oferte_dialogs/offer_commercial_package_picker_dialog.dart';
 import 'oferta_detaliu/oferta_detaliu_formatting_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_smartbill_mixin.dart';
+import 'oferta_detaliu/oferta_detaliu_partner_mixin.dart';
 
 class OfertaDetaliuPage extends StatefulWidget {
   const OfertaDetaliuPage({
@@ -87,14 +85,18 @@ class OfertaDetaliuPage extends StatefulWidget {
 }
 
 class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
-    with OffertaDetaliuFormattingMixin, OffertaDetaliuSmartbillMixin {
+    with
+        OffertaDetaliuFormattingMixin,
+        OffertaDetaliuSmartbillMixin,
+        OffertaDetaliuPartnerMixin {
   static const int _maxInlineAttachmentBytes = 550 * 1024;
 
   late final RegistryService _registryService;
   late final AiAssistantService _aiAssistantService;
   @override
   late OfferRecord offer;
-  bool _saving = false;
+  @override
+  bool saving = false;
   bool _exportingPdf = false;
   bool _converting = false;
   bool _pdfTemplateLoaded = false;
@@ -104,11 +106,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
       MaterialsCatalogService();
   final OfferLaborResourcesCatalogService _laborResourcesService =
       OfferLaborResourcesCatalogService();
-  List<PartnerRecord> _masterPartners = const <PartnerRecord>[];
-  List<PartnerWorkerRecord> _masterPartnerWorkers =
-      const <PartnerWorkerRecord>[];
-  List<PartnerVehicleRecord> _masterPartnerVehicles =
-      const <PartnerVehicleRecord>[];
   OfferLaborResourcesCatalog _laborResourcesCatalog =
       const OfferLaborResourcesCatalog(
     personnel: <OfferLaborResourceOption>[],
@@ -126,7 +123,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     offer = widget.initialOffer;
     _loadPdfTemplatePreference();
     _loadLaborResources();
-    _loadPartnerCatalog();
+    loadPartnerCatalog();
     loadSmartBillStock();
   }
 
@@ -178,7 +175,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
                     ),
                   )
                   .toList(growable: false),
-              onChanged: (_saving || _exportingPdf || _converting)
+              onChanged: (saving || _exportingPdf || _converting)
                   ? null
                   : (value) {
                       if (value == null) return;
@@ -202,19 +199,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     setState(() => _laborResourcesCatalog = catalog);
   }
 
-  Future<void> _loadPartnerCatalog() async {
-    final results = await Future.wait([
-      widget.repository.listPartners(),
-      widget.repository.listPartnerWorkers(),
-      widget.repository.listPartnerVehicles(),
-    ]);
-    if (!mounted) return;
-    setState(() {
-      _masterPartners = results[0] as List<PartnerRecord>;
-      _masterPartnerWorkers = results[1] as List<PartnerWorkerRecord>;
-      _masterPartnerVehicles = results[2] as List<PartnerVehicleRecord>;
-    });
-  }
 
   String _laborResourceSummary(OfferLineItem line) {
     String section(
@@ -346,88 +330,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     if (labels.isEmpty) return '';
     return labels.join(', ');
   }
-
-  List<OfferPartnerWorker> _partnerWorkersFor(String partnerId) {
-    return offer.partnerWorkers
-        .where((item) => item.partnerId == partnerId)
-        .toList(growable: false);
-  }
-
-  List<OfferPartnerVehicle> _partnerVehiclesFor(String partnerId) {
-    return offer.partnerVehicles
-        .where((item) => item.partnerId == partnerId)
-        .toList(growable: false);
-  }
-
-  PartnerRecord? _masterPartnerById(String partnerId) {
-    for (final partner in _masterPartners) {
-      if (partner.id == partnerId) return partner;
-    }
-    return null;
-  }
-
-  List<PartnerWorkerRecord> _masterWorkersForOfferPartner(
-      OfferPartner partner) {
-    final masterPartnerId = partner.masterPartnerId.trim();
-    if (masterPartnerId.isEmpty) return const <PartnerWorkerRecord>[];
-    return _masterPartnerWorkers
-        .where((item) => item.partnerId == masterPartnerId)
-        .toList(growable: false);
-  }
-
-  List<PartnerVehicleRecord> _masterVehiclesForOfferPartner(
-    OfferPartner partner,
-  ) {
-    final masterPartnerId = partner.masterPartnerId.trim();
-    if (masterPartnerId.isEmpty) return const <PartnerVehicleRecord>[];
-    return _masterPartnerVehicles
-        .where((item) => item.partnerId == masterPartnerId)
-        .toList(growable: false);
-  }
-
-  double _partnerWorkersTotalFor(String partnerId) {
-    return _partnerWorkersFor(partnerId)
-        .fold<double>(0, (sum, item) => sum + item.total);
-  }
-
-  double _partnerVehiclesTotalFor(String partnerId) {
-    return _partnerVehiclesFor(partnerId)
-        .fold<double>(0, (sum, item) => sum + item.total);
-  }
-
-  double _partnerTotalFor(String partnerId) {
-    return _partnerWorkersTotalFor(partnerId) +
-        _partnerVehiclesTotalFor(partnerId);
-  }
-
-  double get _partnerWorkersTotal =>
-      offer.partnerWorkers.fold<double>(0, (sum, item) => sum + item.total);
-
-  double get _partnerVehiclesTotal =>
-      offer.partnerVehicles.fold<double>(0, (sum, item) => sum + item.total);
-
-  double get _partnersTotal => _partnerWorkersTotal + _partnerVehiclesTotal;
-
-  String _currencyLabel(Iterable<String> values) {
-    final normalized = values
-        .map((value) => value.trim().toUpperCase())
-        .where((value) => value.isNotEmpty)
-        .toSet();
-    if (normalized.isEmpty) return 'RON';
-    if (normalized.length == 1) return normalized.first;
-    return 'monede mixte';
-  }
-
-  String get _partnerWorkersCurrency =>
-      _currencyLabel(offer.partnerWorkers.map((item) => item.currency));
-
-  String get _partnerVehiclesCurrency =>
-      _currencyLabel(offer.partnerVehicles.map((item) => item.currency));
-
-  String get _partnersCurrency => _currencyLabel([
-        ...offer.partnerWorkers.map((item) => item.currency),
-        ...offer.partnerVehicles.map((item) => item.currency),
-      ]);
 
   double get _internalLaborEstimatedCost {
     return _internalLaborLines.fold<double>(
@@ -910,12 +812,12 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
               runSpacing: 8,
               children: [
                 OutlinedButton.icon(
-                  onPressed: _saving ? null : _openAcceptanceClausesEditor,
+                  onPressed: saving ? null : _openAcceptanceClausesEditor,
                   icon: const Icon(Icons.tune_outlined, size: 16),
                   label: const Text('Editează clauze'),
                 ),
                 FilledButton.tonal(
-                  onPressed: _saving ? null : _captureAcceptanceSignature,
+                  onPressed: saving ? null : _captureAcceptanceSignature,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -927,7 +829,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
                 ),
                 if (isSigned)
                   TextButton.icon(
-                    onPressed: _saving ? null : _clearAcceptanceSignature,
+                    onPressed: saving ? null : _clearAcceptanceSignature,
                     icon: Icon(Icons.clear, size: 16, color: cs.error),
                     label: Text('Resetează semnătura',
                         style: TextStyle(color: cs.error)),
@@ -1024,9 +926,11 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     return buffer.toString();
   }
 
-  bool get _isFrozen => offer.isConverted;
+  @override
+  bool get isFrozen => offer.isConverted;
 
-  void _showFrozenMessage() {
+  @override
+  void showFrozenMessage() {
     final jobId = offer.convertedToJobId.trim();
     final suffix = jobId.isEmpty ? '' : ' Lucrarea generata este $jobId.';
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1072,20 +976,21 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
 
   // keepPdfPath: true doar când salvăm calea PDF după generare
   // În rest, ștergem pdfPath pentru a forța regenerarea la următoarea cerere
-  Future<void> _persistOffer(
+  @override
+  Future<void> persistOffer(
     OfferRecord next, {
     bool keepPdfPath = false,
   }) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
-    if (_saving) return;
+    if (saving) return;
     final toPersist = keepPdfPath ? next : next.copyWith(pdfPath: '');
     final updated = toPersist.copyWith(updatedAt: DateTime.now());
     // Update optimist: UI reflectă imediat modificarea, indiferent de rezultatul salvării
     setState(() {
-      _saving = true;
+      saving = true;
       offer = updated;
     });
     try {
@@ -1098,7 +1003,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
       }
     } finally {
       if (mounted) {
-        setState(() => _saving = false);
+        setState(() => saving = false);
       }
     }
   }
@@ -1365,8 +1270,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
   }
 
   Future<bool> _applyAiOfferDraft(String targetKey, String content) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return false;
     }
     if (targetKey != 'offer_notes') return false;
@@ -1374,7 +1279,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
       notes: content.trim(),
       updatedAt: DateTime.now(),
     );
-    await _persistOffer(next);
+    await persistOffer(next);
     if (!mounted) return false;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -1385,8 +1290,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
   }
 
   Future<void> _changeTipDocument() async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
     TipDocumentDeviz selected = offer.tipDocument;
@@ -1432,12 +1337,12 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
       tipDocument: result,
       updatedAt: DateTime.now(),
     );
-    await _persistOffer(next);
+    await persistOffer(next);
   }
 
   Future<void> _editOfferHeader() async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
     final edit = widget.onEditOffer;
@@ -1475,8 +1380,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
   }
 
   Future<void> _changeOfferStatus(OfferStatus newStatus) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
     if (offer.status == newStatus) return;
@@ -1485,7 +1390,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
       status: newStatus,
       updatedAt: DateTime.now(),
     );
-    await _persistOffer(next);
+    await persistOffer(next);
 
     // Fire-and-forget CRM sync la schimbarea statusului ofertei
     _syncCrmForOfferStatus(next, newStatus);
@@ -1553,8 +1458,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
   }
 
   Future<void> _openEmailDialog() async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
 
@@ -2056,14 +1961,14 @@ if (Test-Path \$attachment) {
       pdfPath: path,
       updatedAt: DateTime.now(),
     );
-    await _persistOffer(next, keepPdfPath: true);
+    await persistOffer(next, keepPdfPath: true);
     _lastGeneratedPdfTemplate = resolvedTemplate;
     return path;
   }
 
   Future<void> _editVatPercent() async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
     final ctrl =
@@ -2104,7 +2009,7 @@ if (Test-Path \$attachment) {
       vatPercent: result,
       lines: offer.lines,
     );
-    await _persistOffer(next);
+    await persistOffer(next);
   }
 
   Future<void> _generatePdf({bool share = false, bool saveAs = false}) async {
@@ -2364,8 +2269,8 @@ if (Test-Path \$attachment) {
   }
 
   Future<void> _addLine() async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
     final mode = await showModalBottomSheet<String>(
@@ -2435,7 +2340,7 @@ if (Test-Path \$attachment) {
       ),
     ];
     final next = _offerWithUpdatedLines(lines);
-    await _persistOffer(next);
+    await persistOffer(next);
     await _handleArticolTemplateSave(syncedLine);
   }
 
@@ -2535,7 +2440,7 @@ if (Test-Path \$attachment) {
         ...addedClauses,
       ],
     );
-    await _persistOffer(next);
+    await persistOffer(next);
   }
 
   Future<void> _addStandardLaborLine() async {
@@ -2557,7 +2462,7 @@ if (Test-Path \$attachment) {
       ),
     ];
     final next = _offerWithUpdatedLines(lines);
-    await _persistOffer(next);
+    await persistOffer(next);
     await _handleArticolTemplateSave(saved);
   }
 
@@ -2581,13 +2486,13 @@ if (Test-Path \$attachment) {
       ),
     ];
     final next = _offerWithUpdatedLines(lines);
-    await _persistOffer(next);
+    await persistOffer(next);
     await _handleArticolTemplateSave(saved);
   }
 
   Future<void> _editLine(OfferLineItem line) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
     if (line.lineType == OfferLineType.manopera &&
@@ -2607,7 +2512,7 @@ if (Test-Path \$attachment) {
           .map((item) => item.id == line.id ? saved : item)
           .toList(growable: false);
       final next = _offerWithUpdatedLines(lines);
-      await _persistOffer(next);
+      await persistOffer(next);
       await _handleArticolTemplateSave(saved);
       return;
     }
@@ -2628,7 +2533,7 @@ if (Test-Path \$attachment) {
         .map((item) => item.id == line.id ? syncedLine : item)
         .toList(growable: false);
     final next = _offerWithUpdatedLines(lines);
-    await _persistOffer(next);
+    await persistOffer(next);
     await _handleArticolTemplateSave(syncedLine);
   }
 
@@ -2761,8 +2666,8 @@ if (Test-Path \$attachment) {
   }
 
   Future<void> _deleteLine(OfferLineItem line) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
+    if (isFrozen) {
+      showFrozenMessage();
       return;
     }
     final confirm = await showDialog<bool>(
@@ -2787,1004 +2692,9 @@ if (Test-Path \$attachment) {
         .where((item) => item.id != line.id)
         .toList(growable: false);
     final next = _offerWithUpdatedLines(remaining);
-    await _persistOffer(next);
+    await persistOffer(next);
   }
 
-  Future<OfferPartner?> _showPartnerDialog({OfferPartner? existing}) async {
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final cuiCtrl = TextEditingController(text: existing?.cui ?? '');
-    final regCtrl =
-        TextEditingController(text: existing?.tradeRegisterNumber ?? '');
-    final contactCtrl =
-        TextEditingController(text: existing?.contactPerson ?? '');
-    final phoneCtrl = TextEditingController(text: existing?.phone ?? '');
-    final emailCtrl = TextEditingController(text: existing?.email ?? '');
-    final addressCtrl = TextEditingController(text: existing?.address ?? '');
-    final cityCtrl = TextEditingController(text: existing?.city ?? '');
-    final countyCtrl = TextEditingController(text: existing?.county ?? '');
-    final ibanCtrl = TextEditingController(text: existing?.iban ?? '');
-    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
-    String? selectedMasterPartnerId =
-        existing?.masterPartnerId.trim().isNotEmpty == true
-            ? existing!.masterPartnerId.trim()
-            : null;
-    try {
-      return await showDialog<OfferPartner>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(
-                existing == null ? 'Adaugă partener' : 'Editează partener'),
-            content: SizedBox(
-              width: 520,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_masterPartners.isNotEmpty)
-                      DropdownButtonFormField<String?>(
-                        initialValue: selectedMasterPartnerId != null &&
-                                _masterPartners.any(
-                                  (item) => item.id == selectedMasterPartnerId,
-                                )
-                            ? selectedMasterPartnerId
-                            : null,
-                        decoration: const InputDecoration(
-                          labelText: 'Partener salvat',
-                          helperText:
-                              'Optional: preia datele din registrul de parteneri',
-                        ),
-                        items: [
-                          const DropdownMenuItem<String?>(
-                            value: null,
-                            child: Text('Introducere manuală'),
-                          ),
-                          ..._masterPartners.map(
-                            (item) => DropdownMenuItem<String?>(
-                              value: item.id,
-                              child: Text(item.name),
-                            ),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setDialogState(() {
-                            selectedMasterPartnerId = value;
-                            final selected = value == null
-                                ? null
-                                : _masterPartnerById(value);
-                            if (selected == null) return;
-                            nameCtrl.text = selected.name;
-                            cuiCtrl.text = selected.cui;
-                            regCtrl.text = selected.tradeRegisterNumber;
-                            contactCtrl.text = selected.contactPerson;
-                            phoneCtrl.text = selected.phone;
-                            emailCtrl.text = selected.email;
-                            addressCtrl.text = selected.address;
-                            cityCtrl.text = selected.city;
-                            countyCtrl.text = selected.county;
-                            ibanCtrl.text = selected.iban;
-                            notesCtrl.text = selected.notes;
-                          });
-                        },
-                      ),
-                    if (selectedMasterPartnerId == null)
-                      AnafCompanyAutofillSection(
-                        cuiController: cuiCtrl,
-                        nameController: nameCtrl,
-                        tradeRegisterController: regCtrl,
-                        phoneController: phoneCtrl,
-                        ibanController: ibanCtrl,
-                        addressController: addressCtrl,
-                        cityController: cityCtrl,
-                        countyController: countyCtrl,
-                      ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: nameCtrl,
-                      decoration: const InputDecoration(
-                          labelText: 'Partener / companie'),
-                    ),
-                    if (selectedMasterPartnerId != null)
-                      TextField(
-                        controller: cuiCtrl,
-                        decoration: const InputDecoration(labelText: 'CUI'),
-                      ),
-                    TextField(
-                      controller: regCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Nr. Reg. Com.',
-                      ),
-                    ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: contactCtrl,
-                      decoration:
-                          const InputDecoration(labelText: 'Persoană contact'),
-                    ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: phoneCtrl,
-                      decoration: const InputDecoration(labelText: 'Telefon'),
-                    ),
-                    TextField(
-                      controller: emailCtrl,
-                      decoration: const InputDecoration(labelText: 'Email'),
-                    ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: addressCtrl,
-                      decoration: const InputDecoration(labelText: 'Adresa'),
-                    ),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            textCapitalization: TextCapitalization.sentences,
-                            controller: cityCtrl,
-                            decoration:
-                                const InputDecoration(labelText: 'Localitate'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            textCapitalization: TextCapitalization.sentences,
-                            controller: countyCtrl,
-                            decoration:
-                                const InputDecoration(labelText: 'Județ'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    TextField(
-                      controller: ibanCtrl,
-                      decoration: const InputDecoration(labelText: 'IBAN'),
-                    ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: notesCtrl,
-                      decoration:
-                          const InputDecoration(labelText: 'Observații'),
-                      minLines: 2,
-                      maxLines: 4,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Renunță'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final name = nameCtrl.text.trim();
-                  if (name.isEmpty) {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Completează numele partenerului.'),
-                      ),
-                    );
-                    return;
-                  }
-                  Navigator.of(context).pop(
-                    OfferPartner(
-                      id: existing?.id ??
-                          'offer-partner-${DateTime.now().microsecondsSinceEpoch}',
-                      name: name,
-                      masterPartnerId: selectedMasterPartnerId ?? '',
-                      cui: cuiCtrl.text.trim(),
-                      tradeRegisterNumber: regCtrl.text.trim(),
-                      contactPerson: contactCtrl.text.trim(),
-                      phone: phoneCtrl.text.trim(),
-                      email: emailCtrl.text.trim(),
-                      address: addressCtrl.text.trim(),
-                      city: cityCtrl.text.trim(),
-                      county: countyCtrl.text.trim(),
-                      iban: ibanCtrl.text.trim(),
-                      notes: notesCtrl.text.trim(),
-                    ),
-                  );
-                },
-                child: const Text('Salvează'),
-              ),
-            ],
-          ),
-        ),
-      );
-    } finally {
-      nameCtrl.dispose();
-      cuiCtrl.dispose();
-      regCtrl.dispose();
-      contactCtrl.dispose();
-      phoneCtrl.dispose();
-      emailCtrl.dispose();
-      addressCtrl.dispose();
-      cityCtrl.dispose();
-      countyCtrl.dispose();
-      ibanCtrl.dispose();
-      notesCtrl.dispose();
-    }
-  }
-
-  Future<OfferPartnerWorker?> _showPartnerWorkerDialog({
-    required OfferPartner partner,
-    OfferPartnerWorker? existing,
-  }) async {
-    final nameCtrl = TextEditingController(text: existing?.fullName ?? '');
-    final roleCtrl = TextEditingController(text: existing?.role ?? '');
-    final hoursCtrl =
-        TextEditingController(text: (existing?.hours ?? 0).toString());
-    final rateCtrl =
-        TextEditingController(text: (existing?.hourlyRate ?? 0).toString());
-    final currencyCtrl =
-        TextEditingController(text: existing?.currency ?? 'RON');
-    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
-    final masterWorkers = _masterWorkersForOfferPartner(partner);
-    String? selectedMasterWorkerId =
-        existing?.masterWorkerId.trim().isNotEmpty == true
-            ? existing!.masterWorkerId.trim()
-            : null;
-    try {
-      return await showDialog<OfferPartnerWorker>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-            builder: (context, setDialogState) => AlertDialog(
-                  title: Text(
-                    existing == null
-                        ? 'Adaugă personal partener'
-                        : 'Editează personal partener',
-                  ),
-                  content: SizedBox(
-                    width: 520,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              partner.name,
-                              style: Theme.of(context).textTheme.labelLarge,
-                            ),
-                          ),
-                          if (masterWorkers.isNotEmpty)
-                            DropdownButtonFormField<String?>(
-                              initialValue: selectedMasterWorkerId != null &&
-                                      masterWorkers.any(
-                                        (item) =>
-                                            item.id == selectedMasterWorkerId,
-                                      )
-                                  ? selectedMasterWorkerId
-                                  : null,
-                              decoration: const InputDecoration(
-                                labelText: 'Personal salvat',
-                                helperText:
-                                    'Optional: precompleteaza din registrul partenerului',
-                              ),
-                              items: [
-                                const DropdownMenuItem<String?>(
-                                  value: null,
-                                  child: Text('Introducere manuală'),
-                                ),
-                                ...masterWorkers.map(
-                                  (item) => DropdownMenuItem<String?>(
-                                    value: item.id,
-                                    child: Text(item.fullName),
-                                  ),
-                                ),
-                              ],
-                              onChanged: (value) {
-                                setDialogState(() {
-                                  selectedMasterWorkerId = value;
-                                  final selected = value == null
-                                      ? null
-                                      : masterWorkers.firstWhere(
-                                          (item) => item.id == value,
-                                        );
-                                  if (selected == null) return;
-                                  nameCtrl.text = selected.fullName;
-                                  roleCtrl.text = selected.role;
-                                  rateCtrl.text =
-                                      selected.hourlyRate.toStringAsFixed(2);
-                                  currencyCtrl.text = selected.currency;
-                                  notesCtrl.text = selected.notes;
-                                });
-                              },
-                            ),
-                          TextField(
-                            textCapitalization: TextCapitalization.sentences,
-                            controller: nameCtrl,
-                            decoration: const InputDecoration(
-                                labelText: 'Nume complet'),
-                          ),
-                          TextField(
-                            textCapitalization: TextCapitalization.sentences,
-                            controller: roleCtrl,
-                            decoration: const InputDecoration(labelText: 'Rol'),
-                          ),
-                          TextField(
-                            controller: hoursCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                            decoration: const InputDecoration(
-                                labelText: 'Ore estimate'),
-                          ),
-                          TextField(
-                            controller: rateCtrl,
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                            decoration: const InputDecoration(
-                                labelText: 'Tarif negociat / ora'),
-                          ),
-                          TextField(
-                            textCapitalization: TextCapitalization.sentences,
-                            controller: currencyCtrl,
-                            decoration:
-                                const InputDecoration(labelText: 'Moneda'),
-                          ),
-                          TextField(
-                            textCapitalization: TextCapitalization.sentences,
-                            controller: notesCtrl,
-                            decoration:
-                                const InputDecoration(labelText: 'Observații'),
-                            minLines: 2,
-                            maxLines: 4,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Renunță'),
-                    ),
-                    FilledButton(
-                      onPressed: () {
-                        final fullName = nameCtrl.text.trim();
-                        if (fullName.isEmpty) {
-                          Navigator.of(context).pop();
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text('Completează numele persoanei.')),
-                          );
-                          return;
-                        }
-                        Navigator.of(context).pop(
-                          OfferPartnerWorker(
-                            id: existing?.id ??
-                                'offer-partner-worker-${DateTime.now().microsecondsSinceEpoch}',
-                            partnerId: partner.id,
-                            fullName: fullName,
-                            masterWorkerId: selectedMasterWorkerId ?? '',
-                            role: roleCtrl.text.trim(),
-                            hours: double.tryParse(
-                                  hoursCtrl.text.replaceAll(',', '.').trim(),
-                                ) ??
-                                0,
-                            hourlyRate: double.tryParse(
-                                  rateCtrl.text.replaceAll(',', '.').trim(),
-                                ) ??
-                                0,
-                            currency: currencyCtrl.text.trim().isEmpty
-                                ? 'RON'
-                                : currencyCtrl.text.trim().toUpperCase(),
-                            notes: notesCtrl.text.trim(),
-                          ),
-                        );
-                      },
-                      child: const Text('Salvează'),
-                    ),
-                  ],
-                )),
-      );
-    } finally {
-      nameCtrl.dispose();
-      roleCtrl.dispose();
-      hoursCtrl.dispose();
-      rateCtrl.dispose();
-      currencyCtrl.dispose();
-      notesCtrl.dispose();
-    }
-  }
-
-  Future<OfferPartnerVehicle?> _showPartnerVehicleDialog({
-    required OfferPartner partner,
-    OfferPartnerVehicle? existing,
-  }) async {
-    final nameCtrl = TextEditingController(text: existing?.vehicleName ?? '');
-    final registrationCtrl =
-        TextEditingController(text: existing?.registrationNumber ?? '');
-    final kmCtrl = TextEditingController(text: (existing?.km ?? 0).toString());
-    final consumptionCtrl = TextEditingController(
-      text: (existing?.fuelConsumptionPer100Km ?? 0).toString(),
-    );
-    final priceCtrl = TextEditingController(
-      text: (existing?.fuelPricePerLiter ?? 0).toString(),
-    );
-    final currencyCtrl =
-        TextEditingController(text: existing?.currency ?? 'RON');
-    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
-    final masterVehicles = _masterVehiclesForOfferPartner(partner);
-    String? selectedMasterVehicleId =
-        existing?.masterVehicleId.trim().isNotEmpty == true
-            ? existing!.masterVehicleId.trim()
-            : null;
-    try {
-      return await showDialog<OfferPartnerVehicle>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: Text(
-              existing == null
-                  ? 'Adaugă autovehicul partener'
-                  : 'Editează autovehicul partener',
-            ),
-            content: SizedBox(
-              width: 520,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        partner.name,
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                    ),
-                    if (masterVehicles.isNotEmpty)
-                      DropdownButtonFormField<String?>(
-                        initialValue: selectedMasterVehicleId != null &&
-                                masterVehicles.any(
-                                  (item) => item.id == selectedMasterVehicleId,
-                                )
-                            ? selectedMasterVehicleId
-                            : null,
-                        decoration: const InputDecoration(
-                          labelText: 'Autovehicul salvat',
-                          helperText:
-                              'Optional: precompletează din registrul partenerului',
-                        ),
-                        items: [
-                          const DropdownMenuItem<String?>(
-                            value: null,
-                            child: Text('Introducere manuală'),
-                          ),
-                          ...masterVehicles.map(
-                            (item) => DropdownMenuItem<String?>(
-                              value: item.id,
-                              child: Text(item.vehicleName),
-                            ),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setDialogState(() {
-                            selectedMasterVehicleId = value;
-                            final selected = value == null
-                                ? null
-                                : masterVehicles.firstWhere(
-                                    (item) => item.id == value,
-                                  );
-                            if (selected == null) return;
-                            nameCtrl.text = selected.vehicleName;
-                            registrationCtrl.text = selected.registrationNumber;
-                            consumptionCtrl.text = selected
-                                .fuelConsumptionPer100Km
-                                .toStringAsFixed(2);
-                            priceCtrl.text =
-                                selected.fuelPricePerLiter.toStringAsFixed(2);
-                            currencyCtrl.text = selected.currency;
-                            notesCtrl.text = selected.notes;
-                          });
-                        },
-                      ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: nameCtrl,
-                      decoration:
-                          const InputDecoration(labelText: 'Denumire vehicul'),
-                    ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: registrationCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Nr. înmatriculare',
-                      ),
-                    ),
-                    TextField(
-                      controller: kmCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Km estimați',
-                      ),
-                    ),
-                    TextField(
-                      controller: consumptionCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Consum L / 100 km',
-                      ),
-                    ),
-                    TextField(
-                      controller: priceCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Preț combustibil',
-                      ),
-                    ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: currencyCtrl,
-                      decoration: const InputDecoration(labelText: 'Monedă'),
-                    ),
-                    TextField(
-                      textCapitalization: TextCapitalization.sentences,
-                      controller: notesCtrl,
-                      decoration:
-                          const InputDecoration(labelText: 'Observații'),
-                      minLines: 2,
-                      maxLines: 4,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Renunță'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final vehicleName = nameCtrl.text.trim();
-                  if (vehicleName.isEmpty) {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Completează denumirea vehiculului.'),
-                      ),
-                    );
-                    return;
-                  }
-                  Navigator.of(context).pop(
-                    OfferPartnerVehicle(
-                      id: existing?.id ??
-                          'offer-partner-vehicle-${DateTime.now().microsecondsSinceEpoch}',
-                      partnerId: partner.id,
-                      vehicleName: vehicleName,
-                      masterVehicleId: selectedMasterVehicleId ?? '',
-                      registrationNumber: registrationCtrl.text.trim(),
-                      km: double.tryParse(
-                            kmCtrl.text.replaceAll(',', '.').trim(),
-                          ) ??
-                          0,
-                      fuelConsumptionPer100Km: double.tryParse(
-                            consumptionCtrl.text.replaceAll(',', '.').trim(),
-                          ) ??
-                          0,
-                      fuelPricePerLiter: double.tryParse(
-                            priceCtrl.text.replaceAll(',', '.').trim(),
-                          ) ??
-                          0,
-                      currency: currencyCtrl.text.trim().isEmpty
-                          ? 'RON'
-                          : currencyCtrl.text.trim().toUpperCase(),
-                      notes: notesCtrl.text.trim(),
-                    ),
-                  );
-                },
-                child: const Text('Salvează'),
-              ),
-            ],
-          ),
-        ),
-      );
-    } finally {
-      nameCtrl.dispose();
-      registrationCtrl.dispose();
-      kmCtrl.dispose();
-      consumptionCtrl.dispose();
-      priceCtrl.dispose();
-      currencyCtrl.dispose();
-      notesCtrl.dispose();
-    }
-  }
-
-  Future<void> _addPartner() async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    final created = await _showPartnerDialog();
-    if (created == null) return;
-    await _persistOffer(
-      offer.copyWith(partners: [...offer.partners, created]),
-    );
-  }
-
-  Future<void> _editPartner(OfferPartner partner) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    final updated = await _showPartnerDialog(existing: partner);
-    if (updated == null) return;
-    await _persistOffer(
-      offer.copyWith(
-        partners: offer.partners
-            .map((item) => item.id == updated.id ? updated : item)
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  Future<void> _deletePartner(OfferPartner partner) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Șterge partener'),
-        content: Text(
-          'Partenerul "${partner.name}" va fi sters impreuna cu personalul si autovehiculele asociate.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Renunță'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Șterge'),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-    await _persistOffer(
-      offer.copyWith(
-        partners: offer.partners
-            .where((item) => item.id != partner.id)
-            .toList(growable: false),
-        partnerWorkers: offer.partnerWorkers
-            .where((item) => item.partnerId != partner.id)
-            .toList(growable: false),
-        partnerVehicles: offer.partnerVehicles
-            .where((item) => item.partnerId != partner.id)
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  Future<void> _addPartnerWorker(OfferPartner partner) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    final created = await _showPartnerWorkerDialog(partner: partner);
-    if (created == null) return;
-    await _persistOffer(
-      offer.copyWith(
-        partnerWorkers: [...offer.partnerWorkers, created],
-      ),
-    );
-  }
-
-  Future<void> _editPartnerWorker(
-    OfferPartner partner,
-    OfferPartnerWorker worker,
-  ) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    final updated = await _showPartnerWorkerDialog(
-      partner: partner,
-      existing: worker,
-    );
-    if (updated == null) return;
-    await _persistOffer(
-      offer.copyWith(
-        partnerWorkers: offer.partnerWorkers
-            .map((item) => item.id == updated.id ? updated : item)
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  Future<void> _deletePartnerWorker(OfferPartnerWorker worker) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    await _persistOffer(
-      offer.copyWith(
-        partnerWorkers: offer.partnerWorkers
-            .where((item) => item.id != worker.id)
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  Future<void> _addPartnerVehicle(OfferPartner partner) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    final created = await _showPartnerVehicleDialog(partner: partner);
-    if (created == null) return;
-    await _persistOffer(
-      offer.copyWith(
-        partnerVehicles: [...offer.partnerVehicles, created],
-      ),
-    );
-  }
-
-  Future<void> _editPartnerVehicle(
-    OfferPartner partner,
-    OfferPartnerVehicle vehicle,
-  ) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    final updated = await _showPartnerVehicleDialog(
-      partner: partner,
-      existing: vehicle,
-    );
-    if (updated == null) return;
-    await _persistOffer(
-      offer.copyWith(
-        partnerVehicles: offer.partnerVehicles
-            .map((item) => item.id == updated.id ? updated : item)
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  Future<void> _deletePartnerVehicle(OfferPartnerVehicle vehicle) async {
-    if (_isFrozen) {
-      _showFrozenMessage();
-      return;
-    }
-    await _persistOffer(
-      offer.copyWith(
-        partnerVehicles: offer.partnerVehicles
-            .where((item) => item.id != vehicle.id)
-            .toList(growable: false),
-      ),
-    );
-  }
-
-  Widget _buildPartnerSection() {
-    if (offer.partners.isEmpty) {
-      return const Card(
-        child: Padding(
-          padding: EdgeInsets.all(12),
-          child: Text('Nu exista resurse partener adaugate.'),
-        ),
-      );
-    }
-
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: offer.partners.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final partner = offer.partners[index];
-        final workers = _partnerWorkersFor(partner.id);
-        final vehicles = _partnerVehiclesFor(partner.id);
-        final workerCurrency =
-            _currencyLabel(workers.map((item) => item.currency));
-        final vehicleCurrency =
-            _currencyLabel(vehicles.map((item) => item.currency));
-        final totalCurrency = _currencyLabel([
-          ...workers.map((item) => item.currency),
-          ...vehicles.map((item) => item.currency),
-        ]);
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            partner.name,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 6),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              if (partner.contactPerson.isNotEmpty)
-                                Chip(
-                                    label: Text(
-                                        'Contact: ${partner.contactPerson}')),
-                              if (partner.phone.isNotEmpty)
-                                Chip(label: Text('Telefon: ${partner.phone}')),
-                              if (partner.email.isNotEmpty)
-                                Chip(label: Text('Email: ${partner.email}')),
-                              Chip(
-                                label: Text(
-                                  'Total personal: ${_partnerWorkersTotalFor(partner.id).toStringAsFixed(2)} $workerCurrency',
-                                ),
-                              ),
-                              Chip(
-                                label: Text(
-                                  'Total autovehicule: ${_partnerVehiclesTotalFor(partner.id).toStringAsFixed(2)} $vehicleCurrency',
-                                ),
-                              ),
-                              Chip(
-                                label: Text(
-                                  'Total partener: ${_partnerTotalFor(partner.id).toStringAsFixed(2)} $totalCurrency',
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (partner.notes.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Text('Observatii: ${partner.notes}'),
-                          ],
-                        ],
-                      ),
-                    ),
-                    Wrap(
-                      spacing: 4,
-                      children: [
-                        IconButton(
-                          tooltip: 'Editeaza partener',
-                          onPressed: (_saving || _isFrozen)
-                              ? null
-                              : () => _editPartner(partner),
-                          icon: const Icon(Icons.edit_outlined),
-                        ),
-                        IconButton(
-                          tooltip: 'Șterge partener',
-                          onPressed: (_saving || _isFrozen)
-                              ? null
-                              : () => _deletePartner(partner),
-                          icon: const Icon(Icons.delete_outline),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Text(
-                      'Personal partener',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: (_saving || _isFrozen)
-                          ? null
-                          : () => _addPartnerWorker(partner),
-                      icon: const Icon(Icons.person_add_alt_1_outlined),
-                      label: const Text('Adauga personal'),
-                    ),
-                  ],
-                ),
-                if (workers.isEmpty)
-                  const Text('Nu exista personal partener adaugat.')
-                else
-                  ...workers.map((worker) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(worker.fullName),
-                        subtitle: Text(
-                          [
-                            if (worker.role.isNotEmpty) 'Rol: ${worker.role}',
-                            'Ore: ${worker.hours.toStringAsFixed(2)}',
-                            'Tarif: ${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency}',
-                            'Total: ${worker.total.toStringAsFixed(2)} ${worker.currency}',
-                            if (worker.notes.isNotEmpty)
-                              'Observatii: ${worker.notes}',
-                          ].join(' • '),
-                        ),
-                        trailing: Wrap(
-                          spacing: 4,
-                          children: [
-                            IconButton(
-                              tooltip: 'Editeaza',
-                              onPressed: (_saving || _isFrozen)
-                                  ? null
-                                  : () => _editPartnerWorker(partner, worker),
-                              icon: const Icon(Icons.edit_outlined),
-                            ),
-                            IconButton(
-                              tooltip: 'Șterge',
-                              onPressed: (_saving || _isFrozen)
-                                  ? null
-                                  : () => _deletePartnerWorker(worker),
-                              icon: const Icon(Icons.delete_outline),
-                            ),
-                          ],
-                        ),
-                      )),
-                const Divider(height: 20),
-                Row(
-                  children: [
-                    Text(
-                      'Autovehicule partener',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: (_saving || _isFrozen)
-                          ? null
-                          : () => _addPartnerVehicle(partner),
-                      icon: const Icon(Icons.local_shipping_outlined),
-                      label: const Text('Adauga autovehicul'),
-                    ),
-                  ],
-                ),
-                if (vehicles.isEmpty)
-                  const Text('Nu exista autovehicule partener adaugate.')
-                else
-                  ...vehicles.map((vehicle) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(vehicle.vehicleName),
-                        subtitle: Text(
-                          [
-                            if (vehicle.registrationNumber.isNotEmpty)
-                              'Nr: ${vehicle.registrationNumber}',
-                            'Km: ${vehicle.km.toStringAsFixed(2)}',
-                            'Consum: ${vehicle.fuelConsumptionPer100Km.toStringAsFixed(2)} L/100 km',
-                            'Pret combustibil: ${vehicle.fuelPricePerLiter.toStringAsFixed(2)} ${vehicle.currency}',
-                            'Total: ${vehicle.total.toStringAsFixed(2)} ${vehicle.currency}',
-                            if (vehicle.notes.isNotEmpty)
-                              'Observatii: ${vehicle.notes}',
-                          ].join(' • '),
-                        ),
-                        trailing: Wrap(
-                          spacing: 4,
-                          children: [
-                            IconButton(
-                              tooltip: 'Editeaza',
-                              onPressed: (_saving || _isFrozen)
-                                  ? null
-                                  : () => _editPartnerVehicle(partner, vehicle),
-                              icon: const Icon(Icons.edit_outlined),
-                            ),
-                            IconButton(
-                              tooltip: 'Șterge',
-                              onPressed: (_saving || _isFrozen)
-                                  ? null
-                                  : () => _deletePartnerVehicle(vehicle),
-                              icon: const Icon(Icons.delete_outline),
-                            ),
-                          ],
-                        ),
-                      )),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -3792,7 +2702,7 @@ if (Test-Path \$attachment) {
       appBar: AppBar(
         title: Text('${offer.offerNumber} - Detaliu ofertă'),
         // Bara de progres la baza AppBar-ului când se salvează sau se exportă PDF
-        bottom: (_saving || _exportingPdf)
+        bottom: (saving || _exportingPdf)
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(3),
                 child: LinearProgressIndicator(
@@ -3806,7 +2716,7 @@ if (Test-Path \$attachment) {
         actions: [
           PopupMenuButton<PdfVisualTemplate>(
             tooltip: 'Șablon PDF',
-            enabled: !(_saving || _exportingPdf || _converting),
+            enabled: !(saving || _exportingPdf || _converting),
             initialValue: _selectedPdfTemplate,
             onSelected: (value) {
               setState(() => _selectedPdfTemplate = value);
@@ -3846,11 +2756,11 @@ if (Test-Path \$attachment) {
             ),
           ),
           IconButton(
-            onPressed: (_saving || _exportingPdf || _converting)
+            onPressed: (saving || _exportingPdf || _converting)
                 ? null
                 : () => _generatePdf(),
             icon: const Icon(Icons.picture_as_pdf_outlined),
-            tooltip: _saving
+            tooltip: saving
                 ? 'Salvare în curs...'
                 : _exportingPdf
                     ? 'Generare PDF în curs...'
@@ -3858,7 +2768,7 @@ if (Test-Path \$attachment) {
           ),
           IconButton(
             onPressed:
-                (_saving || _converting || _isFrozen) ? null : _openEmailDialog,
+                (saving || _converting || isFrozen) ? null : _openEmailDialog,
             icon: const Icon(Icons.email_outlined),
             tooltip: 'Trimite oferta',
           ),
@@ -3899,7 +2809,7 @@ if (Test-Path \$attachment) {
               ),
               PopupMenuItem(
                 value: 'necesar',
-                enabled: !(_saving || _converting),
+                enabled: !(saving || _converting),
                 child: const ListTile(
                   leading: Icon(Icons.format_list_bulleted_outlined),
                   title: Text('Necesar materiale'),
@@ -3918,7 +2828,7 @@ if (Test-Path \$attachment) {
               ),
               PopupMenuItem(
                 value: 'save_as',
-                enabled: !(_saving || _exportingPdf || _converting),
+                enabled: !(saving || _exportingPdf || _converting),
                 child: const ListTile(
                   leading: Icon(Icons.save_as_outlined),
                   title: Text('Salvează ca...'),
@@ -3929,7 +2839,7 @@ if (Test-Path \$attachment) {
               if (offer.complaintId.trim().isNotEmpty)
                 PopupMenuItem(
                   value: 'share',
-                  enabled: !(_saving || _exportingPdf || _converting),
+                  enabled: !(saving || _exportingPdf || _converting),
                   child: const ListTile(
                     leading: Icon(Icons.share_outlined),
                     title: Text('Distribuie'),
@@ -3940,7 +2850,7 @@ if (Test-Path \$attachment) {
               if (offer.isConverted)
                 PopupMenuItem(
                   value: 'lucrare',
-                  enabled: !(_saving || _exportingPdf || _converting),
+                  enabled: !(saving || _exportingPdf || _converting),
                   child: const ListTile(
                     leading: Icon(Icons.open_in_new_outlined),
                     title: Text('Deschide lucrarea'),
@@ -3951,7 +2861,7 @@ if (Test-Path \$attachment) {
               if (widget.onConvertToJob != null)
                 PopupMenuItem(
                   value: 'convert',
-                  enabled: !(_saving ||
+                  enabled: !(saving ||
                       _exportingPdf ||
                       _converting ||
                       !_canConvertToJob),
@@ -3965,7 +2875,7 @@ if (Test-Path \$attachment) {
               if (widget.onDuplicateOffer != null)
                 PopupMenuItem(
                   value: 'duplica',
-                  enabled: !(_saving || _exportingPdf || _converting),
+                  enabled: !(saving || _exportingPdf || _converting),
                   child: const ListTile(
                     leading: Icon(Icons.content_copy_outlined),
                     title: Text('Duplică'),
@@ -3976,7 +2886,7 @@ if (Test-Path \$attachment) {
               if (widget.onEditOffer != null)
                 PopupMenuItem(
                   value: 'edit',
-                  enabled: !(_saving || _converting || _isFrozen),
+                  enabled: !(saving || _converting || isFrozen),
                   child: const ListTile(
                     leading: Icon(Icons.edit_outlined),
                     title: Text('Editează antet'),
@@ -4013,7 +2923,7 @@ if (Test-Path \$attachment) {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: (_saving || _converting || _isFrozen) ? null : _addLine,
+        onPressed: (saving || _converting || isFrozen) ? null : _addLine,
         icon: const Icon(Icons.add),
         label: const Text('Adaugă poziție'),
       ),
@@ -4093,7 +3003,7 @@ if (Test-Path \$attachment) {
                             selected: selected,
                             selectedColor: chipColor,
                             side: BorderSide(color: chipColor, width: 1.2),
-                            onSelected: (_saving || _isFrozen || selected)
+                            onSelected: (saving || isFrozen || selected)
                                 ? null
                                 : (_) => _changeOfferStatus(status),
                           );
@@ -4105,7 +3015,7 @@ if (Test-Path \$attachment) {
                         runSpacing: 8,
                         children: [
                           FilledButton.icon(
-                            onPressed: (_saving || _isFrozen)
+                            onPressed: (saving || isFrozen)
                                 ? null
                                 : _openEmailDialog,
                             icon: const Icon(Icons.email_outlined),
@@ -4222,10 +3132,10 @@ if (Test-Path \$attachment) {
                                 offer.tipDocument.label,
                               ),
                             ),
-                            if (!_isFrozen)
+                            if (!isFrozen)
                               TextButton.icon(
                                 onPressed:
-                                    _saving ? null : _changeTipDocument,
+                                    saving ? null : _changeTipDocument,
                                 icon: const Icon(Icons.edit_outlined,
                                     size: 14),
                                 label: const Text('Schimbă'),
@@ -4548,7 +3458,7 @@ if (Test-Path \$attachment) {
                         const Spacer(),
                         OutlinedButton.icon(
                           onPressed:
-                              (_saving || _isFrozen) ? null : _editVatPercent,
+                              (saving || isFrozen) ? null : _editVatPercent,
                           icon: const Icon(Icons.percent),
                           label: const Text('Modifica TVA'),
                         ),
@@ -4806,19 +3716,19 @@ if (Test-Path \$attachment) {
                         children: [
                           Chip(
                             label: Text(
-                              'Personal partener: ${_partnerWorkersTotal.toStringAsFixed(2)} $_partnerWorkersCurrency',
+                              'Personal partener: ${partnerWorkersTotal.toStringAsFixed(2)} $partnerWorkersCurrency',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                           Chip(
                             label: Text(
-                              'Autovehicule partener: ${_partnerVehiclesTotal.toStringAsFixed(2)} $_partnerVehiclesCurrency',
+                              'Autovehicule partener: ${partnerVehiclesTotal.toStringAsFixed(2)} $partnerVehiclesCurrency',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
                           Chip(
                             label: Text(
-                              'Total general parteneri: ${_partnersTotal.toStringAsFixed(2)} $_partnersCurrency',
+                              'Total general parteneri: ${partnersTotal.toStringAsFixed(2)} $partnersCurrency',
                             ),
                             visualDensity: VisualDensity.compact,
                           ),
@@ -4842,14 +3752,14 @@ if (Test-Path \$attachment) {
                 ),
                 const Spacer(),
                 OutlinedButton.icon(
-                  onPressed: (_saving || _isFrozen) ? null : _addPartner,
+                  onPressed: (saving || isFrozen) ? null : addPartner,
                   icon: const Icon(Icons.handshake_outlined),
                   label: const Text('Adauga partener'),
                 ),
               ],
             ),
             const SizedBox(height: 6),
-            _buildPartnerSection(),
+            buildPartnerSection(),
             const SizedBox(height: 12),
             Text(
               'Pozitii comerciale oferta',
@@ -4864,7 +3774,7 @@ if (Test-Path \$attachment) {
             Align(
               alignment: Alignment.centerLeft,
               child: OutlinedButton.icon(
-                onPressed: (_saving || _isFrozen) ? null : _addLine,
+                onPressed: (saving || isFrozen) ? null : _addLine,
                 icon: const Icon(Icons.add),
                 label: const Text('Adaugă poziție'),
               ),
@@ -4901,14 +3811,14 @@ if (Test-Path \$attachment) {
                               children: [
                                 IconButton(
                                   tooltip: 'Editeaza pozitie',
-                                  onPressed: (_saving || _isFrozen)
+                                  onPressed: (saving || isFrozen)
                                       ? null
                                       : () => _editLine(sourceLine),
                                   icon: const Icon(Icons.edit_outlined),
                                 ),
                                 IconButton(
                                   tooltip: 'Șterge poziție',
-                                  onPressed: (_saving || _isFrozen)
+                                  onPressed: (saving || isFrozen)
                                       ? null
                                       : () => _deleteLine(sourceLine),
                                   icon: const Icon(Icons.delete_outline),
@@ -4984,14 +3894,14 @@ if (Test-Path \$attachment) {
                         children: [
                           IconButton(
                             tooltip: 'Editeaza manopera',
-                            onPressed: (_saving || _isFrozen)
+                            onPressed: (saving || isFrozen)
                                 ? null
                                 : () => _editLine(line),
                             icon: const Icon(Icons.edit_outlined),
                           ),
                           IconButton(
                             tooltip: 'Șterge manoperă',
-                            onPressed: (_saving || _isFrozen)
+                            onPressed: (saving || isFrozen)
                                 ? null
                                 : () => _deleteLine(line),
                             icon: const Icon(Icons.delete_outline),
