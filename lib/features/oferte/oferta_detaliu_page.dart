@@ -46,6 +46,7 @@ import 'oferta_detaliu/oferta_detaliu_formatting_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_smartbill_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_partner_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_acceptance_mixin.dart';
+import 'oferta_detaliu/oferta_detaliu_pdf_mixin.dart';
 
 class OfertaDetaliuPage extends StatefulWidget {
   const OfertaDetaliuPage({
@@ -86,7 +87,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
         OffertaDetaliuFormattingMixin,
         OffertaDetaliuSmartbillMixin,
         OffertaDetaliuPartnerMixin,
-        OffertaDetaliuAcceptanceMixin {
+        OffertaDetaliuAcceptanceMixin,
+        OffertaDetaliuPdfMixin {
   static const int _maxInlineAttachmentBytes = 550 * 1024;
 
   late final RegistryService _registryService;
@@ -95,10 +97,14 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
   late OfferRecord offer;
   @override
   bool saving = false;
-  bool _exportingPdf = false;
-  bool _converting = false;
-  bool _pdfTemplateLoaded = false;
-  PdfVisualTemplate _selectedPdfTemplate = PdfVisualTemplate.classic;
+  @override
+  bool exportingPdf = false;
+  @override
+  bool converting = false;
+  @override
+  bool pdfTemplateLoaded = false;
+  @override
+  PdfVisualTemplate selectedPdfTemplate = PdfVisualTemplate.classic;
   PdfVisualTemplate? _lastGeneratedPdfTemplate;
   final MaterialsCatalogService _materialsCatalogService =
       MaterialsCatalogService();
@@ -119,77 +125,20 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     _registryService = RegistryService(widget.repository);
     _aiAssistantService = AiAssistantService(repository: widget.repository);
     offer = widget.initialOffer;
-    _loadPdfTemplatePreference();
+    loadPdfTemplatePreference();
     _loadLaborResources();
     loadPartnerCatalog();
     loadSmartBillStock();
   }
 
 
-  Future<void> _loadPdfTemplatePreference() async {
-    final profile = await widget.repository.loadCompanyProfile();
-    if (!mounted) return;
-    setState(() {
-      _selectedPdfTemplate = profile.pdfExportSettings.visualTemplate;
-      _pdfTemplateLoaded = true;
-    });
-  }
 
   PdfVisualTemplate _resolvedPdfTemplate(CompanyProfile profile) {
-    return _pdfTemplateLoaded
-        ? _selectedPdfTemplate
+    return pdfTemplateLoaded
+        ? selectedPdfTemplate
         : profile.pdfExportSettings.visualTemplate;
   }
 
-  Widget _buildPdfTemplateSelectorCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Sablon PDF',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Selector rapid pentru generare, Save As si Share direct din aceasta oferta.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<PdfVisualTemplate>(
-              initialValue: _selectedPdfTemplate,
-              decoration: const InputDecoration(
-                labelText: 'Model document',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: PdfVisualTemplate.values
-                  .map(
-                    (template) => DropdownMenuItem<PdfVisualTemplate>(
-                      value: template,
-                      child: Text(template.label),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: (saving || _exportingPdf || _converting)
-                  ? null
-                  : (value) {
-                      if (value == null) return;
-                      setState(() => _selectedPdfTemplate = value);
-                    },
-            ),
-            const SizedBox(height: 6),
-            Text(
-              _selectedPdfTemplate.description,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Future<void> _loadLaborResources() async {
     final catalog = await _laborResourcesService.load();
@@ -1667,8 +1616,8 @@ if (Test-Path \$attachment) {
   }
 
   Future<void> _generatePdf({bool share = false, bool saveAs = false}) async {
-    if (_exportingPdf) return;
-    setState(() => _exportingPdf = true);
+    if (exportingPdf) return;
+    setState(() => exportingPdf = true);
     try {
       final companyProfile = await widget.repository.loadCompanyProfile();
       final selectedTemplate = _resolvedPdfTemplate(companyProfile);
@@ -1704,7 +1653,7 @@ if (Test-Path \$attachment) {
         );
         // Curăță TOATE fișierele PDF vechi ale acestei oferte din același director.
         // Previne acumularea de fișiere și caching-ul viewer-ului Android.
-        _cleanupOldOfferPdfs(newPath: path, offer: offer);
+        cleanupOldOfferPdfs(newPath: path, offer: offer);
         offerForActions = offerForActions.copyWith(
           pdfPath: path,
           hasAcceptancePage: true,
@@ -1769,32 +1718,11 @@ if (Test-Path \$attachment) {
       );
     } finally {
       if (mounted) {
-        setState(() => _exportingPdf = false);
+        setState(() => exportingPdf = false);
       }
     }
   }
 
-  /// Șterge toate fișierele PDF vechi ale ofertei din același director ca [newPath].
-  /// Fiecare generare creează un fișier cu timestamp unic — le curățăm pe cele vechi.
-  void _cleanupOldOfferPdfs({required String newPath, required OfferRecord offer}) {
-    if (newPath.isEmpty) return;
-    try {
-      final newFile = File(newPath);
-      final dir = newFile.parent;
-      if (!dir.existsSync()) return;
-      final prefix = OfferPdfService.exportFilePrefix(offer).toLowerCase();
-      for (final entity in dir.listSync()) {
-        if (entity is! File) continue;
-        final name = entity.uri.pathSegments.last.toLowerCase();
-        if (name == newFile.uri.pathSegments.last.toLowerCase()) continue;
-        if (name.startsWith(prefix) && name.endsWith('.pdf')) {
-          try {
-            entity.deleteSync();
-          } catch (_) {/* intenționat ignorat: ștergere best-effort PDF temporar vechi */}
-        }
-      }
-    } catch (_) {/* intenționat ignorat: curățare best-effort director PDF-uri vechi */}
-  }
 
   Future<void> _showGeneratedPdfActions(String filePath) async {
     if (!mounted) return;
@@ -1907,8 +1835,8 @@ if (Test-Path \$attachment) {
 
   Future<void> _convertToJob() async {
     final action = widget.onConvertToJob;
-    if (action == null || !_canConvertToJob || _converting) return;
-    setState(() => _converting = true);
+    if (action == null || !_canConvertToJob || converting) return;
+    setState(() => converting = true);
     try {
       final updated = await action(offer);
       if (!mounted) return;
@@ -1917,7 +1845,7 @@ if (Test-Path \$attachment) {
       }
     } finally {
       if (mounted) {
-        setState(() => _converting = false);
+        setState(() => converting = false);
       }
     }
   }
@@ -2356,12 +2284,12 @@ if (Test-Path \$attachment) {
       appBar: AppBar(
         title: Text('${offer.offerNumber} - Detaliu ofertă'),
         // Bara de progres la baza AppBar-ului când se salvează sau se exportă PDF
-        bottom: (saving || _exportingPdf)
+        bottom: (saving || exportingPdf)
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(3),
                 child: LinearProgressIndicator(
                   backgroundColor: Colors.transparent,
-                  color: _exportingPdf
+                  color: exportingPdf
                       ? Colors.orange.shade400
                       : Colors.blue.shade300,
                 ),
@@ -2370,10 +2298,10 @@ if (Test-Path \$attachment) {
         actions: [
           PopupMenuButton<PdfVisualTemplate>(
             tooltip: 'Șablon PDF',
-            enabled: !(saving || _exportingPdf || _converting),
-            initialValue: _selectedPdfTemplate,
+            enabled: !(saving || exportingPdf || converting),
+            initialValue: selectedPdfTemplate,
             onSelected: (value) {
-              setState(() => _selectedPdfTemplate = value);
+              setState(() => selectedPdfTemplate = value);
             },
             itemBuilder: (context) => PdfVisualTemplate.values
                 .map(
@@ -2404,25 +2332,25 @@ if (Test-Path \$attachment) {
                 children: [
                   const Icon(Icons.style_outlined),
                   const SizedBox(width: 6),
-                  Text(_selectedPdfTemplate.label),
+                  Text(selectedPdfTemplate.label),
                 ],
               ),
             ),
           ),
           IconButton(
-            onPressed: (saving || _exportingPdf || _converting)
+            onPressed: (saving || exportingPdf || converting)
                 ? null
                 : () => _generatePdf(),
             icon: const Icon(Icons.picture_as_pdf_outlined),
             tooltip: saving
                 ? 'Salvare în curs...'
-                : _exportingPdf
+                : exportingPdf
                     ? 'Generare PDF în curs...'
                     : 'Generează PDF',
           ),
           IconButton(
             onPressed:
-                (saving || _converting || isFrozen) ? null : _openEmailDialog,
+                (saving || converting || isFrozen) ? null : _openEmailDialog,
             icon: const Icon(Icons.email_outlined),
             tooltip: 'Trimite oferta',
           ),
@@ -2463,7 +2391,7 @@ if (Test-Path \$attachment) {
               ),
               PopupMenuItem(
                 value: 'necesar',
-                enabled: !(saving || _converting),
+                enabled: !(saving || converting),
                 child: const ListTile(
                   leading: Icon(Icons.format_list_bulleted_outlined),
                   title: Text('Necesar materiale'),
@@ -2482,7 +2410,7 @@ if (Test-Path \$attachment) {
               ),
               PopupMenuItem(
                 value: 'save_as',
-                enabled: !(saving || _exportingPdf || _converting),
+                enabled: !(saving || exportingPdf || converting),
                 child: const ListTile(
                   leading: Icon(Icons.save_as_outlined),
                   title: Text('Salvează ca...'),
@@ -2493,7 +2421,7 @@ if (Test-Path \$attachment) {
               if (offer.complaintId.trim().isNotEmpty)
                 PopupMenuItem(
                   value: 'share',
-                  enabled: !(saving || _exportingPdf || _converting),
+                  enabled: !(saving || exportingPdf || converting),
                   child: const ListTile(
                     leading: Icon(Icons.share_outlined),
                     title: Text('Distribuie'),
@@ -2504,7 +2432,7 @@ if (Test-Path \$attachment) {
               if (offer.isConverted)
                 PopupMenuItem(
                   value: 'lucrare',
-                  enabled: !(saving || _exportingPdf || _converting),
+                  enabled: !(saving || exportingPdf || converting),
                   child: const ListTile(
                     leading: Icon(Icons.open_in_new_outlined),
                     title: Text('Deschide lucrarea'),
@@ -2516,8 +2444,8 @@ if (Test-Path \$attachment) {
                 PopupMenuItem(
                   value: 'convert',
                   enabled: !(saving ||
-                      _exportingPdf ||
-                      _converting ||
+                      exportingPdf ||
+                      converting ||
                       !_canConvertToJob),
                   child: const ListTile(
                     leading: Icon(Icons.transform_outlined),
@@ -2529,7 +2457,7 @@ if (Test-Path \$attachment) {
               if (widget.onDuplicateOffer != null)
                 PopupMenuItem(
                   value: 'duplica',
-                  enabled: !(saving || _exportingPdf || _converting),
+                  enabled: !(saving || exportingPdf || converting),
                   child: const ListTile(
                     leading: Icon(Icons.content_copy_outlined),
                     title: Text('Duplică'),
@@ -2540,7 +2468,7 @@ if (Test-Path \$attachment) {
               if (widget.onEditOffer != null)
                 PopupMenuItem(
                   value: 'edit',
-                  enabled: !(saving || _converting || isFrozen),
+                  enabled: !(saving || converting || isFrozen),
                   child: const ListTile(
                     leading: Icon(Icons.edit_outlined),
                     title: Text('Editează antet'),
@@ -2577,7 +2505,7 @@ if (Test-Path \$attachment) {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: (saving || _converting || isFrozen) ? null : _addLine,
+        onPressed: (saving || converting || isFrozen) ? null : _addLine,
         icon: const Icon(Icons.add),
         label: const Text('Adaugă poziție'),
       ),
@@ -2679,7 +2607,7 @@ if (Test-Path \$attachment) {
                       ),
                     ],
                     const SizedBox(height: 12),
-                    _buildPdfTemplateSelectorCard(),
+                    buildPdfTemplateSelectorCard(),
                     const SizedBox(height: 12),
                     buildSmartBillSection(),
                     const SizedBox(height: 12),
