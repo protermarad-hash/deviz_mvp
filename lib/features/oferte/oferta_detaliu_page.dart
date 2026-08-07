@@ -39,14 +39,13 @@ import 'offer_standard_labor_line_dialog.dart';
 import '../notifications/notification_service.dart';
 import '../notifications/notification_models.dart';
 import '../../core/widgets/client_info_card.dart';
-import '../crm/crm_models.dart';
-import '../crm/crm_repository.dart';
 import 'oferte_dialogs/offer_commercial_package_picker_dialog.dart';
 import 'oferta_detaliu/oferta_detaliu_formatting_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_smartbill_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_partner_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_acceptance_mixin.dart';
 import 'oferta_detaliu/oferta_detaliu_pdf_mixin.dart';
+import 'oferta_detaliu/oferta_detaliu_crm_mixin.dart';
 
 class OfertaDetaliuPage extends StatefulWidget {
   const OfertaDetaliuPage({
@@ -88,7 +87,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
         OffertaDetaliuSmartbillMixin,
         OffertaDetaliuPartnerMixin,
         OffertaDetaliuAcceptanceMixin,
-        OffertaDetaliuPdfMixin {
+        OffertaDetaliuPdfMixin,
+        OffertaDetaliuCrmMixin {
   static const int _maxInlineAttachmentBytes = 550 * 1024;
 
   late final RegistryService _registryService;
@@ -996,7 +996,7 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     await persistOffer(next);
 
     // Fire-and-forget CRM sync la schimbarea statusului ofertei
-    _syncCrmForOfferStatus(next, newStatus);
+    syncCrmForOfferStatus(next, newStatus);
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1008,57 +1008,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     );
   }
 
-  void _syncCrmForOfferStatus(OfferRecord offer, OfferStatus newStatus) {
-    if (newStatus == OfferStatus.sent) {
-      _upsertCrmForOffer(offer, CrmStadiu.ofertaTrimisa);
-    } else if (newStatus == OfferStatus.accepted) {
-      _upsertCrmForOffer(offer, CrmStadiu.castigat,
-          valoareFinala: offer.totalValue);
-    } else if (newStatus == OfferStatus.rejected) {
-      _upsertCrmForOffer(offer, CrmStadiu.pierdut);
-    }
-  }
-
-  void _upsertCrmForOffer(OfferRecord offer, CrmStadiu stadiu,
-      {double? valoareFinala}) {
-    final repo = CrmRepository.instance;
-    repo.listLocal().then((all) {
-      final existing = all.cast<CrmRecord?>().firstWhere(
-            (r) => r!.ofertaId == offer.id,
-            orElse: () => null,
-          );
-      final now = DateTime.now();
-      final CrmRecord updated;
-      if (existing != null) {
-        updated = existing.copyWith(
-          stadiu: stadiu,
-          valoareFinala: valoareFinala,
-          updatedAt: now,
-        );
-      } else {
-        updated = repo
-            .createNew(
-              titlu: offer.title.isNotEmpty
-                  ? offer.title
-                  : 'Oferta ${offer.id.substring(0, 8)}',
-              clientName: offer.clientName,
-              clientId: offer.clientId,
-              stadiu: stadiu,
-              valoareEstimata: offer.totalValue,
-            )
-            .copyWith(
-              ofertaId: offer.id,
-              valoareFinala: valoareFinala,
-              updatedAt: now,
-            );
-      }
-      repo.upsertCrmRecord(updated).catchError((e) {
-        debugPrint('[CRM] ❌ _upsertCrmForOffer: $e');
-      });
-    }).catchError((e) {
-      debugPrint('[CRM] ❌ listLocal for offer sync: $e');
-    });
-  }
 
   Future<void> _openEmailDialog() async {
     if (isFrozen) {
