@@ -35,9 +35,9 @@ import 'offer_standard_catalog_service.dart';
 import 'oferte_cloud_repository.dart';
 import 'bnr_exchange_rate_service.dart';
 import 'deviz_articole_baza_page.dart';
-import 'oferte_dialogs/offer_commercial_clause_template_editor_dialog.dart';
-import 'oferte_dialogs/offer_commercial_package_template_editor_dialog.dart';
-import 'oferte_dialogs/offer_labor_template_editor_dialog.dart';
+import 'oferte_dialogs/offer_commercial_clause_templates_dialog.dart';
+import 'oferte_dialogs/offer_commercial_package_templates_dialog.dart';
+import 'oferte_dialogs/offer_labor_templates_dialog.dart';
 import '../../core/help/help_module_button.dart';
 import '../../core/widgets/client_autocomplete_field.dart';
 
@@ -1481,7 +1481,7 @@ class _OfertePageState extends State<OfertePage>
   Future<void> _openLaborTemplatesManager() async {
     final saved = await showDialog<bool>(
       context: context,
-      builder: (context) => _OfferLaborTemplatesDialog(
+      builder: (context) => OfferLaborTemplatesDialog(
         items: _laborTemplates,
         onSave: (item) => _standardCatalogService.upsertLaborTemplate(item),
         onImportRecommended: () =>
@@ -1501,7 +1501,7 @@ class _OfertePageState extends State<OfertePage>
   Future<void> _openClauseTemplatesManager() async {
     final saved = await showDialog<bool>(
       context: context,
-      builder: (context) => _OfferCommercialClauseTemplatesDialog(
+      builder: (context) => OfferCommercialClauseTemplatesDialog(
         items: _clauseTemplates,
         onSave: (item) => _standardCatalogService.upsertClauseTemplate(item),
       ),
@@ -1520,7 +1520,7 @@ class _OfertePageState extends State<OfertePage>
   Future<void> _openPackageTemplatesManager() async {
     final saved = await showDialog<bool>(
       context: context,
-      builder: (context) => _OfferCommercialPackageTemplatesDialog(
+      builder: (context) => OfferCommercialPackageTemplatesDialog(
         items: _packageTemplates,
         laborTemplates: _laborTemplates,
         clauseTemplates: _clauseTemplates,
@@ -4450,356 +4450,7 @@ class _OfferCommercialClauseDialogState
   }
 }
 
-class _OfferLaborTemplatesDialog extends StatefulWidget {
-  const _OfferLaborTemplatesDialog({
-    required this.items,
-    required this.onSave,
-    required this.onImportRecommended,
-  });
-
-  final List<OfferLaborTemplate> items;
-  final Future<void> Function(OfferLaborTemplate item) onSave;
-  final Future<int> Function() onImportRecommended;
-
-  @override
-  State<_OfferLaborTemplatesDialog> createState() =>
-      _OfferLaborTemplatesDialogState();
-}
-
-class _OfferLaborTemplatesDialogState
-    extends State<_OfferLaborTemplatesDialog> {
-  bool _saving = false;
-
-  Future<void> _editTemplate([OfferLaborTemplate? existing]) async {
-    final saved = await showDialog<OfferLaborTemplate>(
-      context: context,
-      builder: (context) => OfferLaborTemplateEditorDialog(existing: existing),
-    );
-    if (saved == null || _saving) {
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await widget.onSave(saved);
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context).pop(true);
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
-    }
-  }
-
-  Future<void> _importRecommended() async {
-    if (_saving) {
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await widget.onImportRecommended();
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context).pop(true);
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [...widget.items]
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    return AlertDialog(
-      title: const Text('Catalog manoperă standard'),
-      content: SizedBox(
-        width: 760,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Align(
-              alignment: Alignment.centerRight,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : _importRecommended,
-                    icon: const Icon(Icons.playlist_add_check_outlined),
-                    label: const Text('Importă set recomandat'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _saving ? null : () => _editTemplate(),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Adaugă'),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: items.isEmpty
-                  ? const Center(
-                      child: Text('Nu există șabloane de manoperă standard.'),
-                    )
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        return ListTile(
-                          title: Text(item.name),
-                          subtitle: Text(
-                            'Categorie: ${item.category.trim().isEmpty ? '-' : item.category.trim()}\n'
-                            '${item.description.trim().isEmpty ? '-' : item.description.trim()}\n'
-                            'UM: ${item.unit} • Cantitate implicită: ${item.defaultQuantity.toStringAsFixed(2)} • Preț unitar: ${item.defaultUnitPrice.toStringAsFixed(2)}\n'
-                            'Incluse: ${item.includedServices.trim().isEmpty ? '-' : item.includedServices.trim()}\n'
-                            'Sugestii produse: ${item.suggestedProductKeywords.trim().isEmpty ? '-' : item.suggestedProductKeywords.trim()}\n'
-                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
-                          ),
-                          isThreeLine: false,
-                          trailing: IconButton(
-                            tooltip: 'Editează',
-                            onPressed:
-                                _saving ? null : () => _editTemplate(item),
-                            icon: const Icon(Icons.edit_outlined),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Închide'),
-        ),
-      ],
-    );
-  }
-}
 
 
-class _OfferCommercialClauseTemplatesDialog extends StatefulWidget {
-  const _OfferCommercialClauseTemplatesDialog({
-    required this.items,
-    required this.onSave,
-  });
 
-  final List<OfferCommercialClauseTemplate> items;
-  final Future<void> Function(OfferCommercialClauseTemplate item) onSave;
-
-  @override
-  State<_OfferCommercialClauseTemplatesDialog> createState() =>
-      _OfferCommercialClauseTemplatesDialogState();
-}
-
-class _OfferCommercialClauseTemplatesDialogState
-    extends State<_OfferCommercialClauseTemplatesDialog> {
-  bool _saving = false;
-
-  Future<void> _editTemplate([OfferCommercialClauseTemplate? existing]) async {
-    final saved = await showDialog<OfferCommercialClauseTemplate>(
-      context: context,
-      builder: (context) =>
-          OfferCommercialClauseTemplateEditorDialog(existing: existing),
-    );
-    if (saved == null || _saving) {
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await widget.onSave(saved);
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context).pop(true);
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [...widget.items]
-      ..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
-    return AlertDialog(
-      title: const Text('Condiții comerciale standard'),
-      content: SizedBox(
-        width: 760,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: _saving ? null : () => _editTemplate(),
-                icon: const Icon(Icons.add),
-                label: const Text('Adaugă'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: items.isEmpty
-                  ? const Center(
-                      child: Text(
-                        'Nu există șabloane de condiții comerciale.',
-                      ),
-                    )
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        return ListTile(
-                          title: Text(item.title),
-                          subtitle: Text(
-                            '${item.category.trim().isEmpty ? 'Fără categorie' : item.category.trim()}\n'
-                            '${item.content.trim().isEmpty ? '-' : item.content.trim()}\n'
-                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
-                          ),
-                          isThreeLine: true,
-                          trailing: IconButton(
-                            tooltip: 'Editează',
-                            onPressed:
-                                _saving ? null : () => _editTemplate(item),
-                            icon: const Icon(Icons.edit_outlined),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Închide'),
-        ),
-      ],
-    );
-  }
-}
-
-
-class _OfferCommercialPackageTemplatesDialog extends StatefulWidget {
-  const _OfferCommercialPackageTemplatesDialog({
-    required this.items,
-    required this.laborTemplates,
-    required this.clauseTemplates,
-    required this.onSave,
-  });
-
-  final List<OfferCommercialPackageTemplate> items;
-  final List<OfferLaborTemplate> laborTemplates;
-  final List<OfferCommercialClauseTemplate> clauseTemplates;
-  final Future<void> Function(OfferCommercialPackageTemplate item) onSave;
-
-  @override
-  State<_OfferCommercialPackageTemplatesDialog> createState() =>
-      _OfferCommercialPackageTemplatesDialogState();
-}
-
-class _OfferCommercialPackageTemplatesDialogState
-    extends State<_OfferCommercialPackageTemplatesDialog> {
-  bool _saving = false;
-
-  Future<void> _editTemplate([OfferCommercialPackageTemplate? existing]) async {
-    final saved = await showDialog<OfferCommercialPackageTemplate>(
-      context: context,
-      builder: (context) => OfferCommercialPackageTemplateEditorDialog(
-        existing: existing,
-        laborTemplates: widget.laborTemplates,
-        clauseTemplates: widget.clauseTemplates,
-      ),
-    );
-    if (saved == null || _saving) {
-      return;
-    }
-    setState(() => _saving = true);
-    try {
-      await widget.onSave(saved);
-      if (!mounted) {
-        return;
-      }
-      Navigator.of(context).pop(true);
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = [...widget.items]
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    return AlertDialog(
-      title: const Text('Pachete comerciale standard'),
-      content: SizedBox(
-        width: 820,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: _saving ? null : () => _editTemplate(),
-                icon: const Icon(Icons.add),
-                label: const Text('Adaugă'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: items.isEmpty
-                  ? const Center(
-                      child: Text('Nu există pachete comerciale standard.'),
-                    )
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final item = items[index];
-                        return ListTile(
-                          title: Text(item.name),
-                          subtitle: Text(
-                            '${item.description.trim().isEmpty ? '-' : item.description.trim()}\n'
-                            'Materiale: ${item.materials.length} • Manoperă standard: ${item.standardLabor.length} • Condiții: ${item.commercialClauses.length}\n'
-                            'Status: ${item.isActive ? 'Activ' : 'Inactiv'}',
-                          ),
-                          isThreeLine: true,
-                          trailing: IconButton(
-                            tooltip: 'Editează',
-                            onPressed:
-                                _saving ? null : () => _editTemplate(item),
-                            icon: const Icon(Icons.edit_outlined),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('Închide'),
-        ),
-      ],
-    );
-  }
-}
 
