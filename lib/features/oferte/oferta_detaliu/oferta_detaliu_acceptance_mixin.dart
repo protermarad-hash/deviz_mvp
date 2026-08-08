@@ -233,9 +233,7 @@ mixin OffertaDetaliuAcceptanceMixin on State<OfertaDetaliuPage> {
             const SizedBox(height: 4),
             Text(
               'Mini-contract cu clauze comerciale pre-setate, trimis împreună cu oferta pentru acceptare și semnare.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
+              style: AppTypography.caption(context)
                   ?.copyWith(color: cs.onSurface.withValues(alpha: 0.6)),
             ),
 

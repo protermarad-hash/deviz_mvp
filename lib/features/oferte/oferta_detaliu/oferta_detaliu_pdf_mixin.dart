@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/design_system/app_tokens.dart';
 import '../../../core/pdf_export_settings.dart';
 import '../offer_models.dart';
 import '../offer_pdf_service.dart';
@@ -38,7 +39,7 @@ mixin OffertaDetaliuPdfMixin on State<OfertaDetaliuPage> {
           children: [
             Text(
               'Sablon PDF',
-              style: Theme.of(context).textTheme.titleMedium,
+              style: AppTypography.headingSmall(context),
             ),
             const SizedBox(height: 6),
             Text(
