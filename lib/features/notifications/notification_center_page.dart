@@ -6,7 +6,7 @@ import '../lucrari/lucrari_page.dart';
 import '../oferte/oferte_page.dart';
 import '../product_catalog/product_catalog_page.dart';
 import '../programari/programari_page.dart';
-import '../reclamatii/reclamatii_page.dart';
+import '../reclamatii/reclamatii_list_page.dart';
 import '../tools/scule_page.dart';
 import 'notification_models.dart';
 import 'notification_service.dart';
@@ -181,12 +181,13 @@ class _NotificationCenterPageState extends State<NotificationCenterPage> {
         initialFocusAppointmentId: item.sourceEntityId.trim(),
       );
     } else if (module == 'reclamatii') {
-      page = ReclamatiiPage(
+      page = ReclamatiiListPage(
         repository: widget.repository,
         fieldAuthRoleKey: widget.fieldAuthRoleKey,
         fieldAuthUserId: widget.fieldAuthUserId,
         fieldAuthUserLabel: widget.fieldAuthUserEmail,
         fieldAuthTeamId: widget.fieldAuthTeamId,
+        initialFocusComplaintId: item.sourceEntityId.trim(),
       );
     } else if (module == 'tools') {
       page = SculePage(
