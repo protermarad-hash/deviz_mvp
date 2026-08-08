@@ -10,6 +10,7 @@ import '../../core/cloud/firestore_auth_warning_service.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/design_system/app_tokens.dart';
 import '../../core/widgets/adaptive_side_panel_layout.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../ai_assistant/ai_assistant_service.dart';
@@ -1926,7 +1927,7 @@ class _OfertePageState extends State<OfertePage>
     final isCustom = _analysisPerioadaFilter == 'custom';
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -2042,7 +2043,7 @@ class _OfertePageState extends State<OfertePage>
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border(
@@ -2154,7 +2155,7 @@ class _OfertePageState extends State<OfertePage>
         const SizedBox(height: 16),
         Card(
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(AppSpacing.md),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -2215,7 +2216,7 @@ class _OfertePageState extends State<OfertePage>
                   ...offers.map((offer) {
                     final selected = _selectedIds.contains(offer.id);
                     return Card(
-                      margin: const EdgeInsets.only(bottom: 8),
+                      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
                       child: CheckboxListTile(
                         value: selected,
                         controlAffinity: ListTileControlAffinity.leading,
@@ -2360,7 +2361,7 @@ class _OfertePageState extends State<OfertePage>
               width: sideDrawerWidth,
               child: SafeArea(
                 child: Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(AppSpacing.md),
                   child: _buildOffersSidePanel(items),
                 ),
               ),

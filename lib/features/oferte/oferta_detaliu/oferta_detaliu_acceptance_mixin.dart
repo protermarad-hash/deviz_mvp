@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../../../core/design_system/app_tokens.dart';
 import '../../reclamatii/signature_capture_page.dart';
 import '../clauza_catalog_repository.dart';
 import '../offer_acceptance_clauses_dialog.dart';
@@ -168,7 +169,7 @@ mixin OffertaDetaliuAcceptanceMixin on State<OfertaDetaliuPage> {
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

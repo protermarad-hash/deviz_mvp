@@ -13,6 +13,7 @@ import '../../core/document_file_service.dart';
 import '../../core/pdf_document_branding.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_save_service.dart';
+import '../../core/design_system/app_tokens.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../clients/client_models.dart';
 import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
@@ -2459,7 +2460,7 @@ if (Test-Path \$attachment) {
         label: const Text('Adaugă poziție'),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

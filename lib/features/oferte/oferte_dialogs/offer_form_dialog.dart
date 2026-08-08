@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/design_system/app_tokens.dart';
 import '../../../core/repositories/app_data_repository.dart';
 import '../../../core/widgets/client_autocomplete_field.dart';
 import '../../clients/client_models.dart';
@@ -1131,7 +1132,7 @@ class OfferFormDialogState extends State<OfferFormDialog> {
                                 .toList(growable: false)
                                 .map(
                                   (item) => Card(
-                                    margin: const EdgeInsets.only(bottom: 8),
+                                    margin: const EdgeInsets.only(bottom: AppSpacing.sm),
                                     child: ListTile(
                                       title: Text(item.title.trim().isEmpty
                                           ? 'Condiție comercială'

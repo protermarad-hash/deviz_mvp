@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/company_profile.dart';
+import '../../../core/design_system/app_tokens.dart';
 import '../../../core/integrations/smartbill_service.dart';
 import '../../../core/integrations/smartbill_stock_cache_service.dart';
 import '../../../core/widgets/smartbill_bon_consum_dialog.dart';
@@ -301,7 +302,7 @@ mixin OffertaDetaliuSmartbillMixin on State<OfertaDetaliuPage> {
     final canOpenPublic = document.publicUrl.trim().isNotEmpty;
     final payment = document.paymentStatus;
     return Card(
-      margin: const EdgeInsets.only(top: 8),
+      margin: const EdgeInsets.only(top: AppSpacing.sm),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
