@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/design_system/widgets/app_card.dart';
+import '../../../core/design_system/widgets/app_empty_state.dart';
 import '../../../core/widgets/anaf_company_autofill_section.dart';
 import '../../partners/partner_models.dart';
 import '../offer_models.dart';
@@ -900,11 +901,9 @@ mixin OffertaDetaliuPartnerMixin on State<OfertaDetaliuPage> {
 
   Widget buildPartnerSection() {
     if (offer.partners.isEmpty) {
-      return const Card(
-        child: Padding(
-          padding: EdgeInsets.all(12),
-          child: Text('Nu exista resurse partener adaugate.'),
-        ),
+      return const AppEmptyState(
+        icon: Icons.groups_outlined,
+        title: 'Nu exista resurse partener adaugate.',
       );
     }
 
