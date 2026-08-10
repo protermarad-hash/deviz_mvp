@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../../core/design_system/app_tokens.dart';
+import '../../../core/design_system/widgets/app_card.dart';
 import '../../../core/pdf_export_settings.dart';
 import '../offer_models.dart';
 import '../offer_pdf_service.dart';
@@ -31,58 +32,57 @@ mixin OffertaDetaliuPdfMixin on State<OfertaDetaliuPage> {
   }
 
   Widget buildPdfTemplateSelectorCard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Sablon PDF',
-              style: AppTypography.headingSmall(context),
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Sablon PDF',
+            style: AppTypography.headingSmall(context),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Selector rapid pentru generare, Save As si Share direct din aceasta oferta.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<PdfVisualTemplate>(
+            initialValue: selectedPdfTemplate,
+            decoration: const InputDecoration(
+              labelText: 'Model document',
+              border: OutlineInputBorder(),
+              isDense: true,
             ),
-            const SizedBox(height: 6),
-            Text(
-              'Selector rapid pentru generare, Save As si Share direct din aceasta oferta.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 10),
-            DropdownButtonFormField<PdfVisualTemplate>(
-              initialValue: selectedPdfTemplate,
-              decoration: const InputDecoration(
-                labelText: 'Model document',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: PdfVisualTemplate.values
-                  .map(
-                    (template) => DropdownMenuItem<PdfVisualTemplate>(
-                      value: template,
-                      child: Text(template.label),
-                    ),
-                  )
-                  .toList(growable: false),
-              onChanged: (saving || exportingPdf || converting)
-                  ? null
-                  : (value) {
-                      if (value == null) return;
-                      setState(() => selectedPdfTemplate = value);
-                    },
-            ),
-            const SizedBox(height: 6),
-            Text(
-              selectedPdfTemplate.description,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
+            items: PdfVisualTemplate.values
+                .map(
+                  (template) => DropdownMenuItem<PdfVisualTemplate>(
+                    value: template,
+                    child: Text(template.label),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: (saving || exportingPdf || converting)
+                ? null
+                : (value) {
+                    if (value == null) return;
+                    setState(() => selectedPdfTemplate = value);
+                  },
+          ),
+          const SizedBox(height: 6),
+          Text(
+            selectedPdfTemplate.description,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
       ),
     );
   }
 
   /// Șterge toate fișierele PDF vechi ale ofertei din același director ca [newPath].
   /// Fiecare generare creează un fișier cu timestamp unic — le curățăm pe cele vechi.
-  void cleanupOldOfferPdfs({required String newPath, required OfferRecord offer}) {
+  void cleanupOldOfferPdfs(
+      {required String newPath, required OfferRecord offer}) {
     if (newPath.isEmpty) return;
     try {
       final newFile = File(newPath);
@@ -96,9 +96,13 @@ mixin OffertaDetaliuPdfMixin on State<OfertaDetaliuPage> {
         if (name.startsWith(prefix) && name.endsWith('.pdf')) {
           try {
             entity.deleteSync();
-          } catch (_) {/* intenționat ignorat: ștergere best-effort PDF temporar vechi */}
+          } catch (_) {
+            /* intenționat ignorat: ștergere best-effort PDF temporar vechi */
+          }
         }
       }
-    } catch (_) {/* intenționat ignorat: curățare best-effort director PDF-uri vechi */}
+    } catch (_) {
+      /* intenționat ignorat: curățare best-effort director PDF-uri vechi */
+    }
   }
 }

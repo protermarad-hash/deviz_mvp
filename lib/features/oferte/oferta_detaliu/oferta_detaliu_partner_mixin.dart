@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/design_system/widgets/app_card.dart';
 import '../../../core/widgets/anaf_company_autofill_section.dart';
 import '../../partners/partner_models.dart';
 import '../offer_models.dart';
@@ -23,7 +24,6 @@ mixin OffertaDetaliuPartnerMixin on State<OfertaDetaliuPage> {
   List<PartnerVehicleRecord> _masterPartnerVehicles =
       const <PartnerVehicleRecord>[];
 
-
   Future<void> loadPartnerCatalog() async {
     final results = await Future.wait([
       widget.repository.listPartners(),
@@ -37,7 +37,6 @@ mixin OffertaDetaliuPartnerMixin on State<OfertaDetaliuPage> {
       _masterPartnerVehicles = results[2] as List<PartnerVehicleRecord>;
     });
   }
-
 
   List<OfferPartnerWorker> _partnerWorkersFor(String partnerId) {
     return offer.partnerWorkers
@@ -926,195 +925,192 @@ mixin OffertaDetaliuPartnerMixin on State<OfertaDetaliuPage> {
           ...workers.map((item) => item.currency),
           ...vehicles.map((item) => item.currency),
         ]);
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            partner.name,
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 6),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              if (partner.contactPerson.isNotEmpty)
-                                Chip(
-                                    label: Text(
-                                        'Contact: ${partner.contactPerson}')),
-                              if (partner.phone.isNotEmpty)
-                                Chip(label: Text('Telefon: ${partner.phone}')),
-                              if (partner.email.isNotEmpty)
-                                Chip(label: Text('Email: ${partner.email}')),
-                              Chip(
-                                label: Text(
-                                  'Total personal: ${_partnerWorkersTotalFor(partner.id).toStringAsFixed(2)} $workerCurrency',
-                                ),
-                              ),
-                              Chip(
-                                label: Text(
-                                  'Total autovehicule: ${_partnerVehiclesTotalFor(partner.id).toStringAsFixed(2)} $vehicleCurrency',
-                                ),
-                              ),
-                              Chip(
-                                label: Text(
-                                  'Total partener: ${_partnerTotalFor(partner.id).toStringAsFixed(2)} $totalCurrency',
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (partner.notes.isNotEmpty) ...[
-                            const SizedBox(height: 6),
-                            Text('Observatii: ${partner.notes}'),
-                          ],
-                        ],
-                      ),
-                    ),
-                    Wrap(
-                      spacing: 4,
+        return AppCard(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        IconButton(
-                          tooltip: 'Editeaza partener',
-                          onPressed: (saving || isFrozen)
-                              ? null
-                              : () => _editPartner(partner),
-                          icon: const Icon(Icons.edit_outlined),
+                        Text(
+                          partner.name,
+                          style: Theme.of(context).textTheme.titleMedium,
                         ),
-                        IconButton(
-                          tooltip: 'Șterge partener',
-                          onPressed: (saving || isFrozen)
-                              ? null
-                              : () => _deletePartner(partner),
-                          icon: const Icon(Icons.delete_outline),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (partner.contactPerson.isNotEmpty)
+                              Chip(
+                                  label: Text(
+                                      'Contact: ${partner.contactPerson}')),
+                            if (partner.phone.isNotEmpty)
+                              Chip(label: Text('Telefon: ${partner.phone}')),
+                            if (partner.email.isNotEmpty)
+                              Chip(label: Text('Email: ${partner.email}')),
+                            Chip(
+                              label: Text(
+                                'Total personal: ${_partnerWorkersTotalFor(partner.id).toStringAsFixed(2)} $workerCurrency',
+                              ),
+                            ),
+                            Chip(
+                              label: Text(
+                                'Total autovehicule: ${_partnerVehiclesTotalFor(partner.id).toStringAsFixed(2)} $vehicleCurrency',
+                              ),
+                            ),
+                            Chip(
+                              label: Text(
+                                'Total partener: ${_partnerTotalFor(partner.id).toStringAsFixed(2)} $totalCurrency',
+                              ),
+                            ),
+                          ],
                         ),
+                        if (partner.notes.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text('Observatii: ${partner.notes}'),
+                        ],
                       ],
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Text(
-                      'Personal partener',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: (saving || isFrozen)
-                          ? null
-                          : () => _addPartnerWorker(partner),
-                      icon: const Icon(Icons.person_add_alt_1_outlined),
-                      label: const Text('Adauga personal'),
-                    ),
-                  ],
-                ),
-                if (workers.isEmpty)
-                  const Text('Nu exista personal partener adaugat.')
-                else
-                  ...workers.map((worker) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(worker.fullName),
-                        subtitle: Text(
-                          [
-                            if (worker.role.isNotEmpty) 'Rol: ${worker.role}',
-                            'Ore: ${worker.hours.toStringAsFixed(2)}',
-                            'Tarif: ${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency}',
-                            'Total: ${worker.total.toStringAsFixed(2)} ${worker.currency}',
-                            if (worker.notes.isNotEmpty)
-                              'Observatii: ${worker.notes}',
-                          ].join(' • '),
-                        ),
-                        trailing: Wrap(
-                          spacing: 4,
-                          children: [
-                            IconButton(
-                              tooltip: 'Editeaza',
-                              onPressed: (saving || isFrozen)
-                                  ? null
-                                  : () => _editPartnerWorker(partner, worker),
-                              icon: const Icon(Icons.edit_outlined),
-                            ),
-                            IconButton(
-                              tooltip: 'Șterge',
-                              onPressed: (saving || isFrozen)
-                                  ? null
-                                  : () => _deletePartnerWorker(worker),
-                              icon: const Icon(Icons.delete_outline),
-                            ),
-                          ],
-                        ),
-                      )),
-                const Divider(height: 20),
-                Row(
-                  children: [
-                    Text(
-                      'Autovehicule partener',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: (saving || isFrozen)
-                          ? null
-                          : () => _addPartnerVehicle(partner),
-                      icon: const Icon(Icons.local_shipping_outlined),
-                      label: const Text('Adauga autovehicul'),
-                    ),
-                  ],
-                ),
-                if (vehicles.isEmpty)
-                  const Text('Nu exista autovehicule partener adaugate.')
-                else
-                  ...vehicles.map((vehicle) => ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(vehicle.vehicleName),
-                        subtitle: Text(
-                          [
-                            if (vehicle.registrationNumber.isNotEmpty)
-                              'Nr: ${vehicle.registrationNumber}',
-                            'Km: ${vehicle.km.toStringAsFixed(2)}',
-                            'Consum: ${vehicle.fuelConsumptionPer100Km.toStringAsFixed(2)} L/100 km',
-                            'Pret combustibil: ${vehicle.fuelPricePerLiter.toStringAsFixed(2)} ${vehicle.currency}',
-                            'Total: ${vehicle.total.toStringAsFixed(2)} ${vehicle.currency}',
-                            if (vehicle.notes.isNotEmpty)
-                              'Observatii: ${vehicle.notes}',
-                          ].join(' • '),
-                        ),
-                        trailing: Wrap(
-                          spacing: 4,
-                          children: [
-                            IconButton(
-                              tooltip: 'Editeaza',
-                              onPressed: (saving || isFrozen)
-                                  ? null
-                                  : () => _editPartnerVehicle(partner, vehicle),
-                              icon: const Icon(Icons.edit_outlined),
-                            ),
-                            IconButton(
-                              tooltip: 'Șterge',
-                              onPressed: (saving || isFrozen)
-                                  ? null
-                                  : () => _deletePartnerVehicle(vehicle),
-                              icon: const Icon(Icons.delete_outline),
-                            ),
-                          ],
-                        ),
-                      )),
-              ],
-            ),
+                  ),
+                  Wrap(
+                    spacing: 4,
+                    children: [
+                      IconButton(
+                        tooltip: 'Editeaza partener',
+                        onPressed: (saving || isFrozen)
+                            ? null
+                            : () => _editPartner(partner),
+                        icon: const Icon(Icons.edit_outlined),
+                      ),
+                      IconButton(
+                        tooltip: 'Șterge partener',
+                        onPressed: (saving || isFrozen)
+                            ? null
+                            : () => _deletePartner(partner),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Text(
+                    'Personal partener',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: (saving || isFrozen)
+                        ? null
+                        : () => _addPartnerWorker(partner),
+                    icon: const Icon(Icons.person_add_alt_1_outlined),
+                    label: const Text('Adauga personal'),
+                  ),
+                ],
+              ),
+              if (workers.isEmpty)
+                const Text('Nu exista personal partener adaugat.')
+              else
+                ...workers.map((worker) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(worker.fullName),
+                      subtitle: Text(
+                        [
+                          if (worker.role.isNotEmpty) 'Rol: ${worker.role}',
+                          'Ore: ${worker.hours.toStringAsFixed(2)}',
+                          'Tarif: ${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency}',
+                          'Total: ${worker.total.toStringAsFixed(2)} ${worker.currency}',
+                          if (worker.notes.isNotEmpty)
+                            'Observatii: ${worker.notes}',
+                        ].join(' • '),
+                      ),
+                      trailing: Wrap(
+                        spacing: 4,
+                        children: [
+                          IconButton(
+                            tooltip: 'Editeaza',
+                            onPressed: (saving || isFrozen)
+                                ? null
+                                : () => _editPartnerWorker(partner, worker),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                          IconButton(
+                            tooltip: 'Șterge',
+                            onPressed: (saving || isFrozen)
+                                ? null
+                                : () => _deletePartnerWorker(worker),
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        ],
+                      ),
+                    )),
+              const Divider(height: 20),
+              Row(
+                children: [
+                  Text(
+                    'Autovehicule partener',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: (saving || isFrozen)
+                        ? null
+                        : () => _addPartnerVehicle(partner),
+                    icon: const Icon(Icons.local_shipping_outlined),
+                    label: const Text('Adauga autovehicul'),
+                  ),
+                ],
+              ),
+              if (vehicles.isEmpty)
+                const Text('Nu exista autovehicule partener adaugate.')
+              else
+                ...vehicles.map((vehicle) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(vehicle.vehicleName),
+                      subtitle: Text(
+                        [
+                          if (vehicle.registrationNumber.isNotEmpty)
+                            'Nr: ${vehicle.registrationNumber}',
+                          'Km: ${vehicle.km.toStringAsFixed(2)}',
+                          'Consum: ${vehicle.fuelConsumptionPer100Km.toStringAsFixed(2)} L/100 km',
+                          'Pret combustibil: ${vehicle.fuelPricePerLiter.toStringAsFixed(2)} ${vehicle.currency}',
+                          'Total: ${vehicle.total.toStringAsFixed(2)} ${vehicle.currency}',
+                          if (vehicle.notes.isNotEmpty)
+                            'Observatii: ${vehicle.notes}',
+                        ].join(' • '),
+                      ),
+                      trailing: Wrap(
+                        spacing: 4,
+                        children: [
+                          IconButton(
+                            tooltip: 'Editeaza',
+                            onPressed: (saving || isFrozen)
+                                ? null
+                                : () => _editPartnerVehicle(partner, vehicle),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                          IconButton(
+                            tooltip: 'Șterge',
+                            onPressed: (saving || isFrozen)
+                                ? null
+                                : () => _deletePartnerVehicle(vehicle),
+                            icon: const Icon(Icons.delete_outline),
+                          ),
+                        ],
+                      ),
+                    )),
+            ],
           ),
         );
       },
     );
   }
-
 }

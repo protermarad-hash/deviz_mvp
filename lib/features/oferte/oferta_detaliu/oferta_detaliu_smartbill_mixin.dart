@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/company_profile.dart';
 import '../../../core/design_system/app_tokens.dart';
+import '../../../core/design_system/widgets/app_card.dart';
 import '../../../core/integrations/smartbill_service.dart';
 import '../../../core/integrations/smartbill_stock_cache_service.dart';
 import '../../../core/widgets/smartbill_bon_consum_dialog.dart';
@@ -301,120 +302,116 @@ mixin OffertaDetaliuSmartbillMixin on State<OfertaDetaliuPage> {
     final canOpenCloud = document.documentUrl.trim().isNotEmpty;
     final canOpenPublic = document.publicUrl.trim().isNotEmpty;
     final payment = document.paymentStatus;
-    return Card(
+    return AppCard(
       margin: const EdgeInsets.only(top: AppSpacing.sm),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            document.documentType.label,
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _smartBillDocumentCaption(document),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (payment.hasValues) ...[
+            const SizedBox(height: 6),
             Text(
-              document.documentType.label,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              _smartBillDocumentCaption(document),
+              'Total: ${payment.invoiceTotalAmount.toStringAsFixed(2)} • Incasat: ${payment.paidAmount.toStringAsFixed(2)} • Rest: ${payment.unpaidAmount.toStringAsFixed(2)}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            if (payment.hasValues) ...[
-              const SizedBox(height: 6),
-              Text(
-                'Total: ${payment.invoiceTotalAmount.toStringAsFixed(2)} • Incasat: ${payment.paidAmount.toStringAsFixed(2)} • Rest: ${payment.unpaidAmount.toStringAsFixed(2)}',
-                style: Theme.of(context).textTheme.bodySmall,
+          ],
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: canOpenView
+                    ? () => _openExternalSmartBillUrl(
+                          document.documentViewUrl,
+                          document.documentType.label,
+                        )
+                    : null,
+                icon: const Icon(Icons.open_in_new_outlined),
+                label: const Text('Deschide document'),
+              ),
+              OutlinedButton.icon(
+                onPressed: canOpenCloud
+                    ? () => _openExternalSmartBillUrl(
+                          document.documentUrl,
+                          'document cloud',
+                        )
+                    : null,
+                icon: const Icon(Icons.cloud_outlined),
+                label: const Text('Cloud'),
+              ),
+              OutlinedButton.icon(
+                onPressed: canOpenPublic
+                    ? () => _openExternalSmartBillUrl(
+                          document.publicUrl,
+                          'link public',
+                        )
+                    : null,
+                icon: const Icon(Icons.link_outlined),
+                label: const Text('Link public'),
               ),
             ],
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: canOpenView
-                      ? () => _openExternalSmartBillUrl(
-                            document.documentViewUrl,
-                            document.documentType.label,
-                          )
-                      : null,
-                  icon: const Icon(Icons.open_in_new_outlined),
-                  label: const Text('Deschide document'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: canOpenCloud
-                      ? () => _openExternalSmartBillUrl(
-                            document.documentUrl,
-                            'document cloud',
-                          )
-                      : null,
-                  icon: const Icon(Icons.cloud_outlined),
-                  label: const Text('Cloud'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: canOpenPublic
-                      ? () => _openExternalSmartBillUrl(
-                            document.publicUrl,
-                            'link public',
-                          )
-                      : null,
-                  icon: const Icon(Icons.link_outlined),
-                  label: const Text('Link public'),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
   Widget buildSmartBillSection() {
     final billingClient = _resolveSmartBillBillingClient();
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'SmartBill',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              billingClient == null
-                  ? 'Clientul comercial nu a fost gasit in nomenclator. Emiterea SmartBill va cere un client complet configurat.'
-                  : 'Client comercial pentru emitere: ${billingClient.name}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.icon(
-                  onPressed: _smartBillSyncing ? null : _issueSmartBillEstimate,
-                  icon: const Icon(Icons.receipt_long_outlined),
-                  label: const Text('Emite proforma'),
-                ),
-                FilledButton.tonalIcon(
-                  onPressed: _smartBillSyncing ? null : _issueSmartBillInvoice,
-                  icon: const Icon(Icons.request_quote_outlined),
-                  label: const Text('Emite factura'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: (_smartBillRefreshingStatus ||
-                          !offer.smartBillInvoice.hasDocument)
-                      ? null
-                      : _refreshSmartBillInvoiceStatus,
-                  icon: const Icon(Icons.sync_outlined),
-                  label: const Text('Actualizeaza status'),
-                ),
-              ],
-            ),
-            _buildSmartBillDocumentTile(offer.smartBillEstimate),
-            _buildSmartBillDocumentTile(offer.smartBillInvoice),
-          ],
-        ),
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'SmartBill',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            billingClient == null
+                ? 'Clientul comercial nu a fost gasit in nomenclator. Emiterea SmartBill va cere un client complet configurat.'
+                : 'Client comercial pentru emitere: ${billingClient.name}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: _smartBillSyncing ? null : _issueSmartBillEstimate,
+                icon: const Icon(Icons.receipt_long_outlined),
+                label: const Text('Emite proforma'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _smartBillSyncing ? null : _issueSmartBillInvoice,
+                icon: const Icon(Icons.request_quote_outlined),
+                label: const Text('Emite factura'),
+              ),
+              OutlinedButton.icon(
+                onPressed: (_smartBillRefreshingStatus ||
+                        !offer.smartBillInvoice.hasDocument)
+                    ? null
+                    : _refreshSmartBillInvoiceStatus,
+                icon: const Icon(Icons.sync_outlined),
+                label: const Text('Actualizeaza status'),
+              ),
+            ],
+          ),
+          _buildSmartBillDocumentTile(offer.smartBillEstimate),
+          _buildSmartBillDocumentTile(offer.smartBillInvoice),
+        ],
       ),
     );
   }

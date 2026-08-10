@@ -11,6 +11,7 @@ import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import '../../core/design_system/app_tokens.dart';
+import '../../core/design_system/widgets/app_card.dart';
 import '../../core/widgets/adaptive_side_panel_layout.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../ai_assistant/ai_assistant_service.dart';
@@ -96,6 +97,7 @@ class OfertePage extends StatefulWidget {
   final bool autoCloseAfterDraftSave;
   final String initialFocusOfferId;
   final Future<void> Function(OfferRecord offer)? onOfferSaved;
+
   /// Când e true, AppBar-ul nu se afișează (folosit în tab-ul din OferteDevizeModulPage)
   final bool hideAppBar;
 
@@ -141,7 +143,8 @@ class _OfertePageState extends State<OfertePage>
   List<OfferCommercialPackageTemplate> _packageTemplates =
       const <OfferCommercialPackageTemplate>[];
   OfferStatus? _statusFilter;
-  String _tipOfertaFilter = 'toate'; // 'toate' | 'oferta_lucrari' | 'deviz_tehnic' | 'mini_oferta' | 'deviz_filtre'
+  String _tipOfertaFilter =
+      'toate'; // 'toate' | 'oferta_lucrari' | 'deviz_tehnic' | 'mini_oferta' | 'deviz_filtre'
   String? _clientFilter;
   OferteCloudRepository? _cloudRepository;
   LucrariCloudRepository? _lucrariCloudRepository;
@@ -181,7 +184,8 @@ class _OfertePageState extends State<OfertePage>
     _loadOfferDefaults();
     _loadFilterPreferences();
     // Ascultă modificările de clienți din orice altă pagină (ex: modul Clienți)
-    LocalAppDataRepository.clientsChangeCount.addListener(_handleClientsChanged);
+    LocalAppDataRepository.clientsChangeCount
+        .addListener(_handleClientsChanged);
     Future.microtask(_load);
   }
 
@@ -254,7 +258,8 @@ class _OfertePageState extends State<OfertePage>
     _tabController
       ..removeListener(_handleTabChanged)
       ..dispose();
-    LocalAppDataRepository.clientsChangeCount.removeListener(_handleClientsChanged);
+    LocalAppDataRepository.clientsChangeCount
+        .removeListener(_handleClientsChanged);
     _clientsReloadDebounce?.cancel();
     _preferencesDebounce?.cancel();
     _offersSubscription?.cancel();
@@ -759,10 +764,10 @@ class _OfertePageState extends State<OfertePage>
 
   Widget _buildTipOfertaBadge(String tipOferta) {
     final (label, color) = switch (tipOferta) {
-      'deviz_tehnic'  => ('Deviz tehnic', Colors.purple),
-      'mini_oferta'   => ('Mini ofertă', Colors.orange),
-      'deviz_filtre'  => ('Filtre CTA', Colors.teal),
-      _               => ('Ofertă', Colors.blue),
+      'deviz_tehnic' => ('Deviz tehnic', Colors.purple),
+      'mini_oferta' => ('Mini ofertă', Colors.orange),
+      'deviz_filtre' => ('Filtre CTA', Colors.teal),
+      _ => ('Ofertă', Colors.blue),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -773,8 +778,8 @@ class _OfertePageState extends State<OfertePage>
       ),
       child: Text(
         label,
-        style: TextStyle(
-            fontSize: 10, color: color, fontWeight: FontWeight.w500),
+        style:
+            TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w500),
       ),
     );
   }
@@ -925,7 +930,8 @@ class _OfertePageState extends State<OfertePage>
 
     final range = _analysisDateRange();
     if (range != null) {
-      final start = DateTime(range.start.year, range.start.month, range.start.day);
+      final start =
+          DateTime(range.start.year, range.start.month, range.start.day);
       final end = DateTime(
         range.end.year,
         range.end.month,
@@ -935,12 +941,14 @@ class _OfertePageState extends State<OfertePage>
         59,
       );
       items = items.where(
-        (item) => !item.issueDate.isBefore(start) && !item.issueDate.isAfter(end),
+        (item) =>
+            !item.issueDate.isBefore(start) && !item.issueDate.isAfter(end),
       );
     }
 
     if (_analysisTipFilter != 'toate') {
-      items = items.where((item) => item.tipDocument.value == _analysisTipFilter);
+      items =
+          items.where((item) => item.tipDocument.value == _analysisTipFilter);
     }
 
     final clientQuery = _analysisSearchClient.trim().toLowerCase();
@@ -952,8 +960,9 @@ class _OfertePageState extends State<OfertePage>
 
     final filtered = items.toList(growable: false)
       ..sort((a, b) => b.issueDate.compareTo(a.issueDate));
-    _selectedIds =
-        _selectedIds.where((id) => filtered.any((item) => item.id == id)).toSet();
+    _selectedIds = _selectedIds
+        .where((id) => filtered.any((item) => item.id == id))
+        .toSet();
     return filtered;
   }
 
@@ -1373,20 +1382,18 @@ class _OfertePageState extends State<OfertePage>
           .asMap()
           .entries
           .map((entry) {
-            final l = entry.value;
-            return JobLine.fromOfertaLine(
-              id: '',
-              ofertaLineId: l.id,
-              denumire: l.name,
-              um: l.unit,
-              cantitate: l.quantity,
-              pretUnitar: l.unitPrice,
-              categorie: l.lineType == OfferLineType.manopera
-                  ? 'manopera'
-                  : 'material',
-            );
-          })
-          .toList(growable: false),
+        final l = entry.value;
+        return JobLine.fromOfertaLine(
+          id: '',
+          ofertaLineId: l.id,
+          denumire: l.name,
+          um: l.unit,
+          cantitate: l.quantity,
+          pretUnitar: l.unitPrice,
+          categorie:
+              l.lineType == OfferLineType.manopera ? 'manopera' : 'material',
+        );
+      }).toList(growable: false),
       totalOferta: _displayedOfferTotal(offer),
     );
 
@@ -1634,10 +1641,14 @@ class _OfertePageState extends State<OfertePage>
             decoration: const InputDecoration(labelText: 'Tip document'),
             items: const [
               DropdownMenuItem(value: 'toate', child: Text('Toate tipurile')),
-              DropdownMenuItem(value: 'oferta_lucrari', child: Text('Ofertă lucrări')),
-              DropdownMenuItem(value: 'deviz_tehnic', child: Text('Deviz tehnic')),
-              DropdownMenuItem(value: 'mini_oferta', child: Text('Mini ofertă')),
-              DropdownMenuItem(value: 'deviz_filtre', child: Text('Filtre CTA')),
+              DropdownMenuItem(
+                  value: 'oferta_lucrari', child: Text('Ofertă lucrări')),
+              DropdownMenuItem(
+                  value: 'deviz_tehnic', child: Text('Deviz tehnic')),
+              DropdownMenuItem(
+                  value: 'mini_oferta', child: Text('Mini ofertă')),
+              DropdownMenuItem(
+                  value: 'deviz_filtre', child: Text('Filtre CTA')),
             ],
             onChanged: (v) => setState(() => _tipOfertaFilter = v ?? 'toate'),
           ),
@@ -1801,10 +1812,11 @@ class _OfertePageState extends State<OfertePage>
   Widget _buildStatusDistributionTable(List<OfferRecord> offers) {
     final rows = OfferStatus.values
         .map((status) {
-          final matches = offers.where((item) => item.status == status).toList();
+          final matches =
+              offers.where((item) => item.status == status).toList();
           final count = matches.length;
-          final withoutVat =
-              matches.fold<double>(0, (sum, item) => sum + item.subtotalComercial);
+          final withoutVat = matches.fold<double>(
+              0, (sum, item) => sum + item.subtotalComercial);
           final percentage = offers.isEmpty ? 0.0 : count / offers.length * 100;
           return (
             status: status,
@@ -1990,7 +2002,8 @@ class _OfertePageState extends State<OfertePage>
                   width: 220,
                   child: DropdownButtonFormField<String>(
                     initialValue: _analysisTipFilter,
-                    decoration: const InputDecoration(labelText: 'Tip document'),
+                    decoration:
+                        const InputDecoration(labelText: 'Tip document'),
                     items: [
                       const DropdownMenuItem(
                         value: 'toate',
@@ -2047,7 +2060,8 @@ class _OfertePageState extends State<OfertePage>
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
           border: Border(
-            top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+            top:
+                BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
           ),
           boxShadow: const [
             BoxShadow(
@@ -2085,7 +2099,8 @@ class _OfertePageState extends State<OfertePage>
   Widget _buildAnalysisTab() {
     final items = _analysisFilteredItems;
     final grouped = _groupByClient(items);
-    final totalValue = items.fold<double>(0, (sum, item) => sum + item.totalValue);
+    final totalValue =
+        items.fold<double>(0, (sum, item) => sum + item.totalValue);
     final acceptedValue = items
         .where((item) => item.status == OfferStatus.accepted)
         .fold<double>(0, (sum, item) => sum + item.totalValue);
@@ -2181,8 +2196,10 @@ class _OfertePageState extends State<OfertePage>
           ...grouped.entries.map((entry) {
             final clientName = entry.key;
             final offers = entry.value;
-            final allSelected = offers.every((item) => _selectedIds.contains(item.id));
-            final groupTotal = offers.fold<double>(0, (sum, item) => sum + item.totalValue);
+            final allSelected =
+                offers.every((item) => _selectedIds.contains(item.id));
+            final groupTotal =
+                offers.fold<double>(0, (sum, item) => sum + item.totalValue);
             return Card(
               margin: const EdgeInsets.only(bottom: 12),
               child: ExpansionTile(
@@ -2307,8 +2324,7 @@ class _OfertePageState extends State<OfertePage>
                     ? Center(child: Text(_emptyStateMessage()))
                     : ListView.separated(
                         itemCount: items.length,
-                        separatorBuilder: (_, __) =>
-                            const SizedBox(height: 10),
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
                           final item = items[index];
                           final statusColor = _offerStatusColor(item);
@@ -2403,219 +2419,210 @@ class _OfertePageState extends State<OfertePage>
     final contact = _resolveContactLabel(item);
     final job = _resolveJobLabel(item);
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: statusColor.withValues(alpha: 0.55), width: 1.5),
-      ),
-      child: InkWell(
-        onTap: () => _openDetails(item),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(left: BorderSide(color: statusColor, width: 5)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Rând 1: număr + titlu + meniu acțiuni ──────────────────
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '${item.offerNumber}${item.title.trim().isNotEmpty ? ' — ${item.title.trim()}' : ''}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                        maxLines: 2,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    // Meniu compact ⋮ — toate acțiunile în popup
-                    SizedBox(
-                      width: 36,
-                      height: 36,
-                      child: PopupMenuButton<String>(
-                        padding: EdgeInsets.zero,
-                        icon: const Icon(Icons.more_vert, size: 20),
-                        tooltip: 'Acțiuni',
-                        onSelected: (value) {
-                          switch (value) {
-                            case 'open':
-                              _openDetails(item);
-                            case 'edit':
-                              _openEditor(existing: item);
-                            case 'duplicate':
-                              _duplicateOffer(item);
-                            case 'convert':
-                              _convertOfferToJob(item);
-                            case 'open_job':
-                              _openConvertedJob(item);
-                            case 'delete':
-                              _deleteOffer(item);
-                          }
-                        },
-                        itemBuilder: (context) => [
-                          const PopupMenuItem(
-                            value: 'open',
-                            child: ListTile(
-                              leading: Icon(Icons.visibility_outlined),
-                              title: Text('Deschide detaliu'),
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                            ),
-                          ),
-                          if (item.isConverted)
-                            const PopupMenuItem(
-                              value: 'open_job',
-                              child: ListTile(
-                                leading: Icon(Icons.open_in_new_outlined),
-                                title: Text('Deschide lucrarea'),
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                            )
-                          else ...[
-                            const PopupMenuItem(
-                              value: 'edit',
-                              child: ListTile(
-                                leading: Icon(Icons.edit_outlined),
-                                title: Text('Editează'),
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                            ),
-                            const PopupMenuItem(
-                              value: 'duplicate',
-                              child: ListTile(
-                                leading: Icon(Icons.content_copy_outlined),
-                                title: Text('Duplică'),
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                            ),
-                            if (item.status == OfferStatus.accepted)
-                              const PopupMenuItem(
-                                value: 'convert',
-                                child: ListTile(
-                                  leading: Icon(Icons.published_with_changes_outlined),
-                                  title: Text('Convertește în lucrare'),
-                                  dense: true,
-                                  contentPadding: EdgeInsets.zero,
-                                ),
-                              ),
-                            const PopupMenuItem(
-                              value: 'delete',
-                              child: ListTile(
-                                leading: Icon(Icons.delete_outline, color: Colors.red),
-                                title: Text('Șterge', style: TextStyle(color: Colors.red)),
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
+    return AppCard(
+      elevated: true,
+      accentColor: statusColor,
+      onTap: () => _openDetails(item),
+      padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Rând 1: număr + titlu + meniu acțiuni ──────────────────
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  '${item.offerNumber}${item.title.trim().isNotEmpty ? ' — ${item.title.trim()}' : ''}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
                 ),
-                const SizedBox(height: 6),
-                // ── Rând 2: client ───────────────────────────────────────
-                if (clientName.isNotEmpty) ...[
-                  Row(
-                    children: [
-                      const Icon(Icons.person_outline, size: 13),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          clientName,
-                          style: const TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
+              ),
+              const SizedBox(width: 4),
+              // Meniu compact ⋮ — toate acțiunile în popup
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: PopupMenuButton<String>(
+                  padding: EdgeInsets.zero,
+                  icon: const Icon(Icons.more_vert, size: 20),
+                  tooltip: 'Acțiuni',
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'open':
+                        _openDetails(item);
+                      case 'edit':
+                        _openEditor(existing: item);
+                      case 'duplicate':
+                        _duplicateOffer(item);
+                      case 'convert':
+                        _convertOfferToJob(item);
+                      case 'open_job':
+                        _openConvertedJob(item);
+                      case 'delete':
+                        _deleteOffer(item);
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'open',
+                      child: ListTile(
+                        leading: Icon(Icons.visibility_outlined),
+                        title: Text('Deschide detaliu'),
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                    if (item.isConverted)
+                      const PopupMenuItem(
+                        value: 'open_job',
+                        child: ListTile(
+                          leading: Icon(Icons.open_in_new_outlined),
+                          title: Text('Deschide lucrarea'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      )
+                    else ...[
+                      const PopupMenuItem(
+                        value: 'edit',
+                        child: ListTile(
+                          leading: Icon(Icons.edit_outlined),
+                          title: Text('Editează'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: 'duplicate',
+                        child: ListTile(
+                          leading: Icon(Icons.content_copy_outlined),
+                          title: Text('Duplică'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                      if (item.status == OfferStatus.accepted)
+                        const PopupMenuItem(
+                          value: 'convert',
+                          child: ListTile(
+                            leading:
+                                Icon(Icons.published_with_changes_outlined),
+                            title: Text('Convertește în lucrare'),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: ListTile(
+                          leading:
+                              Icon(Icons.delete_outline, color: Colors.red),
+                          title: Text('Șterge',
+                              style: TextStyle(color: Colors.red)),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
                         ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 2),
-                ],
-                // ── Rând 3: departament + contact (dacă există) ───────────
-                if (dept != '-' || contact != '-') ...[
-                  Text(
-                    [
-                      if (dept != '-') 'Dept: $dept',
-                      if (contact != '-') 'Contact: $contact',
-                    ].join(' • '),
-                    style: const TextStyle(fontSize: 11),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                  ),
-                  const SizedBox(height: 2),
-                ],
-                // ── Rând 4: lucrare (dacă există) ─────────────────────────
-                if (job != '-') ...[
-                  Text(
-                    'Lucrare: $job',
-                    style: const TextStyle(fontSize: 11),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
-                  ),
-                  const SizedBox(height: 2),
-                ],
-                // ── Rând 5: date + preț ───────────────────────────────────
-                Text(
-                  '${_formatDate(item.issueDate)} → ${_formatDate(item.validUntil)}  •  ${_offerPriceSummary(item)}',
-                  style: const TextStyle(fontSize: 11),
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                ),
-                const SizedBox(height: 6),
-                // ── Rând 6: status + expirare + meniu status rapid ─────────
-                Row(
-                  children: [
-                    _buildOfferStatusChip(item),
-                    const SizedBox(width: 6),
-                    _buildExpiryChip(item),
-                    const SizedBox(width: 6),
-                    if (item.tipOferta != 'oferta_lucrari')
-                      _buildTipOfertaBadge(item.tipOferta),
-                    const Spacer(),
-                    _buildOfferStatusMenu(item),
                   ],
                 ),
-                // ── Registratură / reclamație (dacă există) ───────────────
-                if (item.registryNumber.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Reg: ${item.registryNumber}',
-                    style: const TextStyle(fontSize: 11),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-                if (item.complaintId.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Reclamație: ${item.complaintNumber.trim().isEmpty ? item.complaintId.trim() : item.complaintNumber.trim()}',
-                    style: const TextStyle(fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // ── Rând 2: client ───────────────────────────────────────
+          if (clientName.isNotEmpty) ...[
+            Row(
+              children: [
+                const Icon(Icons.person_outline, size: 13),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    clientName,
+                    style: const TextStyle(fontSize: 12),
                     overflow: TextOverflow.ellipsis,
                     maxLines: 1,
                   ),
-                ],
-                if (item.isConverted) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Convertit în lucrare',
-                    style: TextStyle(fontSize: 11, color: Colors.green.shade700),
-                  ),
-                ],
+                ),
               ],
             ),
+            const SizedBox(height: 2),
+          ],
+          // ── Rând 3: departament + contact (dacă există) ───────────
+          if (dept != '-' || contact != '-') ...[
+            Text(
+              [
+                if (dept != '-') 'Dept: $dept',
+                if (contact != '-') 'Contact: $contact',
+              ].join(' • '),
+              style: const TextStyle(fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+            const SizedBox(height: 2),
+          ],
+          // ── Rând 4: lucrare (dacă există) ─────────────────────────
+          if (job != '-') ...[
+            Text(
+              'Lucrare: $job',
+              style: const TextStyle(fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+            const SizedBox(height: 2),
+          ],
+          // ── Rând 5: date + preț ───────────────────────────────────
+          Text(
+            '${_formatDate(item.issueDate)} → ${_formatDate(item.validUntil)}  •  ${_offerPriceSummary(item)}',
+            style: const TextStyle(fontSize: 11),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
           ),
-        ),
+          const SizedBox(height: 6),
+          // ── Rând 6: status + expirare + meniu status rapid ─────────
+          Row(
+            children: [
+              _buildOfferStatusChip(item),
+              const SizedBox(width: 6),
+              _buildExpiryChip(item),
+              const SizedBox(width: 6),
+              if (item.tipOferta != 'oferta_lucrari')
+                _buildTipOfertaBadge(item.tipOferta),
+              const Spacer(),
+              _buildOfferStatusMenu(item),
+            ],
+          ),
+          // ── Registratură / reclamație (dacă există) ───────────────
+          if (item.registryNumber.trim().isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Reg: ${item.registryNumber}',
+              style: const TextStyle(fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          if (item.complaintId.trim().isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Reclamație: ${item.complaintNumber.trim().isEmpty ? item.complaintId.trim() : item.complaintNumber.trim()}',
+              style: const TextStyle(fontSize: 11),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ],
+          if (item.isConverted) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Convertit în lucrare',
+              style: TextStyle(fontSize: 11, color: Colors.green.shade700),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -2626,6 +2633,3 @@ class _OfertePageState extends State<OfertePage>
     return exists ? _clientFilter : null;
   }
 }
-
-
-

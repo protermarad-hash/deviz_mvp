@@ -14,6 +14,7 @@ import '../../core/pdf_document_branding.dart';
 import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/design_system/app_tokens.dart';
+import '../../core/design_system/widgets/app_card.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../clients/client_models.dart';
 import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
@@ -132,21 +133,17 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     loadSmartBillStock();
   }
 
-
-
   PdfVisualTemplate _resolvedPdfTemplate(CompanyProfile profile) {
     return pdfTemplateLoaded
         ? selectedPdfTemplate
         : profile.pdfExportSettings.visualTemplate;
   }
 
-
   Future<void> _loadLaborResources() async {
     final catalog = await _laborResourcesService.load();
     if (!mounted) return;
     setState(() => _laborResourcesCatalog = catalog);
   }
-
 
   String _laborResourceSummary(OfferLineItem line) {
     String section(
@@ -493,7 +490,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     return offer.status.label;
   }
 
-
   /// Automatically updates offer status to [OfferStatus.sent] if it is still
   /// in draft state, so the user doesn't have to change it manually.
   Future<void> _markOfferAsSentIfDraft() async {
@@ -508,10 +504,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     }
   }
 
-
   String _commercialLineSubtitle(OfferLineItem sourceLine, OfferLineItem line) {
-    final buffer = StringBuffer()
-      ..writeln('Tip: ${line.lineType.label}');
+    final buffer = StringBuffer()..writeln('Tip: ${line.lineType.label}');
     // Descrierea dată de utilizator — dacă e goală, nu afișăm nimic
     if (sourceLine.description.trim().isNotEmpty) {
       buffer.writeln(sourceLine.description.trim());
@@ -625,7 +619,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
     }
     return null;
   }
-
 
   AiAssistantRuntimeContext _buildOfferAiContext() {
     final client = _findOfferClient();
@@ -780,7 +773,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
                             Expanded(
                               flex: 5,
                               child: TextFormField(
-                                textCapitalization: TextCapitalization.sentences,
+                                textCapitalization:
+                                    TextCapitalization.sentences,
                                 controller: names[i],
                                 decoration: const InputDecoration(
                                   isDense: true,
@@ -810,7 +804,8 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
                             SizedBox(
                               width: 60,
                               child: TextFormField(
-                                textCapitalization: TextCapitalization.sentences,
+                                textCapitalization:
+                                    TextCapitalization.sentences,
                                 controller: units[i],
                                 decoration: const InputDecoration(
                                   isDense: true,
@@ -1008,7 +1003,6 @@ class _OfertaDetaliuPageState extends State<OfertaDetaliuPage>
       ),
     );
   }
-
 
   Future<void> _openEmailDialog() async {
     if (isFrozen) {
@@ -1449,7 +1443,9 @@ if (Test-Path \$attachment) {
         'notification_email_attachments/oferte/$safeEntity/${now}_$normalizedFileName';
     try {
       await FirebaseAuth.instance.currentUser?.getIdToken(true);
-    } catch (_) {/* intenționat ignorat: refresh token best-effort înainte de upload */}
+    } catch (_) {
+      /* intenționat ignorat: refresh token best-effort înainte de upload */
+    }
     final ref = FirebaseStorage.instance.ref().child(path);
     try {
       await ref.putData(
@@ -1618,9 +1614,8 @@ if (Test-Path \$attachment) {
         try {
           final entry = await _registryService.registerOffer(
             offerId: offer.id,
-            documentNumber: offer.offerNumber.trim().isEmpty
-                ? offer.id
-                : offer.offerNumber,
+            documentNumber:
+                offer.offerNumber.trim().isEmpty ? offer.id : offer.offerNumber,
             title: offer.title.trim().isEmpty
                 ? 'Oferta client ${offer.offerNumber}'
                 : offer.title.trim(),
@@ -1672,7 +1667,6 @@ if (Test-Path \$attachment) {
       }
     }
   }
-
 
   Future<void> _showGeneratedPdfActions(String filePath) async {
     if (!mounted) return;
@@ -2134,13 +2128,11 @@ if (Test-Path \$attachment) {
     // Prețul s-a schimbat — întreabă utilizatorul
     if (!mounted) return;
     final lines = <String>[];
-    if (isMaterial &&
-        (newMat - existing.pretUnitarMat).abs() > 0.005) {
+    if (isMaterial && (newMat - existing.pretUnitarMat).abs() > 0.005) {
       lines.add(
           'Mat: ${existing.pretUnitarMat.toStringAsFixed(2)} → ${newMat.toStringAsFixed(2)} RON');
     }
-    if (isStandardLabor &&
-        (newMan - existing.pretUnitarMan).abs() > 0.005) {
+    if (isStandardLabor && (newMan - existing.pretUnitarMan).abs() > 0.005) {
       lines.add(
           'Man: ${existing.pretUnitarMan.toStringAsFixed(2)} → ${newMan.toStringAsFixed(2)} RON');
     }
@@ -2154,8 +2146,8 @@ if (Test-Path \$attachment) {
           children: [
             const Text('Prețul s-a schimbat față de ultima utilizare:'),
             const SizedBox(height: 8),
-            ...lines.map((l) => Text(l,
-                style: const TextStyle(fontWeight: FontWeight.w600))),
+            ...lines.map((l) =>
+                Text(l, style: const TextStyle(fontWeight: FontWeight.w600))),
           ],
         ),
         actions: [
@@ -2176,13 +2168,9 @@ if (Test-Path \$attachment) {
         : existing.catalogProductId;
     final toSave = shouldUpdate == true
         ? existing.copyWith(
-            um: line.unit.trim().isNotEmpty
-                ? line.unit.trim()
-                : existing.um,
-            pretUnitarMat:
-                isMaterial ? newMat : existing.pretUnitarMat,
-            pretUnitarMan:
-                isStandardLabor ? newMan : existing.pretUnitarMan,
+            um: line.unit.trim().isNotEmpty ? line.unit.trim() : existing.um,
+            pretUnitarMat: isMaterial ? newMat : existing.pretUnitarMat,
+            pretUnitarMan: isStandardLabor ? newMan : existing.pretUnitarMan,
             lastUpdated: DateTime.now(),
             folositDeCateOri: existing.folositDeCateOri + 1,
             catalogProductId: resolvedCatalogId,
@@ -2226,7 +2214,6 @@ if (Test-Path \$attachment) {
     final next = _offerWithUpdatedLines(remaining);
     await persistOffer(next);
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -2428,30 +2415,31 @@ if (Test-Path \$attachment) {
                 ),
             ],
           ),
-          Builder(builder: (ctx) => IconButton(
-            icon: const Icon(Icons.help_outline),
-            tooltip: 'Ajutor Ofertă',
-            onPressed: () => showDialog<void>(
-              context: ctx,
-              builder: (_) => AlertDialog(
-                title: const Text('Detaliu ofertă'),
-                content: const Text(
-                  '• Vizualizare și gestionare ofertă comercială\n'
-                  '• Buton + (FAB): adaugă poziție nouă\n'
-                  '• Meniu ⋮: editare antet, export PDF, duplicare\n'
-                  '• Status: Draft → Trimis → Acceptat/Respins\n'
-                  '• Convertire la Lucrare la status Acceptat\n'
-                  '• Semnătură electronică pentru acceptare',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('OK'),
-                  ),
-                ],
-              ),
-            ),
-          )),
+          Builder(
+              builder: (ctx) => IconButton(
+                    icon: const Icon(Icons.help_outline),
+                    tooltip: 'Ajutor Ofertă',
+                    onPressed: () => showDialog<void>(
+                      context: ctx,
+                      builder: (_) => AlertDialog(
+                        title: const Text('Detaliu ofertă'),
+                        content: const Text(
+                          '• Vizualizare și gestionare ofertă comercială\n'
+                          '• Buton + (FAB): adaugă poziție nouă\n'
+                          '• Meniu ⋮: editare antet, export PDF, duplicare\n'
+                          '• Status: Draft → Trimis → Acceptat/Respins\n'
+                          '• Convertire la Lucrare la status Acceptat\n'
+                          '• Semnătură electronică pentru acceptare',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('OK'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -2464,421 +2452,407 @@ if (Test-Path \$attachment) {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 8,
-                      children: [
-                        Chip(
-                          label: Text(
-                            offer.isConverted
-                                ? 'Status: Convertită'
-                                : 'Status: ${offer.status.label}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                            ),
-                          ),
-                          backgroundColor: _statusChipColor(offer),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        Chip(
-                          label: Text(
-                            offer.registryNumber.trim().isEmpty
-                                ? 'Neînregistrată'
-                                : 'Registratură: ${offer.registryNumber.trim()}',
-                            style: TextStyle(
-                              color: offer.registryNumber.trim().isEmpty
-                                  ? Colors.orange.shade900
-                                  : Colors.green.shade900,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                            ),
-                          ),
-                          backgroundColor: offer.registryNumber.trim().isEmpty
-                              ? Colors.orange.shade100
-                              : Colors.green.shade100,
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ],
-                    ),
-                    if (!offer.isConverted) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        'Status rapid',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: OfferStatus.values.map((status) {
-                          final selected = offer.status == status;
-                          final chipColor =
-                              _statusChipColor(offer.copyWith(status: status));
-                          return ChoiceChip(
-                            label: Text(
-                              status.label,
-                              style: TextStyle(
-                                color: selected ? Colors.white : chipColor,
-                                fontWeight: selected
-                                    ? FontWeight.w600
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                            selected: selected,
-                            selectedColor: chipColor,
-                            side: BorderSide(color: chipColor, width: 1.2),
-                            onSelected: (saving || isFrozen || selected)
-                                ? null
-                                : (_) => _changeOfferStatus(status),
-                          );
-                        }).toList(growable: false),
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          FilledButton.icon(
-                            onPressed: (saving || isFrozen)
-                                ? null
-                                : _openEmailDialog,
-                            icon: const Icon(Icons.email_outlined),
-                            label: const Text('Trimite oferta'),
-                          ),
-                        ],
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    buildPdfTemplateSelectorCard(),
-                    const SizedBox(height: 12),
-                    buildSmartBillSection(),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 8,
-                      children: [
-                        _kv('Numar oferta', offer.offerNumber),
-                        _kv('Titlu', offer.title),
-                        _kv('Client', _resolveClientName()),
-                        // Card detalii identificare client
-                        if (_findOfferClient() != null)
-                          SizedBox(
-                            width: double.infinity,
-                            child: ClientInfoCard(
-                              client: _findOfferClient()!,
-                              compact: true,
-                              showTitle: false,
-                            ),
-                          ),
-                        if (offer.commercialRecipientName.trim().isNotEmpty)
-                          _kv(
-                            'Destinatar comercial / platitor',
-                            offer.commercialRecipientName.trim(),
-                          ),
-                        if (offer.beneficiaryName.trim().isNotEmpty)
-                          _kv('Beneficiar real', offer.beneficiaryName.trim()),
-                        _kv(
-                          'Departament',
-                          offer.departmentName.trim().isEmpty
-                              ? '-'
-                              : offer.departmentName.trim(),
-                        ),
-                        _kv(
-                          'Persoana de contact',
-                          offer.contactPersonName.trim().isEmpty
-                              ? '-'
-                              : offer.contactPersonName.trim(),
-                        ),
-                        _kv(
-                          'Contact email',
-                          offer.contactPersonEmail.trim().isEmpty
-                              ? '-'
-                              : offer.contactPersonEmail.trim(),
-                        ),
-                        _kv(
-                          'Contact telefon',
-                          offer.contactPersonPhone.trim().isEmpty
-                              ? '-'
-                              : offer.contactPersonPhone.trim(),
-                        ),
-                        _kv('Lucrare', _resolveJobLabel()),
-                        if (offer.complaintNumber.trim().isNotEmpty)
-                          _kv('Reclamatie sursa',
-                              offer.complaintNumber.trim()),
-                        if (offer.appointmentId.trim().isNotEmpty)
-                          _kv('Programare sursa', offer.appointmentId.trim()),
-                        _kv(
-                          'Acord client',
-                          offer.agreementAcceptedAt == null
-                              ? 'Nesemnat'
-                              : formatDate(offer.agreementAcceptedAt),
-                        ),
-                        _kv('Status', _displayStatusLabel(offer)),
-                        _kv(
-                          'Registratura',
-                          offer.registryNumber.trim().isEmpty
-                              ? 'neinregistrat'
-                              : offer.registryNumber.trim(),
-                        ),
-                        _kv(
-                          'Data inregistrare',
-                          formatDate(offer.registeredAt),
-                        ),
-                        _kv(
-                          'Conversie in lucrare',
-                          offer.convertedToJobId.trim().isEmpty
-                              ? 'Nu'
-                              : 'Da (${offer.convertedToJobId})',
-                        ),
-                        _kv(
-                          'Data conversie',
-                          formatDate(offer.convertedAt),
-                        ),
-                        _kv('Data emitere', formatDate(offer.issueDate)),
-                        _kv('Valabil pana la', formatDate(offer.validUntil)),
-                        _kv(
-                            'Moneda',
-                            OfferCurrencyConverter.normalizeCurrency(
-                                offer.currency)),
-                        _kv('Curs oferta', rateLabel()),
-                        _kv(
-                          'Observatii',
-                          offer.notes.trim().isEmpty
-                              ? '-'
-                              : offer.notes.trim(),
-                        ),
-                        _kv('Afisare preturi', priceDisplayModeLabel()),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _kv(
-                                'Tip document',
-                                offer.tipDocument.label,
-                              ),
-                            ),
-                            if (!isFrozen)
-                              TextButton.icon(
-                                onPressed:
-                                    saving ? null : _changeTipDocument,
-                                icon: const Icon(Icons.edit_outlined,
-                                    size: 14),
-                                label: const Text('Schimbă'),
-                                style: TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                              ),
-                          ],
-                        ),
-                        if (offer.pdfPath.trim().isNotEmpty)
-                          _kv('Ultimul PDF', offer.pdfPath.trim()),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            if (offer.complaintId.trim().isNotEmpty)
-              Card(
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHighest
-                    .withValues(alpha: 0.45),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Flux comercial complet pentru reclamatie',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Oferta pornita din reclamatie foloseste acelasi motor comercial din Oferte. Poti calcula normal materiale, manopera, autoturisme, scule, parteneri si totalurile comerciale.',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: const [
-                          Chip(
-                            label: Text('Materiale'),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text('Manopera'),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text('Autoturisme'),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text('Scule'),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text('Parteneri'),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text('Regie / Profit / TVA'),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (_hasEquipmentData)
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Wrap(
+            AppCard(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Wrap(
                     spacing: 16,
                     runSpacing: 8,
                     children: [
-                      _kv('Tip echipament', _equipmentTypeLabel),
-                      _kv(
-                          'Brand',
-                          offer.equipmentBrand.trim().isEmpty
-                              ? '-'
-                              : offer.equipmentBrand.trim()),
-                      _kv(
-                          'Model',
-                          offer.equipmentModel.trim().isEmpty
-                              ? '-'
-                              : offer.equipmentModel.trim()),
-                      _kv(
-                        'Serie unitate exterioara',
-                        offer.outdoorUnitSerial.trim().isEmpty
-                            ? '-'
-                            : offer.outdoorUnitSerial.trim(),
+                      Chip(
+                        label: Text(
+                          offer.isConverted
+                              ? 'Status: Convertită'
+                              : 'Status: ${offer.status.label}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        ),
+                        backgroundColor: _statusChipColor(offer),
+                        visualDensity: VisualDensity.compact,
                       ),
-                      _kv(
-                        'Serii unitati interioare',
-                        offer.indoorUnitSerials.trim().isEmpty
-                            ? '-'
-                            : offer.indoorUnitSerials.trim(),
-                      ),
-                      _kv(
-                        'Detalii tehnice',
-                        offer.equipmentDetails.trim().isEmpty
-                            ? '-'
-                            : offer.equipmentDetails.trim(),
+                      Chip(
+                        label: Text(
+                          offer.registryNumber.trim().isEmpty
+                              ? 'Neînregistrată'
+                              : 'Registratură: ${offer.registryNumber.trim()}',
+                          style: TextStyle(
+                            color: offer.registryNumber.trim().isEmpty
+                                ? Colors.orange.shade900
+                                : Colors.green.shade900,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12,
+                          ),
+                        ),
+                        backgroundColor: offer.registryNumber.trim().isEmpty
+                            ? Colors.orange.shade100
+                            : Colors.green.shade100,
+                        visualDensity: VisualDensity.compact,
                       ),
                     ],
                   ),
-                ),
-              ),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+                  if (!offer.isConverted) ...[
+                    const SizedBox(height: 12),
                     Text(
-                      'Acord si semnaturi',
-                      style: Theme.of(context).textTheme.titleMedium,
+                      'Status rapid',
+                      style: Theme.of(context).textTheme.titleSmall,
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      offer.complaintId.trim().isEmpty
-                          ? 'Semnaturile pot fi folosite pentru confirmarea documentului comercial.'
-                          : 'Documentul poate functiona si ca acord pentru interventia provenita din reclamatie.',
-                      style: Theme.of(context).textTheme.bodyMedium,
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: OfferStatus.values.map((status) {
+                        final selected = offer.status == status;
+                        final chipColor =
+                            _statusChipColor(offer.copyWith(status: status));
+                        return ChoiceChip(
+                          label: Text(
+                            status.label,
+                            style: TextStyle(
+                              color: selected ? Colors.white : chipColor,
+                              fontWeight: selected
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          selected: selected,
+                          selectedColor: chipColor,
+                          side: BorderSide(color: chipColor, width: 1.2),
+                          onSelected: (saving || isFrozen || selected)
+                              ? null
+                              : (_) => _changeOfferStatus(status),
+                        );
+                      }).toList(growable: false),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 12),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        Chip(
-                          label: Text(
-                            offer.beneficiaryName.trim().isEmpty
-                                ? 'Beneficiar: -'
-                                : 'Beneficiar: ${offer.beneficiaryName.trim()}',
+                        FilledButton.icon(
+                          onPressed:
+                              (saving || isFrozen) ? null : _openEmailDialog,
+                          icon: const Icon(Icons.email_outlined),
+                          label: const Text('Trimite oferta'),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  buildPdfTemplateSelectorCard(),
+                  const SizedBox(height: 12),
+                  buildSmartBillSection(),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    children: [
+                      _kv('Numar oferta', offer.offerNumber),
+                      _kv('Titlu', offer.title),
+                      _kv('Client', _resolveClientName()),
+                      // Card detalii identificare client
+                      if (_findOfferClient() != null)
+                        SizedBox(
+                          width: double.infinity,
+                          child: ClientInfoCard(
+                            client: _findOfferClient()!,
+                            compact: true,
+                            showTitle: false,
                           ),
+                        ),
+                      if (offer.commercialRecipientName.trim().isNotEmpty)
+                        _kv(
+                          'Destinatar comercial / platitor',
+                          offer.commercialRecipientName.trim(),
+                        ),
+                      if (offer.beneficiaryName.trim().isNotEmpty)
+                        _kv('Beneficiar real', offer.beneficiaryName.trim()),
+                      _kv(
+                        'Departament',
+                        offer.departmentName.trim().isEmpty
+                            ? '-'
+                            : offer.departmentName.trim(),
+                      ),
+                      _kv(
+                        'Persoana de contact',
+                        offer.contactPersonName.trim().isEmpty
+                            ? '-'
+                            : offer.contactPersonName.trim(),
+                      ),
+                      _kv(
+                        'Contact email',
+                        offer.contactPersonEmail.trim().isEmpty
+                            ? '-'
+                            : offer.contactPersonEmail.trim(),
+                      ),
+                      _kv(
+                        'Contact telefon',
+                        offer.contactPersonPhone.trim().isEmpty
+                            ? '-'
+                            : offer.contactPersonPhone.trim(),
+                      ),
+                      _kv('Lucrare', _resolveJobLabel()),
+                      if (offer.complaintNumber.trim().isNotEmpty)
+                        _kv('Reclamatie sursa', offer.complaintNumber.trim()),
+                      if (offer.appointmentId.trim().isNotEmpty)
+                        _kv('Programare sursa', offer.appointmentId.trim()),
+                      _kv(
+                        'Acord client',
+                        offer.agreementAcceptedAt == null
+                            ? 'Nesemnat'
+                            : formatDate(offer.agreementAcceptedAt),
+                      ),
+                      _kv('Status', _displayStatusLabel(offer)),
+                      _kv(
+                        'Registratura',
+                        offer.registryNumber.trim().isEmpty
+                            ? 'neinregistrat'
+                            : offer.registryNumber.trim(),
+                      ),
+                      _kv(
+                        'Data inregistrare',
+                        formatDate(offer.registeredAt),
+                      ),
+                      _kv(
+                        'Conversie in lucrare',
+                        offer.convertedToJobId.trim().isEmpty
+                            ? 'Nu'
+                            : 'Da (${offer.convertedToJobId})',
+                      ),
+                      _kv(
+                        'Data conversie',
+                        formatDate(offer.convertedAt),
+                      ),
+                      _kv('Data emitere', formatDate(offer.issueDate)),
+                      _kv('Valabil pana la', formatDate(offer.validUntil)),
+                      _kv(
+                          'Moneda',
+                          OfferCurrencyConverter.normalizeCurrency(
+                              offer.currency)),
+                      _kv('Curs oferta', rateLabel()),
+                      _kv(
+                        'Observatii',
+                        offer.notes.trim().isEmpty ? '-' : offer.notes.trim(),
+                      ),
+                      _kv('Afisare preturi', priceDisplayModeLabel()),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _kv(
+                              'Tip document',
+                              offer.tipDocument.label,
+                            ),
+                          ),
+                          if (!isFrozen)
+                            TextButton.icon(
+                              onPressed: saving ? null : _changeTipDocument,
+                              icon: const Icon(Icons.edit_outlined, size: 14),
+                              label: const Text('Schimbă'),
+                              style: TextButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                        ],
+                      ),
+                      if (offer.pdfPath.trim().isNotEmpty)
+                        _kv('Ultimul PDF', offer.pdfPath.trim()),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            if (offer.complaintId.trim().isNotEmpty)
+              AppCard(
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.45),
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Flux comercial complet pentru reclamatie',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Oferta pornita din reclamatie foloseste acelasi motor comercial din Oferte. Poti calcula normal materiale, manopera, autoturisme, scule, parteneri si totalurile comerciale.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: const [
+                        Chip(
+                          label: Text('Materiale'),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
-                          label: Text(
-                            offer.commercialRecipientName.trim().isEmpty
-                                ? 'Platitor comercial: ${_resolveClientName()}'
-                                : 'Platitor comercial: ${offer.commercialRecipientName.trim()}',
-                          ),
+                          label: Text('Manopera'),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
-                          label: Text(
-                            offer.agreementAcceptedAt == null
-                                ? 'Acord client: in asteptare'
-                                : 'Acord client: ${formatDate(offer.agreementAcceptedAt)}',
-                          ),
+                          label: Text('Autoturisme'),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text('Scule'),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text('Parteneri'),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text('Regie / Profit / TVA'),
                           visualDensity: VisualDensity.compact,
                         ),
                       ],
                     ),
-                    const SizedBox(height: 10),
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final vertical = constraints.maxWidth < 900;
-                        final items = [
-                          SizedBox(
-                            width: vertical
-                                ? double.infinity
-                                : (constraints.maxWidth - 12) / 2,
-                            child: signatureCard(
-                              title: 'Semnatura client / beneficiar',
-                              raw: offer.clientSignatureBase64,
-                              isClient: true,
-                              subtitle: offer.agreementAcceptedAt == null
-                                  ? 'Confirmă acordul pentru execuție.'
-                                  : 'Acord înregistrat la ${formatDate(offer.agreementAcceptedAt)}.',
-                            ),
-                          ),
-                          SizedBox(
-                            width: vertical
-                                ? double.infinity
-                                : (constraints.maxWidth - 12) / 2,
-                            child: signatureCard(
-                              title: 'Semnatura emitent / reprezentant firma',
-                              raw: offer.issuerSignatureBase64,
-                              isClient: false,
-                              subtitle:
-                                  'Semnatura emitentului pentru documentul comercial.',
-                            ),
-                          ),
-                        ];
-                        return Wrap(
-                          spacing: 12,
-                          runSpacing: 12,
-                          children: items,
-                        );
-                      },
+                  ],
+                ),
+              ),
+            if (_hasEquipmentData)
+              AppCard(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(
+                  spacing: 16,
+                  runSpacing: 8,
+                  children: [
+                    _kv('Tip echipament', _equipmentTypeLabel),
+                    _kv(
+                        'Brand',
+                        offer.equipmentBrand.trim().isEmpty
+                            ? '-'
+                            : offer.equipmentBrand.trim()),
+                    _kv(
+                        'Model',
+                        offer.equipmentModel.trim().isEmpty
+                            ? '-'
+                            : offer.equipmentModel.trim()),
+                    _kv(
+                      'Serie unitate exterioara',
+                      offer.outdoorUnitSerial.trim().isEmpty
+                          ? '-'
+                          : offer.outdoorUnitSerial.trim(),
+                    ),
+                    _kv(
+                      'Serii unitati interioare',
+                      offer.indoorUnitSerials.trim().isEmpty
+                          ? '-'
+                          : offer.indoorUnitSerials.trim(),
+                    ),
+                    _kv(
+                      'Detalii tehnice',
+                      offer.equipmentDetails.trim().isEmpty
+                          ? '-'
+                          : offer.equipmentDetails.trim(),
                     ),
                   ],
                 ),
+              ),
+            AppCard(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Acord si semnaturi',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    offer.complaintId.trim().isEmpty
+                        ? 'Semnaturile pot fi folosite pentru confirmarea documentului comercial.'
+                        : 'Documentul poate functiona si ca acord pentru interventia provenita din reclamatie.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      Chip(
+                        label: Text(
+                          offer.beneficiaryName.trim().isEmpty
+                              ? 'Beneficiar: -'
+                              : 'Beneficiar: ${offer.beneficiaryName.trim()}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          offer.commercialRecipientName.trim().isEmpty
+                              ? 'Platitor comercial: ${_resolveClientName()}'
+                              : 'Platitor comercial: ${offer.commercialRecipientName.trim()}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          offer.agreementAcceptedAt == null
+                              ? 'Acord client: in asteptare'
+                              : 'Acord client: ${formatDate(offer.agreementAcceptedAt)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final vertical = constraints.maxWidth < 900;
+                      final items = [
+                        SizedBox(
+                          width: vertical
+                              ? double.infinity
+                              : (constraints.maxWidth - 12) / 2,
+                          child: signatureCard(
+                            title: 'Semnatura client / beneficiar',
+                            raw: offer.clientSignatureBase64,
+                            isClient: true,
+                            subtitle: offer.agreementAcceptedAt == null
+                                ? 'Confirmă acordul pentru execuție.'
+                                : 'Acord înregistrat la ${formatDate(offer.agreementAcceptedAt)}.',
+                          ),
+                        ),
+                        SizedBox(
+                          width: vertical
+                              ? double.infinity
+                              : (constraints.maxWidth - 12) / 2,
+                          child: signatureCard(
+                            title: 'Semnatura emitent / reprezentant firma',
+                            raw: offer.issuerSignatureBase64,
+                            isClient: false,
+                            subtitle:
+                                'Semnatura emitentului pentru documentul comercial.',
+                          ),
+                        ),
+                      ];
+                      return Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: items,
+                      );
+                    },
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 12),
             buildAcceptanceFormCard(),
             if (offer.isConverted) ...[
               const SizedBox(height: 12),
-              Card(
+              AppCard(
+                padding: EdgeInsets.zero,
                 child: ListTile(
                   leading: const Icon(Icons.lock_outline),
                   title:
@@ -2895,22 +2869,245 @@ if (Test-Path \$attachment) {
               ),
             ],
             const SizedBox(height: 12),
-            Card(
+            AppCard(
               color: offer.complaintId.trim().isNotEmpty
                   ? Theme.of(context)
                       .colorScheme
                       .surfaceContainerHighest
                       .withValues(alpha: 0.38)
                   : null,
-              child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    offer.complaintId.trim().isNotEmpty
+                        ? 'Rezumat economic pentru reclamație'
+                        : 'Rezumat economic',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      Chip(
+                        label: Text(
+                          'Cost estimat: ${displayAmount(_estimatedInterventionCost)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          priceDisplayMode == OfferPriceDisplayMode.both
+                              ? displayAmountWithLabels(
+                                  _offeredPriceWithoutVat,
+                                  withoutVatLabel: 'Preț ofertat fără TVA',
+                                  withVatLabel: 'Preț ofertat cu TVA',
+                                )
+                              : 'Preț ofertat: ${displaySingleAmount(_offeredPriceWithoutVat)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      if (priceDisplayMode == OfferPriceDisplayMode.both)
+                        Chip(
+                          label: Text(
+                            'TVA (${offer.vatPercent.toStringAsFixed(2)}%): ${moneyCommercial(offer.vatValue)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      Chip(
+                        label: Text(
+                          priceDisplayMode == OfferPriceDisplayMode.both
+                              ? displayAmountWithLabels(
+                                  _offeredPriceWithoutVat,
+                                  withoutVatLabel: 'Total fără TVA',
+                                  withVatLabel: 'Preț final',
+                                )
+                              : '${priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${displaySingleAmount(_offeredPriceWithoutVat)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      if (_estimatedInterventionCost > 0 ||
+                          _offeredPriceWithoutVat > 0)
+                        Chip(
+                          label: Text(
+                            'Marja estimata: ${moneyCommercial(_estimatedCommercialMargin)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${priceDisplayExplanation()} ${offer.complaintId.trim().isNotEmpty ? 'Cost estimat = subtotal direct calculat din resursele ofertei. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul către plătitorul comercial.' : 'Cost estimat = subtotal direct. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul cu TVA.'}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            AppCard(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        'Totaluri oferta',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const Spacer(),
+                      OutlinedButton.icon(
+                        onPressed:
+                            (saving || isFrozen) ? null : _editVatPercent,
+                        icon: const Icon(Icons.percent),
+                        label: const Text('Modifica TVA'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 8,
+                    children: [
+                      Chip(
+                        label: Text(
+                          'Subtotal materiale: ${displayAmount(offer.materialSubtotal)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          'Manopera generala: ${displayAmount(offer.laborSubtotal)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          'Cost estimat / subtotal direct: ${displayAmount(offer.subtotalDirect)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          'Regie (${offer.regiePercent.toStringAsFixed(2)}%): ${displayAmount(offer.regieValue)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          'Profit (${offer.profitPercent.toStringAsFixed(2)}%): ${displayAmount(offer.profitValue)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      Chip(
+                        label: Text(
+                          priceDisplayMode == OfferPriceDisplayMode.both
+                              ? displayAmountWithLabels(
+                                  offer.subtotalComercial,
+                                  withoutVatLabel: 'Preț ofertat fără TVA',
+                                  withVatLabel: 'Preț ofertat cu TVA',
+                                )
+                              : 'Preț ofertat: ${displaySingleAmount(offer.subtotalComercial)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      if (priceDisplayMode == OfferPriceDisplayMode.both)
+                        Chip(
+                          label: Text(
+                            'TVA (${offer.vatPercent.toStringAsFixed(2)}%): ${moneyCommercial(offer.vatValue)}',
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      Chip(
+                        label: Text(
+                          priceDisplayMode == OfferPriceDisplayMode.both
+                              ? displayAmountWithLabels(
+                                  offer.subtotalComercial,
+                                  withoutVatLabel: 'Total fără TVA',
+                                  withVatLabel: 'Preț final',
+                                )
+                              : '${priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${displaySingleAmount(offer.subtotalComercial)}',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    priceDisplayExplanation(),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            if (_internalLaborLines.isNotEmpty ||
+                _standardLaborCommercialValue > 0) ...[
+              const SizedBox(height: 12),
+              AppCard(
                 padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      offer.complaintId.trim().isNotEmpty
-                          ? 'Rezumat economic pentru reclamație'
-                          : 'Rezumat economic',
+                      'Transparenta manopera',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        if (_internalLaborLines.isNotEmpty) ...[
+                          Chip(
+                            label: Text(
+                              'Cost intern estimat: ${moneyCommercial(_internalLaborEstimatedCost)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialLaborValue)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          Chip(
+                            label: Text(
+                              'Diferenta estimata: ${moneyCommercial(_estimatedLaborMargin)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                        if (_standardLaborCommercialValue > 0)
+                          Chip(
+                            label: Text(
+                              'Manopera standard comerciala: ${moneyCommercial(_standardLaborCommercialValue)}',
+                            ),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _standardLaborCommercialValue > 0
+                          ? 'Zona este doar informativa. Pentru manopera standard pastram doar pretul comercial daca nu exista un cost intern clar.'
+                          : 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.',
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (_internalVehicleEstimatedCost > 0) ...[
+              const SizedBox(height: 12),
+              AppCard(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Transparenta autoturisme',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
@@ -2920,81 +3117,44 @@ if (Test-Path \$attachment) {
                       children: [
                         Chip(
                           label: Text(
-                            'Cost estimat: ${displayAmount(_estimatedInterventionCost)}',
+                            'Cost intern estimat autoturisme: ${moneyCommercial(_internalVehicleEstimatedCost)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            priceDisplayMode == OfferPriceDisplayMode.both
-                                ? displayAmountWithLabels(
-                                    _offeredPriceWithoutVat,
-                                    withoutVatLabel: 'Preț ofertat fără TVA',
-                                    withVatLabel: 'Preț ofertat cu TVA',
-                                  )
-                                : 'Preț ofertat: ${displaySingleAmount(_offeredPriceWithoutVat)}',
+                            'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialVehicleValue)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
-                        if (priceDisplayMode == OfferPriceDisplayMode.both)
-                          Chip(
-                            label: Text(
-                              'TVA (${offer.vatPercent.toStringAsFixed(2)}%): ${moneyCommercial(offer.vatValue)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
                         Chip(
                           label: Text(
-                            priceDisplayMode == OfferPriceDisplayMode.both
-                                ? displayAmountWithLabels(
-                                    _offeredPriceWithoutVat,
-                                    withoutVatLabel: 'Total fără TVA',
-                                    withVatLabel: 'Preț final',
-                                  )
-                                : '${priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${displaySingleAmount(_offeredPriceWithoutVat)}',
+                            'Diferenta estimata: ${moneyCommercial(_estimatedVehicleMargin)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
-                        if (_estimatedInterventionCost > 0 ||
-                            _offeredPriceWithoutVat > 0)
-                          Chip(
-                            label: Text(
-                              'Marja estimata: ${moneyCommercial(_estimatedCommercialMargin)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
                       ],
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
                     Text(
-                      '${priceDisplayExplanation()} ${offer.complaintId.trim().isNotEmpty ? 'Cost estimat = subtotal direct calculat din resursele ofertei. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul către plătitorul comercial.' : 'Cost estimat = subtotal direct. Preț ofertat fără TVA = subtotal comercial. Preț final = totalul cu TVA.'}',
-                      style: Theme.of(context).textTheme.bodySmall,
+                      _vehicleCostSourceSummaryAll.isEmpty
+                          ? 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.'
+                          : 'Sursa cost autoturisme: $_vehicleCostSourceSummaryAll\nZona este doar informativa si nu modifica totalurile actuale ale ofertei.',
                     ),
                   ],
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
+            ],
+            if (_internalToolsEstimatedCost > 0) ...[
+              const SizedBox(height: 12),
+              AppCard(
                 padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          'Totaluri oferta',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        const Spacer(),
-                        OutlinedButton.icon(
-                          onPressed:
-                              (saving || isFrozen) ? null : _editVatPercent,
-                          icon: const Icon(Icons.percent),
-                          label: const Text('Modifica TVA'),
-                        ),
-                      ],
+                    Text(
+                      'Transparenta scule / pachete scule',
+                      style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
                     Wrap(
@@ -3003,62 +3163,19 @@ if (Test-Path \$attachment) {
                       children: [
                         Chip(
                           label: Text(
-                            'Subtotal materiale: ${displayAmount(offer.materialSubtotal)}',
+                            'Cost intern estimat scule: ${moneyCommercial(_internalToolsEstimatedCost)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            'Manopera generala: ${displayAmount(offer.laborSubtotal)}',
+                            'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialToolsValue)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
                         Chip(
                           label: Text(
-                            'Cost estimat / subtotal direct: ${displayAmount(offer.subtotalDirect)}',
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        Chip(
-                          label: Text(
-                            'Regie (${offer.regiePercent.toStringAsFixed(2)}%): ${displayAmount(offer.regieValue)}',
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        Chip(
-                          label: Text(
-                            'Profit (${offer.profitPercent.toStringAsFixed(2)}%): ${displayAmount(offer.profitValue)}',
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        Chip(
-                          label: Text(
-                            priceDisplayMode == OfferPriceDisplayMode.both
-                                ? displayAmountWithLabels(
-                                    offer.subtotalComercial,
-                                    withoutVatLabel: 'Preț ofertat fără TVA',
-                                    withVatLabel: 'Preț ofertat cu TVA',
-                                  )
-                                : 'Preț ofertat: ${displaySingleAmount(offer.subtotalComercial)}',
-                          ),
-                          visualDensity: VisualDensity.compact,
-                        ),
-                        if (priceDisplayMode == OfferPriceDisplayMode.both)
-                          Chip(
-                            label: Text(
-                              'TVA (${offer.vatPercent.toStringAsFixed(2)}%): ${moneyCommercial(offer.vatValue)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        Chip(
-                          label: Text(
-                            priceDisplayMode == OfferPriceDisplayMode.both
-                                ? displayAmountWithLabels(
-                                    offer.subtotalComercial,
-                                    withoutVatLabel: 'Total fără TVA',
-                                    withVatLabel: 'Preț final',
-                                  )
-                                : '${priceDisplayMode == OfferPriceDisplayMode.withoutVat ? 'Total fără TVA' : 'Preț final'}: ${displaySingleAmount(offer.subtotalComercial)}',
+                            'Diferenta estimata: ${moneyCommercial(_estimatedToolsMargin)}',
                           ),
                           visualDensity: VisualDensity.compact,
                         ),
@@ -3066,164 +3183,11 @@ if (Test-Path \$attachment) {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      priceDisplayExplanation(),
-                      style: Theme.of(context).textTheme.bodySmall,
+                      _toolCostSourceSummaryAll.isEmpty
+                          ? 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.'
+                          : 'Sursa cost scule: $_toolCostSourceSummaryAll\nZona este doar informativa si nu modifica totalurile actuale ale ofertei.',
                     ),
                   ],
-                ),
-              ),
-            ),
-            if (_internalLaborLines.isNotEmpty ||
-                _standardLaborCommercialValue > 0) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Transparenta manopera',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 8,
-                        children: [
-                          if (_internalLaborLines.isNotEmpty) ...[
-                            Chip(
-                              label: Text(
-                                'Cost intern estimat: ${moneyCommercial(_internalLaborEstimatedCost)}',
-                              ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                            Chip(
-                              label: Text(
-                                'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialLaborValue)}',
-                              ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                            Chip(
-                              label: Text(
-                                'Diferenta estimata: ${moneyCommercial(_estimatedLaborMargin)}',
-                              ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ],
-                          if (_standardLaborCommercialValue > 0)
-                            Chip(
-                              label: Text(
-                                'Manopera standard comerciala: ${moneyCommercial(_standardLaborCommercialValue)}',
-                              ),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _standardLaborCommercialValue > 0
-                            ? 'Zona este doar informativa. Pentru manopera standard pastram doar pretul comercial daca nu exista un cost intern clar.'
-                            : 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.',
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-            if (_internalVehicleEstimatedCost > 0) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Transparenta autoturisme',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            label: Text(
-                              'Cost intern estimat autoturisme: ${moneyCommercial(_internalVehicleEstimatedCost)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text(
-                              'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialVehicleValue)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text(
-                              'Diferenta estimata: ${moneyCommercial(_estimatedVehicleMargin)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _vehicleCostSourceSummaryAll.isEmpty
-                            ? 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.'
-                            : 'Sursa cost autoturisme: $_vehicleCostSourceSummaryAll\nZona este doar informativa si nu modifica totalurile actuale ale ofertei.',
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-            if (_internalToolsEstimatedCost > 0) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Transparenta scule / pachete scule',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            label: Text(
-                              'Cost intern estimat scule: ${moneyCommercial(_internalToolsEstimatedCost)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text(
-                              'Pret comercial estimat: ${moneyCommercial(_estimatedCommercialToolsValue)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          Chip(
-                            label: Text(
-                              'Diferenta estimata: ${moneyCommercial(_estimatedToolsMargin)}',
-                            ),
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _toolCostSourceSummaryAll.isEmpty
-                            ? 'Zona este doar informativa si nu modifica totalurile actuale ale ofertei.'
-                            : 'Sursa cost scule: $_toolCostSourceSummaryAll\nZona este doar informativa si nu modifica totalurile actuale ale ofertei.',
-                      ),
-                    ],
-                  ),
                 ),
               ),
             ],
@@ -3231,47 +3195,45 @@ if (Test-Path \$attachment) {
                 offer.partnerWorkers.isNotEmpty ||
                 offer.partnerVehicles.isNotEmpty) ...[
               const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Totaluri parteneri',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 10,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            label: Text(
-                              'Personal partener: ${partnerWorkersTotal.toStringAsFixed(2)} $partnerWorkersCurrency',
-                            ),
-                            visualDensity: VisualDensity.compact,
+              AppCard(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Totaluri parteneri',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        Chip(
+                          label: Text(
+                            'Personal partener: ${partnerWorkersTotal.toStringAsFixed(2)} $partnerWorkersCurrency',
                           ),
-                          Chip(
-                            label: Text(
-                              'Autovehicule partener: ${partnerVehiclesTotal.toStringAsFixed(2)} $partnerVehiclesCurrency',
-                            ),
-                            visualDensity: VisualDensity.compact,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            'Autovehicule partener: ${partnerVehiclesTotal.toStringAsFixed(2)} $partnerVehiclesCurrency',
                           ),
-                          Chip(
-                            label: Text(
-                              'Total general parteneri: ${partnersTotal.toStringAsFixed(2)} $partnersCurrency',
-                            ),
-                            visualDensity: VisualDensity.compact,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Chip(
+                          label: Text(
+                            'Total general parteneri: ${partnersTotal.toStringAsFixed(2)} $partnersCurrency',
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Zona este separata de resursele interne si are rol informativ pentru componenta partenerilor din oferta.',
-                      ),
-                    ],
-                  ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Zona este separata de resursele interne si are rol informativ pentru componenta partenerilor din oferta.',
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -3331,7 +3293,8 @@ if (Test-Path \$attachment) {
                   final isAggregatedLabor =
                       sourceLine.id == '__labor_aggregate__' &&
                           sourceLine.lineType == OfferLineType.manopera;
-                  return Card(
+                  return AppCard(
+                    padding: EdgeInsets.zero,
                     child: ListTile(
                       title: Text('${line.sortOrder}. ${line.name}'),
                       subtitle: Text(_commercialLineSubtitle(sourceLine, line)),
@@ -3375,7 +3338,8 @@ if (Test-Path \$attachment) {
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
                   final clause = offer.commercialClauses[index];
-                  return Card(
+                  return AppCard(
+                    padding: EdgeInsets.zero,
                     child: ListTile(
                       title: Text(
                         clause.title.trim().isEmpty
@@ -3406,11 +3370,12 @@ if (Test-Path \$attachment) {
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
                   final line = _internalLaborLines[index];
-                  return Card(
+                  return AppCard(
                     color: Theme.of(context)
                         .colorScheme
                         .surfaceContainerHighest
                         .withValues(alpha: 0.35),
+                    padding: EdgeInsets.zero,
                     child: ListTile(
                       title: Text('${line.sortOrder}. ${line.name}'),
                       subtitle: Text(
@@ -3461,9 +3426,7 @@ if (Test-Path \$attachment) {
 
   String get _equipmentTypeLabel {
     return ComplaintEquipmentType.fromValue(offer.equipmentType)?.label ??
-        (offer.equipmentType.trim().isEmpty
-            ? '-'
-            : offer.equipmentType.trim());
+        (offer.equipmentType.trim().isEmpty ? '-' : offer.equipmentType.trim());
   }
 
   Widget _kv(String label, String value) {
@@ -3483,4 +3446,3 @@ if (Test-Path \$attachment) {
     );
   }
 }
-
