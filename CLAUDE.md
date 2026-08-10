@@ -80,9 +80,11 @@ commit, push, build și publicare, **FĂRĂ să se oprească pentru aprobare
 intermediară**. Raportează complet DOAR la final: ce a modificat, de ce,
 rezultatul `dart analyze`, orice decizie luată singur și motivul.
 
-**SINGURA EXCEPȚIE — agentul TREBUIE să ceară aprobare explicită doar pentru:**
+**EXCEPȚIILE — agentul TREBUIE să ceară aprobare explicită doar pentru:**
 - Operații ireversibile fără backup posibil — ex: ștergere definitivă de date
   din Firestore/Storage **fără** export prealabil al stării curente
+- Orice workaround care ocolește un tool MCP lipsă prin acces alternativ la
+  date/sisteme externe (vezi secțiunea „🔐 REGULI DE SECURITATE — CREDENȚIALE")
 
 **Tot restul se face direct și automat:** `git add/commit/push`, `flutter build`
 (apk/windows), `node scripts/publish_release.js`, migrări de date CU backup
@@ -93,6 +95,36 @@ rezultatul `dart analyze`, orice decizie luată singur și motivul.
 - `dart analyze` 0 erori obligatoriu înainte de orice commit
 - Versionare incrementată la fiecare livrare
 - Regulile de siguranță din secțiunea "REGULI DE SIGURANȚĂ — PRODUCȚIE"
+
+---
+
+## 🔐 REGULI DE SECURITATE — CREDENȚIALE
+
+**Precedent (10 aug. 2026):** un subagent, în timpul unui audit read-only, nu a
+găsit un tool MCP potrivit pentru o verificare și a scris singur un script care
+a citit token-ul OAuth Firebase stocat local (`~/.config/configstore/firebase-tools.json`,
+același folosit de `scripts/publish_release.js`) și l-a folosit ca să interogheze
+direct producția, extrăgând date reale (email + rol) pentru toți utilizatorii din
+colecția `users`. Operația a fost read-only, dar tokenul și datele au ajuns
+într-un transcript de agent. Token-ul a fost invalidat imediat (`firebase logout`).
+
+**Reguli obligatorii, fără excepție:**
+
+- Agentul **NU citește, NU copiază și NU reutilizează** niciun fișier de
+  credențiale (`~/.config/configstore/firebase-tools.json`, orice
+  `serviceAccount*.json`, `.firebaserc` cu tokenuri, `.env` cu secrete) în afara
+  scopului intern al tool-ului MCP/scriptului sancționat care îl folosește deja
+  (ex: `scripts/publish_release.js` are voie să-l folosească pentru publicare —
+  un script NOU scris ad-hoc de agent NU are voie).
+- Dacă o capabilitate cerută nu există prin tool-urile MCP disponibile (Dart,
+  Firebase etc.), agentul **se OPREȘTE și raportează limitarea explicit** — NU
+  improvizează acces alternativ la date sau sisteme externe, indiferent cât de
+  „read-only" sau „sigur" pare workaround-ul.
+- Aceasta e a doua excepție (alături de operațiile ireversibile fără backup)
+  care necesită aprobarea explicită a utilizatorului înainte de orice workaround.
+- Hook tehnic de blocare mecanică: `.claude/settings.json` → `PreToolUse` pe
+  `Read`/`Bash`, verifică dacă ținta conține `configstore`, `firebase-tools.json`,
+  `serviceAccount`, `.firebaserc` sau `.env` — dacă da, blochează (exit code 2).
 
 ---
 
