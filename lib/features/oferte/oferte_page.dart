@@ -12,6 +12,7 @@ import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import '../../core/design_system/app_tokens.dart';
 import '../../core/design_system/widgets/app_card.dart';
+import '../../core/design_system/widgets/app_status_chip.dart';
 import '../../core/widgets/adaptive_side_panel_layout.dart';
 import '../../core/widgets/app_viewport_guard.dart';
 import '../ai_assistant/ai_assistant_service.dart';
@@ -743,22 +744,11 @@ class _OfertePageState extends State<OfertePage>
 
   Widget _buildOfferStatusChip(OfferRecord item) {
     final color = _offerStatusColor(item);
-    return Chip(
-      avatar: Icon(
-        item.isConverted ? Icons.transform_outlined : Icons.flag_outlined,
-        size: 16,
-        color: color,
-      ),
-      label: Text(
-        _displayStatusLabel(item),
-        style: TextStyle(
-          color: color,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      backgroundColor: color.withValues(alpha: 0.14),
-      side: BorderSide(color: color.withValues(alpha: 0.5)),
-      visualDensity: VisualDensity.compact,
+    return AppStatusChip(
+      label: _displayStatusLabel(item),
+      status: AppStatusKind.neutral,
+      customColor: color,
+      icon: item.isConverted ? Icons.transform_outlined : Icons.flag_outlined,
     );
   }
 
@@ -812,15 +802,11 @@ class _OfertePageState extends State<OfertePage>
       icon = Icons.check_circle_outline;
     }
 
-    return Chip(
-      avatar: Icon(icon, size: 16, color: color),
-      label: Text(
-        label,
-        style: TextStyle(color: color, fontWeight: FontWeight.w600),
-      ),
-      backgroundColor: color.withValues(alpha: 0.12),
-      side: BorderSide(color: color.withValues(alpha: 0.4)),
-      visualDensity: VisualDensity.compact,
+    return AppStatusChip(
+      label: label,
+      status: AppStatusKind.neutral,
+      customColor: color,
+      icon: icon,
     );
   }
 

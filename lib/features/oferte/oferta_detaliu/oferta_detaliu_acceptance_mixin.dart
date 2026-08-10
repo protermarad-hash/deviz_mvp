@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/design_system/app_tokens.dart';
 import '../../../core/design_system/widgets/app_card.dart';
+import '../../../core/design_system/widgets/app_status_chip.dart';
 import '../../reclamatii/signature_capture_page.dart';
 import '../clauza_catalog_repository.dart';
 import '../offer_acceptance_clauses_dialog.dart';
@@ -188,45 +189,16 @@ mixin OffertaDetaliuAcceptanceMixin on State<OfertaDetaliuPage> {
                       ),
                 ),
               ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isSigned
-                      ? Colors.green.shade50
-                      : cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isSigned ? Colors.green.shade300 : cs.outlineVariant,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      isSigned
-                          ? Icons.check_circle_outline
-                          : Icons.pending_outlined,
-                      size: 14,
-                      color: isSigned
-                          ? Colors.green.shade700
-                          : cs.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      isSigned
-                          ? 'Semnat${signedDate != null ? " · $signedDate" : ""}'
-                          : 'Nesemnat',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: isSigned
-                            ? Colors.green.shade700
-                            : cs.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
+              AppStatusChip(
+                label: isSigned
+                    ? 'Semnat${signedDate != null ? " · $signedDate" : ""}'
+                    : 'Nesemnat',
+                status: AppStatusKind.neutral,
+                customColor:
+                    isSigned ? Colors.green.shade700 : cs.onSurfaceVariant,
+                icon: isSigned
+                    ? Icons.check_circle_outline
+                    : Icons.pending_outlined,
               ),
             ],
           ),
