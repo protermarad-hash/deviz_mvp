@@ -12,6 +12,7 @@ import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
 import '../../core/design_system/app_tokens.dart';
 import '../../core/design_system/widgets/app_card.dart';
+import '../../core/design_system/widgets/app_empty_state.dart';
 import '../../core/design_system/widgets/app_status_chip.dart';
 import '../../core/widgets/adaptive_side_panel_layout.dart';
 import '../../core/widgets/app_viewport_guard.dart';
@@ -2307,7 +2308,12 @@ class _OfertePageState extends State<OfertePage>
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: items.isEmpty
-                    ? Center(child: Text(_emptyStateMessage()))
+                    ? Center(
+                        child: AppEmptyState(
+                          icon: Icons.receipt_long_outlined,
+                          title: _emptyStateMessage(),
+                        ),
+                      )
                     : ListView.separated(
                         itemCount: items.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
