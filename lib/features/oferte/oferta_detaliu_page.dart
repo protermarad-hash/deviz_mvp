@@ -15,6 +15,7 @@ import '../../core/pdf_export_settings.dart';
 import '../../core/pdf_save_service.dart';
 import '../../core/design_system/app_tokens.dart';
 import '../../core/design_system/widgets/app_card.dart';
+import '../../core/design_system/widgets/app_empty_state.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../clients/client_models.dart';
 import '../jobs/lucrare_detalii_page.dart' show LucrareDetaliiPage;
@@ -3275,11 +3276,9 @@ if (Test-Path \$attachment) {
             ),
             const SizedBox(height: 8),
             if (_commercialLines.isEmpty)
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Text('Nu exista pozitii in aceasta oferta.'),
-                ),
+              const AppEmptyState(
+                icon: Icons.list_alt_outlined,
+                title: 'Nu exista pozitii in aceasta oferta.',
               )
             else
               ListView.separated(
