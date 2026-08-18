@@ -54,6 +54,27 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
             onPressed: _isCalendarNavigating ? null : _goToNextCalendarInterval,
             tooltip: 'Interval următor',
           ),
+          // Acces direct la panoul zoom/zile, indiferent de starea
+          // _barraCollapsed a toolbar-ului principal — altfel utilizatorul
+          // trebuia să deschidă mai întâi bara principală ca să ajungă la
+          // butonul "Panou calendar".
+          IconButton(
+            icon: Icon(
+              _showCalendarControlPanel
+                  ? Icons.view_agenda_outlined
+                  : Icons.tune_outlined,
+            ),
+            onPressed: () {
+              // ignore: invalid_use_of_protected_member
+              setState(() {
+                _showCalendarControlPanel = !_showCalendarControlPanel;
+              });
+            },
+            tooltip: _showCalendarControlPanel
+                ? 'Ascunde panou calendar'
+                : 'Panou calendar',
+            iconSize: 20,
+          ),
         ],
       ),
     );
@@ -282,7 +303,17 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                   margin: EdgeInsets.zero,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Wrap(
+                  // Panoul are conținut variabil (chips zoom/zile) care poate
+                  // depăși înălțimea disponibilă pe telefoane mici — limitat +
+                  // scrollabil intern ca toate opțiunile să rămână accesibile
+                  // (fără asta, ultimele chips-uri erau tăiate sub fold, ex.
+                  // "Zoom: Mare", confirmat vizual: overflow 80-176px).
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: constraints.maxHeight * 0.4,
+                    ),
+                    child: SingleChildScrollView(
+                      child: Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
@@ -415,9 +446,11 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                           ],
                         ),
                       ],
+                      ),
                     ),
                   ),
                 ),
+              ),
             if (allVisibleItems.isEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
