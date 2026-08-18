@@ -4479,6 +4479,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
             initialValue: _statusFilter.isEmpty ? null : _statusFilter,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Filtru status'),
             items: <DropdownMenuItem<String>>[
               const DropdownMenuItem<String>(
@@ -4503,6 +4504,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             initialValue: _teamFilter.isEmpty ? null : _teamFilter,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Filtru echipa'),
             items: <DropdownMenuItem<String>>[
               const DropdownMenuItem<String>(
@@ -4527,6 +4529,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             initialValue: _jobFilter.isEmpty ? null : _jobFilter,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Filtru lucrare'),
             items: <DropdownMenuItem<String>>[
               const DropdownMenuItem<String>(
@@ -4551,6 +4554,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
             initialValue: _documentFilter.isEmpty ? null : _documentFilter,
+            isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'Filtru documente',
               prefixIcon: Icon(Icons.attach_file_outlined),
@@ -4578,6 +4582,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
             const SizedBox(height: 12),
             DropdownButtonFormField<_EmployeeScopeMode>(
               initialValue: _employeeScopeMode,
+              isExpanded: true,
               decoration: const InputDecoration(labelText: 'Scope vizualizare'),
               items: const <DropdownMenuItem<_EmployeeScopeMode>>[
                 DropdownMenuItem<_EmployeeScopeMode>(
