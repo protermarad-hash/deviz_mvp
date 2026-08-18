@@ -10,6 +10,9 @@ import '../../core/cloud/firestore_auth_warning_service.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
 import '../../core/repositories/local_app_data_repository.dart';
+import '../../core/user_preferences/status_order_editor_page.dart';
+import '../../core/user_preferences/status_order_utils.dart';
+import '../../core/user_preferences/user_status_order_repository.dart';
 import '../../core/design_system/app_tokens.dart';
 import '../../core/design_system/widgets/app_card.dart';
 import '../../core/design_system/widgets/app_empty_state.dart';
@@ -47,34 +50,53 @@ import 'oferte_dialogs/offer_labor_templates_dialog.dart';
 import '../../core/help/help_module_button.dart';
 
 /// Prioritatea de afișare a unei oferte după status (sortare logică).
-/// Ordinea dorită: Acceptat → Trimis → (În așteptare) → Draft → Respins →
-/// Anulat → Convertită (ultimele). Convertirea are prioritate ABSOLUTĂ peste
-/// statusul de bază: o ofertă convertită în lucrare merge ultima indiferent
-/// dacă era „acceptată” înainte.
-int _offerStatusRank(OfferRecord o) {
-  if (o.isConverted) return 100;
-  switch (o.status) {
-    case OfferStatus.accepted:
-      return 0;
-    case OfferStatus.sent:
-      return 1;
-    case OfferStatus.awaiting:
-      return 2;
-    case OfferStatus.draft:
-      return 3;
-    case OfferStatus.rejected:
-      return 4;
-    case OfferStatus.cancelled:
-      return 5;
-  }
-}
+/// Comparator simplu, doar după dată descrescător (cele mai recente primele).
+/// Ordinea GRUPURILOR de status nu mai e hardcodată aici — e reordonabilă de
+/// user și aplicată separat la construirea secțiunilor din listă (vezi
+/// `_offerStatusOrder` + `_buildGroupedOffersList()`).
+int _compareOffersByDate(OfferRecord a, OfferRecord b) =>
+    b.updatedAt.compareTo(a.updatedAt);
 
-/// Comparator: întâi după prioritatea statusului, apoi (în cadrul aceluiași
-/// status) după dată descrescător (cele mai recente primele).
-int _compareOffersByStatus(OfferRecord a, OfferRecord b) {
-  final byStatus = _offerStatusRank(a).compareTo(_offerStatusRank(b));
-  if (byStatus != 0) return byStatus;
-  return b.updatedAt.compareTo(a.updatedAt);
+/// Cheia de grupare pentru un `OfferRecord`: `kConvertedStatusKey` dacă e
+/// convertit în lucrare (prioritate peste status, ca înainte), altfel numele
+/// enum-ului de status (`OfferStatus.name`).
+String _offerStatusGroupKey(OfferRecord o) =>
+    o.isConverted ? kConvertedStatusKey : o.status.name;
+
+/// Toate cheile posibile de grup pentru modulul Oferte — sursa de adevăr e
+/// `OfferStatus.values` (NU o listă hardcodată paralelă), plus cheia
+/// sintetică de convertire.
+List<String> _allOfferStatusKeys() =>
+    <String>[...OfferStatus.values.map((s) => s.name), kConvertedStatusKey];
+
+/// Ordinea implicită (fallback) — aceeași ordine de business ca fostul rank
+/// hardcodat: Acceptat → Trimis → În așteptare → Draft → Respins → Anulat →
+/// Convertită. Folosită doar ca fallback dacă userul nu a salvat încă o
+/// ordine proprie (sau dacă ordinea salvată nu poate fi încărcată offline).
+List<String> _defaultOfferStatusOrder() => <String>[
+      OfferStatus.accepted.name,
+      OfferStatus.sent.name,
+      OfferStatus.awaiting.name,
+      OfferStatus.draft.name,
+      OfferStatus.rejected.name,
+      OfferStatus.cancelled.name,
+      kConvertedStatusKey,
+    ];
+
+/// Rând intern pentru lista grupată de oferte: fie header de secțiune
+/// (status + număr de elemente), fie o ofertă propriu-zisă.
+class _OfferListRow {
+  const _OfferListRow.header(this.headerLabel, this.headerCount)
+      : item = null;
+  const _OfferListRow.item(this.item)
+      : headerLabel = null,
+        headerCount = 0;
+
+  final String? headerLabel;
+  final int headerCount;
+  final OfferRecord? item;
+
+  bool get isHeader => headerLabel != null;
 }
 
 class OfertePage extends StatefulWidget {
@@ -157,6 +179,10 @@ class _OfertePageState extends State<OfertePage>
   bool _didHandleInitialFocus = false;
   late final TabController _tabController;
   List<String> _analysisStatusFilters = <String>[];
+  final UserStatusOrderRepository _statusOrderRepository =
+      UserStatusOrderRepository();
+  static const String _statusOrderModuleId = 'oferte';
+  List<String> _offerStatusOrder = _defaultOfferStatusOrder();
   String _analysisPerioadaFilter = 'toate';
   String _analysisTipFilter = 'toate';
   String _analysisSearchClient = '';
@@ -185,6 +211,7 @@ class _OfertePageState extends State<OfertePage>
     _bindCloudOffers();
     _loadOfferDefaults();
     _loadFilterPreferences();
+    _loadStatusOrder();
     // Ascultă modificările de clienți din orice altă pagină (ex: modul Clienți)
     LocalAppDataRepository.clientsChangeCount
         .addListener(_handleClientsChanged);
@@ -253,6 +280,56 @@ class _OfertePageState extends State<OfertePage>
     final loaded = await _defaultsStore.load(profileFallback: profileFallback);
     if (!mounted) return;
     setState(() => _offerDefaults = loaded);
+  }
+
+  /// Încarcă ordinea de grupuri de status salvată de user (cross-device).
+  /// Dacă nu există ordine salvată sau citirea eșuează (offline/eroare
+  /// Firestore), cade pe ordinea implicită — fără crash.
+  Future<void> _loadStatusOrder() async {
+    List<String>? saved;
+    try {
+      saved = await _statusOrderRepository.loadOrder(_statusOrderModuleId);
+    } catch (e) {
+      debugPrint('[Oferte] încărcare ordine status eșuată, folosesc implicit: $e');
+    }
+    if (!mounted) return;
+    setState(() {
+      _offerStatusOrder = resolveStatusOrder(
+        allKeys: _allOfferStatusKeys(),
+        defaultOrder: _defaultOfferStatusOrder(),
+        savedOrder: saved,
+      );
+    });
+  }
+
+  Future<void> _openStatusOrderEditor() async {
+    final options = <StatusGroupOption>[
+      for (final status in OfferStatus.values)
+        StatusGroupOption(
+          key: status.name,
+          label: status.label,
+          color: _offerStatusBaseColor(status),
+        ),
+      const StatusGroupOption(
+        key: kConvertedStatusKey,
+        label: 'Convertită',
+        color: Colors.teal,
+        icon: Icons.move_up_outlined,
+      ),
+    ];
+    final result = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute<List<String>>(
+        builder: (_) => StatusOrderEditorPage(
+          moduleId: _statusOrderModuleId,
+          moduleTitle: 'Oferte',
+          options: options,
+          initialOrder: _offerStatusOrder,
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _offerStatusOrder = result);
+    }
   }
 
   @override
@@ -340,7 +417,7 @@ class _OfertePageState extends State<OfertePage>
         }
         setState(() {
           _setCloudSource();
-          _items = [...cloudItems]..sort(_compareOffersByStatus);
+          _items = [...cloudItems]..sort(_compareOffersByDate);
           _loading = false;
         });
       },
@@ -528,7 +605,7 @@ class _OfertePageState extends State<OfertePage>
       if (!mounted) return;
       setState(() {
         _items = [...(results[0] as List<OfferRecord>)]
-          ..sort(_compareOffersByStatus);
+          ..sort(_compareOffersByDate);
         _clients = results[1] as List<ClientRecord>;
         _jobs = results[2] as List<JobRecord>;
         // Construieste Maps O(1) pentru lookup rapid
@@ -1781,6 +1858,11 @@ class _OfertePageState extends State<OfertePage>
                 icon: const Icon(Icons.auto_awesome_outlined),
                 label: const Text('Oferta din cerinta client'),
               ),
+              OutlinedButton.icon(
+                onPressed: _openStatusOrderEditor,
+                icon: const Icon(Icons.reorder_outlined),
+                label: const Text('Ordine status'),
+              ),
               if (showPanelButton)
                 Builder(
                   builder: (context) => FilledButton.tonalIcon(
@@ -2314,15 +2396,7 @@ class _OfertePageState extends State<OfertePage>
                           title: _emptyStateMessage(),
                         ),
                       )
-                    : ListView.separated(
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final item = items[index];
-                          final statusColor = _offerStatusColor(item);
-                          return _buildOfferCard(item, statusColor);
-                        },
-                      ),
+                    : _buildGroupedOffersList(items),
               ),
             ),
           ],
@@ -2400,6 +2474,75 @@ class _OfertePageState extends State<OfertePage>
           ),
         ],
       ),
+    );
+  }
+
+  String _offerStatusGroupLabel(String key) {
+    if (key == kConvertedStatusKey) return 'Convertită';
+    try {
+      return OfferStatus.values.byName(key).label;
+    } catch (_) {
+      return key;
+    }
+  }
+
+  /// Construiește lista grupată vizual pe status: header de secțiune (cu
+  /// numărul de oferte din grup) urmat de cardurile grupului, în ordinea
+  /// aleasă de user (`_offerStatusOrder`); în interiorul fiecărui grup,
+  /// sortare secundară după dată (cele mai recente primele) — fostul
+  /// `_offerStatusRank`/`_compareOffersByStatus` NU mai există ca mecanism
+  /// activ, e complet înlocuit de ordinea reordonabilă.
+  Widget _buildGroupedOffersList(List<OfferRecord> items) {
+    final byKey = <String, List<OfferRecord>>{};
+    for (final item in items) {
+      byKey.putIfAbsent(_offerStatusGroupKey(item), () => <OfferRecord>[]).add(item);
+    }
+
+    final rows = <_OfferListRow>[];
+    for (final key in _offerStatusOrder) {
+      final group = byKey[key];
+      if (group == null || group.isEmpty) continue;
+      group.sort(_compareOffersByDate);
+      rows.add(_OfferListRow.header(_offerStatusGroupLabel(key), group.length));
+      for (final item in group) {
+        rows.add(_OfferListRow.item(item));
+      }
+    }
+
+    final cs = Theme.of(context).colorScheme;
+    return ListView.builder(
+      itemCount: rows.length,
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        if (row.isHeader) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(2, index == 0 ? 0 : 16, 2, 8),
+            child: Row(
+              children: [
+                Text(
+                  row.headerLabel!,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '(${row.headerCount})',
+                  style: TextStyle(fontSize: 12, color: cs.outline),
+                ),
+              ],
+            ),
+          );
+        }
+        final item = row.item!;
+        final statusColor = _offerStatusColor(item);
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: _buildOfferCard(item, statusColor),
+        );
+      },
     );
   }
 

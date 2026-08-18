@@ -5,6 +5,9 @@ import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/pdf_actions_helper.dart';
 import '../../core/repositories/app_data_repository.dart';
+import '../../core/user_preferences/status_order_editor_page.dart';
+import '../../core/user_preferences/status_order_utils.dart';
+import '../../core/user_preferences/user_status_order_repository.dart';
 import '../clients/client_models.dart';
 import '../jobs/firebase_lucrari_repository.dart';
 import '../jobs/job_models.dart';
@@ -13,33 +16,39 @@ import 'deviz_tehnic_pdf_service.dart';
 import 'deviz_tehnic_repository.dart';
 import 'deviz_tehnic_form_page.dart';
 
-/// Prioritatea de afișare a unui deviz tehnic / ofertă / situație după status
-/// (sortare logică, nu cronologică). Ordinea dorită: Acceptat → Trimis →
-/// Draft → Respins → Anulat → Convertită (ultimele). Convertirea în lucrare are
-/// prioritate ABSOLUTĂ peste statusul de bază.
-int _devizStatusRank(DevizTehnicRecord d) {
-  if (d.isConverted) return 100;
-  switch (d.status) {
-    case DevizTehnicStatus.acceptat:
-      return 0;
-    case DevizTehnicStatus.trimis:
-      return 1;
-    case DevizTehnicStatus.draft:
-      return 2;
-    case DevizTehnicStatus.respins:
-      return 3;
-    case DevizTehnicStatus.anulat:
-      return 4;
-  }
-}
+/// Comparator simplu, doar după dată descrescător (cele mai recente primele).
+/// Ordinea GRUPURILOR de status nu mai e hardcodată aici — e reordonabilă de
+/// user și aplicată separat la construirea secțiunilor din listă (vezi
+/// `_devizStatusOrder` + `_buildGroupedDevizList()`).
+int _compareDevizeByDate(DevizTehnicRecord a, DevizTehnicRecord b) =>
+    b.updatedAt.compareTo(a.updatedAt);
 
-/// Comparator: întâi după prioritatea statusului, apoi (în cadrul aceluiași
-/// status) după dată descrescător (cele mai recente primele).
-int _compareDevizeByStatus(DevizTehnicRecord a, DevizTehnicRecord b) {
-  final byStatus = _devizStatusRank(a).compareTo(_devizStatusRank(b));
-  if (byStatus != 0) return byStatus;
-  return b.updatedAt.compareTo(a.updatedAt);
-}
+/// Cheia de grupare pentru un `DevizTehnicRecord`: `kConvertedStatusKey` dacă
+/// e convertit în lucrare (prioritate peste status, ca înainte), altfel
+/// numele enum-ului de status (`DevizTehnicStatus.name`).
+String _devizStatusGroupKey(DevizTehnicRecord d) =>
+    d.isConverted ? kConvertedStatusKey : d.status.name;
+
+/// Toate cheile posibile de grup pentru modulul Devize Tehnice — sursa de
+/// adevăr e `DevizTehnicStatus.values` (NU o listă hardcodată paralelă), plus
+/// cheia sintetică de convertire.
+List<String> _allDevizStatusKeys() => <String>[
+      ...DevizTehnicStatus.values.map((s) => s.name),
+      kConvertedStatusKey,
+    ];
+
+/// Ordinea implicită (fallback) — aceeași ordine de business ca fostul rank
+/// hardcodat: Acceptat → Trimis → Draft → Respins → Anulat → Convertit.
+/// Folosită doar ca fallback dacă userul nu a salvat încă o ordine proprie
+/// (sau dacă ordinea salvată nu poate fi încărcată offline).
+List<String> _defaultDevizStatusOrder() => <String>[
+      DevizTehnicStatus.acceptat.name,
+      DevizTehnicStatus.trimis.name,
+      DevizTehnicStatus.draft.name,
+      DevizTehnicStatus.respins.name,
+      DevizTehnicStatus.anulat.name,
+      kConvertedStatusKey,
+    ];
 
 /// Lista devizelor tehnice cu logica de calcul Excel (Mat/Man/Utilaj/Transport).
 class DevizTehnicListPage extends StatefulWidget {
@@ -77,6 +86,11 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
   final Set<DevizTehnicTipDocument> _filterTip = {};
   final Set<DevizTehnicStatus> _filterStatus = {};
 
+  final UserStatusOrderRepository _statusOrderRepository =
+      UserStatusOrderRepository();
+  static const String _statusOrderModuleId = 'deviz_tehnic';
+  List<String> _devizStatusOrder = _defaultDevizStatusOrder();
+
   @override
   void initState() {
     super.initState();
@@ -85,6 +99,58 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
     // fie ready (sau înainte de conexiune), reîncarcă automat.
     FirebaseBootstrap.onlineNotifier.addListener(_onOnlineChanged);
     Future.microtask(_load);
+    _loadStatusOrder();
+  }
+
+  /// Încarcă ordinea de grupuri de status salvată de user (cross-device).
+  /// Dacă nu există ordine salvată sau citirea eșuează (offline/eroare
+  /// Firestore), cade pe ordinea implicită — fără crash.
+  Future<void> _loadStatusOrder() async {
+    List<String>? saved;
+    try {
+      saved = await _statusOrderRepository.loadOrder(_statusOrderModuleId);
+    } catch (e) {
+      debugPrint(
+          '[DevizeTehnice] încărcare ordine status eșuată, folosesc implicit: $e');
+    }
+    if (!mounted) return;
+    setState(() {
+      _devizStatusOrder = resolveStatusOrder(
+        allKeys: _allDevizStatusKeys(),
+        defaultOrder: _defaultDevizStatusOrder(),
+        savedOrder: saved,
+      );
+    });
+  }
+
+  Future<void> _openStatusOrderEditor() async {
+    final options = <StatusGroupOption>[
+      for (final status in DevizTehnicStatus.values)
+        StatusGroupOption(
+          key: status.name,
+          label: status.label,
+          color: status.color,
+        ),
+      const StatusGroupOption(
+        key: kConvertedStatusKey,
+        label: 'Convertit',
+        color: Colors.teal,
+        icon: Icons.move_up_outlined,
+      ),
+    ];
+    final result = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute<List<String>>(
+        builder: (_) => StatusOrderEditorPage(
+          moduleId: _statusOrderModuleId,
+          moduleTitle: 'Devize tehnice',
+          options: options,
+          initialOrder: _devizStatusOrder,
+        ),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _devizStatusOrder = result);
+    }
   }
 
   @override
@@ -114,7 +180,7 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
       if (!mounted) return;
       setState(() {
         _items = (results[0] as List<DevizTehnicRecord>)
-          ..sort(_compareDevizeByStatus);
+          ..sort(_compareDevizeByDate);
         _clients = results[1] as List<ClientRecord>;
         _loading = false;
       });
@@ -654,6 +720,12 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                     onPressed:
                         (_loading || _syncing) ? null : _forceSyncToCloud,
                   ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(Icons.reorder_outlined),
+                    tooltip: 'Ordine status',
+                    onPressed: _openStatusOrderEditor,
+                  ),
                 ],
               ),
             ),
@@ -844,12 +916,110 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                     )
                   : RefreshIndicator(
                       onRefresh: _load,
-                      child: ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (ctx, i) {
-                          final d = items[i];
+                      child: _buildGroupedDevizList(items, cs, dateFmt),
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+
+    final fab = FloatingActionButton.extended(
+      onPressed: () => _openForm(),
+      icon: const Icon(Icons.add),
+      label: const Text('Document nou'),
+    );
+
+    if (widget.hideAppBar) {
+      return Scaffold(body: body, floatingActionButton: fab);
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('Devize tehnice')),
+      body: body,
+      floatingActionButton: fab,
+    );
+  }
+
+  String _devizStatusGroupLabel(String key) {
+    if (key == kConvertedStatusKey) return 'Convertit';
+    try {
+      return DevizTehnicStatus.values.byName(key).label;
+    } catch (_) {
+      return key;
+    }
+  }
+
+  /// Construiește lista grupată vizual pe status: header de secțiune (cu
+  /// numărul de devize din grup) urmat de cardurile grupului, în ordinea
+  /// aleasă de user (`_devizStatusOrder`); în interiorul fiecărui grup,
+  /// sortare secundară după dată (cele mai recente primele) — fostul
+  /// `_devizStatusRank`/`_compareDevizeByStatus` NU mai există ca mecanism
+  /// activ, e complet înlocuit de ordinea reordonabilă.
+  Widget _buildGroupedDevizList(
+    List<DevizTehnicRecord> items,
+    ColorScheme cs,
+    DateFormat dateFmt,
+  ) {
+    final byKey = <String, List<DevizTehnicRecord>>{};
+    for (final item in items) {
+      byKey
+          .putIfAbsent(_devizStatusGroupKey(item), () => <DevizTehnicRecord>[])
+          .add(item);
+    }
+
+    final rows = <_DevizListRow>[];
+    for (final key in _devizStatusOrder) {
+      final group = byKey[key];
+      if (group == null || group.isEmpty) continue;
+      group.sort(_compareDevizeByDate);
+      rows.add(_DevizListRow.header(_devizStatusGroupLabel(key), group.length));
+      for (final item in group) {
+        rows.add(_DevizListRow.item(item));
+      }
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+      itemCount: rows.length,
+      itemBuilder: (context, index) {
+        final row = rows[index];
+        if (row.isHeader) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(2, index == 0 ? 0 : 16, 2, 8),
+            child: Row(
+              children: [
+                Text(
+                  row.headerLabel!,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '(${row.headerCount})',
+                  style: TextStyle(fontSize: 12, color: cs.outline),
+                ),
+              ],
+            ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: _buildDevizCard(row.item!, cs, dateFmt),
+        );
+      },
+    );
+  }
+
+  /// Card individual deviz — extras ca metodă separată (înainte inline în
+  /// `itemBuilder`) ca să poată fi refolosit de lista grupată pe status.
+  Widget _buildDevizCard(
+    DevizTehnicRecord d,
+    ColorScheme cs,
+    DateFormat dateFmt,
+  ) {
                           final statusColor = d.status.color;
                           return Card(
                             clipBehavior: Clip.antiAlias,
@@ -1183,30 +1353,22 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
                               ),
                             ),
                           );
-                        },
-                      ),
-                    ),
-            ),
-          ],
-        );
-      },
-    );
-
-    final fab = FloatingActionButton.extended(
-      onPressed: () => _openForm(),
-      icon: const Icon(Icons.add),
-      label: const Text('Document nou'),
-    );
-
-    if (widget.hideAppBar) {
-      return Scaffold(body: body, floatingActionButton: fab);
-    }
-    return Scaffold(
-      appBar: AppBar(title: const Text('Devize tehnice')),
-      body: body,
-      floatingActionButton: fab,
-    );
   }
+}
+
+/// Rând intern pentru lista grupată de devize: fie header de secțiune
+/// (status + număr de elemente), fie un deviz propriu-zis.
+class _DevizListRow {
+  const _DevizListRow.header(this.headerLabel, this.headerCount) : item = null;
+  const _DevizListRow.item(this.item)
+      : headerLabel = null,
+        headerCount = 0;
+
+  final String? headerLabel;
+  final int headerCount;
+  final DevizTehnicRecord? item;
+
+  bool get isHeader => headerLabel != null;
 }
 
 class _MiniStat extends StatelessWidget {
