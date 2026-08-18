@@ -72,6 +72,12 @@ debug_log.txt
 # Snapshot-uri baze de date locale
 snapshot_baza_*/
 
+# Backup-uri/exporturi Firestore cu date reale de producție — NICIODATĂ în git.
+# Pattern-uri generice (nu doar numele găsite azi) — acoperă orice timestamp
+# viitor (ex: 20260711_124219, 2026-07-05T1103) și orice client (PRO TERM/Costel).
+backups_firestore/
+firestore_backup*.json
+
 # Windows build artifacts (generate automat)
 windows/x64/
 x64/Release/
