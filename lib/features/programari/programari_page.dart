@@ -875,7 +875,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
         _defaultWorkdayStartHour;
     final endHour =
         prefs.getInt(_plannerBaseEndHourPreferenceKey) ?? _defaultWorkdayEndHour;
-    final visibleDays = prefs.getInt(_calendarVisibleDaysPreferenceKey) ?? 7;
+    final rawVisibleDays = prefs.getInt(_calendarVisibleDaysPreferenceKey);
     final zoom = prefs.getDouble(_calendarZoomPreferenceKey) ?? 1.0;
     final rawTeam =
         (prefs.getString(_defaultAppointmentTeamIdsPreferenceKey) ?? '').trim();
@@ -900,8 +900,16 @@ class _ProgramariPageState extends State<ProgramariPage> {
       }
       _plannerBaseStartHour = startHour.clamp(0, 23);
       _plannerBaseEndHour = endHour.clamp(startHour.clamp(0, 23) + 1, 24);
-      _calendarVisibleDays =
-          _calendarVisibleDayOptions.contains(visibleDays) ? visibleDays : 7;
+      // Implicit 1 zi pe ecran îngust (telefon), 7 zile pe ecran larg —
+      // DOAR când utilizatorul nu a ales niciodată manual altă valoare.
+      // Odată salvată o alegere manuală (3/5/7), aceasta e respectată
+      // indiferent de ecran (isWide, aceeași convenție ca clients_page.dart).
+      final isWide = MediaQuery.sizeOf(context).width >= 600;
+      final visibleDaysDefault = isWide ? 7 : 1;
+      final visibleDays = rawVisibleDays ?? visibleDaysDefault;
+      _calendarVisibleDays = _calendarVisibleDayOptions.contains(visibleDays)
+          ? visibleDays
+          : visibleDaysDefault;
       _calendarZoom = zoom.clamp(0.78, 1.16);
       if (rawTeam.isNotEmpty) {
         final ids = rawTeam
