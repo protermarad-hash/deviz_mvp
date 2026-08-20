@@ -12,6 +12,10 @@ setGlobalOptions({ region: 'europe-west1', maxInstances: 10 });
 
 const db = admin.firestore();
 
+// FAZA 1 — motor read-only de disponibilitate WhatsApp/Programari (aug. 2026)
+const { availability: whatsappAvailability } = require('./whatsapp_availability');
+exports.availability = whatsappAvailability;
+
 const COLLECTIONS = {
   notifications: 'notifications',
   emailQueue: 'notification_email_queue',
