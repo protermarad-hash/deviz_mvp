@@ -1,0 +1,13 @@
+// firestore.emulator-test.rules
+// ⚠️ TEST-ONLY — folosit STRICT de Firebase Emulator Suite local (vezi
+// firebase.emulator.json din acest folder). NU se deployeaza NICIODATA.
+// Permisiv intentionat (allow read, write: if true) pentru ca emulatorul
+// contine DOAR date fixture fictive, sterse la fiecare rulare de test.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

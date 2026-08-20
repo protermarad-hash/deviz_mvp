@@ -8,9 +8,11 @@
   "scripts": {
     "check": "node --check index.js",
     "test": "node --test test/*.test.js",
+    "test:emulator": "node test/emulator/run_integration.js",
     "deploy": "firebase deploy --only functions --project devizpro-ultra-pilot"
   },
   "dependencies": {
+    "express": "^4.21.0",
     "firebase-admin": "^13.8.0",
     "firebase-functions": "^7.2.5",
     "nodemailer": "^6.9.16"

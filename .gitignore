@@ -1,6 +1,12 @@
 # Miscellaneous
 *.class
 *.log
+
+# Firebase Functions — secrete locale pentru emulator (NU comite niciodată)
+functions/.secret.local
+functions/*.secret.local
+functions/test/emulator/*.log
+functions/test/emulator/*-debug.log
 *.pyc
 *.swp
 .DS_Store

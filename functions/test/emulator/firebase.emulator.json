@@ -1,0 +1,23 @@
+{
+  "$comment": "Config EXCLUSIV pentru Firebase Emulator Suite local, folosit doar de functions/test/emulator/run_integration.js prin --config. NU e firebase.json-ul proiectului (acela ramane neatins la radacina repo-ului). NU se foloseste NICIODATA cu `firebase deploy`.",
+  "functions": {
+    "source": "../.."
+  },
+  "firestore": {
+    "rules": "firestore.emulator-test.rules"
+  },
+  "emulators": {
+    "functions": {
+      "port": 5301,
+      "host": "127.0.0.1"
+    },
+    "firestore": {
+      "port": 5302,
+      "host": "127.0.0.1"
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}

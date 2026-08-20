@@ -14,6 +14,7 @@ const { defineSecret } = require('firebase-functions/params');
 const logger = require('firebase-functions/logger');
 const crypto = require('crypto');
 const admin = require('firebase-admin');
+const express = require('express');
 
 const engine = require('./whatsapp_availability_engine');
 
@@ -178,13 +179,27 @@ async function availabilityHandler(req, res, deps) {
 
     // Query simplu pe un singur câmp (>= și <=) — NU necesită index compus
     // Firestore (regula din CLAUDE.md: evită .where().orderBy()).
-    const [appointmentsSnap, teamsSnap] = await Promise.all([
+    //
+    // IMPORTANT (descoperit prin test end-to-end în emulator, FAZA 1.1):
+    // Firestore filtrează DOAR documentele care au efectiv câmpul interogat.
+    // Appointment.fromMap() (Dart) acceptă istoric și `scheduledDate`
+    // (camelCase) pe lângă `scheduled_date` — dacă am interoga strict
+    // `scheduled_date`, un document legacy scris doar cu `scheduledDate`
+    // ar fi invizibil pentru query și motorul ar oferi eronat acel interval
+    // ca disponibil, deși e ocupat. Interogăm ambele variante de câmp și
+    // unim rezultatele (deduplicate după id de document).
+    const [snapSnakeCase, snapCamelCase, teamsSnap] = await Promise.all([
       db.collection('appointments').where('scheduled_date', '>=', rangeStart).where('scheduled_date', '<=', rangeEnd).get(),
+      db.collection('appointments').where('scheduledDate', '>=', rangeStart).where('scheduledDate', '<=', rangeEnd).get(),
       db.collection('teams').get(),
     ]);
 
-    const appointments = [];
-    appointmentsSnap.forEach((doc) => appointments.push(doc.data()));
+    const appointmentsById = new Map();
+    snapSnakeCase.forEach((doc) => appointmentsById.set(doc.id, doc.data()));
+    snapCamelCase.forEach((doc) => {
+      if (!appointmentsById.has(doc.id)) appointmentsById.set(doc.id, doc.data());
+    });
+    const appointments = Array.from(appointmentsById.values());
 
     const teamIds = [];
     teamsSnap.forEach((doc) => teamIds.push(doc.id));
@@ -227,10 +242,31 @@ async function availabilityHandler(req, res, deps) {
 // Export Cloud Function (onRequest, NU onCall — vezi secțiunea 18 din task)
 // ---------------------------------------------------------------------------
 
-const availability = onRequest({ region: 'europe-west1', secrets: [AVAILABILITY_API_TOKEN] }, async (req, res) => {
+// Folosim un Express app propriu (nu doar (req,res)=>{}) ca să putem
+// intercepta noi înșine erorile de parsare JSON. Fără asta, un body
+// malformat e respins de middleware-ul intern de body-parsing ÎNAINTE
+// să ajungă la handler-ul nostru, iar handler-ul default de eroare
+// Express poate scurge stack trace către client (descoperit prin test
+// end-to-end în Firebase Emulator, FAZA 1.1 — secțiunea 20 interzice
+// explicit expunerea stack trace-ului).
+const app = express();
+app.use(express.json());
+// Middleware de eroare (4 argumente = Express îl recunoaște ca error handler)
+// — prinde exact eroarea de JSON.parse aruncată de express.json().
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err) {
+    logger.warn('[whatsapp_availability] body JSON invalid', { message: err.message });
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+  return next();
+});
+app.all('*', async (req, res) => {
   const db = admin.firestore();
   await availabilityHandler(req, res, { db, expectedToken: AVAILABILITY_API_TOKEN.value() });
 });
+
+const availability = onRequest({ region: 'europe-west1', secrets: [AVAILABILITY_API_TOKEN] }, app);
 
 module.exports = {
   availability,
