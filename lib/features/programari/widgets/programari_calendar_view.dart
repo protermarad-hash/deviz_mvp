@@ -156,70 +156,8 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
   List<CalendarPlacement> _calendarPlacementsForDay(
     List<Appointment> items,
     DateTime day,
-  ) {
-    if (items.isEmpty) {
-      return const <CalendarPlacement>[];
-    }
-    final dayStart = _dateOnly(day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    final placements = <CalendarPlacement>[];
-    var index = 0;
-    while (index < items.length) {
-      final clusterItems = <Appointment>[items[index]];
-      var clusterEnd = items[index].effectiveEndDateTime;
-      var cursor = index + 1;
-      while (cursor < items.length) {
-        final next = items[cursor];
-        if (!next.effectiveStartDateTime.isBefore(clusterEnd)) {
-          break;
-        }
-        clusterItems.add(next);
-        if (next.effectiveEndDateTime.isAfter(clusterEnd)) {
-          clusterEnd = next.effectiveEndDateTime;
-        }
-        cursor++;
-      }
-
-      final laneEndTimes = <DateTime>[];
-      final laneById = <String, int>{};
-      for (final item in clusterItems) {
-        var laneIndex = 0;
-        while (laneIndex < laneEndTimes.length &&
-            item.effectiveStartDateTime.isBefore(laneEndTimes[laneIndex])) {
-          laneIndex++;
-        }
-        if (laneIndex == laneEndTimes.length) {
-          laneEndTimes.add(item.effectiveEndDateTime);
-        } else {
-          laneEndTimes[laneIndex] = item.effectiveEndDateTime;
-        }
-        laneById[item.id] = laneIndex;
-      }
-
-      final laneCount = laneEndTimes.length.clamp(1, 12);
-      for (final item in clusterItems) {
-        final clippedStart = item.effectiveStartDateTime.isBefore(dayStart)
-            ? dayStart
-            : item.effectiveStartDateTime;
-        final clippedEnd = item.effectiveEndDateTime.isAfter(dayEnd)
-            ? dayEnd
-            : item.effectiveEndDateTime;
-        placements.add(
-          CalendarPlacement(
-            item: item,
-            laneIndex: laneById[item.id] ?? 0,
-            laneCount: laneCount,
-            visualStart: clippedStart,
-            visualEnd:
-                clippedEnd.isBefore(clippedStart) ? clippedStart : clippedEnd,
-          ),
-        );
-      }
-
-      index = cursor;
-    }
-    return placements;
-  }
+  ) =>
+      CalendarPlacement.computeForDay(items, day);
 
   /// Returnează plasamentele calendarului pentru o zi — cu cache per zi.
   /// Cache-ul este invalidat NUMAI când se schimbă `_cachedFilteredItems` sau `_calendarFocusDate`.
@@ -292,6 +230,35 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
           viewportPlannerWidth,
           double.infinity,
         );
+
+        // Auto-scroll vertical la prima programare a intervalului vizibil —
+        // fără el, grila pornea mereu de la `startHour` (poate fi 05:00),
+        // iar programările de după-amiază/seară rămâneau sub fold, complet
+        // în afara zonei vizibile fără scroll manual (confirmat vizual:
+        // "programări care nu apar în Calendar" deși erau randate corect,
+        // doar needescoperite). Declanșat DOAR când se schimbă efectiv
+        // intervalul vizibil (focus/nr. zile), nu la orice rebuild.
+        final verticalScrollKey =
+            '${_calendarFocusDate.toIso8601String()}_$visibleDayCount';
+        if (_calendarVerticalScrollKey != verticalScrollKey) {
+          _calendarVerticalScrollKey = verticalScrollKey;
+          final targetVerticalOffsetMinutes =
+              calendarVerticalAutoScrollOffsetMinutes(
+            startHour: startHour,
+            earliestHour: earliestHour,
+          );
+          final targetVerticalOffset =
+              targetVerticalOffsetMinutes / 60 * hourHeight;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (!_calendarVerticalScrollController.hasClients) return;
+            final maxExtent =
+                _calendarVerticalScrollController.position.maxScrollExtent;
+            _calendarVerticalScrollController.jumpTo(
+              targetVerticalOffset.clamp(0.0, maxExtent),
+            );
+          });
+        }
 
         return Column(
           children: [
@@ -494,6 +461,7 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
                 child: SizedBox(
                   width: timeColumnWidth + plannerWidth,
                   child: SingleChildScrollView(
+                    controller: _calendarVerticalScrollController,
                     child: Padding(
                       padding: EdgeInsets.only(bottom: bottomSpacing),
                       child: SizedBox(

@@ -319,6 +319,12 @@ class _ProgramariPageState extends State<ProgramariPage> {
   final ScrollController _pageScrollController = ScrollController();
   final ScrollController _calendarHorizontalScrollController =
       ScrollController();
+  final ScrollController _calendarVerticalScrollController =
+      ScrollController();
+  // Cheie a ultimei poziții verticale calculate — evită re-scroll la fiecare
+  // rebuild (ex. dupa un simplu setState), scroll-ul vertical se declanșează
+  // DOAR când se schimbă efectiv intervalul de zile vizibile (focus/zile).
+  String? _calendarVerticalScrollKey;
   String _dataSourceLabel = 'local_cache';
   String? _cloudFallbackReason = FirebaseBootstrap.lastErrorMessage;
   DateTime _calendarFocusDate = DateTime.now();
@@ -533,6 +539,7 @@ class _ProgramariPageState extends State<ProgramariPage> {
     _appointmentsRealtimeSubscription?.cancel();
     _pageScrollController.dispose();
     _calendarHorizontalScrollController.dispose();
+    _calendarVerticalScrollController.dispose();
     _searchController.dispose();
     _serviciiPrestateNotifier.dispose();
     super.dispose();

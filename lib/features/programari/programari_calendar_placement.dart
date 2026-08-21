@@ -16,6 +16,93 @@ class CalendarPlacement {
   final int laneCount;
   final DateTime visualStart;
   final DateTime visualEnd;
+
+  /// Calculează plasamentele (bandă + interval vizual clipat pe zi) pentru
+  /// toate programările unei zile. Funcție PURĂ — nu depinde de state-ul
+  /// paginii — extrasă din `_ProgramariCalendarViewX._calendarPlacementsForDay`
+  /// ca să poată fi testată direct fără a instanția widget-ul.
+  ///
+  /// Randează exact un [CalendarPlacement] per item din [items] (1:1, fără
+  /// să elimine niciun item) — [items] trebuie să fie deja filtrat pentru
+  /// ziua [day] (ex. rezultatul `_calendarItemsForDate(day)`).
+  static List<CalendarPlacement> computeForDay(
+    List<Appointment> items,
+    DateTime day,
+  ) {
+    if (items.isEmpty) {
+      return const <CalendarPlacement>[];
+    }
+    final dayStart = DateTime(day.year, day.month, day.day);
+    final dayEnd = dayStart.add(const Duration(days: 1));
+    final placements = <CalendarPlacement>[];
+    var index = 0;
+    while (index < items.length) {
+      final clusterItems = <Appointment>[items[index]];
+      var clusterEnd = items[index].effectiveEndDateTime;
+      var cursor = index + 1;
+      while (cursor < items.length) {
+        final next = items[cursor];
+        if (!next.effectiveStartDateTime.isBefore(clusterEnd)) {
+          break;
+        }
+        clusterItems.add(next);
+        if (next.effectiveEndDateTime.isAfter(clusterEnd)) {
+          clusterEnd = next.effectiveEndDateTime;
+        }
+        cursor++;
+      }
+
+      final laneEndTimes = <DateTime>[];
+      final laneById = <String, int>{};
+      for (final item in clusterItems) {
+        var laneIndex = 0;
+        while (laneIndex < laneEndTimes.length &&
+            item.effectiveStartDateTime.isBefore(laneEndTimes[laneIndex])) {
+          laneIndex++;
+        }
+        if (laneIndex == laneEndTimes.length) {
+          laneEndTimes.add(item.effectiveEndDateTime);
+        } else {
+          laneEndTimes[laneIndex] = item.effectiveEndDateTime;
+        }
+        laneById[item.id] = laneIndex;
+      }
+
+      final laneCount = laneEndTimes.length.clamp(1, 12);
+      for (final item in clusterItems) {
+        final clippedStart = item.effectiveStartDateTime.isBefore(dayStart)
+            ? dayStart
+            : item.effectiveStartDateTime;
+        final clippedEnd = item.effectiveEndDateTime.isAfter(dayEnd)
+            ? dayEnd
+            : item.effectiveEndDateTime;
+        placements.add(
+          CalendarPlacement(
+            item: item,
+            laneIndex: laneById[item.id] ?? 0,
+            laneCount: laneCount,
+            visualStart: clippedStart,
+            visualEnd:
+                clippedEnd.isBefore(clippedStart) ? clippedStart : clippedEnd,
+          ),
+        );
+      }
+
+      index = cursor;
+    }
+    return placements;
+  }
+}
+
+/// Calculează offset-ul vertical (în pixeli logici) la care trebuie
+/// scrollat automat planner-ul, astfel încât prima programare a
+/// intervalului vizibil să fie imediat vizibilă, fără scroll manual.
+/// Funcție PURĂ, extrasă pentru testare directă.
+int calendarVerticalAutoScrollOffsetMinutes({
+  required int startHour,
+  required int earliestHour,
+}) {
+  return (earliestHour - startHour) * 60;
 }
 
 /// Geometria (poziție verticală + indicatori de continuare) unui bloc de
