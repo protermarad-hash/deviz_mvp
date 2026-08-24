@@ -4118,7 +4118,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           ? selectedDays.length.toDouble()
           : _laborPeriodDays(periodStart: periodStart, periodEnd: periodEnd);
       final hoursPerDay = _sanitizeLaborHoursPerDay(hoursPerDayController.text);
-      hoursPerDayController.text = _formatDecimal(hoursPerDay);
+      // BUG critic reparat (raportat pe JOB-0032): NU rescrie
+      // hoursPerDayController.text aici — utilizatorul tastează live în
+      // acest câmp. sanitizeLaborHoursPerDay() întoarce fallback 8.0 pentru
+      // orice stare tranzitorie goală/zero (ex. imediat după Backspace,
+      // înainte de a apuca să tasteze cifra nouă); rescrierea imediată a
+      // câmpului cu acel fallback bloca ORICE editare — câmpul revenea
+      // instant la 8, indiferent ce se tasta. Fallback-ul rămâne aplicat
+      // doar la CALCULE derivate (mai jos) și la salvare (nu aici).
       // "Zile individuale": Ore totale = SUMA orelor per zi introduse
       // (nu perDay × nrZile — zilele pot avea ore diferite). "Interval":
       // neschimbat, perDay × nrZile (nu are sens per-zi pe un interval
@@ -5426,7 +5433,13 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       final tripDays =
           _laborPeriodDays(periodStart: periodStart, periodEnd: periodEnd);
       final hoursPerDay = _sanitizeLaborHoursPerDay(hoursPerDayController.text);
-      hoursPerDayController.text = _formatDecimal(hoursPerDay);
+      // BUG critic reparat (raportat pe JOB-0032, pre-existent din commit
+      // initial d3edf44, 25 mai 2026 — NU regresie din Faza 1 de azi): NU
+      // rescrie hoursPerDayController.text aici — utilizatorul tastează
+      // live în acest câmp la editarea unui rând existent. Rescrierea
+      // imediată cu fallback-ul sanitizeLaborHoursPerDay (8.0 pt orice
+      // stare tranzitorie goală/zero, ex. după Backspace) bloca ORICE
+      // editare — "Ore/zi" revenea instant la 8, indiferent ce se tasta.
       hoursController.text = _formatDecimal(tripDays * hoursPerDay);
       tripDaysController.text = _formatDecimal(tripDays);
       zileDiurnaController.text =
