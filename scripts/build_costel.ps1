@@ -21,6 +21,21 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# Verificare preventiva: procese java/dart ramase dintr-un build anterior
+# esuat/intrerupt pot cauza conflicte de fisiere in timpul build-ului curent
+# (incident: un proces Gradle orfan concurent a facut ca build-ul curent sa
+# esueze real, dar scriptul a continuat si a livrat tacut un artefact vechi).
+# Doar avertizeaza - NU le opreste automat, ar putea fi procese legitime.
+$orphanProcesses = Get-Process -Name java, dart, dart64 -ErrorAction SilentlyContinue
+if ($orphanProcesses) {
+    Write-Host "ATENTIE: procese java/dart deja ruleaza inainte de a incepe build-ul:" -ForegroundColor Yellow
+    foreach ($proc in $orphanProcesses) {
+        Write-Host "  PID $($proc.Id): $($proc.ProcessName)" -ForegroundColor Yellow
+    }
+    Write-Host "Daca provin dintr-un build anterior neterminat, pot cauza esec de build cu erori neclare (fisiere blocate/conflicte cache)." -ForegroundColor Yellow
+    Write-Host "Scriptul continua, dar daca build-ul de mai jos esueaza neasteptat, opreste manual aceste procese si reia." -ForegroundColor Yellow
+}
+
 # 0. Citeste versiunea din pubspec.yaml (format: version: X.Y.Z+BUILD)
 #    Aceeasi sursa/convenite ca PRO TERM (publish_release.js foloseste
 #    v{version}-build{buildNumber}).
@@ -50,6 +65,11 @@ $relZip = Join-Path $relWinDir "proventaris-windows-costel-v$version-build$build
 # 1. Build APK Android (flavor costel + Firebase costel pe partea Dart)
 Write-Host "[1/6] flutter build apk --flavor costel (CLIENT=costel, BUILD_TAG=$buildTag)..."
 flutter build apk --release --flavor costel --dart-define=CLIENT=costel --dart-define=BUILD_TAG=$buildTag
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "EROARE: 'flutter build apk --flavor costel' a esuat (exit code $LASTEXITCODE)." -ForegroundColor Red
+    Write-Host "Build oprit - NU se copiaza niciun artefact in build\releases\costel\." -ForegroundColor Red
+    exit 1
+}
 
 # 2. Build Windows (Windows nu are flavors Android; doar dart-define)
 #
@@ -70,6 +90,11 @@ Remove-Item -Recurse -Force ".dart_tool\flutter_build" -ErrorAction SilentlyCont
 
 Write-Host "[3/6] flutter build windows (CLIENT=costel, BUILD_TAG=$buildTag)..."
 flutter build windows --release --dart-define=CLIENT=costel --dart-define=BUILD_TAG=$buildTag
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "EROARE: 'flutter build windows' (CLIENT=costel) a esuat (exit code $LASTEXITCODE)." -ForegroundColor Red
+    Write-Host "Build oprit - NU se arhiveaza/copiaza niciun artefact in build\releases\costel\." -ForegroundColor Red
+    exit 1
+}
 
 # 3. ZIP build Windows DIRECT in folderul dedicat (nume versionat)
 Write-Host "[4/6] Arhivare build Windows -> $relZip ..."
