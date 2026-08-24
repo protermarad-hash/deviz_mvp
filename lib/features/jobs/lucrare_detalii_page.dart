@@ -76,6 +76,8 @@ import 'dialogs/contract_dialog.dart';
 import 'dialogs/work_task_dialog.dart';
 import 'services/lucrare_persistence.dart';
 import 'services/lucrare_labor_calc.dart';
+import 'services/pontaj_fisa_aggregator.dart';
+import 'services/pontaj_fisa_pdf_service.dart';
 import 'services/lucrare_ai_service.dart';
 import 'services/lucrare_pdf_builder.dart';
 import 'services/lucrare_document_actions.dart';
@@ -5918,6 +5920,69 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       documentLabel: 'Deviz',
       titlePrefix: 'Deviz',
     );
+  }
+
+  /// Faza 2 — fișă de pontaj PDF PER LUCRARE: combină manopera proprie
+  /// (`_labor`) și personalul partener (`_partnerWorkers`) ale ACESTEI
+  /// lucrări, filtrate pe perioada aleasă de utilizator.
+  Future<void> _onGeneratePontajFisaLucrare() async {
+    final now = DateTime.now();
+    final period = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 5),
+      initialDateRange: DateTimeRange(
+        start: _dateOnly(now.subtract(const Duration(days: 30))),
+        end: _dateOnly(now),
+      ),
+      helpText: 'Selectează perioada pentru fișa de pontaj',
+    );
+    if (period == null || !mounted) return;
+
+    final periodStart = _dateOnly(period.start);
+    final periodEnd = _dateOnly(period.end);
+
+    final ownRows = buildPontajFisaOwnRows(
+      _labor,
+      periodStart: periodStart,
+      periodEnd: periodEnd,
+    );
+    final partnerNamesById = {for (final p in _partners) p.id: p.name};
+    final partnerRows = buildPontajFisaPartnerRows(
+      _partnerWorkers,
+      periodStart: periodStart,
+      periodEnd: periodEnd,
+      partnerNamesById: partnerNamesById,
+    );
+
+    if (ownRows.isEmpty && partnerRows.isEmpty) {
+      _snack('Nu exista inregistrari de pontaj in perioada selectata.');
+      return;
+    }
+
+    final jobLabel = _jobSnapshot.jobCode.trim().isNotEmpty
+        ? _jobSnapshot.jobCode
+        : _jobSnapshot.id;
+    final periodLabel =
+        '${_formatDate(periodStart)} - ${_formatDate(periodEnd)}';
+    try {
+      final path = await PontajFisaPdfService.export(
+        repository: widget.repository,
+        documentTitle: 'FISA PONTAJ — $jobLabel',
+        periodLabel: periodLabel,
+        ownRows: ownRows,
+        partnerRows: partnerRows,
+        fileNamePrefix: 'fisa_pontaj_$jobLabel',
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Fișă pontaj — $jobLabel',
+      );
+    } catch (e) {
+      _snack('Eroare la generarea fisei de pontaj: $e');
+    }
   }
 
   Future<void> _onGenerateContract() async {
@@ -12507,6 +12572,19 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 onPressed: _onAddPartner,
                 icon: const Icon(Icons.handshake_outlined),
                 label: const Text('Adaugă partener'),
+              ),
+            ),
+            _section(
+              context,
+              'Fișă pontaj (propriu + partener)',
+              const Text(
+                'Generează un PDF cu orele/costul personalului propriu și '
+                'partener alocat acestei lucrări, pentru o perioadă aleasă.',
+              ),
+              action: TextButton.icon(
+                onPressed: _onGeneratePontajFisaLucrare,
+                icon: const Icon(Icons.picture_as_pdf_outlined),
+                label: const Text('Generează fișă pontaj'),
               ),
             ),
             _section(
