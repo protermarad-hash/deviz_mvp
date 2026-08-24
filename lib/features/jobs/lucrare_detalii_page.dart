@@ -77,6 +77,7 @@ import 'dialogs/work_task_dialog.dart';
 import 'services/lucrare_persistence.dart';
 import 'services/lucrare_labor_calc.dart';
 import 'services/pontaj_fisa_aggregator.dart';
+import 'services/pontaj_fisa_cross_job_service.dart';
 import 'services/pontaj_fisa_pdf_service.dart';
 import 'services/lucrare_ai_service.dart';
 import 'services/lucrare_pdf_builder.dart';
@@ -5985,6 +5986,78 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     }
   }
 
+  /// Faza 3 — fișă de pontaj PDF AGREGATĂ CROSS-LUCRARE pentru o singură
+  /// persoană (propriu sau partener): scanează TOATE lucrările
+  /// (`repository.listJobs()`) și adună orele/costul persoanei pe
+  /// perioada aleasă, cu detaliere per lucrare (vezi limitarea de cost
+  /// documentată în pontaj_fisa_cross_job_service.dart).
+  Future<void> _onGeneratePontajFisaCrossJob(String personaNume) async {
+    final now = DateTime.now();
+    final period = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 5),
+      initialDateRange: DateTimeRange(
+        start: _dateOnly(now.subtract(const Duration(days: 30))),
+        end: _dateOnly(now),
+      ),
+      helpText: 'Fișă pontaj agregată — $personaNume',
+    );
+    if (period == null || !mounted) return;
+
+    final periodStart = _dateOnly(period.start);
+    final periodEnd = _dateOnly(period.end);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Se scanează lucrările pentru $personaNume...')),
+    );
+
+    late final PontajFisaCrossJobResult result;
+    try {
+      result = await buildPontajFisaCrossJob(
+        repository: widget.repository,
+        personaNume: personaNume,
+        periodStart: periodStart,
+        periodEnd: periodEnd,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Eroare la scanarea lucrărilor: $e');
+      return;
+    }
+    if (!mounted) return;
+
+    if (result.ownRows.isEmpty && result.partnerRows.isEmpty) {
+      _snack(
+        'Nicio înregistrare de pontaj pentru $personaNume în perioada '
+        'selectată (scanate ${result.jobsScanned} lucrări).',
+      );
+      return;
+    }
+
+    final periodLabel =
+        '${_formatDate(periodStart)} - ${_formatDate(periodEnd)}';
+    try {
+      final path = await PontajFisaPdfService.export(
+        repository: widget.repository,
+        documentTitle: 'FISA PONTAJ AGREGATA — $personaNume',
+        periodLabel: periodLabel,
+        ownRows: result.ownRows,
+        partnerRows: result.partnerRows,
+        showJobColumn: true,
+        fileNamePrefix: 'fisa_pontaj_agregata_$personaNume',
+      );
+      if (!mounted) return;
+      await PdfActionsHelper.showPdfActions(
+        context,
+        filePath: path,
+        title: 'Fișă pontaj agregată — $personaNume',
+      );
+    } catch (e) {
+      _snack('Eroare la generarea fisei de pontaj: $e');
+    }
+  }
+
   Future<void> _onGenerateContract() async {
     final contractData = await _showContractDialog();
     if (contractData == null) return;
@@ -10545,6 +10618,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                           'Total ${isTeam ? 'echipă' : 'lucrător'}',
                           '${groupTotal.toStringAsFixed(2)} RON',
                         ),
+                      if (!isTeam)
+                        IconButton(
+                          tooltip:
+                              'Fișă pontaj agregată (toate lucrările) — $workerName',
+                          icon: const Icon(Icons.summarize_outlined, size: 20),
+                          onPressed: () =>
+                              _onGeneratePontajFisaCrossJob(workerName),
+                        ),
                     ],
                   ),
                   const Divider(height: 20),
@@ -10745,6 +10826,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                                       'Total persoana',
                                       '${groupTotal.toStringAsFixed(2)} ${firstWorker.currency}',
                                     ),
+                                  IconButton(
+                                    tooltip:
+                                        'Fișă pontaj agregată (toate lucrările) — ${firstWorker.fullName}',
+                                    icon: const Icon(Icons.summarize_outlined,
+                                        size: 20),
+                                    onPressed: () =>
+                                        _onGeneratePontajFisaCrossJob(
+                                            firstWorker.fullName),
+                                  ),
                                 ],
                               ),
                               const Divider(height: 16),
