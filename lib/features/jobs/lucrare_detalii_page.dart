@@ -69,6 +69,7 @@ import 'lucrare_format_utils.dart';
 import 'lucrare_import_parser.dart';
 import 'dialogs/multi_day_picker_dialog.dart';
 import 'dialogs/partner_dialogs.dart';
+import 'dialogs/partner_worker_dialog.dart';
 import 'dialogs/beneficiary_dialogs.dart';
 import 'dialogs/own_vehicle_dialog.dart';
 import 'dialogs/contract_dialog.dart';
@@ -2568,7 +2569,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         existing: existing,
       );
 
-  Future<JobPartnerWorker?> _showPartnerWorkerDialog({
+  Future<List<JobPartnerWorker>?> _showPartnerWorkerDialog({
     required JobPartner partner,
     JobPartnerWorker? existing,
   }) =>
@@ -2924,23 +2925,27 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
 
   Future<void> _onAddPartnerWorker(JobPartner partner) async {
     final created = await _showPartnerWorkerDialog(partner: partner);
-    if (created == null) return;
-    final next = <JobPartnerWorker>[..._partnerWorkers, created];
+    if (created == null || created.isEmpty) return;
+    final next = <JobPartnerWorker>[..._partnerWorkers, ...created];
     await _savePartnerWorkers(next);
+    final who = created.first.fullName;
     await _appendJournal(
       action: 'partner_worker_added',
-      message: 'Personal partener adaugat: ${created.fullName}',
+      message: created.length == 1
+          ? 'Personal partener adaugat: $who'
+          : 'Personal partener adaugat: $who (${created.length} zile individuale)',
     );
-    _snack('Personal partener adaugat: ${created.fullName}');
+    _snack('Personal partener adaugat: $who');
   }
 
   Future<void> _onEditPartnerWorker(
     JobPartner partner,
     JobPartnerWorker worker,
   ) async {
-    final updated =
+    final updatedList =
         await _showPartnerWorkerDialog(partner: partner, existing: worker);
-    if (updated == null) return;
+    if (updatedList == null || updatedList.isEmpty) return;
+    final updated = updatedList.first;
     final next = _partnerWorkers
         .map((entry) => entry.id == updated.id ? updated : entry)
         .toList(growable: false);
@@ -4600,6 +4605,39 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     return _partnerWorkers
         .where((worker) => worker.partnerId == partnerId)
         .toList(growable: false);
+  }
+
+  /// Grupează rândurile de personal partener pe persoană (mai multe zile
+  /// individuale ale aceleiași persoane apar într-un singur grup, cu
+  /// subtotal) — vizual simetric cu `_buildOwnResourcesSection`.
+  Map<String, List<JobPartnerWorker>> _groupPartnerWorkers(
+    List<JobPartnerWorker> workers,
+  ) {
+    final groups = <String, List<JobPartnerWorker>>{};
+    for (final worker in workers) {
+      final key = worker.masterWorkerId.trim().isNotEmpty
+          ? worker.masterWorkerId.trim()
+          : worker.fullName.trim().toLowerCase();
+      groups.putIfAbsent(key, () => []).add(worker);
+    }
+    for (final list in groups.values) {
+      list.sort((a, b) {
+        final aDate = a.workPeriodStart;
+        final bDate = b.workPeriodStart;
+        if (aDate == null || bDate == null) return 0;
+        return aDate.compareTo(bDate);
+      });
+    }
+    return groups;
+  }
+
+  String _partnerWorkerPeriodLabel(JobPartnerWorker worker) {
+    final start = worker.workPeriodStart;
+    if (start == null) return 'Zi nespecificata';
+    final end = worker.workPeriodEnd ?? start;
+    final startLabel = _formatDate(start);
+    final endLabel = _formatDate(end);
+    return startLabel == endLabel ? startLabel : '$startLabel - $endLabel';
   }
 
   List<JobPartnerVehicle> _partnerVehiclesFor(String partnerId) {
@@ -10610,36 +10648,89 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                       child: Text('Nu exista personal partener adaugat.'),
                     )
                   else
-                    ...workers.map((worker) => ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(worker.fullName),
-                          subtitle: Text(
-                            [
-                              if (worker.role.isNotEmpty) 'Rol: ${worker.role}',
-                              'Ore: ${worker.workedHours.toStringAsFixed(2)}',
-                              'Tarif: ${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency}',
-                              'Total: ${worker.total.toStringAsFixed(2)} ${worker.currency}',
-                              if (worker.notes.isNotEmpty)
-                                'Observatii: ${worker.notes}',
-                            ].join(' • '),
-                          ),
-                          trailing: Wrap(
-                            spacing: 4,
+                    ..._groupPartnerWorkers(workers).entries.map((group) {
+                      final groupWorkers = group.value;
+                      final firstWorker = groupWorkers.first;
+                      final groupTotal = groupWorkers.fold<double>(
+                          0, (sum, w) => sum + w.total);
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              IconButton(
-                                tooltip: 'Editeaza',
-                                onPressed: () =>
-                                    _onEditPartnerWorker(partner, worker),
-                                icon: const Icon(Icons.edit_outlined),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(Icons.person_outline, size: 18),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      firstWorker.role.isEmpty
+                                          ? firstWorker.fullName
+                                          : '${firstWorker.fullName} (${firstWorker.role})',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleSmall,
+                                    ),
+                                  ),
+                                  if (!_isTechnician)
+                                    _chip(
+                                      'Total persoana',
+                                      '${groupTotal.toStringAsFixed(2)} ${firstWorker.currency}',
+                                    ),
+                                ],
                               ),
-                              IconButton(
-                                tooltip: 'Sterge',
-                                onPressed: () => _onDeletePartnerWorker(worker),
-                                icon: const Icon(Icons.delete_outline),
-                              ),
+                              const Divider(height: 16),
+                              ...groupWorkers.map((worker) => ListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    dense: true,
+                                    title: Text(
+                                      worker.workPeriodStart != null
+                                          ? _partnerWorkerPeriodLabel(worker)
+                                          : 'Zi nespecificata',
+                                    ),
+                                    subtitle: Text(
+                                      [
+                                        'Ore/zi: ${worker.hoursPerDay.toStringAsFixed(2)}',
+                                        'Ore: ${worker.workedHours.toStringAsFixed(2)}',
+                                        'Tarif: ${worker.hourlyRate.toStringAsFixed(2)} ${worker.currency}',
+                                        if (worker.perDiemDays > 0)
+                                          'Diurna: ${worker.perDiemCost.toStringAsFixed(2)} ${worker.currency}',
+                                        if (worker.lodgingNights > 0)
+                                          'Cazare: ${worker.lodgingCost.toStringAsFixed(2)} ${worker.currency}',
+                                        'Total: ${worker.total.toStringAsFixed(2)} ${worker.currency}',
+                                        if (worker.notes.isNotEmpty)
+                                          'Observatii: ${worker.notes}',
+                                      ].join(' • '),
+                                    ),
+                                    trailing: Wrap(
+                                      spacing: 4,
+                                      children: [
+                                        IconButton(
+                                          tooltip: 'Editeaza',
+                                          onPressed: () =>
+                                              _onEditPartnerWorker(
+                                                  partner, worker),
+                                          icon:
+                                              const Icon(Icons.edit_outlined),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Sterge',
+                                          onPressed: () =>
+                                              _onDeletePartnerWorker(worker),
+                                          icon: const Icon(
+                                              Icons.delete_outline),
+                                        ),
+                                      ],
+                                    ),
+                                  )),
                             ],
                           ),
-                        )),
+                        ),
+                      );
+                    }),
                   const Divider(height: 20),
                   Row(
                     children: [
