@@ -75,6 +75,7 @@ import 'dialogs/own_vehicle_dialog.dart';
 import 'dialogs/contract_dialog.dart';
 import 'dialogs/work_task_dialog.dart';
 import 'services/lucrare_persistence.dart';
+import 'dialogs/per_day_hours_editor.dart';
 import 'services/lucrare_labor_calc.dart';
 import 'services/pontaj_fisa_aggregator.dart';
 import 'services/pontaj_fisa_cross_job_service.dart';
@@ -4088,6 +4089,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     // interval continuu — generează câte o intrare _labor per zi la salvare.
     bool multiDayMode = false;
     Set<DateTime> selectedDays = {};
+    // Ore per zi editabile individual la "Zile individuale" (nu doar
+    // uniform) — cheile sunt EXACT zilele din selectedDays (normalizate,
+    // fără componentă de oră), populate/actualizate de PerDayHoursEditor.
+    Map<DateTime, double> perDayHours = {};
+    final perDayHoursKey = GlobalKey<PerDayHoursEditorState>();
     final hoursController = TextEditingController(text: '8');
     final hoursPerDayController = TextEditingController(text: '8');
     final tripDaysController = TextEditingController(text: '0');
@@ -4113,7 +4119,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           : _laborPeriodDays(periodStart: periodStart, periodEnd: periodEnd);
       final hoursPerDay = _sanitizeLaborHoursPerDay(hoursPerDayController.text);
       hoursPerDayController.text = _formatDecimal(hoursPerDay);
-      hoursController.text = _formatDecimal(tripDays * hoursPerDay);
+      // "Zile individuale": Ore totale = SUMA orelor per zi introduse
+      // (nu perDay × nrZile — zilele pot avea ore diferite). "Interval":
+      // neschimbat, perDay × nrZile (nu are sens per-zi pe un interval
+      // continuu unde nu există rânduri distincte încă).
+      hoursController.text = multiDayMode
+          ? _formatDecimal(
+              perDayHours.values.fold<double>(0, (sum, h) => sum + h))
+          : _formatDecimal(tripDays * hoursPerDay);
       tripDaysController.text = _formatDecimal(tripDays);
       zileDiurnaController.text =
           includeDiurna ? _formatDecimal(tripDays) : '0';
@@ -4305,6 +4318,47 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                                     ))
                                 .toList(),
                           ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Ore per zi (editabile individual)',
+                                  style: Theme.of(context).textTheme.labelMedium,
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  final value = _sanitizeLaborHoursPerDay(
+                                      hoursPerDayController.text);
+                                  perDayHoursKey.currentState
+                                      ?.applyToAll(value);
+                                },
+                                child: const Text('Aplică la toate zilele'),
+                              ),
+                            ],
+                          ),
+                          PerDayHoursEditor(
+                            key: perDayHoursKey,
+                            days: selectedDays.toList()..sort(),
+                            initialHoursPerDay: _sanitizeLaborHoursPerDay(
+                                hoursPerDayController.text),
+                            formatHours: _formatDecimal,
+                            onChanged: (values) => setDialogState(() {
+                              perDayHours = values;
+                              syncComputedValues();
+                            }),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Poți corecta oricând, individual, orele unei '
+                            'zile deja salvate — din lista rândurilor '
+                            'persoanei, buton „Editează".',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(fontStyle: FontStyle.italic),
+                          ),
                         ],
                       ],
                     ),
@@ -4469,8 +4523,13 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     _snack('Selectează cel puțin o zi.');
                     return;
                   }
-                  final hoursPerDay =
-                      _sanitizeLaborHoursPerDay(hoursPerDayController.text);
+                  // Sursă unică pentru orele per zi: valorile curente din
+                  // PerDayHoursEditor (nu doar ultima stare raportată prin
+                  // onChanged) — evită orice discrepanță dacă un câmp a
+                  // fost editat chiar înainte de a apăsa "Adaugă".
+                  final liveValues =
+                      perDayHoursKey.currentState?.currentValues;
+                  if (liveValues != null) perDayHours = liveValues;
                   final entries = _laborCalc.buildMultiDayLaborEntries(
                     selectedDays: selectedDays,
                     whoId: normalizedSelection,
@@ -4478,7 +4537,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     type: normalizedSelection.startsWith('team:')
                         ? 'team'
                         : 'person',
-                    hoursPerDay: hoursPerDay,
+                    hoursPerDayByDate: perDayHours,
                     hourlyRate: rate,
                     includeDiurna: includeDiurna,
                     diurnaPerDay: selectedPerDiemPerDay,

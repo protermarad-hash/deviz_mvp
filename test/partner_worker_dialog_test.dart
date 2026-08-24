@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:devizpro_ultra/features/jobs/dialogs/partner_worker_dialog.dart';
+import 'package:devizpro_ultra/features/jobs/dialogs/per_day_hours_editor.dart';
 import 'package:devizpro_ultra/features/jobs/job_partner_models.dart';
 
 /// Reproduce fluxul real din `showPartnerWorkerDialog` (Faza 1, paritate
@@ -138,6 +139,97 @@ void main() {
     }
     // Zilele celor 2 randuri sunt distincte.
     expect(result![0].workPeriodStart, isNot(result![1].workPeriodStart));
+  });
+
+  testWidgets(
+      'zile individuale -> ore editate individual per zi, fiecare rand isi pastreaza propria ora',
+      (tester) async {
+    tester.view.physicalSize = const Size(1000, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    List<JobPartnerWorker>? result;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              result = await showPartnerWorkerDialog(
+                context,
+                partner: partner,
+                masterWorkers: const [],
+                jobId: 'job-1',
+                onValidationError: (_) {},
+              );
+            },
+            child: const Text('deschide'),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('deschide'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Nume complet'), 'Mihai Popa');
+    await tester.enterText(find.widgetWithText(TextField, 'Ore/zi'), '8');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Tarif negociat / ora'), '30');
+
+    await tester.ensureVisible(find.text('Zile individuale'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Zile individuale'));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Selectează zile'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Selectează zile'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('10'));
+    await tester.tap(find.text('15'));
+    await tester.tap(find.text('20'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmă'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 zile selectate'), findsOneWidget);
+
+    // "Ore per zi" - editorul per-zi trebuie sa fie vizibil, precompletat
+    // cu "Ore/zi" implicit (8) pentru toate cele 3 zile. Scopeaza cautarea
+    // STRICT la campurile din PerDayHoursEditor (nu si campul global
+    // "Ore/zi implicit", care afiseaza tot '8') - altfel riscam sa editam
+    // campul gresit.
+    await tester.ensureVisible(find.text('Ore per zi (editabile individual)'));
+    await tester.pumpAndSettle();
+    final perDayFieldsFinder = find.descendant(
+      of: find.byType(PerDayHoursEditor),
+      matching: find.byType(TextField),
+    );
+    expect(perDayFieldsFinder, findsNWidgets(3));
+
+    // Editeaza DOAR primele 2 campuri de ore per-zi (lasa a treia zi la 8).
+    await tester.enterText(perDayFieldsFinder.at(0), '2');
+    await tester.pumpAndSettle();
+    await tester.enterText(perDayFieldsFinder.at(1), '5');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Salveaza'));
+    await tester.pumpAndSettle();
+
+    expect(result, isNotNull);
+    expect(result!.length, 3);
+    final hoursSet = result!.map((r) => r.hoursPerDay).toSet();
+    // Cele 3 randuri NU au toate aceeasi ora (era imposibil inainte de
+    // Faza 1 - exact gap-ul raportat de utilizator).
+    expect(hoursSet.length, greaterThan(1));
+    // Fiecare rand: workedHours == hoursPerDay (1 zi per rand).
+    for (final row in result!) {
+      expect(row.workedHours, row.hoursPerDay);
+    }
+    // Suma orelor reflecta editarile (2 + 5 + 8 = 15), nu 3 * 8 = 24.
+    final totalHours =
+        result!.fold<double>(0, (s, r) => s + r.hoursPerDay);
+    expect(totalHours, 15);
   });
 
   testWidgets('diurna si cazare active -> incluse in randul generat',

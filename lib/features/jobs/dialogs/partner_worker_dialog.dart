@@ -5,6 +5,7 @@ import '../job_partner_models.dart';
 import '../lucrare_format_utils.dart';
 import 'multi_day_picker_dialog.dart';
 import 'partner_worker_autocomplete.dart';
+import 'per_day_hours_editor.dart';
 
 /// Dialog "Personal partener" — paritate cu manopera proprie
 /// (`_buildOwnResourcesSection` / dialogul din `lucrare_detalii_page.dart`
@@ -63,6 +64,11 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
           ? existing!.masterWorkerId.trim()
           : null;
   var multiDayMode = false;
+  // Ore per zi editabile individual la "Zile individuale" — cheile sunt
+  // EXACT zilele din selectedDays (paritate cu manopera proprie, vezi
+  // PerDayHoursEditor + lucrare_detalii_page.dart).
+  var perDayHours = <DateTime, double>{};
+  final perDayHoursKey = GlobalKey<PerDayHoursEditorState>();
   var includeDiurna = (existing?.perDiemDays ?? 0) > 0;
   var includeCazare = (existing?.lodgingNights ?? 0) > 0;
   var periodStart = existing?.workPeriodStart ?? DateTime.now();
@@ -82,11 +88,17 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
                     hoursPerDayCtrl.text.replaceAll(',', '.')) ??
                 8;
             if (!isEdit) {
-              final days = multiDayMode
-                  ? (selectedDays.isEmpty ? 1 : selectedDays.length)
-                  : (periodEnd.difference(periodStart).inDays + 1).clamp(
-                      1, 100000);
-              hoursTotalCtrl.text = _fmtNum(perDay * days);
+              if (multiDayMode) {
+                // "Zile individuale": Ore totale = SUMA orelor per zi
+                // introduse (zilele pot avea ore diferite), nu perDay ×
+                // nrZile.
+                hoursTotalCtrl.text = _fmtNum(
+                    perDayHours.values.fold<double>(0, (s, h) => s + h));
+              } else {
+                final days = (periodEnd.difference(periodStart).inDays + 1)
+                    .clamp(1, 100000);
+                hoursTotalCtrl.text = _fmtNum(perDay * days);
+              }
             }
           }
 
@@ -241,6 +253,53 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
                                           }),
                                         ))
                                     .toList(),
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'Ore per zi (editabile individual)',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium,
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      final value = double.tryParse(
+                                              hoursPerDayCtrl.text
+                                                  .replaceAll(',', '.')) ??
+                                          8;
+                                      perDayHoursKey.currentState
+                                          ?.applyToAll(value);
+                                    },
+                                    child: const Text('Aplică la toate zilele'),
+                                  ),
+                                ],
+                              ),
+                              PerDayHoursEditor(
+                                key: perDayHoursKey,
+                                days: selectedDays.toList()..sort(),
+                                initialHoursPerDay: double.tryParse(
+                                        hoursPerDayCtrl.text
+                                            .replaceAll(',', '.')) ??
+                                    8,
+                                formatHours: _fmtNum,
+                                onChanged: (values) => setDialogState(() {
+                                  perDayHours = values;
+                                  syncTotal();
+                                }),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Poți corecta oricând, individual, orele '
+                                'unei zile deja salvate — din lista '
+                                'rândurilor persoanei, buton „Editeaza".',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(fontStyle: FontStyle.italic),
                               ),
                             ],
                           ],
@@ -433,17 +492,31 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
                   if (multiDayMode) {
                     final sortedDays = selectedDays.toList()
                       ..sort((a, b) => a.compareTo(b));
+                    // Sursă unică pentru orele per zi: valorile curente din
+                    // PerDayHoursEditor, nu doar ultima stare raportată
+                    // prin onChanged.
+                    final liveValues =
+                        perDayHoursKey.currentState?.currentValues;
+                    if (liveValues != null) perDayHours = liveValues;
                     final rows = List<JobPartnerWorker>.generate(
                       sortedDays.length,
-                      (index) => buildRow(
-                        id: 'job-partner-worker-'
-                            '${sortedDays[index].millisecondsSinceEpoch}-$index',
-                        dayStart: sortedDays[index],
-                        dayEnd: sortedDays[index],
-                        hoursPerDay: hoursPerDay,
-                        workedHours: hoursPerDay,
-                        workDays: 1,
-                      ),
+                      (index) {
+                        final day = sortedDays[index];
+                        final dayHours = perDayHours[day];
+                        final resolvedHours =
+                            (dayHours == null || dayHours <= 0)
+                                ? hoursPerDay
+                                : dayHours;
+                        return buildRow(
+                          id: 'job-partner-worker-'
+                              '${day.millisecondsSinceEpoch}-$index',
+                          dayStart: day,
+                          dayEnd: day,
+                          hoursPerDay: resolvedHours,
+                          workedHours: resolvedHours,
+                          workDays: 1,
+                        );
+                      },
                     );
                     Navigator.of(context).pop(rows);
                     return;

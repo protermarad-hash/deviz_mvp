@@ -68,16 +68,26 @@ class LucrareLaborCalculator {
   /// Generează câte o intrare `_labor` distinctă pentru fiecare zi din
   /// `selectedDays` (posibil neconsecutive — ex: luni + miercuri + vineri),
   /// spre deosebire de `laborPeriodDays` care presupune un interval continuu.
-  /// Fiecare zi primește aceleași ore/zi, tarif, diurnă și cazare — doar
-  /// data diferă. Id-uri unice garantate prin index + dată (nu doar
-  /// timestamp de creare, care ar coincide pentru toate intrările generate
-  /// în aceeași buclă sincronă).
+  /// Fiecare zi poate avea ore PROPRII (`hoursPerDayByDate`) — tarif,
+  /// diurnă și cazare rămân uniforme pe tot lotul (nu au fost cerute
+  /// per-zi). Id-uri unice garantate prin index + dată (nu doar timestamp
+  /// de creare, care ar coincide pentru toate intrările generate în
+  /// aceeași buclă sincronă).
+  ///
+  /// `hoursPerDayByDate` trebuie să conțină o cheie pentru fiecare zi din
+  /// `selectedDays` (normalizată prin `_dateOnly`, ca în restul funcției);
+  /// o zi lipsă din map primește fallback 8.0 (`sanitizeLaborHoursPerDay`),
+  /// aceeași valoare de siguranță folosită înainte la parsare eșuată.
+  /// Un apel cu aceeași valoare pentru toate zilele produce EXACT același
+  /// rezultat ca vechiul parametru unic `hoursPerDay` (verificat prin
+  /// testele existente, migrate la noua semnătură fără schimbare de
+  /// așteptări).
   List<Map<String, dynamic>> buildMultiDayLaborEntries({
     required Set<DateTime> selectedDays,
     required String whoId,
     required String whoLabel,
     required String type,
-    required double hoursPerDay,
+    required Map<DateTime, double> hoursPerDayByDate,
     required double hourlyRate,
     required bool includeDiurna,
     required double diurnaPerDay,
@@ -87,11 +97,13 @@ class LucrareLaborCalculator {
   }) {
     final sortedDays = selectedDays.map(_dateOnly).toSet().toList()
       ..sort((a, b) => a.compareTo(b));
-    final costOre = hoursPerDay * hourlyRate;
     final costDiurna = includeDiurna ? diurnaPerDay : 0.0;
     final costCazare = includeCazare ? cazarePerNoapte : 0.0;
     return List<Map<String, dynamic>>.generate(sortedDays.length, (index) {
       final day = sortedDays[index];
+      final hoursPerDay =
+          sanitizeLaborHoursPerDay(hoursPerDayByDate[day]);
+      final costOre = hoursPerDay * hourlyRate;
       return <String, dynamic>{
         'id': 'job-labor-${day.millisecondsSinceEpoch}-$index',
         'jobId': jobId,
