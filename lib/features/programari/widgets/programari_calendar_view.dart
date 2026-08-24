@@ -5,7 +5,8 @@ part of '../programari_page.dart';
 /// Extension (nu mixin) pentru a evita circularitatea "on ClassItself";
 /// `part of` păstrează accesul complet la starea privată a paginii.
 extension _ProgramariCalendarViewX on _ProgramariPageState {
-  bool _calendarUsesWeekAnchor(int dayCount) => dayCount > 1;
+  bool _calendarUsesWeekAnchor(int dayCount) =>
+      CalendarIntervalNavigation.usesWeekAnchor(dayCount);
 
   List<DateTime> _calendarDays({required int dayCount}) {
     final start = _calendarUsesWeekAnchor(dayCount)

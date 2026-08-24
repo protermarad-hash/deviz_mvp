@@ -68,6 +68,7 @@ import 'appointment_sheet_pdf_service.dart';
 import 'appointment_status_utils.dart';
 import 'programari_models.dart';
 import 'programari_utils.dart';
+import 'programari_calendar_navigation.dart';
 import 'programari_calendar_placement.dart';
 import 'programari_echipe_grouping.dart';
 import 'programari_slots.dart';
@@ -4061,20 +4062,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
   // ── Navigare calendar cu swipe / butoane ────────────────────────────────────
   void _goToNextCalendarInterval() {
     if (_isCalendarNavigating) return;
-    const intervalStep = 7;
     final visibleDayCount = _calendarVisibleDayOptions.contains(_calendarVisibleDays)
         ? _calendarVisibleDays
         : 7;
-    final useWeekAnchor = _calendarUsesWeekAnchor(visibleDayCount);
-    final baseDate = useWeekAnchor
-        ? _startOfWeekMonday(_calendarFocusDate)
-        : _dateOnly(_calendarFocusDate);
     setState(() {
       _isCalendarNavigating = true;
-      _calendarFocusDate = DateTime(
-        baseDate.year,
-        baseDate.month,
-        baseDate.day + intervalStep,
+      _calendarFocusDate = CalendarIntervalNavigation.nextFocusDate(
+        currentFocusDate: _calendarFocusDate,
+        visibleDayCount: visibleDayCount,
       );
     });
     Future.delayed(const Duration(milliseconds: 400), () {
@@ -4084,20 +4079,14 @@ class _ProgramariPageState extends State<ProgramariPage> {
 
   void _goToPreviousCalendarInterval() {
     if (_isCalendarNavigating) return;
-    const intervalStep = 7;
     final visibleDayCount = _calendarVisibleDayOptions.contains(_calendarVisibleDays)
         ? _calendarVisibleDays
         : 7;
-    final useWeekAnchor = _calendarUsesWeekAnchor(visibleDayCount);
-    final baseDate = useWeekAnchor
-        ? _startOfWeekMonday(_calendarFocusDate)
-        : _dateOnly(_calendarFocusDate);
     setState(() {
       _isCalendarNavigating = true;
-      _calendarFocusDate = DateTime(
-        baseDate.year,
-        baseDate.month,
-        baseDate.day - intervalStep,
+      _calendarFocusDate = CalendarIntervalNavigation.previousFocusDate(
+        currentFocusDate: _calendarFocusDate,
+        visibleDayCount: visibleDayCount,
       );
     });
     Future.delayed(const Duration(milliseconds: 400), () {
