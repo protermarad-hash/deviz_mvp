@@ -10716,10 +10716,16 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                       ),
                       trailing: Wrap(
                         spacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
-                          IconButton(
-                            tooltip: 'Editează',
-                            icon: const Icon(Icons.edit_outlined),
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8),
+                            ),
+                            icon: const Icon(Icons.edit_outlined, size: 18),
+                            label: const Text('Editează'),
                             onPressed: () => _onEditLabor(i),
                           ),
                           if (!_isTechnician)
@@ -10921,14 +10927,23 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                                     ),
                                     trailing: Wrap(
                                       spacing: 4,
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
                                       children: [
-                                        IconButton(
-                                          tooltip: 'Editeaza',
+                                        TextButton.icon(
+                                          style: TextButton.styleFrom(
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            padding: const EdgeInsets
+                                                .symmetric(horizontal: 8),
+                                          ),
+                                          icon: const Icon(
+                                              Icons.edit_outlined,
+                                              size: 18),
+                                          label: const Text('Editează'),
                                           onPressed: () =>
                                               _onEditPartnerWorker(
                                                   partner, worker),
-                                          icon:
-                                              const Icon(Icons.edit_outlined),
                                         ),
                                         IconButton(
                                           tooltip: 'Sterge',
