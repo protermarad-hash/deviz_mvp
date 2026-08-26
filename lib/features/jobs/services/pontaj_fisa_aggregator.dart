@@ -9,6 +9,7 @@ class PontajFisaRow {
   const PontajFisaRow({
     required this.persoanaNume,
     required this.esteProprie,
+    this.partenerId = '',
     this.partenerNume = '',
     this.rol = '',
     this.jobCode = '',
@@ -26,6 +27,11 @@ class PontajFisaRow {
 
   final String persoanaNume;
   final bool esteProprie;
+
+  /// ID-ul firmei partenere (JobPartnerWorker.partnerId) — doar dacă
+  /// `esteProprie == false`. Mereu populat pentru rânduri partener (câmp
+  /// `required` pe JobPartnerWorker) — sigur ca cheie de grupare per partener.
+  final String partenerId;
 
   /// Numele companiei partenere — doar dacă `esteProprie == false`.
   final String partenerNume;
@@ -118,6 +124,7 @@ List<PontajFisaRow> buildPontajFisaPartnerRows(
     return PontajFisaRow(
       persoanaNume: w.fullName,
       esteProprie: false,
+      partenerId: w.partnerId,
       partenerNume: partnerNamesById[w.partnerId] ?? '',
       rol: w.role,
       dataStart: w.workPeriodStart,

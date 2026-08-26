@@ -27,6 +27,7 @@ import '../features/field_sales/field_sales_page.dart';
 import '../features/materials/materials_master_page.dart';
 import '../features/notifications/notification_center_page.dart';
 import '../features/notifications/notification_runtime_service.dart';
+import '../features/jobs/pontaj_partener_saptamanal_page.dart';
 import '../features/partners/partners_page.dart';
 import '../features/partner_financial/partner_financial_dashboard_page.dart';
 import '../features/product_catalog/product_catalog_page.dart';
@@ -116,7 +117,15 @@ const List<_ShellSectionDef> _kShellSections = [
     id: 'comercial',
     label: 'COMERCIAL',
     icon: Icons.storefront_outlined,
-    itemIds: ['crm', 'oferte', 'clienti', 'parteneri', 'financiar_parteneri', 'agent_teren'],
+    itemIds: [
+      'crm',
+      'oferte',
+      'clienti',
+      'parteneri',
+      'financiar_parteneri',
+      'pontaj_partener_saptamanal',
+      'agent_teren',
+    ],
   ),
   _ShellSectionDef(
     id: 'operational',
@@ -401,6 +410,14 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
         allowedRoles: {UserRole.admin, UserRole.birou},
         builder: (_) => PartnerFinancialDashboardPage(
               appRepository: widget.appDataRepository),
+      ),
+      ShellDestination(
+        id: 'pontaj_partener_saptamanal',
+        label: 'Pontaj parteneri (săptămânal)',
+        icon: Icons.summarize_outlined,
+        allowedRoles: {UserRole.admin, UserRole.birou},
+        builder: (_) => PontajPartenerSaptamanalPage(
+              repository: widget.appDataRepository),
       ),
       ShellDestination(
         id: 'catalog_produse',
