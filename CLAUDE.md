@@ -1484,6 +1484,26 @@ await PdfActionsHelper.showPdfActions(context, filePath: path, title: '...');
 
 ---
 
+## 📝 NOTE TEHNICE CUNOSCUTE (inconsecvențe minore, decizie: nu se schimbă)
+
+### `PontajFisaRow.partenerId` vs `JobPartnerWorker.partnerId`
+
+**Notă cunoscută:** `PontajFisaRow.partenerId` (`pontaj_fisa_aggregator.dart`)
+și `JobPartnerWorker.partnerId` (`job_partner_models.dart`) reprezintă
+ACEEAȘI valoare (ID firmă parteneră) — nume diferite (ro/en) din motive de
+consecvență locală cu restul câmpurilor fiecărei clase, NU o diferență de
+semantică.
+
+**Decizie:** NU se redenumește (schimbarea ar introduce altă inconsecvență
+în `PontajFisaRow`, care e deja o clasă mixtă ro/en: `persoanaNume`,
+`partenerNume`, `esteProprie` sunt românești, `dataStart`, `costTotal` sunt
+englezești).
+
+**De reținut la orice grep viitor pe `partnerId`** — verifică și varianta
+`partenerId`.
+
+---
+
 ## 📋 MODULUL TASKURI
 
 ### Fișiere principale:
