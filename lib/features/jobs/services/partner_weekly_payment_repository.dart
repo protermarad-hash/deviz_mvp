@@ -136,8 +136,7 @@ class PartnerWeeklyPaymentRepository {
   }
 
   /// Lista locală completă — pentru teste și forceSyncLocalToCloud.
-  Future<List<PartnerWeeklyPayment>> listLocalPayments() async =>
-      _readLocal();
+  Future<List<PartnerWeeklyPayment>> listLocalPayments() async => _readLocal();
 
   /// Citire cu fallback cloud, pentru un singur document.
   Future<PartnerWeeklyPayment?> getPayment(
@@ -172,8 +171,7 @@ class PartnerWeeklyPaymentRepository {
       DateTime start, DateTime end) async {
     final all = await _readLocal();
     final filtered = all
-        .where((p) =>
-            !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
+        .where((p) => !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
         .toList(growable: false);
     lastLocalCount = filtered.length;
 
@@ -183,8 +181,8 @@ class PartnerWeeklyPaymentRepository {
       final snapshot = await _collection.get();
       final cloud = snapshot.docs
           .map((doc) => PartnerWeeklyPayment.fromMap(doc.data()))
-          .where((p) =>
-              !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
+          .where(
+              (p) => !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
           .toList(growable: false);
       lastFirestoreCount = cloud.length;
       lastFirestoreError = null;
@@ -202,8 +200,9 @@ class PartnerWeeklyPaymentRepository {
       }).toList(growable: false);
 
       final knownIds = resolved.map((p) => p.id).toSet();
-      final localOnly =
-          filtered.where((p) => !knownIds.contains(p.id)).toList(growable: false);
+      final localOnly = filtered
+          .where((p) => !knownIds.contains(p.id))
+          .toList(growable: false);
       for (final p in localOnly) {
         await OfflineSyncRuntime.instance
             .queuePartnerWeeklyPaymentUpsert(p.toMap());
@@ -221,7 +220,8 @@ class PartnerWeeklyPaymentRepository {
       return merged;
     } catch (e) {
       lastFirestoreError = e.toString();
-      debugPrint('[PartnerWeeklyPayment] listPaymentsForPeriod cloud eroare: $e');
+      debugPrint(
+          '[PartnerWeeklyPayment] listPaymentsForPeriod cloud eroare: $e');
       return filtered;
     }
   }
@@ -258,9 +258,7 @@ class PartnerWeeklyPaymentRepository {
     int synced = 0;
     for (final p in locals) {
       try {
-        await _collection
-            .doc(p.id)
-            .set(p.toMap(), SetOptions(merge: true));
+        await _collection.doc(p.id).set(p.toMap(), SetOptions(merge: true));
         await OfflineSyncRuntime.instance
             .queuePartnerWeeklyPaymentUpsert(p.toMap());
         synced++;

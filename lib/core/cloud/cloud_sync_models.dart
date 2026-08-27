@@ -98,7 +98,8 @@ class CloudSyncItem {
       lastError: clearFailureState ? null : (lastError ?? this.lastError),
       lastAttemptAt:
           clearFailureState ? null : (lastAttemptAt ?? this.lastAttemptAt),
-      nextAttemptAt: clearFailureState ? null : (nextAttemptAt ?? this.nextAttemptAt),
+      nextAttemptAt:
+          clearFailureState ? null : (nextAttemptAt ?? this.nextAttemptAt),
     );
   }
 

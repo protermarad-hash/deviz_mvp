@@ -19,8 +19,8 @@ void main() {
     });
 
     test('ID cu luna și zi cu zero-padding corect', () {
-      final id = PartnerWeeklyPaymentRepository.paymentId(
-          'x', DateTime(2025, 1, 5));
+      final id =
+          PartnerWeeklyPaymentRepository.paymentId('x', DateTime(2025, 1, 5));
       expect(id, 'pwp_x_20250105');
     });
 
@@ -81,8 +81,7 @@ void main() {
       final repo = PartnerWeeklyPaymentRepository();
       final weekStart = DateTime(2025, 3, 10);
       const partnerId = 'partner_test';
-      final id =
-          PartnerWeeklyPaymentRepository.paymentId(partnerId, weekStart);
+      final id = PartnerWeeklyPaymentRepository.paymentId(partnerId, weekStart);
 
       final v1 = PartnerWeeklyPayment(
         id: id,

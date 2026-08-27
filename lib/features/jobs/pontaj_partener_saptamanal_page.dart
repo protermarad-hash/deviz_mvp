@@ -98,7 +98,8 @@ class _PontajPartenerSaptamanalPageState
     if (picked == null || !mounted) return;
     setState(() {
       _period = DateTimeRange(
-        start: DateTime(picked.start.year, picked.start.month, picked.start.day),
+        start:
+            DateTime(picked.start.year, picked.start.month, picked.start.day),
         end: DateTime(picked.end.year, picked.end.month, picked.end.day),
       );
     });
@@ -273,8 +274,8 @@ class _PontajPartenerSaptamanalPageState
     final name = partner.partnerNume.trim().isEmpty
         ? partner.partnerId
         : partner.partnerNume.trim();
-    final payId = PartnerWeeklyPaymentRepository.paymentId(
-        partner.partnerId, weekStart);
+    final payId =
+        PartnerWeeklyPaymentRepository.paymentId(partner.partnerId, weekStart);
     final payment = _payments[payId];
     final isPaid = payment != null;
     // Avertisment: calculatedAmountAtMarking s-a schimbat față de pontajul curent.
@@ -296,8 +297,8 @@ class _PontajPartenerSaptamanalPageState
                   Text(
                     'Plătit ${_fmt.format(payment.amountPaid)} RON'
                     ' · ${_dateFmt.format(payment.paidAt)}',
-                    style: TextStyle(
-                        fontSize: 11, color: Colors.green.shade700),
+                    style:
+                        TextStyle(fontSize: 11, color: Colors.green.shade700),
                   ),
                 ],
               )
@@ -332,12 +333,10 @@ class _PontajPartenerSaptamanalPageState
                 color: Colors.transparent,
                 child: InkWell(
                   borderRadius: BorderRadius.circular(15),
-                  onTap: () => _showMarkPaymentDialog(
-                      partner, weekStart, payment),
+                  onTap: () =>
+                      _showMarkPaymentDialog(partner, weekStart, payment),
                   child: Icon(
-                    isPaid
-                        ? Icons.edit_outlined
-                        : Icons.payments_outlined,
+                    isPaid ? Icons.edit_outlined : Icons.payments_outlined,
                     size: 16,
                     color: isPaid
                         ? Colors.grey.shade500
@@ -366,14 +365,12 @@ class _PontajPartenerSaptamanalPageState
           ? existing.amountPaid.toStringAsFixed(2)
           : partner.totalCost.toStringAsFixed(2),
     );
-    final notesCtrl =
-        TextEditingController(text: existing?.notes ?? '');
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
 
     final result = await showDialog<_PaymentDialogResult>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(
-            existing == null ? 'Marchează plată' : 'Editează plată'),
+        title: Text(existing == null ? 'Marchează plată' : 'Editează plată'),
         content: SizedBox(
           width: 400,
           child: SingleChildScrollView(
@@ -393,15 +390,13 @@ class _PontajPartenerSaptamanalPageState
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(name,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700)),
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
                       const SizedBox(height: 2),
                       Text(
                         'Săpt. ${_dateFmt.format(weekStart)}'
                         ' – ${_dateFmt.format(weekStart.add(const Duration(days: 6)))}',
                         style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade600),
+                            fontSize: 12, color: Colors.grey.shade600),
                       ),
                       const SizedBox(height: 6),
                       Text(
@@ -414,8 +409,7 @@ class _PontajPartenerSaptamanalPageState
                         Text(
                           'Marcat pe: ${_dateFmt.format(existing.paidAt)}',
                           style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey.shade600),
+                              fontSize: 11, color: Colors.grey.shade600),
                         ),
                       ],
                     ],
@@ -429,8 +423,8 @@ class _PontajPartenerSaptamanalPageState
                     border: OutlineInputBorder(),
                     isDense: true,
                   ),
-                  keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -450,10 +444,9 @@ class _PontajPartenerSaptamanalPageState
         actions: [
           if (existing != null)
             TextButton(
-              onPressed: () => Navigator.of(ctx)
-                  .pop(const _PaymentDialogResult._cancel()),
-              style: TextButton.styleFrom(
-                  foregroundColor: Colors.red.shade700),
+              onPressed: () =>
+                  Navigator.of(ctx).pop(const _PaymentDialogResult._cancel()),
+              style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
               child: const Text('Anulează marcarea'),
             ),
           TextButton(
@@ -462,17 +455,14 @@ class _PontajPartenerSaptamanalPageState
           ),
           FilledButton(
             onPressed: () {
-              final raw =
-                  amountCtrl.text.trim().replaceAll(',', '.');
-              final amount =
-                  double.tryParse(raw) ?? partner.totalCost;
+              final raw = amountCtrl.text.trim().replaceAll(',', '.');
+              final amount = double.tryParse(raw) ?? partner.totalCost;
               Navigator.of(ctx).pop(_PaymentDialogResult._save(
                 amount: amount,
                 notes: notesCtrl.text.trim(),
               ));
             },
-            child:
-                Text(existing == null ? 'Marchează' : 'Salvează'),
+            child: Text(existing == null ? 'Marchează' : 'Salvează'),
           ),
         ],
       ),
@@ -483,8 +473,8 @@ class _PontajPartenerSaptamanalPageState
 
     if (!mounted || result == null) return;
 
-    final payId = PartnerWeeklyPaymentRepository.paymentId(
-        partner.partnerId, weekStart);
+    final payId =
+        PartnerWeeklyPaymentRepository.paymentId(partner.partnerId, weekStart);
 
     if (result.shouldCancel) {
       setState(() => _payments.remove(payId));

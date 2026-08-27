@@ -90,18 +90,21 @@ class OfflineSyncRuntime {
   Future<void> queueAppointmentsBatch(List<Appointment> appointments) async {
     if (appointments.isEmpty) return;
     final now = DateTime.now();
-    final items = appointments.map((a) {
-      final id = a.id;
-      final entityId = id.trim().isEmpty ? null : id;
-      if (entityId == null) return null;
-      return CloudSyncItem(
-        id: 'appointments_${entityId}_${now.millisecondsSinceEpoch}',
-        entityType: CloudEntityType.appointments,
-        entityId: entityId,
-        payload: a.toMap(),
-        updatedAt: now,
-      );
-    }).whereType<CloudSyncItem>().toList(growable: false);
+    final items = appointments
+        .map((a) {
+          final id = a.id;
+          final entityId = id.trim().isEmpty ? null : id;
+          if (entityId == null) return null;
+          return CloudSyncItem(
+            id: 'appointments_${entityId}_${now.millisecondsSinceEpoch}',
+            entityType: CloudEntityType.appointments,
+            entityId: entityId,
+            payload: a.toMap(),
+            updatedAt: now,
+          );
+        })
+        .whereType<CloudSyncItem>()
+        .toList(growable: false);
     if (items.isNotEmpty) {
       await _queueRepository.upsertBatch(items);
     }
@@ -201,7 +204,8 @@ class OfflineSyncRuntime {
     await _bridge.queueAgfrEquipmentDelete(equipmentId);
   }
 
-  Future<void> queueAgfrIntervention(AgfrInterventionRecord intervention) async {
+  Future<void> queueAgfrIntervention(
+      AgfrInterventionRecord intervention) async {
     await _bridge.queueAgfrIntervention(intervention.toMap());
   }
 
@@ -377,8 +381,7 @@ class OfflineSyncRuntime {
     await _bridge.queueGpsCheckinUpsert(checkin);
   }
 
-  Future<void> queueEchipamentInstalat(
-      Map<String, dynamic> echipament) async {
+  Future<void> queueEchipamentInstalat(Map<String, dynamic> echipament) async {
     await _bridge.queueEchipamentInstalat(echipament);
   }
 
@@ -440,8 +443,7 @@ class OfflineSyncRuntime {
     final now = DateTime.now();
     if (_isSyncing) {
       if (_lastSyncSkipLoggedAt == null ||
-          now.difference(_lastSyncSkipLoggedAt!) >
-              const Duration(seconds: 2)) {
+          now.difference(_lastSyncSkipLoggedAt!) > const Duration(seconds: 2)) {
         debugPrint('[Programari] cloud sync skip reason=already_syncing');
         _lastSyncSkipLoggedAt = now;
       }
@@ -455,8 +457,7 @@ class OfflineSyncRuntime {
     if (lastSyncActivityAt != null &&
         now.difference(lastSyncActivityAt) < _minSyncGap) {
       if (_lastSyncSkipLoggedAt == null ||
-          now.difference(_lastSyncSkipLoggedAt!) >
-              const Duration(seconds: 2)) {
+          now.difference(_lastSyncSkipLoggedAt!) > const Duration(seconds: 2)) {
         debugPrint('[Programari] cloud sync skip reason=cooldown');
         _lastSyncSkipLoggedAt = now;
       }
@@ -494,7 +495,8 @@ class OfflineSyncRuntime {
       final documentsRepository = FirebaseJobSiteDocumentsRepository();
       final teamsRepository = FirebaseEchipeRepository();
       final appointmentsRepository = FirebaseProgramariRepository();
-      final appointmentMaterialKitRepository = FirebaseProgramareKitRepository();
+      final appointmentMaterialKitRepository =
+          FirebaseProgramareKitRepository();
       final clientsRepository = FirebaseClientiRepository();
       final materialsRepository = FirebaseMaterialeRepository();
       final complaintsCollection =
@@ -738,8 +740,7 @@ class OfflineSyncRuntime {
               if (item.deleted) {
                 await templateRepo.deleteFromFirebase(item.entityId);
               } else {
-                final template =
-                    DevizArticolTemplate.fromMap(item.payload);
+                final template = DevizArticolTemplate.fromMap(item.payload);
                 await templateRepo.upsertToFirebase(template);
               }
               await _queueRepository.markItemSynced(item.id, DateTime.now());
