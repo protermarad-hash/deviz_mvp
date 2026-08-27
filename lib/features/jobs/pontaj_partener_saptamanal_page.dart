@@ -277,28 +277,57 @@ class _PontajPartenerSaptamanalPageState
     final payId =
         PartnerWeeklyPaymentRepository.paymentId(partner.partnerId, weekStart);
     final payment = _payments[payId];
-    final isPaid = payment != null;
-    // Avertisment: calculatedAmountAtMarking s-a schimbat față de pontajul curent.
-    // NU comparăm amountPaid (poate diferi intenționat — ex. avans).
-    final hasDiscrepancy = isPaid &&
+    final hasPaymentRecord = payment != null;
+    // Status DERIVAT (Faza 3) — comparație amountPaid vs. totalCost curent,
+    // NU un câmp stocat. Vezi derivePartnerWeeklyPaymentStatus().
+    final status = derivePartnerWeeklyPaymentStatus(
+      payment: payment,
+      totalCost: partner.totalCost,
+    );
+    final isPaidFully = status == PartnerWeeklyPaymentDerivedStatus.platit;
+    // Avertisment SEPARAT de statusul de plată: calculatedAmountAtMarking
+    // s-a schimbat față de pontajul curent (pontaj modificat DUPĂ marcare).
+    // NU comparăm amountPaid aici (asta face derivePartnerWeeklyPaymentStatus).
+    final hasDiscrepancy = hasPaymentRecord &&
         (payment.calculatedAmountAtMarking - partner.totalCost).abs() > 0.005;
 
     return Padding(
       padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
       child: ExpansionTile(
-        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w500)),
-        subtitle: isPaid
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                name,
+                style: const TextStyle(fontWeight: FontWeight.w500),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 6),
+            _buildPaymentStatusBadge(status),
+          ],
+        ),
+        subtitle: hasPaymentRecord
             ? Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.check_circle,
-                      size: 12, color: Colors.green.shade600),
+                  Icon(
+                    isPaidFully ? Icons.check_circle : Icons.pie_chart_outline,
+                    size: 12,
+                    color: isPaidFully
+                        ? Colors.green.shade600
+                        : Colors.orange.shade700,
+                  ),
                   const SizedBox(width: 3),
                   Text(
-                    'Plătit ${_fmt.format(payment.amountPaid)} RON'
+                    '${_fmt.format(payment.amountPaid)} RON plătit'
                     ' · ${_dateFmt.format(payment.paidAt)}',
-                    style:
-                        TextStyle(fontSize: 11, color: Colors.green.shade700),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isPaidFully
+                          ? Colors.green.shade700
+                          : Colors.orange.shade800,
+                    ),
                   ),
                 ],
               )
@@ -322,7 +351,7 @@ class _PontajPartenerSaptamanalPageState
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 13,
-                color: isPaid ? Colors.grey.shade500 : null,
+                color: isPaidFully ? Colors.grey.shade500 : null,
               ),
             ),
             const SizedBox(width: 2),
@@ -336,9 +365,11 @@ class _PontajPartenerSaptamanalPageState
                   onTap: () =>
                       _showMarkPaymentDialog(partner, weekStart, payment),
                   child: Icon(
-                    isPaid ? Icons.edit_outlined : Icons.payments_outlined,
+                    hasPaymentRecord
+                        ? Icons.edit_outlined
+                        : Icons.payments_outlined,
                     size: 16,
-                    color: isPaid
+                    color: hasPaymentRecord
                         ? Colors.grey.shade500
                         : Theme.of(context).colorScheme.primary,
                   ),
@@ -348,6 +379,47 @@ class _PontajPartenerSaptamanalPageState
           ],
         ),
         children: partner.muncitori.map(_buildWorkerTile).toList(),
+      ),
+    );
+  }
+
+  /// Badge/chip de status de plată (Faza 3) — Plătit (verde) / Plătit
+  /// parțial (portocaliu) / Neplătit (roșu). Paletă ALINIATĂ cu modulul
+  /// "Financiar parteneri" (`partner_financial_page.dart:2438-2466` —
+  /// verde=achitat/încasat, portocaliu=neîncasat/pending, roșu=de plătit),
+  /// ca să nu introducă o paletă nouă doar pentru acest ecran. Stil chip
+  /// (padding+border+background alpha) consecvent cu badge-ul de status
+  /// deja folosit pentru reconcilieri în același modul financiar
+  /// (`partner_financial_page.dart:1739-1759`).
+  Widget _buildPaymentStatusBadge(PartnerWeeklyPaymentDerivedStatus status) {
+    final (label, color) = switch (status) {
+      PartnerWeeklyPaymentDerivedStatus.platit => (
+          'Plătit',
+          Colors.green.shade700
+        ),
+      PartnerWeeklyPaymentDerivedStatus.platitPartial => (
+          'Plătit parțial',
+          Colors.orange.shade700
+        ),
+      PartnerWeeklyPaymentDerivedStatus.neplatit => (
+          'Neplătit',
+          Colors.red.shade700
+        ),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
       ),
     );
   }

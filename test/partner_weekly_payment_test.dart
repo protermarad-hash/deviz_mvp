@@ -150,4 +150,85 @@ void main() {
           reason: '...dar NU produce avertisment de discrepanță pontaj');
     });
   });
+
+  // ── Status de plată derivat (Faza 3) ───────────────────────────────────────
+
+  group('derivePartnerWeeklyPaymentStatus — logică pură', () {
+    PartnerWeeklyPayment payment(double amountPaid) => PartnerWeeklyPayment(
+          id: 'pwp_p1_20250310',
+          partnerId: 'p1',
+          weekStart: DateTime(2025, 3, 10),
+          amountPaid: amountPaid,
+          calculatedAmountAtMarking: 0,
+          paidAt: DateTime(2025, 3, 15),
+        );
+
+    test('nicio inregistrare de plata -> neplatit', () {
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: null,
+        totalCost: 1000,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.neplatit);
+    });
+
+    test('amountPaid == 0 (inregistrare existenta, dar suma zero) -> neplatit', () {
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: payment(0),
+        totalCost: 1000,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.neplatit);
+    });
+
+    test('amountPaid > 0 dar sub total -> platit partial', () {
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: payment(600),
+        totalCost: 1000,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.platitPartial);
+    });
+
+    test('amountPaid == totalCost exact -> platit (caz de granita)', () {
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: payment(1000),
+        totalCost: 1000,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.platit);
+    });
+
+    test('amountPaid > totalCost -> platit (plata in avans/rotunjire)', () {
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: payment(1050),
+        totalCost: 1000,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.platit);
+    });
+
+    test('diferenta de rotunjire sub toleranta (0.01) -> tot platit', () {
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: payment(999.995),
+        totalCost: 1000,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.platit);
+    });
+
+    test('diferenta peste toleranta -> platit partial, nu platit', () {
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: payment(999.5),
+        totalCost: 1000,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.platitPartial);
+    });
+
+    test('statusul e derivat, NU stocat — se recalculeaza corect daca '
+        'totalCost creste dupa marcare (pontaj adaugat ulterior)', () {
+      // Simuleaza exact scenariul BUG-ului de discrepanta: platit integral
+      // la momentul marcarii (1000/1000), apoi apare o intrare noua de
+      // pontaj care creste totalul la 1300 -> acum e doar partial.
+      final status = derivePartnerWeeklyPaymentStatus(
+        payment: payment(1000),
+        totalCost: 1300,
+      );
+      expect(status, PartnerWeeklyPaymentDerivedStatus.platitPartial);
+    });
+  });
 }
