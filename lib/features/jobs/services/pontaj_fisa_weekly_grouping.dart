@@ -74,11 +74,32 @@ class PontajFisaWorkerWeeklyTotal {
   int numarRanduri = 0;
   bool areRandSpansMultipleWeeks = false;
 
+  final List<PontajFisaWeeklyEntry> _intrari = [];
+
+  /// Intrările individuale (dată/perioadă, lucrare, ore, cost) din care
+  /// provine totalul de mai sus — sortate cronologic (`dataStart` crescător).
+  /// Adăugat Faza 1 (aug 2026), pentru detaliu per-intrare în UI (Faza 2) —
+  /// NU înlocuiește sumele existente (`totalOre`/`totalCost`/`numarRanduri`),
+  /// doar le însoțește. Un muncitor poate avea 2+ intrări din lucrări
+  /// DIFERITE în aceeași săptămână — fiecare intrare își păstrează propriul
+  /// `PontajFisaRow.jobCode`/`jobTitle`/`dataStart`/`dataEnd`.
+  List<PontajFisaWeeklyEntry> get intrari {
+    final list = [..._intrari];
+    list.sort((a, b) {
+      final aStart = a.row.dataStart;
+      final bStart = b.row.dataStart;
+      if (aStart == null || bStart == null) return 0;
+      return aStart.compareTo(bStart);
+    });
+    return list;
+  }
+
   void adaugaRand(PontajFisaWeeklyEntry entry) {
     totalOre += entry.row.oreTotale;
     totalCost += entry.row.costTotal;
     numarRanduri += 1;
     if (entry.spansMultipleWeeks) areRandSpansMultipleWeeks = true;
+    _intrari.add(entry);
   }
 }
 

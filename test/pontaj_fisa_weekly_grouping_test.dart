@@ -15,12 +15,16 @@ void main() {
     DateTime? dataEnd,
     double oreTotale = 8,
     double costOre = 400,
+    String jobCode = '',
+    String jobTitle = '',
   }) {
     return PontajFisaRow(
       persoanaNume: persoanaNume,
       esteProprie: false,
       partenerId: partenerId,
       partenerNume: partenerNume,
+      jobCode: jobCode,
+      jobTitle: jobTitle,
       dataStart: dataStart,
       dataEnd: dataEnd ?? dataStart,
       orePeZi: 8,
@@ -215,6 +219,86 @@ void main() {
 
       expect(groups.length, 2);
       expect(groups.first.weekStart.isAfter(groups.last.weekStart), isTrue);
+    });
+  });
+
+  group('PontajFisaWorkerWeeklyTotal.intrari (Faza 1 — detaliu individual)', () {
+    test('o singura intrare -> lista "intrari" contine exact acel rand', () {
+      final row = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9),
+        costOre: 400,
+        jobCode: 'DVZ-2026-0001',
+        jobTitle: 'Montaj centrala',
+      );
+
+      final groups = groupPontajFisaRowsByWeek([row]);
+      final worker = groups.first.parteneri.single.muncitori.single;
+
+      expect(worker.intrari.length, 1);
+      expect(worker.intrari.single.row.jobCode, 'DVZ-2026-0001');
+      expect(worker.intrari.single.row.jobTitle, 'Montaj centrala');
+      expect(worker.intrari.single.row.dataStart, DateTime(2026, 6, 9));
+      expect(worker.intrari.single.row.costTotal, 400);
+      // Sumele agregate raman neschimbate (Faza 1 e strict aditiva).
+      expect(worker.totalCost, 400);
+      expect(worker.numarRanduri, 1);
+    });
+
+    test(
+        'muncitor cu intrari pe DOUA lucrari diferite in aceeasi saptamana '
+        '-> "intrari" pastreaza ambele, distincte, sortate cronologic', () {
+      final rowA = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 11), // joi
+        costOre: 300,
+        jobCode: 'DVZ-2026-0002',
+        jobTitle: 'Lucrare a doua',
+      );
+      final rowB = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9), // marti — mai devreme
+        costOre: 400,
+        jobCode: 'DVZ-2026-0001',
+        jobTitle: 'Lucrare intai',
+      );
+
+      // Ordine intentionat inversa la intrare, ca sa verificam sortarea.
+      final groups = groupPontajFisaRowsByWeek([rowA, rowB]);
+      final worker = groups.first.parteneri.single.muncitori.single;
+
+      expect(worker.numarRanduri, 2);
+      expect(worker.totalCost, 700);
+      expect(worker.intrari.length, 2);
+      // Sortate cronologic: marti (rowB) inaintea lui joi (rowA).
+      expect(worker.intrari[0].row.jobCode, 'DVZ-2026-0001');
+      expect(worker.intrari[0].row.dataStart, DateTime(2026, 6, 9));
+      expect(worker.intrari[1].row.jobCode, 'DVZ-2026-0002');
+      expect(worker.intrari[1].row.dataStart, DateTime(2026, 6, 11));
+      // Fiecare intrare isi pastreaza costul propriu, distinct.
+      expect(worker.intrari[0].row.costTotal, 400);
+      expect(worker.intrari[1].row.costTotal, 300);
+    });
+
+    test('intrare "interval" (dataStart != dataEnd) pastreaza ambele date', () {
+      final row = partnerRow(
+        persoanaNume: 'Vasile Ionescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 12),
+        dataEnd: DateTime(2026, 6, 13),
+        costOre: 800,
+        jobCode: 'DVZ-2026-0003',
+      );
+
+      final groups = groupPontajFisaRowsByWeek([row]);
+      final worker = groups.first.parteneri.single.muncitori.single;
+
+      expect(worker.intrari.single.row.dataStart, DateTime(2026, 6, 12));
+      expect(worker.intrari.single.row.dataEnd, DateTime(2026, 6, 13));
+      expect(worker.intrari.single.spansMultipleWeeks, isFalse);
     });
   });
 }
