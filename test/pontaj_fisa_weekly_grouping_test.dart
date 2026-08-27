@@ -301,4 +301,92 @@ void main() {
       expect(worker.intrari.single.spansMultipleWeeks, isFalse);
     });
   });
+
+  group('regroupByPartnerAcrossWeeks (Faza 4 — vedere Partener→Săptămână)', () {
+    test('acelasi partener, doua saptamani diferite -> UN card partener cu '
+        '2 intrari de saptamana, nu doua carduri separate', () {
+      final rowS1 = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        partenerNume: 'Alfa SRL',
+        dataStart: DateTime(2026, 6, 9), // saptamana 08-14 iunie
+        costOre: 400,
+      );
+      final rowS2 = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        partenerNume: 'Alfa SRL',
+        dataStart: DateTime(2026, 6, 16), // saptamana 15-21 iunie
+        costOre: 600,
+      );
+
+      final weeklyGroups = groupPontajFisaRowsByWeek([rowS1, rowS2]);
+      expect(weeklyGroups.length, 2,
+          reason: 'precondiție: sursa are 2 grupuri săptămânale distincte');
+
+      final byPartner = regroupByPartnerAcrossWeeks(weeklyGroups);
+
+      expect(byPartner.length, 1,
+          reason: 'un singur partener, indiferent de cate saptamani');
+      final partner = byPartner.single;
+      expect(partner.partnerId, 'p1');
+      expect(partner.totalCost, 1000);
+      expect(partner.saptamani.length, 2);
+      // Sortate descrescator: 15-21 iunie inaintea lui 08-14 iunie.
+      expect(partner.saptamani[0].weekStart, DateTime(2026, 6, 15));
+      expect(partner.saptamani[0].total.totalCost, 600);
+      expect(partner.saptamani[1].weekStart, DateTime(2026, 6, 8));
+      expect(partner.saptamani[1].total.totalCost, 400);
+    });
+
+    test('doi parteneri diferiti in aceeasi saptamana -> 2 carduri partener, '
+        'fiecare cu totalul lui propriu', () {
+      final rowA = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        partenerNume: 'Alfa SRL',
+        dataStart: DateTime(2026, 6, 9),
+        costOre: 400,
+      );
+      final rowB = partnerRow(
+        persoanaNume: 'Vasile Ionescu',
+        partenerId: 'p2',
+        partenerNume: 'Beta SRL',
+        dataStart: DateTime(2026, 6, 9),
+        costOre: 900,
+      );
+
+      final weeklyGroups = groupPontajFisaRowsByWeek([rowA, rowB]);
+      final byPartner = regroupByPartnerAcrossWeeks(weeklyGroups);
+
+      expect(byPartner.length, 2);
+      // Sortat descrescator dupa totalCost -> Beta (900) inaintea lui Alfa (400).
+      expect(byPartner[0].partnerId, 'p2');
+      expect(byPartner[0].totalCost, 900);
+      expect(byPartner[1].partnerId, 'p1');
+      expect(byPartner[1].totalCost, 400);
+    });
+
+    test('muncitorii ramân accesibili nemodificati prin vederea noua '
+        '(aceleasi obiecte PontajFisaPartnerWeeklyTotal, nu copii)', () {
+      final row = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9),
+        costOre: 400,
+        jobCode: 'DVZ-2026-0001',
+      );
+
+      final weeklyGroups = groupPontajFisaRowsByWeek([row]);
+      final byPartner = regroupByPartnerAcrossWeeks(weeklyGroups);
+
+      final total = byPartner.single.saptamani.single.total;
+      expect(total.muncitori.single.displayName, 'Ion Popescu');
+      expect(total.muncitori.single.intrari.single.row.jobCode, 'DVZ-2026-0001');
+    });
+
+    test('lista de intrare goala -> lista de parteneri goala', () {
+      expect(regroupByPartnerAcrossWeeks(const []), isEmpty);
+    });
+  });
 }

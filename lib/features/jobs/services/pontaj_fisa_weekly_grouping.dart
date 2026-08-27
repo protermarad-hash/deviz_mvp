@@ -211,3 +211,77 @@ List<PontajFisaWeeklyGroup> groupPontajFisaRowsByWeek(
     ..sort((a, b) => b.weekStart.compareTo(a.weekStart));
   return result;
 }
+
+/// Totalul unui partener într-O săptămână anume, în vederea Partener→
+/// Săptămână (Faza 4). REFOLOSEȘTE `PontajFisaPartnerWeeklyTotal` deja
+/// construit de `groupPontajFisaRowsByWeek()` — nu recalculează nimic.
+class PontajFisaPartnerWeekEntry {
+  const PontajFisaPartnerWeekEntry({
+    required this.weekStart,
+    required this.total,
+  });
+
+  final DateTime weekStart;
+  final PontajFisaPartnerWeeklyTotal total;
+}
+
+/// Un partener (firmă), cu totalurile lui pe FIECARE săptămână în care a
+/// avut activitate — vederea alternativă Partener→Săptămână→Muncitor
+/// (Faza 4), construită prin reorganizarea rezultatului deja grupat pe
+/// săptămână (`groupPontajFisaRowsByWeek`), NU printr-o citire nouă.
+class PontajFisaPartnerAcrossWeeks {
+  PontajFisaPartnerAcrossWeeks({
+    required this.partnerId,
+    required this.partnerNume,
+  });
+
+  final String partnerId;
+  final String partnerNume;
+
+  final List<PontajFisaPartnerWeekEntry> _saptamani = [];
+
+  /// Săptămânile acestui partener, sortate descrescător (cea mai recentă
+  /// primă) — consecvent cu ordinea din vederea Săptămână→Partener.
+  List<PontajFisaPartnerWeekEntry> get saptamani {
+    final list = [..._saptamani];
+    list.sort((a, b) => b.weekStart.compareTo(a.weekStart));
+    return list;
+  }
+
+  double get totalCost =>
+      _saptamani.fold<double>(0, (s, e) => s + e.total.totalCost);
+
+  void _adaugaSaptamana(DateTime weekStart, PontajFisaPartnerWeeklyTotal total) {
+    _saptamani.add(PontajFisaPartnerWeekEntry(weekStart: weekStart, total: total));
+  }
+}
+
+/// Reorganizează rezultatul deja grupat pe săptămână
+/// (`groupPontajFisaRowsByWeek`) într-o vedere Partener→Săptămână→Muncitor —
+/// ACELEAȘI date, doar regrupate local în memorie, FĂRĂ nicio citire nouă
+/// din repository/Firestore.
+///
+/// Rezultat sortat descrescător după `totalCost` (partenerul cu cel mai
+/// mare total de pontaj în intervalul afișat primul).
+List<PontajFisaPartnerAcrossWeeks> regroupByPartnerAcrossWeeks(
+  List<PontajFisaWeeklyGroup> weeklyGroups,
+) {
+  final byPartnerId = <String, PontajFisaPartnerAcrossWeeks>{};
+
+  for (final week in weeklyGroups) {
+    for (final partnerTotal in week.parteneri) {
+      final entry = byPartnerId.putIfAbsent(
+        partnerTotal.partnerId,
+        () => PontajFisaPartnerAcrossWeeks(
+          partnerId: partnerTotal.partnerId,
+          partnerNume: partnerTotal.partnerNume,
+        ),
+      );
+      entry._adaugaSaptamana(week.weekStart, partnerTotal);
+    }
+  }
+
+  final result = byPartnerId.values.toList()
+    ..sort((a, b) => b.totalCost.compareTo(a.totalCost));
+  return result;
+}

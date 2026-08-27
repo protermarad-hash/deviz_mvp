@@ -24,6 +24,10 @@ class PontajPartenerSaptamanalPage extends StatefulWidget {
       _PontajPartenerSaptamanalPageState();
 }
 
+/// Cele două ierarhii de grupare (Faza 4) — construite din ACELEAȘI date
+/// (`_groups`), fără nicio citire separată. Vezi `regroupByPartnerAcrossWeeks()`.
+enum _ViewMode { saptamanal, perPartener }
+
 class _PontajPartenerSaptamanalPageState
     extends State<PontajPartenerSaptamanalPage> {
   final _fmt = NumberFormat('#,##0.00', 'ro_RO');
@@ -36,6 +40,13 @@ class _PontajPartenerSaptamanalPageState
   int _jobsScanned = 0;
   List<PontajFisaWeeklyGroup> _groups = const [];
   Map<String, PartnerWeeklyPayment> _payments = {};
+  _ViewMode _viewMode = _ViewMode.saptamanal;
+
+  /// Vederea Partener→Săptămână — reorganizare LOCALĂ a `_groups` (Faza 1),
+  /// nu o citire nouă. Recalculată la fiecare `build()`, dar pe un set mic
+  /// de date deja în memorie (ieftin — vezi `regroupByPartnerAcrossWeeks`).
+  List<PontajFisaPartnerAcrossWeeks> get _partnersAcrossWeeks =>
+      regroupByPartnerAcrossWeeks(_groups);
 
   late DateTimeRange _period;
 
@@ -121,6 +132,39 @@ class _PontajPartenerSaptamanalPageState
             onPressed: _loading ? null : _pickPeriod,
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(48),
+          child: Padding(
+            padding: const EdgeInsets.only(left: 12, right: 12, bottom: 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<_ViewMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: _ViewMode.saptamanal,
+                    label: Text('Săptămână → Partener'),
+                    icon: Icon(Icons.calendar_view_week_outlined, size: 16),
+                  ),
+                  ButtonSegment(
+                    value: _ViewMode.perPartener,
+                    label: Text('Partener → Săptămână'),
+                    icon: Icon(Icons.handshake_outlined, size: 16),
+                  ),
+                ],
+                selected: {_viewMode},
+                // Comutarea NU reîncarcă datele (_load() nu e apelat) — doar
+                // reorganizează local ce e deja în _groups (Faza 4), deci
+                // perioada/filtrele curente rămân neatinse automat.
+                onSelectionChanged: (selection) =>
+                    setState(() => _viewMode = selection.first),
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -186,13 +230,21 @@ class _PontajPartenerSaptamanalPageState
   }
 
   Widget _buildContent() {
+    final isWeekFirst = _viewMode == _ViewMode.saptamanal;
+    // Ambele liste provin din ACELEAȘI date (_groups) — vezi getter-ul
+    // _partnersAcrossWeeks, care doar reorganizează local, fără citire nouă.
+    final List<PontajFisaPartnerAcrossWeeks> partnersAcrossWeeks =
+        isWeekFirst ? const [] : _partnersAcrossWeeks;
     return CustomScrollView(
       slivers: [
         SliverToBoxAdapter(child: _buildHeaderSummary()),
         SliverList(
           delegate: SliverChildBuilderDelegate(
-            (ctx, i) => _buildWeekCard(_groups[i]),
-            childCount: _groups.length,
+            (ctx, i) => isWeekFirst
+                ? _buildWeekCard(_groups[i])
+                : _buildPartnerFirstCard(partnersAcrossWeeks[i]),
+            childCount:
+                isWeekFirst ? _groups.length : partnersAcrossWeeks.length,
           ),
         ),
         const SliverToBoxAdapter(child: SizedBox(height: 16)),
@@ -269,11 +321,56 @@ class _PontajPartenerSaptamanalPageState
     );
   }
 
-  Widget _buildPartnerTile(
-      PontajFisaPartnerWeeklyTotal partner, DateTime weekStart) {
+  /// Cardul principal în vederea Partener→Săptămână (Faza 4) — partenerul e
+  /// nivelul de sus, cu toate săptămânile lui (din intervalul curent)
+  /// dedesubt, fiecare cu statusul ei propriu de plată (plata se
+  /// urmărește per partener+săptămână, nu global pe partener — vezi
+  /// `PartnerWeeklyPaymentRepository.paymentId`).
+  Widget _buildPartnerFirstCard(PontajFisaPartnerAcrossWeeks partner) {
+    final theme = Theme.of(context);
     final name = partner.partnerNume.trim().isEmpty
         ? partner.partnerId
         : partner.partnerNume.trim();
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      child: ExpansionTile(
+        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text(
+          '${partner.saptamani.length} '
+          '${partner.saptamani.length == 1 ? "săptămână" : "săptămâni"}',
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: Text(
+          '${_fmt.format(partner.totalCost)} RON',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
+            color: theme.colorScheme.primary,
+          ),
+        ),
+        children: partner.saptamani.map((e) {
+          final weekLabel = 'Săpt. ${_dateFmt.format(e.weekStart)} – '
+              '${_dateFmt.format(e.weekStart.add(const Duration(days: 6)))}';
+          return _buildPartnerTile(e.total, e.weekStart, titleLabel: weekLabel);
+        }).toList(),
+      ),
+    );
+  }
+
+  /// Cardul "partener într-o săptămână" — nucleul comun al AMBELOR ierarhii
+  /// (Faza 4): în vederea Săptămână→Partener, `titleLabel` e numele
+  /// partenerului (apelat din `_buildWeekCard`); în vederea Partener→
+  /// Săptămână, `titleLabel` e intervalul săptămânii (apelat din
+  /// `_buildPartnerFirstCard`, unde numele partenerului e deja afișat pe
+  /// cardul-părinte). Restul (badge status, avertisment discrepanță, buton
+  /// marchează plată, listă muncitori) e IDENTIC, indiferent de ierarhie.
+  Widget _buildPartnerTile(
+      PontajFisaPartnerWeeklyTotal partner, DateTime weekStart,
+      {String? titleLabel}) {
+    final name = titleLabel ??
+        (partner.partnerNume.trim().isEmpty
+            ? partner.partnerId
+            : partner.partnerNume.trim());
     final payId =
         PartnerWeeklyPaymentRepository.paymentId(partner.partnerId, weekStart);
     final payment = _payments[payId];
