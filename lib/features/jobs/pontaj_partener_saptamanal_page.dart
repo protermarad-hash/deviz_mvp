@@ -510,44 +510,105 @@ class _PontajPartenerSaptamanalPageState
   }
 
   Widget _buildWorkerTile(PontajFisaWorkerWeeklyTotal worker) {
-    return ListTile(
-      dense: true,
-      contentPadding: const EdgeInsets.only(left: 24, right: 16),
-      leading: const Icon(Icons.person_outline, size: 20),
-      title: Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.only(left: 24, right: 16),
+          leading: const Icon(Icons.person_outline, size: 20),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  worker.displayName,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (worker.areRandSpansMultipleWeeks) ...[
+                const SizedBox(width: 6),
+                Tooltip(
+                  message: 'Conține o intrare pe interval ce trece peste '
+                      'granița săptămânii — atribuită integral acestei '
+                      'săptămâni (data de început).',
+                  child: Icon(
+                    Icons.call_split,
+                    size: 14,
+                    color: Colors.orange.shade700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          subtitle: Text(
+            '${_fmt.format(worker.totalOre)} ore · ${worker.numarRanduri} '
+            'intrări',
+            style: const TextStyle(fontSize: 11),
+          ),
+          trailing: Text(
+            '${_fmt.format(worker.totalCost)} RON',
+            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+          ),
+        ),
+        // Detaliu per intrare individuală (Faza 2, aug 2026) — lucrare +
+        // data/perioada exactă, indiferent dacă muncitorul are 1 sau mai
+        // multe intrări în săptămâna asta (detaliul rămâne util și la 1).
+        Padding(
+          padding: const EdgeInsets.only(left: 56, right: 16, bottom: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children:
+                worker.intrari.map(_buildWorkerEntryRow).toList(growable: false),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// O linie compactă pentru O intrare individuală de pontaj a unui
+  /// muncitor (lucrare + dată/perioadă exactă + ore + cost).
+  Widget _buildWorkerEntryRow(PontajFisaWeeklyEntry entry) {
+    final row = entry.row;
+    final jobLabel = row.jobTitle.trim().isEmpty
+        ? (row.jobCode.trim().isEmpty ? '—' : row.jobCode)
+        : (row.jobCode.trim().isEmpty
+            ? row.jobTitle
+            : '${row.jobCode} · ${row.jobTitle}');
+    final start = row.dataStart;
+    final end = row.dataEnd ?? start;
+    final periodLabel = start == null
+        ? '—'
+        : (end == null || _isSameDay(start, end)
+            ? _dateFmt.format(start)
+            : '${_dateFmt.format(start)} – ${_dateFmt.format(end)}');
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Flexible(
+          Icon(Icons.work_outline, size: 12, color: Colors.grey.shade500),
+          const SizedBox(width: 4),
+          Expanded(
             child: Text(
-              worker.displayName,
+              '$jobLabel · $periodLabel',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          if (worker.areRandSpansMultipleWeeks) ...[
-            const SizedBox(width: 6),
-            Tooltip(
-              message: 'Conține o intrare pe interval ce trece peste '
-                  'granița săptămânii — atribuită integral acestei '
-                  'săptămâni (data de început).',
-              child: Icon(
-                Icons.call_split,
-                size: 14,
-                color: Colors.orange.shade700,
-              ),
-            ),
-          ],
+          const SizedBox(width: 6),
+          Text(
+            '${_fmt.format(entry.row.oreTotale)} h · '
+            '${_fmt.format(entry.row.costTotal)} RON',
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+          ),
         ],
-      ),
-      subtitle: Text(
-        '${_fmt.format(worker.totalOre)} ore · ${worker.numarRanduri} '
-        'intrări',
-        style: const TextStyle(fontSize: 11),
-      ),
-      trailing: Text(
-        '${_fmt.format(worker.totalCost)} RON',
-        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
       ),
     );
   }
+
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
 /// Rezultat intern al dialogului de marcare plată.
