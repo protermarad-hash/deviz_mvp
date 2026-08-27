@@ -406,6 +406,27 @@ class CloudSyncBridge {
     );
   }
 
+  Future<void> queuePartnerWeeklyPaymentUpsert(
+    Map<String, dynamic> payment,
+  ) async {
+    final id = (payment['id'] ?? '').toString();
+    if (id.isEmpty) return;
+    await _service.queueUpsert(
+      entityType: CloudEntityType.partnerWeeklyPayments,
+      entityId: id,
+      payload: payment,
+    );
+  }
+
+  Future<void> queuePartnerWeeklyPaymentDelete(String paymentId) async {
+    final id = paymentId.trim();
+    if (id.isEmpty) return;
+    await _service.queueDelete(
+      entityType: CloudEntityType.partnerWeeklyPayments,
+      entityId: id,
+    );
+  }
+
   Future<void> queueDevizArticolTemplateUpsert(
     Map<String, dynamic> template,
   ) async {

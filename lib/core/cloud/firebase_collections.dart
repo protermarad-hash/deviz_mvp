@@ -93,6 +93,7 @@ class FirebaseCollections {
   static const String partnerTransactions = 'partner_transactions';
   static const String partnerFinancialSummary = 'partner_financial_summary';
   static const String partnerSettlements = 'partner_settlements';
+  static const String partnerWeeklyPayments = 'partner_weekly_payments';
   static const String devizArticoleTemplate = 'deviz_articole_template';
   static const String devizeTehnice = 'devize_tehnice';
   static const String devizeFiltreCta = 'devize_filtre_cta';

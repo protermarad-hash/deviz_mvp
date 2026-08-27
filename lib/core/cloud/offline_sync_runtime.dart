@@ -267,6 +267,16 @@ class OfflineSyncRuntime {
     await _bridge.queuePartnerSettlementDelete(settlementId);
   }
 
+  Future<void> queuePartnerWeeklyPaymentUpsert(
+    Map<String, dynamic> payment,
+  ) async {
+    await _bridge.queuePartnerWeeklyPaymentUpsert(payment);
+  }
+
+  Future<void> queuePartnerWeeklyPaymentDelete(String paymentId) async {
+    await _bridge.queuePartnerWeeklyPaymentDelete(paymentId);
+  }
+
   Future<void> queueDevizArticolTemplateUpsert(
     Map<String, dynamic> template,
   ) async {
@@ -983,6 +993,20 @@ class OfflineSyncRuntime {
               } else {
                 await FirebaseFirestore.instance
                     .collection(FirebaseCollections.pontajZileLucrari)
+                    .doc(item.entityId)
+                    .set(item.payload, SetOptions(merge: true));
+              }
+              await _queueRepository.markItemSynced(item.id, DateTime.now());
+              break;
+            case CloudEntityType.partnerWeeklyPayments:
+              if (item.deleted) {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.partnerWeeklyPayments)
+                    .doc(item.entityId)
+                    .delete();
+              } else {
+                await FirebaseFirestore.instance
+                    .collection(FirebaseCollections.partnerWeeklyPayments)
                     .doc(item.entityId)
                     .set(item.payload, SetOptions(merge: true));
               }

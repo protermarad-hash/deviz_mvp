@@ -44,6 +44,8 @@ enum CloudEntityType {
   partnerVehicles,
   // Pontaj zilnic pe lucrări (iul 2026) — evidență de sine stătătoare.
   pontajZileLucrari,
+  // Plăți săptămânale per partener (aug 2026) — izolat de partner_financial.
+  partnerWeeklyPayments,
   unknown,
 }
 

@@ -1,0 +1,389 @@
+// ═════════════════════════════════════════════════════════════════════════
+// firestore.rules — PROPUNERE, NEPUBLICATĂ ÎN CLOUD
+// Generat local pentru revizuire umană. NU a fost rulat `firebase deploy`.
+// Proiect țintă: devizpro-ultra-pilot (PRO TERM SRL)
+//
+// ⚠️ AVERTISMENT OBLIGATORIU — CITEȘTE ÎNAINTE DE PUBLICARE ⚠️
+// Verificarea Pas 1 (document ID din `users` === firebase_uid) a fost făcută
+// REAL, prin citire directă a colecției `users` din producție (Firestore
+// REST API, token OAuth reutilizat de la `firebase login`, GET, fără nicio
+// scriere). Rezultat: 5/5 documente citite (= ÎNTREAGA colecție `users`,
+// nextPageToken absent) au docId === firebase_uid. Nu s-a găsit niciun
+// document legacy inconsistent. Vezi raportul final al sesiunii pentru
+// detalii complete.
+//
+// TOTUȘI: colecția `users` are doar 5 documente azi. Dacă se adaugă
+// utilizatori noi pe alt flux decât `ensureCloudProfileForFirebaseUser`
+// (ex. import manual, script), verificarea de mai sus NU garantează
+// consistența viitoare. Re-verifică după orice import manual de useri.
+//
+// TESTEAZĂ ÎNTOTDEAUNA CU FIREBASE EMULATOR SUITE ÎNAINTE DE
+// `firebase deploy --only firestore:rules` PE PRODUCȚIE. NU publica direct.
+// ═════════════════════════════════════════════════════════════════════════
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper-e de bază ──────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // get()/exists() în interiorul regulilor este privilegiat — nu declanșează
+    // recursiv regulile de `read` ale colecției `users` (mecanism Firestore).
+    function userExists() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userRole() {
+      return userExists() ? userDoc().data.role : null;
+    }
+
+    function isActive() {
+      // Backward-compat: dacă lipsește câmpul `active`, tratăm ca activ
+      // (nu bloca useri vechi fără câmpul setat explicit).
+      return userExists() &&
+        (!('active' in userDoc().data) || userDoc().data.active == true);
+    }
+
+    function isAdminOrOffice() {
+      return isActive() && (userRole() == 'admin' || userRole() == 'office');
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── Categorie C: module operaționale de bază ────────────────────────────
+    // Folosite curent de TOATE rolurile (admin/office/team_lead/employee) —
+    // programări, clienți, oferte, reclamații, poze teren, unelte etc.
+    // O restricție pe rol aici ar rupe fluxuri reale din aplicație
+    // (ex: tehnicianul pe teren are nevoie de acces la clienti/parteneri/
+    // jobs/reclamatii chiar dacă meniul de navigare ascunde unele module).
+    // Restricția aplicată: doar cont autentificat ȘI activ (nu doar
+    // autentificat, cum era regula veche din producție).
+    function isOperational() {
+      return isActive();
+    }
+
+    // ── Categorie D: cataloage/șabloane/configurări comune ──────────────
+    // Citire pentru toți utilizatorii activi, scriere doar admin/office.
+    function isCatalogRead() {
+      return isActive();
+    }
+    function isCatalogWrite() {
+      return isAdminOrOffice();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // UTILIZATORI — colecția care alimentează userRole()/isActive()
+    // ═══════════════════════════════════════════════════════════════════
+    match /users/{userId} {
+      // Orice utilizator activ poate citi directorul (nume/rol/email pentru
+      // selectoare de angajat, atribuire programări etc.) — informație cu
+      // sensibilitate redusă. Editarea: propriul profil SAU admin/office.
+      allow read: if isActive();
+      allow write: if isOwner(userId) || isAdminOrOffice();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA A — ADMIN/OFFICE ONLY
+    // Date financiare agregate, salarizare HR, config email/SMTP, profil
+    // companie, cataloage de prețuri interne, financiar parteneri/angajați.
+    // ═══════════════════════════════════════════════════════════════════
+
+    // Profil companie — date firmă (CUI, IBAN, procente implicite TVA/profit).
+    match /company_profiles/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /company_cost_profiles/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+
+    // Config email/SMTP + jurnal livrări email — date tehnice sensibile.
+    match /email_server_configs/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /email_delivery_logs/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /notification_email_queue/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /notification_push_queue/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+
+    // Cataloage de prețuri interne (preț furnizor, liste de preț) — nu
+    // pentru tehnicieni/team lead, doar admin/office (marjă comercială).
+    match /product_catalog_supplier_prices/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /product_catalog_price_lists/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /product_catalog_price_list_entries/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+
+    // HR — reguli fiscale, salarizare, popriri, avansuri, plăți.
+    // Sensibil: date salariale individuale ale TUTUROR angajaților.
+    match /hr_rule_sets/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_rule_versions/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_payroll_input_snapshots/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_bonuses/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_deductions/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_advances/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_garnishments/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_payroll_calculations/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_payroll_runs/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_payroll_accounting_reports/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_payroll_payments/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    // Profil HR individual (contract, date personale) + contracte — date
+    // personale/contractuale sensibile, distincte de colecția `employees`
+    // (care e directorul operațional folosit peste tot în aplicație).
+    match /hr_employee_profiles/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /hr_contracts/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+
+    // Financiar angajați — vizibil DOAR admin+birou (confirmat în CLAUDE.md:
+    // "Vizibil pentru: admin, birou").
+    match /employee_pay_entries/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /employee_payments/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /employee_financial_summary/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /employee_settings/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+
+    // Financiar parteneri — tranzacții, sold net, decontări.
+    match /partner_transactions/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /partner_financial_summary/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /partner_settlements/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+    match /partner_weekly_payments/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+
+    // CRM Pipeline vânzări — confirmat în CLAUDE.md "Vizibil: admin + birou".
+    match /crm_records/{docId} {
+      allow read, write: if isAdminOrOffice();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA B — ADMIN/OFFICE + SELF-SERVICE (propriile date HR)
+    //
+    // ⚠️ LIMITARE CUNOSCUTĂ: HrAccessPolicy (hr_access_policy.dart) confirmă
+    // în cod că angajatul are self-service (canUseEmployeeAttendanceSelfService/
+    // canUseEmployeeLeaveSelfService/canUseEmployeePayslipSelfService), deci
+    // INTENȚIA e "angajatul își vede DOAR propriile date". Regulile Firestore
+    // NU pot verifica direct "acest document aparține userului curent" fără
+    // un câmp de legătură verificat (uid angajat vs. Firebase Auth uid).
+    // NU am găsit în cod o legătură fiabilă document→request.auth.uid pentru
+    // aceste colecții (employeeId ≠ garantat == firebase uid). Nu ghicesc un
+    // nume de câmp neverificat — aplic temporar regula cea mai permisivă
+    // existentă azi (autentificat + activ), ca să NU rup self-service-ul
+    // real din aplicație.
+    // TODO: verifică manual în cod cum se leagă hr_attendance_entries /
+    // hr_leave_requests / hr_monthly_timesheets / hr_payslips /
+    // hr_self_service_attendance_sessions de request.auth.uid (câmp
+    // employeeId → employees/{id}.firebase_uid sau similar), apoi înlocuiește
+    // isActive() de mai jos cu isAdminOrOffice() || isOwner-ul real.
+    // ═══════════════════════════════════════════════════════════════════
+    match /hr_attendance_entries/{docId} {
+      allow read, write: if isActive(); // TODO: restricționează la owner + admin/office
+    }
+    match /hr_self_service_attendance_sessions/{docId} {
+      allow read, write: if isActive(); // TODO: restricționează la owner + admin/office
+    }
+    match /hr_leave_requests/{docId} {
+      allow read, write: if isActive(); // TODO: restricționează la owner + admin/office
+    }
+    match /hr_monthly_timesheets/{docId} {
+      allow read, write: if isActive(); // TODO: restricționează la owner + admin/office
+    }
+    match /hr_payslips/{docId} {
+      allow read, write: if isActive(); // TODO: restricționează la owner + admin/office (fluturaș = date salariale individuale!)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA D — READ pentru toți activi, WRITE doar admin/office
+    // Cataloage/șabloane/configurări comune.
+    // ═══════════════════════════════════════════════════════════════════
+    match /materials/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    match /appointment_material_kit_templates/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    match /offer_labor_templates/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    match /offer_commercial_clause_templates/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    match /offer_commercial_package_templates/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    match /tool_categories/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    match /hr_leave_types/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    match /clauze_custom_catalog/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    // Config auto-update aplicație (app_config/version_info) — citit de toți
+    // userii logați pentru bannerul de update; scris doar de publish script
+    // (rulat cu contul admin forțat proterm.arad@gmail.com).
+    match /app_config/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    // Conținut Help (Info/Ghid/FAQ) — citit de toți, editat din admin panel.
+    match /help_content/{docId} {
+      allow read: if isCatalogRead();
+      allow write: if isCatalogWrite();
+    }
+    // Setări partajate cross-device (ex: tip document deviz implicit) — nu
+    // conțin date sensibile, dar sunt editate de useri obișnuiți (nu doar
+    // admin/office) din formulare curente → scriere pentru toți activi.
+    match /app_settings/{docId} {
+      allow read, write: if isActive();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA C — MODULE OPERAȚIONALE DE BAZĂ
+    // Toți utilizatorii autentificați ȘI activi (orice rol).
+    // ═══════════════════════════════════════════════════════════════════
+    match /teams/{docId} { allow read, write: if isOperational(); }
+    match /appointments/{docId} { allow read, write: if isOperational(); }
+    match /deleted_appointments/{docId} { allow read, write: if isOperational(); }
+    match /appointment_history/{docId} { allow read, write: if isOperational(); }
+    match /agfr_equipments/{docId} { allow read, write: if isOperational(); }
+    match /agfr_interventions/{docId} { allow read, write: if isOperational(); }
+    match /agfr_reports/{docId} { allow read, write: if isOperational(); }
+    match /agfr_weighing_reports/{docId} { allow read, write: if isOperational(); }
+    match /refrigerant_reporting_records/{docId} { allow read, write: if isOperational(); }
+    match /jobs/{docId} { allow read, write: if isOperational(); }
+    match /clients/{docId} { allow read, write: if isOperational(); }
+    match /partners/{docId} { allow read, write: if isOperational(); }
+    match /partner_workers/{docId} { allow read, write: if isOperational(); }
+    match /partner_vehicles/{docId} { allow read, write: if isOperational(); }
+    match /offers/{docId} { allow read, write: if isOperational(); }
+    match /registry_entries/{docId} { allow read, write: if isOperational(); }
+    match /registry_settings/{docId} { allow read, write: if isOperational(); }
+    // Directorul operațional de angajați (nume/echipă/telefon) — folosit
+    // peste tot pentru selectoare. Distinct de hr_employee_profiles (Cat. A).
+    match /employees/{docId} { allow read, write: if isOperational(); }
+    match /vehicles/{docId} { allow read, write: if isOperational(); }
+    // hr_deplasari (deplasări/ordine) — nav teamLead+, dar nu am găsit
+    // restricție hard-coded de rol pe date; păstrat operațional ca azi.
+    match /hr_trips/{docId} { allow read, write: if isOperational(); }
+    match /hr_travel_orders/{docId} { allow read, write: if isOperational(); }
+    match /complaints/{docId} { allow read, write: if isOperational(); }
+    match /repair_reports/{docId} { allow read, write: if isOperational(); }
+    match /warranty_intervention_reports/{docId} { allow read, write: if isOperational(); }
+    match /field_photos/{docId} { allow read, write: if isOperational(); }
+    match /job_site_documents/{docId} { allow read, write: if isOperational(); }
+    match /tools/{docId} {
+      allow read, write: if isOperational();
+      // Subcolecție istoric mișcări unealtă (tools/{id}/history).
+      match /history/{historyId} {
+        allow read, write: if isOperational();
+      }
+    }
+    match /tool_handovers/{docId} { allow read, write: if isOperational(); }
+    match /tool_transfer_requests/{docId} { allow read, write: if isOperational(); }
+    match /tool_transfer_notifications/{docId} { allow read, write: if isOperational(); }
+    match /tool_packages/{docId} { allow read, write: if isOperational(); }
+    match /tool_package_handovers/{docId} { allow read, write: if isOperational(); }
+    match /tool_package_movements/{docId} { allow read, write: if isOperational(); }
+    match /tool_package_notifications/{docId} { allow read, write: if isOperational(); }
+    match /product_catalog_products/{docId} { allow read, write: if isOperational(); }
+    match /product_catalog_sales/{docId} { allow read, write: if isOperational(); }
+    match /product_catalog_warranty_certificates/{docId} { allow read, write: if isOperational(); }
+    match /notifications/{docId} { allow read, write: if isOperational(); }
+    match /notification_preferences/{docId} { allow read, write: if isOperational(); }
+    match /notification_device_tokens/{docId} { allow read, write: if isOperational(); }
+    match /field_sales_leads/{docId} { allow read, write: if isOperational(); }
+    match /field_sales_requests/{docId} { allow read, write: if isOperational(); }
+    match /complaint_client_centralizers/{docId} { allow read, write: if isOperational(); }
+    match /complaint_work_orders/{docId} { allow read, write: if isOperational(); }
+    match /deviz_articole_template/{docId} { allow read, write: if isOperational(); }
+    match /devize_tehnice/{docId} { allow read, write: if isOperational(); }
+    match /devize_filtre_cta/{docId} { allow read, write: if isOperational(); }
+    match /app_tasks/{docId} { allow read, write: if isOperational(); }
+    match /stoc_items/{docId} { allow read, write: if isOperational(); }
+    match /stoc_miscari/{docId} { allow read, write: if isOperational(); }
+    match /gps_checkins/{docId} { allow read, write: if isOperational(); }
+    match /echipamente_instalate/{docId} { allow read, write: if isOperational(); }
+    match /mentenanta_contracte/{docId} { allow read, write: if isOperational(); }
+    match /mentenanta_interventii/{docId} { allow read, write: if isOperational(); }
+    match /servicii_prestate/{docId} { allow read, write: if isOperational(); }
+    match /pontaj_zile_lucrari/{docId} { allow read, write: if isOperational(); }
+
+    // TODO: verifica manual - nu am gasit in cod cine foloseste aceasta colectie
+    match /obiective_lunare/{docId} { allow read, write: if isOperational(); }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // FALLBACK EXPLICIT — orice colecție neenumerată mai sus este BLOCATĂ.
+    // Dacă apare o eroare de permisiuni pe o colecție reală folosită de
+    // aplicație, înseamnă că lipsește din lista de mai sus — adaug-o
+    // explicit (nu slăbi acest fallback la "allow if isSignedIn()").
+    // ═══════════════════════════════════════════════════════════════════
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
