@@ -389,4 +389,103 @@ void main() {
       expect(regroupByPartnerAcrossWeeks(const []), isEmpty);
     });
   });
+
+  group('partnerJobLabels (FIX 3 — rezumat lucrari pe card partener)', () {
+    test('un singur muncitor, o singura lucrare -> o singura eticheta', () {
+      final row = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9),
+        jobCode: 'DVZ-2026-0001',
+        jobTitle: 'Reparatie centrala termica',
+      );
+      final partner = groupPontajFisaRowsByWeek([row]).first.parteneri.single;
+
+      expect(partnerJobLabels(partner),
+          ['DVZ-2026-0001 · Reparatie centrala termica']);
+    });
+
+    test('doi muncitori, aceeasi lucrare -> o singura eticheta (dedup)', () {
+      final row1 = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9),
+        jobCode: 'DVZ-2026-0001',
+        jobTitle: 'Montaj VRF',
+      );
+      final row2 = partnerRow(
+        persoanaNume: 'Vasile Ionescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 10),
+        jobCode: 'DVZ-2026-0001',
+        jobTitle: 'Montaj VRF',
+      );
+      final partner =
+          groupPontajFisaRowsByWeek([row1, row2]).first.parteneri.single;
+
+      expect(partnerJobLabels(partner), ['DVZ-2026-0001 · Montaj VRF']);
+    });
+
+    test('un muncitor cu 2 intrari pe lucrari diferite -> 2 etichete, '
+        'ordinea primei aparitii, fara duplicate', () {
+      final rowA = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9),
+        jobCode: 'DVZ-2026-0001',
+        jobTitle: 'Lucrare A',
+      );
+      final rowB = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 10),
+        jobCode: 'DVZ-2026-0002',
+        jobTitle: 'Lucrare B',
+      );
+      // A doua intrare pe DVZ-2026-0001 (aceeasi lucrare ca prima) -> NU
+      // trebuie sa produca un al treilea label duplicat.
+      final rowA2 = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 11),
+        jobCode: 'DVZ-2026-0001',
+        jobTitle: 'Lucrare A',
+      );
+      final partner = groupPontajFisaRowsByWeek([rowA, rowB, rowA2])
+          .first
+          .parteneri
+          .single;
+
+      expect(partnerJobLabels(partner),
+          ['DVZ-2026-0001 · Lucrare A', 'DVZ-2026-0002 · Lucrare B']);
+    });
+
+    test('jobCode gol, doar titlu -> foloseste titlul; ambele goale -> ignorat',
+        () {
+      final rowTitluDoar = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9),
+        jobCode: '',
+        jobTitle: 'Lucrare fara cod',
+      );
+      final partner =
+          groupPontajFisaRowsByWeek([rowTitluDoar]).first.parteneri.single;
+
+      expect(partnerJobLabels(partner), ['Lucrare fara cod']);
+    });
+
+    test('nicio lucrare identificata (cod si titlu goale) -> lista goala', () {
+      final row = partnerRow(
+        persoanaNume: 'Ion Popescu',
+        partenerId: 'p1',
+        dataStart: DateTime(2026, 6, 9),
+        jobCode: '',
+        jobTitle: '',
+      );
+      final partner = groupPontajFisaRowsByWeek([row]).first.parteneri.single;
+
+      expect(partnerJobLabels(partner), isEmpty);
+    });
+  });
 }

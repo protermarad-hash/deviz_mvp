@@ -391,17 +391,29 @@ class _PontajPartenerSaptamanalPageState
     return Padding(
       padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
       child: ExpansionTile(
-        title: Row(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: Text(
-                name,
-                style: const TextStyle(fontWeight: FontWeight.w500),
-                overflow: TextOverflow.ellipsis,
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    name,
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _buildPaymentStatusBadge(status),
+              ],
             ),
-            const SizedBox(width: 6),
-            _buildPaymentStatusBadge(status),
+            // FIX 3 (aug 2026): rezumat compact lucrare(i), vizibil DIRECT
+            // pe card, fără nicio expandare — complementar detaliului per
+            // intrare de la _buildWorkerEntryRow (acela mai arată și
+            // data/perioada exactă, dar necesită 2 expandări ca să fie
+            // vizibil).
+            _buildPartnerJobsSummary(partner),
           ],
         ),
         subtitle: hasPaymentRecord
@@ -480,14 +492,15 @@ class _PontajPartenerSaptamanalPageState
     );
   }
 
-  /// Badge/chip de status de plată (Faza 3) — Plătit (verde) / Plătit
-  /// parțial (portocaliu) / Neplătit (roșu). Paletă ALINIATĂ cu modulul
-  /// "Financiar parteneri" (`partner_financial_page.dart:2438-2466` —
-  /// verde=achitat/încasat, portocaliu=neîncasat/pending, roșu=de plătit),
-  /// ca să nu introducă o paletă nouă doar pentru acest ecran. Stil chip
-  /// (padding+border+background alpha) consecvent cu badge-ul de status
-  /// deja folosit pentru reconcilieri în același modul financiar
-  /// (`partner_financial_page.dart:1739-1759`).
+  /// Badge/chip de status de plată (Faza 3, ajustat FIX 2 — contrast
+  /// insuficient în testarea vizuală: chip-ul discret alpha 10%/40%
+  /// (identic ca stil cu `partner_financial_page.dart:2438-2466`) era
+  /// greu vizibil pe ecran mic de telefon). Verde/portocaliu/roșu = ACELEAȘI
+  /// culori de bază ca înainte (Plătit/Plătit parțial/Neplătit) — doar
+  /// stilul de aplicare s-a schimbat, la „pill" plin: fundal 100% opac,
+  /// text ALB bold, fără contur, pentru contrast maxim.
+  /// NU s-au atins badge-urile din `partner_financial_page.dart` — rămân
+  /// cu stilul discret original, în afara scopului acestui fix.
   Widget _buildPaymentStatusBadge(PartnerWeeklyPaymentDerivedStatus status) {
     final (label, color) = switch (status) {
       PartnerWeeklyPaymentDerivedStatus.platit => (
@@ -506,17 +519,63 @@ class _PontajPartenerSaptamanalPageState
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: color,
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Text(
         label,
-        style: TextStyle(
+        style: const TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w600,
-          color: color,
+          color: Colors.white,
         ),
+      ),
+    );
+  }
+
+  /// FIX 3 (aug 2026) — rezumat compact al lucrării/lucrărilor la care
+  /// partenerul a fost alocat în acest card, vizibil DIRECT sub titlu,
+  /// fără nicio expandare. Sursă: `partnerJobLabels()` (funcție pură,
+  /// testabilă, `pontaj_fisa_weekly_grouping.dart`) — dedup pe
+  /// jobCode+jobTitle peste toți muncitorii cardului.
+  Widget _buildPartnerJobsSummary(PontajFisaPartnerWeeklyTotal partner) {
+    final labels = partnerJobLabels(partner);
+    if (labels.isEmpty) return const SizedBox.shrink();
+
+    if (labels.length == 1) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          labels.single,
+          style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+          overflow: TextOverflow.ellipsis,
+        ),
+      );
+    }
+
+    // 2+ lucrări diferite în același card — chip-uri mici, nu text lung
+    // înșiruit (evită supraîncărcarea vizuală a cardului).
+    return Padding(
+      padding: const EdgeInsets.only(top: 3),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 2,
+        children: labels
+            .map(
+              (label) => Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  label,
+                  style: TextStyle(fontSize: 10, color: Colors.grey.shade700),
+                ),
+              ),
+            )
+            .toList(growable: false),
       ),
     );
   }

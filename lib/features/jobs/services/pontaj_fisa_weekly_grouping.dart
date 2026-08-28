@@ -285,3 +285,31 @@ List<PontajFisaPartnerAcrossWeeks> regroupByPartnerAcrossWeeks(
     ..sort((a, b) => b.totalCost.compareTo(a.totalCost));
   return result;
 }
+
+/// FIX 3 (aug 2026) — listă compactă, deduplicată, a lucrărilor (cod+titlu)
+/// la care partenerul a fost alocat în ACEST card (o săptămână, un
+/// partener) — sursă: `worker.intrari` (Faza 1), deja disponibilă pe
+/// fiecare muncitor din `partner.muncitori`. Extrasă ca funcție PURĂ (fără
+/// dependință Flutter), testabilă direct.
+///
+/// Dedup pe `jobCode+jobTitle` (nu doar `jobCode` — o lucrare fără cod dar
+/// cu titlu tot trebuie să apară o singură dată), păstrând ordinea primei
+/// apariții (stabilă, nu resortează alfabetic — evită "sărituri" vizuale
+/// între randări ale aceluiași card).
+List<String> partnerJobLabels(PontajFisaPartnerWeeklyTotal partner) {
+  final seenKeys = <String>{};
+  final labels = <String>[];
+  for (final worker in partner.muncitori) {
+    for (final entry in worker.intrari) {
+      final row = entry.row;
+      final code = row.jobCode.trim();
+      final title = row.jobTitle.trim();
+      final label = title.isEmpty
+          ? code
+          : (code.isEmpty ? title : '$code · $title');
+      if (label.isEmpty) continue;
+      if (seenKeys.add('$code|$title')) labels.add(label);
+    }
+  }
+  return labels;
+}
