@@ -1,13 +1,18 @@
 'use strict';
 
-// FAZA 1.1 — teste Firebase Storage Rules pentru `supplier_invoices/**`,
-// folosind regulile REALE din ../../storage.rules (citite direct din
-// fisier). Testeaza in mod EXPLICIT:
+// FAZA 1.1 / FAZA 4 — teste Firebase Storage Rules pentru
+// `supplier_invoices/**`, folosind regulile REALE din ../../storage.rules
+// (citite direct din fisier — reconciliate la FAZA 4 cu regulile LIVE din
+// productie, pornind de la fallback deny-by-default, nu de la catch-all
+// permisiv). Testeaza in mod EXPLICIT:
 //   1) matricea de acces (admin/office/alt user/neautentificat)
 //   2) validarea continutului (extensie/content-type/dimensiune)
-//   3) TESTUL CRITIC — ca regula genericA `match /{allPaths=**}` NU poate
-//      acorda acces (bypass) la supplier_invoices/**, chiar daca in mod
-//      normal ar permite acel tip de operatie pe orice alt path.
+//   3) TESTUL CRITIC — ca niciun alt path/regula (inclusiv fallback-ul
+//      deny-by-default) nu poate acorda acces la supplier_invoices/**
+//      unui utilizator non-admin.
+//   4) SANITY LIVE — ca path-urile existente in productie
+//      (field_photos/signatures/notification_email_attachments) si
+//      fallback-ul deny-by-default raman neschimbate.
 //
 // Ruleaza exclusiv local (proiect demo-invoice-rules-test), niciodata
 // productie.
@@ -157,13 +162,15 @@ test('NEAUTENTIFICAT: NU poate accesa supplier_invoices', async () => {
   await assertFails(getBytes(fileRef));
 });
 
-// ── TESTUL CRITIC: regula generica NU poate acorda bypass ──────────────
-test('CRITIC: user autentificat non-admin NU poate citi supplier_invoices/<adminUid>/... prin regula generica', async () => {
-  // Confirmare directa a cerintei FAZA 1.1 pct. 4: un fisier care AR fi
-  // permis de catch-all-ul generic (orice autentificat, orice tip permis)
-  // TREBUIE sa ramana blocat sub supplier_invoices/**, pentru ca guard-ul
-  // `allPaths[0] != 'supplier_invoices'` scoate acest prefix din
-  // domeniul catch-all-ului.
+// ── TESTUL CRITIC: niciun alt path/regula nu poate acorda bypass ───────
+test('CRITIC: user autentificat non-admin NU poate citi supplier_invoices/<adminUid>/... prin nicio alta regula', async () => {
+  // FAZA 4 (reconciliere LIVE): spre deosebire de Faza 1.1 (unde exista un
+  // catch-all generic permisiv si era nevoie de un guard explicit),
+  // fisierul LIVE are fallback deny-by-default — nu exista NICIUN path
+  // generic care ar putea "scapa" accesul. Testul ramane relevant ca
+  // control pozitiv: confirma ca office (cont activ, autentificat) NU
+  // poate citi fisierul, exact cum era si inainte, dar acum garantia vine
+  // din designul deny-by-default, nu dintr-un guard specific.
   await seedUser('admin-1', { role: 'admin', active: true });
   await seedUser('office-1', { role: 'office', active: true });
 
@@ -174,9 +181,8 @@ test('CRITIC: user autentificat non-admin NU poate citi supplier_invoices/<admin
   );
   await uploadBytes(adminFileRef, SMALL_XML, { contentType: 'application/xml' });
 
-  // office-1 e un cont ACTIV, autentificat — daca ar exista bypass prin
-  // catch-all, acest read AR reusi (catch-all-ul original permitea orice
-  // autentificat sa citeasca orice path). Trebuie sa esueze.
+  // office-1 e un cont ACTIV, autentificat — trebuie sa esueze oricum,
+  // pentru ca match-ul supplier_invoices cere explicit isAdminOnly().
   const officeStorage = storageAs('office-1');
   const officeFileRef = ref(
     officeStorage,
@@ -185,11 +191,10 @@ test('CRITIC: user autentificat non-admin NU poate citi supplier_invoices/<admin
   await assertFails(getBytes(officeFileRef));
 });
 
-test('SANITY: catch-all-ul generic tot functioneaza normal pe alt path (field_photos) — neafectat', async () => {
-  // Confirma ca guard-ul adaugat NU a rupt accesul existent la alte
-  // functii (poze/atasamente) — orice autentificat activ poate in
-  // continuare scrie/citi pe orice alt path in afara de
-  // supplier_invoices/**.
+test('SANITY LIVE: field_photos (path explicit LIVE, nu catch-all) tot functioneaza normal — neafectat', async () => {
+  // FAZA 4: LIVE nu are catch-all generic permisiv (are deny-by-default) —
+  // field_photos e propriul match block, cu isOperational(). Confirmam ca
+  // adaugarea supplier_invoices NU a rupt acest path existent.
   await seedUser('emp-1', { role: 'employee', active: true });
   const storage = storageAs('emp-1');
   const photoRef = ref(storage, 'field_photos/jobs/job-1/photo1.jpg');
@@ -198,6 +203,15 @@ test('SANITY: catch-all-ul generic tot functioneaza normal pe alt path (field_ph
     uploadBytes(photoRef, fakeJpeg, { contentType: 'image/jpeg' }),
   );
   await assertSucceeds(getBytes(photoRef));
+});
+
+test('SANITY LIVE: path neenumerat este blocat (deny-by-default), chiar si pentru admin', async () => {
+  await seedUser('admin-fallback', { role: 'admin', active: true });
+  const storage = storageAs('admin-fallback');
+  const randomRef = ref(storage, 'orice_alt_path_neinregistrat/fisier.txt');
+  await assertFails(
+    uploadBytes(randomRef, Buffer.from('x'), { contentType: 'text/plain' }),
+  );
 });
 
 // ── VALIDARE CONȚINUT (extensie / content-type / dimensiune) ──────────

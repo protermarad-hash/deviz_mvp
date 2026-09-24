@@ -1,43 +1,121 @@
+// ═════════════════════════════════════════════════════════════════════════
+// storage.rules — CANDIDAT PROMOVAT, TESTAT (47 teste Storage, Etapa 0C)
+// Etapa Securitate Legacy 0E.1. Acesta este fișierul principal al
+// repository-ului, dar NU a fost încă publicat (`firebase deploy --only
+// storage`) — publicarea rămâne o etapă separată, condiționată de backup
+// și preflight de deploy dedicat.
+//
+// Regula CONFIRMATĂ ACTIVĂ în producție la momentul auditului inițial
+// (verificată manual în Firebase Console) permitea oricărui user
+// autentificat citire/scriere pe ORICE obiect din bucket. Acest fișier o
+// înlocuiește cu deny-by-default + structură pe cele 3 prefixe reale
+// confirmate în cod (Etapa 0C, inventar exhaustiv): field_photos/,
+// signatures/, notification_email_attachments/.
+//
+// LIMITARE STRUCTURALĂ IMPORTANTĂ (vezi tooling/firebase_security_hotfix/
+// README.md, "Blocker Storage ownership"): path-urile conțin un
+// identificator de modul/entitate business (ex. sourceModule/
+// sourceEntityId, jobId), dar Storage Rules NU pot verifica nativ dacă
+// utilizatorul curent are drept legitim asupra acelei entități fără un
+// cross-check `firestore.get()`. Acest fișier aplică: (a) autentificare +
+// cont activ obligatorii pentru tot, identic cu politica operațională din
+// Firestore (isOperational); (b) restricții de tip/dimensiune fișier pe
+// upload; (c) fără cross-check de ownership fin per-entitate — echivalentul
+// politicii "isOperational()" din Firestore (orice cont activ, orice rol,
+// acces la modulele operaționale) aplicat și la Storage, ceea ce e deja o
+// îmbunătățire masivă față de "orice user, orice obiect", dar NU e
+// echivalentul complet al unei separări per-client/per-job. Marcat explicit
+// ca debt pentru rafinare ulterioară (etapă separată, nu acum).
+//
+// FAZA 4 (reconciliere) — adăugat suportul pentru supplier_invoices
+// (Import materiale din factură), strict admin. Spre deosebire de Faza 1.1
+// (unde a fost nevoie de un guard explicit împotriva unui catch-all
+// permisiv), acest fișier LIVE are deja fallback deny-by-default
+// (`{allPaths=**} -> allow read, write: if false`) — niciun bypass nu e
+// posibil prin construcție, deci NU a fost nevoie de niciun guard
+// suplimentar. Restul regulilor (field_photos/signatures/
+// notification_email_attachments) neatinse.
+// ═════════════════════════════════════════════════════════════════════════
+
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // ── Helper-e (Import materiale din factură — Faza 1) ──────────────────
-    // Reutilizează exact rolul administrativ definit în firestore.rules
-    // (isAdminOnly), citit cross-service prin firestore.get()/exists().
-    // NU introduce un RBAC nou — doar oglindește userRole()/isActive().
+
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function invoiceUserDoc() {
+    function userDoc() {
       return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
     }
 
-    function invoiceUserExists() {
+    function userExists() {
       return isSignedIn() &&
         firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
     }
 
-    function invoiceUserActive() {
-      return invoiceUserExists() &&
-        (!('active' in invoiceUserDoc().data) || invoiceUserDoc().data.active == true);
+    function isActive() {
+      return userExists() &&
+        (!('active' in userDoc().data) || userDoc().data.active == true);
     }
 
-    // STRICT ADMIN — FAZA 1.1 pct. 2: facturile furnizorilor trebuie
-    // accesibile DOAR administratorului (nu admin/office). Redenumit din
-    // isAdminOrOfficeForInvoices() ca sa nu lase impresia gresita.
-    function isAdminOnlyForInvoices() {
-      return invoiceUserActive() && invoiceUserDoc().data.role == 'admin';
+    function userRole() {
+      return userExists() ? userDoc().data.role : null;
     }
 
-    // Fișier sursă al facturii furnizor (XML e-Factura) — Faza 1.
-    // Path izolat, nou, NU afectează niciun path existent mai jos.
-    // Doar admin; doar extensie .xml; doar fișierul propriu upload
-    // (uid din path == uploader); dimensiune limitată la 5MB (XML text,
-    // nu justifică limita de 20MB folosită pentru poze/PDF-uri generice).
+    function isAdminOrOffice() {
+      return isActive() && (userRole() == 'admin' || userRole() == 'office');
+    }
+
+    // FAZA 1.1 / FAZA 4 — strict admin, reutilizat DOAR pentru
+    // supplier_invoices, în același stil ca isAdminOrOffice() de mai sus.
+    function isAdminOnly() {
+      return isActive() && userRole() == 'admin';
+    }
+
+    function isOperational() {
+      return isActive();
+    }
+
+    function isReasonableImage() {
+      return request.resource.contentType.matches('image/.*')
+        && request.resource.size <= 20 * 1024 * 1024;
+    }
+
+    function isReasonablePdf() {
+      return request.resource.contentType == 'application/pdf'
+        && request.resource.size <= 50 * 1024 * 1024;
+    }
+
+    match /field_photos/{sourceModule}/{sourceEntityId}/{fileName} {
+      allow read: if isOperational();
+      allow write: if isOperational() && isReasonableImage();
+      allow delete: if isOperational();
+    }
+
+    match /signatures/{jobId}/{fileName} {
+      allow read: if isOperational();
+      allow create, update: if isOperational()
+        && request.resource.contentType == 'image/png'
+        && request.resource.size <= 5 * 1024 * 1024;
+      allow delete: if isAdminOrOffice();
+    }
+
+    match /notification_email_attachments/{sourceModule}/{safeEntity}/{fileName} {
+      allow read: if isOperational();
+      allow create, update: if isOperational() && isReasonablePdf();
+      allow delete: if isAdminOrOffice();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // supplier_invoices/{uid}/{invoiceId}/{fileName}
+    // Fișier sursă al facturii furnizor (XML e-Factura) — Import materiale
+    // din factură. Strict admin; doar extensie .xml; doar fișierul propriu
+    // upload (uid din path == uploader); dimensiune limitată la 5MB.
+    // ═══════════════════════════════════════════════════════════════════
     match /supplier_invoices/{uid}/{invoiceId}/{fileName} {
-      allow read: if isAdminOnlyForInvoices();
-      allow write: if isAdminOnlyForInvoices()
+      allow read: if isAdminOnly();
+      allow write: if isAdminOnly()
                    && request.auth.uid == uid
                    && request.resource.size < 5 * 1024 * 1024
                    && fileName.matches('.*[.]xml')
@@ -46,32 +124,18 @@ service firebase.storage {
                    && (request.resource.contentType.matches('(application|text)/xml')
                        || request.resource.contentType == 'text/plain'
                        || request.resource.contentType == 'application/octet-stream');
-      allow delete: if isAdminOnlyForInvoices() && request.auth.uid == uid;
+      allow delete: if isAdminOnly() && request.auth.uid == uid;
     }
 
-    // Permite utilizatorilor autentificați să citească și scrie fișiere
-    // Bucket: devizpro-ultra-pilot.firebasestorage.app
-    //
-    // FAZA 1.1 — BLOCKER CRITIC REZOLVAT: Firebase Storage Rules evaluează
-    // TOATE regulile care se potrivesc pe o cale (nu doar cea mai
-    // specifică) și acordă acces dacă ORICARE dintre ele permite (OR,
-    // niciodată override). Fără guard-ul `allPaths[0] != 'supplier_invoices'`
-    // de mai jos, acest catch-all ar fi acordat INDEPENDENT acces de
-    // citire/scriere la supplier_invoices/** oricărui utilizator
-    // autentificat, indiferent de rol — anulând regula strictă de mai sus
-    // (bypass). Guard-ul exclude EXPLICIT prefixul supplier_invoices din
-    // acest catch-all, fără să schimbe comportamentul pentru niciun alt
-    // path existent (field_photos, semnături, atașamente etc. — neatinse).
-    // Demonstrat prin test: vezi tooling/rules_tests/storage.rules.test.js.
+    // ═══════════════════════════════════════════════════════════════════
+    // FALLBACK EXPLICIT — orice path neenumerat mai sus este BLOCAT.
+    // Corespunde deny-by-default cerut de politica de hotfix; dacă apare o
+    // eroare de permisiuni pe un path Storage real folosit de aplicație,
+    // înseamnă că lipsește din lista de mai sus — adaugă-l explicit (nu
+    // slăbi acest fallback la "allow if isSignedIn()").
+    // ═══════════════════════════════════════════════════════════════════
     match /{allPaths=**} {
-      allow read: if request.auth != null
-                   && allPaths[0] != 'supplier_invoices';
-      allow write: if request.auth != null
-                   && allPaths[0] != 'supplier_invoices'
-                   && request.resource.size < 20 * 1024 * 1024
-                   && (request.resource.contentType.matches('image/.*')
-                       || request.resource.contentType.matches('application/pdf')
-                       || request.resource.contentType.matches('application/octet-stream'));
+      allow read, write: if false;
     }
   }
 }

@@ -222,3 +222,56 @@ test('SANITY: office activ tot poate citi materials (catalog, neafectat)', async
   const db = dbAs('office-3');
   await assertSucceeds(db.collection('materials').doc('mat-1').get());
 });
+
+// ── FAZA 4 — sanity tests pentru trasaturile LIVE care NU fac parte din
+// supplier_invoices, dar sunt esentiale sa nu fie rupte de reconciliere
+// (regula "pornim de la LIVE, nu-l reinterpretam").
+
+test('SANITY LIVE: employee NU poate seta role=admin pe propriul document users/{uid}', async () => {
+  await seedUser('emp-escalate', { role: 'employee', active: true });
+  const db = dbAs('emp-escalate');
+  await assertFails(
+    db.collection('users').doc('emp-escalate').update({ role: 'admin' }),
+  );
+});
+
+test('SANITY LIVE: employee POATE actualiza propriul nume/telefon (selfEditableUserFields)', async () => {
+  await seedUser('emp-selfedit', { role: 'employee', active: true });
+  const db = dbAs('emp-selfedit');
+  await assertSucceeds(
+    db.collection('users').doc('emp-selfedit').update({ name: 'Nume Nou', phone: '0700000000' }),
+  );
+});
+
+test('SANITY LIVE: employee NU poate accesa hr_leave_requests (self-service dezactivat, BLOCKING)', async () => {
+  await seedUser('emp-hr', { role: 'employee', active: true });
+  const db = dbAs('emp-hr');
+  await assertFails(
+    db.collection('hr_leave_requests').doc('req-1').set({ status: 'pending' }),
+  );
+});
+
+test('SANITY LIVE: admin/office tot pot accesa hr_leave_requests', async () => {
+  await seedUser('office-hr', { role: 'office', active: true });
+  const db = dbAs('office-hr');
+  await assertSucceeds(
+    db.collection('hr_leave_requests').doc('req-2').set({ status: 'pending' }),
+  );
+});
+
+test('SANITY LIVE: appointment_versions este imuabil chiar si pentru admin (create=false)', async () => {
+  await seedUser('admin-hist', { role: 'admin', active: true });
+  const db = dbAs('admin-hist');
+  await assertFails(
+    db.collection('appointment_versions').doc('v-1').set({ data: 'x' }),
+  );
+});
+
+test('SANITY LIVE: appointment_versions e citibil de admin/office (strict activ)', async () => {
+  await seedUser('admin-hist-2', { role: 'admin', active: true });
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection('appointment_versions').doc('v-2').set({ data: 'x' });
+  });
+  const db = dbAs('admin-hist-2');
+  await assertSucceeds(db.collection('appointment_versions').doc('v-2').get());
+});
