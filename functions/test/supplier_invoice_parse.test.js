@@ -100,6 +100,20 @@ test('1. XML UBL valid cu o singura linie', () => {
   assert.equal(result.lines[0].rawName, 'Teava cupru frigorific 1/2');
 });
 
+// Descoperit la validarea pe factura reala Romstal (21 linii, cbc:ID = "1".."21"
+// in XML): parserul nu extragea deloc ID-ul declarat de furnizor pe linie,
+// desi era in specificatia initiala FAZA 1. Fixat — vezi supplier_invoice_parse.js.
+test('1b. sourceLineId (cbc:ID din InvoiceLine) e extras separat de lineIndex', () => {
+  const xml = invoiceXml({
+    linesXml: [invoiceLineXml({ id: 7 }), invoiceLineXml({ id: 9 })].join('\n'),
+  });
+  const result = parseUblInvoiceXml(xml);
+  assert.equal(result.lines[0].lineIndex, 0);
+  assert.equal(result.lines[0].sourceLineId, '7');
+  assert.equal(result.lines[1].lineIndex, 1);
+  assert.equal(result.lines[1].sourceLineId, '9');
+});
+
 // ── 2. XML cu 60-70 linii ────────────────────────────────────────────────
 test('2. XML cu 65 de linii — toate extrase, in ordine', () => {
   const lines = Array.from({ length: 65 }, (_, i) =>

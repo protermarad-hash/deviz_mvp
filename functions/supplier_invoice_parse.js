@@ -117,6 +117,13 @@ function extractLine(lineNode, lineIndex) {
   const price = lineNode.Price || {};
   const warnings = [];
 
+  // ID-ul declarat de furnizor pe linie (cbc:ID din InvoiceLine, ex. "1",
+  // "2"...) — distinct de `lineIndex` (pozitia 0-based in document, folosita
+  // intern pentru ordonare/id-uri de linie). Gasit lipsa la validarea pe
+  // factura reala Romstal (FAZA 1 nu il extragea, desi era in specificatia
+  // initiala "PENTRU FIECARE InvoiceLine: - ID").
+  const sourceLineId = textOf(lineNode.ID);
+
   const qtyNode = lineNode.InvoicedQuantity;
   const quantity = parseDecimal(textOf(qtyNode));
   const unit = attrOf(qtyNode, 'unitCode');
@@ -179,6 +186,7 @@ function extractLine(lineNode, lineIndex) {
 
   return {
     lineIndex,
+    sourceLineId,
     rawName: rawName || '',
     supplierProductCode,
     unit,

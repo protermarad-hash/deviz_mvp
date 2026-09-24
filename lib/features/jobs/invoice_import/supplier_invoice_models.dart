@@ -49,6 +49,7 @@ class SupplierInvoiceParsedHeader {
 class SupplierInvoicePreviewLine {
   SupplierInvoicePreviewLine({
     required this.lineIndex,
+    this.sourceLineId,
     required this.rawName,
     this.supplierProductCode,
     this.unit,
@@ -70,6 +71,7 @@ class SupplierInvoicePreviewLine {
     return SupplierInvoicePreviewLine(
       lineIndex:
           (map['lineIndex'] is num) ? (map['lineIndex'] as num).toInt() : 0,
+      sourceLineId: asString(map['sourceLineId']),
       rawName: asString(map['rawName']) ?? '',
       supplierProductCode: asString(map['supplierProductCode']),
       unit: asString(map['unit']),
@@ -86,6 +88,11 @@ class SupplierInvoicePreviewLine {
   }
 
   final int lineIndex;
+
+  /// ID-ul declarat de furnizor pe linie (cbc:ID din InvoiceLine, ex.
+  /// "1".."21") — distinct de `lineIndex` (pozitia 0-based in document).
+  /// Nullable: unele facturi pot sa nu il populeze.
+  final String? sourceLineId;
 
   /// Text ORIGINAL din XML (Item/Name) — imutabil dupa parsare.
   final String rawName;
@@ -141,6 +148,7 @@ class SupplierInvoicePreviewLine {
     return <String, dynamic>{
       'id': 'line-$lineIndex',
       'lineIndex': lineIndex,
+      if (sourceLineId != null) 'sourceLineId': sourceLineId,
       'rawName': rawName,
       if (editedName != null && editedName!.trim().isNotEmpty)
         'editedName': editedName!.trim(),
