@@ -2,22 +2,35 @@
 
 // FAZA 1 — Import materiale din factura: parser XML e-Factura (UBL Invoice).
 //
-// Modul IZOLAT, NOU. NU scrie in `jobs`, NU scrie in `materials`, NU scrie
-// in catalogul de produse. NU persista nimic in Firestore/Storage — este
-// STATELESS: primeste text XML, intoarce JSON structurat cu antetul si
-// liniile facturii, pentru afisare intr-un ecran de verificare in aplicatie.
-// Persistarea facturii (dupa ce utilizatorul verifica/editeaza in preview)
-// se face separat, client-side, prin scriere Firestore directa in
-// `supplier_invoices` (protejata de firestore.rules, vezi acel fisier).
+// Modul IZOLAT. NU scrie in `jobs`, NU scrie in `materials`, NU scrie in
+// catalogul de produse, NU scrie in Firestore `supplier_invoices` (asta
+// ramane client-side, prin SupplierInvoiceRepository.persistNewInvoice —
+// protejata de firestore.rules).
 //
-// De ce STATELESS: o parsare esuata sau anulata de utilizator nu trebuie sa
-// lase niciun document partial in Firestore care ar necesita curatare
-// manuala ulterior. Singurul lucru care poate esua aici este intoarcerea
-// unei erori catre client — nu exista nicio scriere de curatat.
+// FAZA A-E/1-13 (bug crash nativ firebase_storage pe Windows) — acest
+// modul NU mai este stateless in privinta Storage: dupa parsare cu succes,
+// persista XML-ul sursa DIRECT in Firebase Storage prin Admin SDK
+// (bypaseaza storage.rules — de aceea autorizarea admin-only ramane
+// STRICT server-side, vezi requireAdminForInvoices mai jos, neschimbata).
+// Motiv: pluginul `firebase_storage` pe Windows desktop are un defect
+// structural confirmat (inspectie sursa + harness izolat de reproducere) —
+// `storageRef.putData(...)` client-side trimite mesaje pe canalul Flutter
+// dintr-un thread nativ gresit, ceea ce sub concurenta doboara procesul
+// INAINTE ca importul sa ajunga la persistarea materialelor. Mutand
+// persistarea XML-ului server-side, clientul Windows nu mai executa deloc
+// cod firebase_storage pentru acest feature.
+//
+// invoiceId = SHA-256(xmlContent) calculat AICI (canonic, server-side) —
+// acelasi ID e folosit ca nume de document Firestore de catre
+// SupplierInvoiceRepository si ca segment de path in Storage. Path-ul
+// Storage e construit EXCLUSIV server-side din (uid autentificat,
+// invoiceId calculat) — clientul NU poate influenta path-ul in niciun fel
+// (nu exista niciun camp de input citit in acest scop).
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
+const crypto = require('crypto');
 const { XMLParser, XMLValidator } = require('fast-xml-parser');
 
 // Limita de dimensiune a continutului XML acceptat — coerenta cu limita de
@@ -271,6 +284,49 @@ function evaluateInvoiceAuthorization({ hasAuth, uid, userExists, userData }) {
   return { authorized: true, uid, role };
 }
 
+/**
+ * Hash SHA-256 CANONIC al continutului XML — determina atat `invoiceId`
+ * (numele documentului Firestore `supplier_invoices/{id}`, vezi
+ * SupplierInvoiceRepository) cat si segmentul de path in Storage. Continut
+ * diferit => hash diferit => path diferit, prin constructie (nu exista
+ * cale prin care doua continuturi diferite sa ajunga la acelasi
+ * invoiceId, in afara unei coliziuni SHA-256 — practic imposibil).
+ */
+function computeSourceFileHash(xmlContent) {
+  return crypto.createHash('sha256').update(xmlContent, 'utf8').digest('hex');
+}
+
+/**
+ * Path-ul Storage pentru XML-ul sursa — determinist, construit EXCLUSIV
+ * din `uid` (din request.auth, verificat de requireAdminForInvoices) si
+ * `invoiceId` (calculat de computeSourceFileHash mai sus). NU accepta
+ * niciun input de la client pentru acest path.
+ */
+function buildSourceStoragePath(uid, invoiceId) {
+  return `supplier_invoices/${uid}/${invoiceId}/source.xml`;
+}
+
+/**
+ * Persista XML-ul sursa in Storage prin Admin SDK, IDEMPOTENT: daca
+ * fisierul exista deja la path-ul determinist (aceeasi factura, reimportata
+ * sau reparsata), NU il rescrie — doar confirma ca poate continua. `bucket`
+ * e primit ca parametru (nu `admin.storage().bucket()` direct) special ca
+ * sa poata fi inlocuit cu un fake in memorie la teste, fara emulator
+ * Storage.
+ */
+async function persistSourceXmlIfNeeded({ bucket, storagePath, xmlContent }) {
+  const file = bucket.file(storagePath);
+  const [exists] = await file.exists();
+  if (exists) {
+    return { created: false, storagePath };
+  }
+  await file.save(Buffer.from(xmlContent, 'utf8'), {
+    contentType: 'application/xml',
+    resumable: false,
+  });
+  return { created: true, storagePath };
+}
+
 async function requireAdminForInvoices(request) {
   const auth = request && request.auth ? request.auth : null;
   const uid = auth ? (auth.uid || '').toString().trim() : '';
@@ -297,7 +353,7 @@ exports.parseSupplierInvoiceXml = onCall(
   { region: 'europe-west1' },
   async (request) => {
     const startedAtMs = Date.now();
-    await requireAdminForInvoices(request);
+    const { uid } = await requireAdminForInvoices(request);
 
     const data = request.data || {};
     const xmlContent = data.xmlContent;
@@ -328,16 +384,46 @@ exports.parseSupplierInvoiceXml = onCall(
       throw error;
     }
 
+    // FAZA A-E/1-13 — persistare server-side a XML-ului sursa in Storage,
+    // DUPA parsare cu succes. invoiceId/path sunt calculate exclusiv aici
+    // (vezi computeSourceFileHash/buildSourceStoragePath) — clientul NU
+    // trimite si NU poate influenta path-ul. Esec de persistare => eroare
+    // fatala (NU intoarcem un rezultat de parsare "de succes" care ar duce
+    // clientul sa creada gresit ca sursa e salvata in Storage).
+    const invoiceId = computeSourceFileHash(xmlContent);
+    const storagePath = buildSourceStoragePath(uid, invoiceId);
+    try {
+      await persistSourceXmlIfNeeded({
+        bucket: admin.storage().bucket(),
+        storagePath,
+        xmlContent,
+      });
+    } catch (storageError) {
+      logger.error('parseSupplierInvoiceXml: persist source.xml failed', {
+        durationMs: Date.now() - startedAtMs,
+        invoiceId,
+        errorMessage: storageError && storageError.message,
+      });
+      throw new HttpsError(
+        'internal',
+        'Nu am putut salva factura sursa. Incearca din nou.',
+      );
+    }
+
     const durationMs = Date.now() - startedAtMs;
     logger.info('parseSupplierInvoiceXml succeeded', {
       durationMs,
       lineCount: result.lines.length,
+      invoiceId,
     });
 
     return {
       ok: true,
       header: result.header,
       lines: result.lines,
+      invoiceId,
+      storagePath,
+      sourcePersisted: true,
     };
   },
 );
@@ -351,4 +437,7 @@ exports._internal = {
   attrOf,
   evaluateInvoiceAuthorization,
   MAX_XML_BYTES,
+  computeSourceFileHash,
+  buildSourceStoragePath,
+  persistSourceXmlIfNeeded,
 };

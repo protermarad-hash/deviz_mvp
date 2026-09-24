@@ -10,7 +10,6 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 
 import '../../../core/cloud/firebase_collections.dart';
 import 'supplier_invoice_models.dart';
@@ -69,12 +68,9 @@ class SupplierInvoiceLoaded {
 class SupplierInvoiceRepository {
   SupplierInvoiceRepository({
     FirebaseFirestore? firestore,
-    FirebaseStorage? storage,
-  })  : _db = firestore ?? FirebaseFirestore.instance,
-        _storage = storage ?? FirebaseStorage.instance;
+  }) : _db = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseFirestore _db;
-  final FirebaseStorage _storage;
 
   CollectionReference<Map<String, dynamic>> get _invoices =>
       _db.collection(FirebaseCollections.supplierInvoices);
@@ -128,22 +124,28 @@ class SupplierInvoiceRepository {
     );
   }
 
-  /// FAZA 2 — persista o factura NOUA (hash inexistent inca), cu TOATE
-  /// liniile parsate (nu doar cele selectate — pastram factura sursa
-  /// completa, selectia afecteaza doar ce se importa in lucrare).
+  /// FAZA 2 — persista o factura NOUA (invoiceId inexistent inca in
+  /// Firestore), cu TOATE liniile parsate (nu doar cele selectate —
+  /// pastram factura sursa completa, selectia afecteaza doar ce se
+  /// importa in lucrare).
   ///
-  /// Ordine: (1) upload XML in Storage, (2) TRANZACTIE Firestore atomica:
-  /// re-verifica existenta doc-ului (inchide fereastra de cursa) + scrie
-  /// doc factura + toate liniile, all-or-nothing. Daca tranzactia esueaza
-  /// (inclusiv duplicat detectat in interior), fisierul din Storage e
-  /// sters (best-effort) ca sa nu ramana orfan.
+  /// FAZA A-E/1-13 (bug crash nativ firebase_storage pe Windows) — acest
+  /// client NU mai face niciun upload catre Firebase Storage. XML-ul sursa
+  /// e deja persistat SERVER-SIDE, in `parseSupplierInvoiceXml` (Admin
+  /// SDK, idempotent — vezi functions_invoice_import/), INAINTE ca acest
+  /// apel sa aiba loc. `invoiceId` primit aici e chiar hash-ul SHA-256
+  /// canonic calculat de server (returnat de parser), NU un hash
+  /// recalculat client-side — clientul e doar consumator al acestui id.
+  ///
+  /// Ordine: TRANZACTIE Firestore atomica: re-verifica existenta doc-ului
+  /// (inchide fereastra de cursa) + scrie doc factura + toate liniile,
+  /// all-or-nothing.
   ///
   /// Arunca [SupplierInvoiceDuplicateException] doar in cazul rar al unei
-  /// curse reale (alt request a creat exact acelasi hash intre timp) —
-  /// apelantul trebuie sa reincerce cu `loadExistingInvoiceByHash`.
+  /// curse reale (alt request a creat exact acelasi invoiceId intre timp)
+  /// — apelantul trebuie sa reincerce cu `loadExistingInvoiceByHash`.
   Future<SupplierInvoiceLoaded> persistNewInvoice({
-    required Uint8List xmlBytes,
-    required String sourceFileHash,
+    required String invoiceId,
     required SupplierInvoiceParsedHeader header,
     required List<SupplierInvoicePreviewLine> allLines,
   }) async {
@@ -156,8 +158,8 @@ class SupplierInvoiceRepository {
         '(limita: $kSupplierInvoiceMaxLinesPerBatch).',
       );
     }
-    if (sourceFileHash.isEmpty) {
-      throw ArgumentError('Hash-ul fisierului sursa este obligatoriu.');
+    if (invoiceId.isEmpty) {
+      throw ArgumentError('ID-ul facturii (hash canonic server) este obligatoriu.');
     }
 
     final authUser = FirebaseAuth.instance.currentUser;
@@ -166,75 +168,62 @@ class SupplierInvoiceRepository {
     }
     await authUser.getIdToken(true);
 
-    final invoiceRef = _invoiceRefForHash(sourceFileHash);
-    final invoiceId = invoiceRef.id;
+    final invoiceRef = _invoiceRefForHash(invoiceId);
 
-    final existingBeforeUpload =
-        await loadExistingInvoiceByHash(sourceFileHash);
-    if (existingBeforeUpload != null) {
-      return existingBeforeUpload;
+    final existingBeforeWrite = await loadExistingInvoiceByHash(invoiceId);
+    if (existingBeforeWrite != null) {
+      return existingBeforeWrite;
     }
 
+    // Path determinist — IDENTIC cu cel calculat server-side (acelasi uid +
+    // invoiceId), doar pentru inregistrare/trasabilitate in documentul
+    // Firestore. NU e folosit pentru niciun upload aici — fisierul exista
+    // deja la acest path, scris de server.
     final storagePath =
         'supplier_invoices/${authUser.uid}/$invoiceId/source.xml';
-    final storageRef = _storage.ref(storagePath);
-
-    await storageRef.putData(
-      xmlBytes,
-      SettableMetadata(contentType: 'application/xml'),
-    );
 
     final lineRefs = <DocumentReference<Map<String, dynamic>>>[];
-    try {
-      await _db.runTransaction((transaction) async {
-        final existingSnap = await transaction.get(invoiceRef);
-        if (existingSnap.exists) {
-          final data = existingSnap.data() ?? const <String, dynamic>{};
-          throw SupplierInvoiceDuplicateException(
-            SupplierInvoiceDuplicateInfo(
-              invoiceId: existingSnap.id,
-              invoiceNumber: (data['invoiceNumber'] ?? '').toString(),
-              supplierName: (data['supplierName'] ?? '').toString(),
-            ),
-          );
-        }
-
-        transaction.set(invoiceRef, <String, dynamic>{
-          'id': invoiceId,
-          'supplierName': header.supplierName,
-          'supplierTaxId': header.supplierTaxId,
-          'invoiceNumber': header.invoiceNumber,
-          'invoiceDate': header.invoiceDate,
-          'sourceType': 'xmlEInvoice',
-          'sourceFileStoragePath': storagePath,
-          'sourceFileHash': sourceFileHash,
-          'importedByUserId': authUser.uid,
-          'importedAt': FieldValue.serverTimestamp(),
-          'currency': header.currency,
-          'totalWithoutVat': header.totalWithoutVat,
-          'totalVat': header.totalVat,
-          'status': supplierInvoiceStatusToString(SupplierInvoiceStatus.parsed),
-          'linkedJobIds': <String>[],
-        });
-
-        final linesRef =
-            invoiceRef.collection(FirebaseCollections.supplierInvoiceLines);
-        for (final line in allLines) {
-          final lineDoc = linesRef.doc();
-          lineRefs.add(lineDoc);
-          final map = line.toLineDocMap();
-          map['id'] = lineDoc.id;
-          transaction.set(lineDoc, map);
-        }
-      });
-    } catch (error) {
-      try {
-        await storageRef.delete();
-      } catch (_) {
-        // best-effort — vezi nota FAZA 1.1 despre fisiere orfane izolate.
+    await _db.runTransaction((transaction) async {
+      final existingSnap = await transaction.get(invoiceRef);
+      if (existingSnap.exists) {
+        final data = existingSnap.data() ?? const <String, dynamic>{};
+        throw SupplierInvoiceDuplicateException(
+          SupplierInvoiceDuplicateInfo(
+            invoiceId: existingSnap.id,
+            invoiceNumber: (data['invoiceNumber'] ?? '').toString(),
+            supplierName: (data['supplierName'] ?? '').toString(),
+          ),
+        );
       }
-      rethrow;
-    }
+
+      transaction.set(invoiceRef, <String, dynamic>{
+        'id': invoiceId,
+        'supplierName': header.supplierName,
+        'supplierTaxId': header.supplierTaxId,
+        'invoiceNumber': header.invoiceNumber,
+        'invoiceDate': header.invoiceDate,
+        'sourceType': 'xmlEInvoice',
+        'sourceFileStoragePath': storagePath,
+        'sourceFileHash': invoiceId,
+        'importedByUserId': authUser.uid,
+        'importedAt': FieldValue.serverTimestamp(),
+        'currency': header.currency,
+        'totalWithoutVat': header.totalWithoutVat,
+        'totalVat': header.totalVat,
+        'status': supplierInvoiceStatusToString(SupplierInvoiceStatus.parsed),
+        'linkedJobIds': <String>[],
+      });
+
+      final linesRef =
+          invoiceRef.collection(FirebaseCollections.supplierInvoiceLines);
+      for (final line in allLines) {
+        final lineDoc = linesRef.doc();
+        lineRefs.add(lineDoc);
+        final map = line.toLineDocMap();
+        map['id'] = lineDoc.id;
+        transaction.set(lineDoc, map);
+      }
+    });
 
     for (var i = 0; i < allLines.length; i++) {
       allLines[i].lineDocId = lineRefs[i].id;

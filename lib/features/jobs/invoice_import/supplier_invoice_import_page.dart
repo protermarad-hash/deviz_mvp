@@ -11,7 +11,6 @@
 // (vezi `_openSupplierInvoiceImportPage` in lucrare_detalii_page.dart).
 
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -67,16 +66,22 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       AppRolePolicy.fromRoleKey(widget.roleKey) == UserRole.admin;
 
   String? _fileName;
-  Uint8List? _xmlBytes;
-  String? _fileHash;
 
   bool _isParsing = false;
   bool _isSaving = false;
   String? _errorMessage;
 
-  /// Non-null doar dupa ce factura a fost persistata (import nou) sau
-  /// incarcata dintr-un document existent (reutilizare, FAZA 2 pct. 14).
+  /// Non-null dupa orice parsare reusita (FAZA A-E/1-13: id-ul canonic e
+  /// acum cunoscut IMEDIAT dupa parsare, calculat server-side — nu doar
+  /// dupa ce metadata Firestore a fost scrisa). Vezi [_invoiceMetadataPersisted]
+  /// pentru starea separata "documentul supplier_invoices exista deja".
   String? _invoiceId;
+
+  /// true doar dupa ce documentul Firestore `supplier_invoices/{id}` +
+  /// liniile lui au fost efectiv scrise (import nou reusit) sau incarcate
+  /// dintr-un document existent (reutilizare, FAZA 2 pct. 14). Distinct de
+  /// [_invoiceId] (care e cunoscut mai devreme, imediat dupa parsare).
+  bool _invoiceMetadataPersisted = false;
 
   SupplierInvoiceParsedHeader? _header;
   List<SupplierInvoicePreviewLine> _lines =
@@ -195,18 +200,24 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     setState(() {
       _isParsing = true;
       _fileName = picked.name;
-      _xmlBytes = bytes;
     });
 
     try {
-      final hash = _repository.computeSha256(bytes);
-
-      // FAZA 2 pct. 14 — daca factura exista deja (indiferent de lucrare),
-      // o reutilizam direct, fara sa re-parsam/re-uploadam.
-      final existing = await _repository.loadExistingInvoiceByHash(hash);
+      // FAZA 2 pct. 14 — pre-verificare LOCALA, opportunistica: daca
+      // exact acelasi fisier (bytes) a mai fost importat, reutilizam
+      // direct documentul Firestore existent, fara sa mai apelam serverul
+      // de parsare. Hash-ul local (pe bytes brute) e doar un shortcut de
+      // UX — id-ul CANONIC/autoritar al facturii ramane cel calculat
+      // server-side (SHA-256 pe xmlContent decodat), vezi FAZA A-E/1-13.
+      // Daca fisierul are BOM sau alte diferente de encoding fata de
+      // textul canonic, acest shortcut pur si simplu nu gaseste nimic
+      // local si se trece la parsarea normala (server-side) — sigur, doar
+      // mai putin optim (un apel de retea in plus).
+      final localHash = _repository.computeSha256(bytes);
+      final existing = await _repository.loadExistingInvoiceByHash(localHash);
       if (existing != null) {
         if (!mounted) return;
-        _applyLoadedInvoice(existing, hash);
+        _applyLoadedInvoice(existing);
         return;
       }
 
@@ -217,8 +228,12 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       final parseResult = await _parserClient.parseXml(xmlText);
       if (!mounted) return;
       setState(() {
-        _fileHash = hash;
-        _invoiceId = null;
+        // FAZA A-E/1-13 — id-ul canonic vine acum DIRECT din raspunsul
+        // serverului (SHA-256 calculat server-side, coerent cu XML-ul
+        // deja persistat server-side in Storage in acelasi apel) — nu
+        // ramane null pana la import, ca inainte.
+        _invoiceId = parseResult.invoiceId;
+        _invoiceMetadataPersisted = false;
         _header = parseResult.header;
         _lines = parseResult.lines;
         _isParsing = false;
@@ -239,10 +254,10 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     }
   }
 
-  void _applyLoadedInvoice(SupplierInvoiceLoaded loaded, String hash) {
+  void _applyLoadedInvoice(SupplierInvoiceLoaded loaded) {
     setState(() {
-      _fileHash = hash;
       _invoiceId = loaded.invoiceId;
+      _invoiceMetadataPersisted = true;
       _header = loaded.header;
       _lines = loaded.lines;
       _isParsing = false;
@@ -542,9 +557,8 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
   void _resetToPickStep() {
     setState(() {
       _fileName = null;
-      _xmlBytes = null;
-      _fileHash = null;
       _invoiceId = null;
+      _invoiceMetadataPersisted = false;
       _header = null;
       _lines = const <SupplierInvoicePreviewLine>[];
       _errorMessage = null;
@@ -596,23 +610,23 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     debugPrint('IMPORT_STEP_02 validation done t=${DateTime.now().toIso8601String()} selectedCount=${selected.length}');
 
     try {
-      var invoiceId = _invoiceId;
-      if (invoiceId == null) {
-        final xmlBytes = _xmlBytes;
-        final hash = _fileHash;
-        final header = _header;
-        if (xmlBytes == null || hash == null || header == null) {
-          throw StateError('Factura nu este pregatita pentru import.');
-        }
-        final persisted = await _repository.persistNewInvoice(
-          xmlBytes: xmlBytes,
-          sourceFileHash: hash,
+      final invoiceId = _invoiceId;
+      final header = _header;
+      if (invoiceId == null || invoiceId.isEmpty || header == null) {
+        throw StateError('Factura nu este pregatita pentru import.');
+      }
+      // FAZA A-E/1-13 — `invoiceId` e deja cunoscut (canonic, server-side)
+      // imediat dupa parsare; ramane doar sa scriem metadata Firestore
+      // (`supplier_invoices/{id}` + liniile), daca nu s-a facut deja.
+      // XML-ul sursa e deja in Storage — niciun upload aici.
+      if (!_invoiceMetadataPersisted) {
+        await _repository.persistNewInvoice(
+          invoiceId: invoiceId,
           header: header,
           allLines: _lines,
         );
-        invoiceId = persisted.invoiceId;
         if (!mounted) return;
-        setState(() => _invoiceId = invoiceId);
+        setState(() => _invoiceMetadataPersisted = true);
       }
 
       final catalog = await MaterialsCatalogService().listMaterials();

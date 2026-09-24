@@ -37,10 +37,25 @@ class SupplierInvoiceParseResult {
   const SupplierInvoiceParseResult({
     required this.header,
     required this.lines,
+    required this.invoiceId,
+    required this.sourcePersisted,
   });
 
   final SupplierInvoiceParsedHeader header;
   final List<SupplierInvoicePreviewLine> lines;
+
+  /// ID canonic al facturii — SHA-256(xmlContent), calculat SERVER-SIDE de
+  /// `parseSupplierInvoiceXml` (vezi functions_invoice_import/). Acelasi
+  /// id e folosit atat ca document Firestore `supplier_invoices/{id}`
+  /// (SupplierInvoiceRepository), cat si ca segment de path in Storage
+  /// (calculat identic pe server). Autoritar — nu se recalculeaza client-side.
+  final String invoiceId;
+
+  /// true daca XML-ul sursa a fost deja persistat in Firebase Storage de
+  /// server (Admin SDK) in cadrul acestui apel — clientul NU mai face
+  /// niciun upload propriu catre Storage pentru acest feature (elimina
+  /// crash-ul nativ firebase_storage confirmat pe Windows).
+  final bool sourcePersisted;
 }
 
 class SupplierInvoiceParserClient {
@@ -83,7 +98,12 @@ class SupplierInvoiceParserClient {
             SupplierInvoicePreviewLine.fromMap(Map<String, dynamic>.from(m)))
         .toList(growable: false);
 
-    return SupplierInvoiceParseResult(header: header, lines: lines);
+    return SupplierInvoiceParseResult(
+      header: header,
+      lines: lines,
+      invoiceId: (data['invoiceId'] ?? '').toString(),
+      sourcePersisted: data['sourcePersisted'] == true,
+    );
   }
 
   Future<Map<String, dynamic>> _callNative(String xmlContent) async {
