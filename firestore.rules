@@ -125,6 +125,18 @@ service cloud.firestore {
     match /product_catalog_supplier_prices/{docId} {
       allow read, write: if isAdminOrOffice();
     }
+
+    // Facturi furnizori importate (Import materiale din factură — Faza 1).
+    // Conțin costuri reale de achiziție și date furnizor — strict
+    // admin/office, la fel ca product_catalog_supplier_prices mai sus.
+    // NU se relaxează niciodată la isOperational() — vezi audit Faza 1.
+    match /supplier_invoices/{invoiceId} {
+      allow read, write: if isAdminOrOffice();
+
+      match /lines/{lineId} {
+        allow read, write: if isAdminOrOffice();
+      }
+    }
     match /product_catalog_price_lists/{docId} {
       allow read, write: if isAdminOrOffice();
     }

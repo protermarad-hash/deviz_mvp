@@ -16,6 +16,11 @@ const db = admin.firestore();
 const { availability: whatsappAvailability } = require('./whatsapp_availability');
 exports.availability = whatsappAvailability;
 
+// FAZA 1 — Import materiale din factura: parser XML e-Factura, izolat,
+// stateless (nu scrie in jobs/materials/catalog). Vezi supplier_invoice_parse.js.
+const { parseSupplierInvoiceXml } = require('./supplier_invoice_parse');
+exports.parseSupplierInvoiceXml = parseSupplierInvoiceXml;
+
 const COLLECTIONS = {
   notifications: 'notifications',
   emailQueue: 'notification_email_queue',

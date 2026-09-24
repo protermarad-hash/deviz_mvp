@@ -1,6 +1,51 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    // ── Helper-e (Import materiale din factură — Faza 1) ──────────────────
+    // Reutilizează exact rolul administrativ definit în firestore.rules
+    // (isAdminOrOffice), citit cross-service prin firestore.get()/exists().
+    // NU introduce un RBAC nou — doar oglindește userRole()/isActive().
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function invoiceUserDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function invoiceUserExists() {
+      return isSignedIn() &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function invoiceUserActive() {
+      return invoiceUserExists() &&
+        (!('active' in invoiceUserDoc().data) || invoiceUserDoc().data.active == true);
+    }
+
+    function isAdminOrOfficeForInvoices() {
+      return invoiceUserActive() &&
+        (invoiceUserDoc().data.role == 'admin' || invoiceUserDoc().data.role == 'office');
+    }
+
+    // Fișier sursă al facturii furnizor (XML e-Factura) — Faza 1.
+    // Path izolat, nou, NU afectează niciun path existent mai jos.
+    // Doar admin/office; doar extensie .xml; doar fișierul propriu upload
+    // (uid din path == uploader); dimensiune limitată la 5MB (XML text,
+    // nu justifică limita de 20MB folosită pentru poze/PDF-uri generice).
+    match /supplier_invoices/{uid}/{invoiceId}/{fileName} {
+      allow read: if isAdminOrOfficeForInvoices();
+      allow write: if isAdminOrOfficeForInvoices()
+                   && request.auth.uid == uid
+                   && request.resource.size < 5 * 1024 * 1024
+                   && fileName.matches('.*[.]xml')
+                   && !request.resource.contentType.matches('image/.*')
+                   && request.resource.contentType != 'application/pdf'
+                   && (request.resource.contentType.matches('(application|text)/xml')
+                       || request.resource.contentType == 'text/plain'
+                       || request.resource.contentType == 'application/octet-stream');
+    }
+
     // Permite utilizatorilor autentificați să citească și scrie fișiere
     // Bucket: devizpro-ultra-pilot.firebasestorage.app
     match /{allPaths=**} {

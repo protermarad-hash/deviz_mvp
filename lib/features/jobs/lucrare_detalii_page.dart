@@ -52,6 +52,7 @@ import 'job_site_document_models.dart';
 import 'job_site_document_services.dart';
 import 'job_site_documents_cloud_repository.dart';
 import 'job_site_documents_page.dart';
+import 'invoice_import/supplier_invoice_import_page.dart';
 import 'lucrare_raport_page.dart';
 import 'job_document_type_utils.dart';
 import 'lucrare_raport_complet_page.dart';
@@ -1195,6 +1196,20 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           repository: widget.repository,
           job: _jobSnapshot,
           clientName: widget.clientName,
+          roleKey: widget.roleKey,
+        ),
+      ),
+    );
+  }
+
+  // FAZA 1 — Import materiale din factura (XML e-Factura). Punct de
+  // intrare minim; TOATA logica noua sta in lib/features/jobs/invoice_import/
+  // (fisier nou, izolat) — NU se adauga logica noua in acest fisier monolit.
+  Future<void> _openSupplierInvoiceImportPage() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SupplierInvoiceImportPage(
+          job: _jobSnapshot,
           roleKey: widget.roleKey,
         ),
       ),
@@ -12591,10 +12606,27 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                           );
                         }),
                       ),
-                action: TextButton.icon(
-                  onPressed: _onAddMaterial,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Adaugă material'),
+                action: Wrap(
+                  spacing: 4,
+                  children: [
+                    // FAZA 1 — vizibil doar admin/office (aceeasi
+                    // conditie ca autorizarea reala din Cloud
+                    // Function/firestore.rules/storage.rules; ascunderea
+                    // aici e doar UX, NU mecanismul de securitate).
+                    if (AppRolePolicy.canAccessOffice(
+                      AppRolePolicy.fromRoleKey(widget.roleKey),
+                    ))
+                      TextButton.icon(
+                        onPressed: _openSupplierInvoiceImportPage,
+                        icon: const Icon(Icons.receipt_long_outlined),
+                        label: const Text('Import din factură'),
+                      ),
+                    TextButton.icon(
+                      onPressed: _onAddMaterial,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Adaugă material'),
+                    ),
+                  ],
                 ),
               ),
             // "Resurse proprii" (manoperă proprie manuală introdusă prin

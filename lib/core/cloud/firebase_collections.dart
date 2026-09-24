@@ -115,4 +115,8 @@ class FirebaseCollections {
   static const String clauzeCustomCatalog = 'clauze_custom_catalog';
   static const String pontajZileLucrari = 'pontaj_zile_lucrari';
   static const String userStatusOrder = 'user_status_order';
+
+  // FAZA 1 — Import materiale din factura (izolat, nu atinge `jobs`).
+  static const String supplierInvoices = 'supplier_invoices';
+  static const String supplierInvoiceLines = 'lines';
 }
