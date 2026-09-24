@@ -5,9 +5,16 @@
   "storage": {
     "rules": "storage.rules"
   },
-  "functions": {
-    "source": "functions"
-  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default"
+    },
+    {
+      "source": "functions_invoice_import",
+      "codebase": "invoice-import"
+    }
+  ],
   "flutter": {
     "platforms": {
       "android": {

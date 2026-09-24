@@ -1,0 +1,18 @@
+{
+  "name": "devizpro-ultra-functions-invoice-import",
+  "private": true,
+  "description": "Codebase Firebase Functions IZOLAT, dedicat exclusiv parseSupplierInvoiceXml (Import materiale din factura). Nu contine si nu depinde de nimic din codebase-ul legacy (functions/) - fara WhatsApp/availability, fara email/nodemailer, fara secrete legacy. Vezi CLAUDE.md / raportul FAZA 5 pentru motivul izolarii (deploy-ul legacy e blocat de un secret WhatsApp neconfigurat in CLI non-interactiv).",
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "scripts": {
+    "check": "node --check index.js && node --check supplier_invoice_parse.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.1",
+    "firebase-admin": "^13.8.0",
+    "firebase-functions": "^7.2.5"
+  }
+}

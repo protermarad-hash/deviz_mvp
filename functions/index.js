@@ -16,10 +16,10 @@ const db = admin.firestore();
 const { availability: whatsappAvailability } = require('./whatsapp_availability');
 exports.availability = whatsappAvailability;
 
-// FAZA 1 — Import materiale din factura: parser XML e-Factura, izolat,
-// stateless (nu scrie in jobs/materials/catalog). Vezi supplier_invoice_parse.js.
-const { parseSupplierInvoiceXml } = require('./supplier_invoice_parse');
-exports.parseSupplierInvoiceXml = parseSupplierInvoiceXml;
+// FAZA 5 — parseSupplierInvoiceXml a fost mutat intr-un codebase Firebase
+// Functions IZOLAT (../functions_invoice_import/), ca sa deblocheze deploy-ul
+// legacy fara a atinge availability/WhatsApp. Vezi functions_invoice_import/
+// pentru implementare si teste.
 
 const COLLECTIONS = {
   notifications: 'notifications',
