@@ -18,6 +18,7 @@ import '../job_models.dart';
 import 'supplier_invoice_models.dart';
 import 'supplier_invoice_parser_client.dart';
 import 'supplier_invoice_repository.dart';
+import 'supplier_invoice_unit_labels.dart';
 
 class SupplierInvoiceImportPage extends StatefulWidget {
   const SupplierInvoiceImportPage({
@@ -347,7 +348,10 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                   ),
                   _textField(
                     label: 'UM',
-                    value: line.unit ?? '',
+                    // Afisare prietenoasa (H87 -> buc) — valoarea originala
+                    // UBL ramane in line.unit pana cand utilizatorul chiar
+                    // editeaza campul (vezi supplier_invoice_unit_labels.dart).
+                    value: friendlyUnitLabel(line.unit),
                     onChanged: (v) =>
                         line.unit = v.trim().isEmpty ? null : v.trim(),
                   ),
