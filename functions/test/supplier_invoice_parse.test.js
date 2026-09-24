@@ -282,15 +282,15 @@ test('16b. Utilizator admin, dar cont inactiv — permission-denied', () => {
   assert.equal(result.code, 'permission-denied');
 });
 
-test('16c. Utilizator rol "office", activ — autorizat', () => {
+test('16c. Utilizator rol "office", activ — permission-denied (FAZA 1.1: strict admin, nu admin/office)', () => {
   const result = evaluateInvoiceAuthorization({
     hasAuth: true,
     uid: 'uid-office-1',
     userExists: true,
     userData: { role: 'office', active: true },
   });
-  assert.equal(result.authorized, true);
-  assert.equal(result.role, 'office');
+  assert.equal(result.authorized, false);
+  assert.equal(result.code, 'permission-denied');
 });
 
 test('16d. Utilizator rol "admin", camp active absent (backward-compat) — autorizat', () => {
@@ -301,4 +301,15 @@ test('16d. Utilizator rol "admin", camp active absent (backward-compat) — auto
     userData: { role: 'admin' },
   });
   assert.equal(result.authorized, true);
+});
+
+test('16e. Utilizator rol "admin", activ — autorizat (control pozitiv)', () => {
+  const result = evaluateInvoiceAuthorization({
+    hasAuth: true,
+    uid: 'uid-admin-1',
+    userExists: true,
+    userData: { role: 'admin', active: true },
+  });
+  assert.equal(result.authorized, true);
+  assert.equal(result.role, 'admin');
 });

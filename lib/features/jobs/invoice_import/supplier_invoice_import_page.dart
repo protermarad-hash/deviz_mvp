@@ -13,6 +13,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/auth/app_role_policy.dart';
+import '../../../core/auth_models.dart';
 import '../job_models.dart';
 import 'supplier_invoice_models.dart';
 import 'supplier_invoice_parser_client.dart';
@@ -38,8 +39,13 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       SupplierInvoiceParserClient();
   final SupplierInvoiceRepository _repository = SupplierInvoiceRepository();
 
+  // FAZA 1.1 — STRICT ADMIN, nu admin/office (cerinta pct. 2: doar
+  // administratorul editeaza Lucrari/Oferte si foloseste import-ul de
+  // facturi; office nu trebuie sa vada costuri reale de achizitie).
+  // Ascunderea de aici e doar UX — autorizarea reala e in Cloud
+  // Function + firestore.rules/storage.rules (isAdminOnly/isAdminOnlyForInvoices).
   bool get _isAuthorized =>
-      AppRolePolicy.canAccessOffice(AppRolePolicy.fromRoleKey(widget.roleKey));
+      AppRolePolicy.fromRoleKey(widget.roleKey) == UserRole.admin;
 
   String? _fileName;
   Uint8List? _xmlBytes;
@@ -66,7 +72,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  'Aceasta functie este disponibila doar pentru rolul admin/office.',
+                  'Aceasta functie este disponibila doar pentru administrator.',
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -437,31 +443,11 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     setState(() => _isSaving = true);
 
     try {
-      final duplicate = await _repository.findByFileHash(hash);
-      if (!mounted) return;
-      if (duplicate != null) {
-        setState(() => _isSaving = false);
-        await showDialog<void>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Factura deja importata'),
-            content: Text(
-              'Aceasta factura a fost deja importata anterior.\n\n'
-              'Numar factura: ${duplicate.invoiceNumber}\n'
-              'Furnizor: ${duplicate.supplierName}',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Am inteles'),
-              ),
-            ],
-          ),
-        );
-        return;
-      }
-
       final selected = _lines.where((l) => l.selected).toList(growable: false);
+      // FAZA 1.1: saveForReview face el insusi verificarea de duplicat +
+      // o repeta ATOMIC intr-o tranzactie Firestore (doc ID determinist =
+      // hash-ul fisierului), ca sa inchida fereastra de cursa dintre doua
+      // request-uri simultane — vezi supplier_invoice_repository.dart.
       final invoiceId = await _repository.saveForReview(
         xmlBytes: xmlBytes,
         sourceFileHash: hash,
@@ -477,6 +463,26 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                 'Factura salvata pentru verificare (${selected.length} linii). ID: $invoiceId')),
       );
       Navigator.of(context).pop();
+    } on SupplierInvoiceDuplicateException catch (error) {
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Factura deja importata'),
+          content: Text(
+            'Aceasta factura a fost deja importata anterior.\n\n'
+            'Numar factura: ${error.info.invoiceNumber}\n'
+            'Furnizor: ${error.info.supplierName}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Am inteles'),
+            ),
+          ],
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() {

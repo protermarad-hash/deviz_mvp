@@ -232,7 +232,7 @@ function parseUblInvoiceXml(xmlText) {
 
 /**
  * Functie PURA (fara acces Firestore) care decide autorizarea, pornind de
- * la datele deja citite. Separata de `requireAdminOrOfficeForInvoices`
+ * la datele deja citite. Separata de `requireAdminForInvoices`
  * special ca sa poata fi testata unitar (cazurile "neautentificat" /
  * "fara rol administrativ") fara Firebase Admin SDK / emulator.
  */
@@ -249,17 +249,21 @@ function evaluateInvoiceAuthorization({ hasAuth, uid, userExists, userData }) {
     return { authorized: false, code: 'permission-denied', message: 'Cont inexistent sau inactiv.' };
   }
   const role = (data.role || '').toString().trim().toLowerCase();
-  if (role !== 'admin' && role !== 'office') {
+  // STRICT ADMIN — FAZA 1.1 pct. 2: facturile furnizorilor si costurile
+  // reale de achizitie sunt accesibile DOAR administratorului, nu si
+  // rolului "office" (decizie explicita, diferita de restul categoriei A
+  // din firestore.rules care e admin/office).
+  if (role !== 'admin') {
     return {
       authorized: false,
       code: 'permission-denied',
-      message: 'Doar rolul admin/office poate importa facturi de la furnizori.',
+      message: 'Doar administratorul poate importa facturi de la furnizori.',
     };
   }
   return { authorized: true, uid, role };
 }
 
-async function requireAdminOrOfficeForInvoices(request) {
+async function requireAdminForInvoices(request) {
   const auth = request && request.auth ? request.auth : null;
   const uid = auth ? (auth.uid || '').toString().trim() : '';
   const hasAuth = Boolean(auth && uid);
@@ -285,7 +289,7 @@ exports.parseSupplierInvoiceXml = onCall(
   { region: 'europe-west1' },
   async (request) => {
     const startedAtMs = Date.now();
-    await requireAdminOrOfficeForInvoices(request);
+    await requireAdminForInvoices(request);
 
     const data = request.data || {};
     const xmlContent = data.xmlContent;

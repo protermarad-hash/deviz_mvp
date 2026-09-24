@@ -56,6 +56,14 @@ service cloud.firestore {
       return isActive() && (userRole() == 'admin' || userRole() == 'office');
     }
 
+    // Strict admin — FAZA 1.1: facturile furnizorilor (supplier_invoices)
+    // trebuie accesibile DOAR administratorului, nu admin/office (decizie
+    // explicita, cerinta pct. 2). Reutilizeaza aceleasi primitive
+    // (isActive/userRole) ca isAdminOrOffice() — nu introduce RBAC nou.
+    function isAdminOnly() {
+      return isActive() && userRole() == 'admin';
+    }
+
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
     }
@@ -127,14 +135,16 @@ service cloud.firestore {
     }
 
     // Facturi furnizori importate (Import materiale din factură — Faza 1).
-    // Conțin costuri reale de achiziție și date furnizor — strict
-    // admin/office, la fel ca product_catalog_supplier_prices mai sus.
-    // NU se relaxează niciodată la isOperational() — vezi audit Faza 1.
+    // Conțin costuri reale de achiziție și date furnizor — STRICT ADMIN
+    // (nu admin/office — decizie explicită Faza 1.1 pct. 2: doar
+    // administratorul editează Lucrări/Oferte și folosește import-ul de
+    // facturi; office nu trebuie să vadă costuri reale de achiziție).
+    // NU se relaxează niciodată la isAdminOrOffice()/isOperational().
     match /supplier_invoices/{invoiceId} {
-      allow read, write: if isAdminOrOffice();
+      allow read, write: if isAdminOnly();
 
       match /lines/{lineId} {
-        allow read, write: if isAdminOrOffice();
+        allow read, write: if isAdminOnly();
       }
     }
     match /product_catalog_price_lists/{docId} {

@@ -9,6 +9,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/auth/app_role_policy.dart';
+import '../../core/auth_models.dart' show UserRole;
 import '../../core/company_profile.dart';
 import '../../core/app_models.dart';
 import '../../core/local_store.dart';
@@ -12609,13 +12610,12 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 action: Wrap(
                   spacing: 4,
                   children: [
-                    // FAZA 1 — vizibil doar admin/office (aceeasi
+                    // FAZA 1.1 — STRICT ADMIN, nu admin/office (aceeasi
                     // conditie ca autorizarea reala din Cloud
                     // Function/firestore.rules/storage.rules; ascunderea
                     // aici e doar UX, NU mecanismul de securitate).
-                    if (AppRolePolicy.canAccessOffice(
-                      AppRolePolicy.fromRoleKey(widget.roleKey),
-                    ))
+                    if (AppRolePolicy.fromRoleKey(widget.roleKey) ==
+                        UserRole.admin)
                       TextButton.icon(
                         onPressed: _openSupplierInvoiceImportPage,
                         icon: const Icon(Icons.receipt_long_outlined),

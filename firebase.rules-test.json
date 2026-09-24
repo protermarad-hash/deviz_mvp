@@ -1,0 +1,23 @@
+{
+  "$comment": "Config EXCLUSIV pentru Firebase Emulator Suite local, folosit doar de tooling/rules_tests (teste FAZA 1.1 pentru firestore.rules/storage.rules). NU e firebase.json-ul proiectului (acela ramane complet neatins). NU se foloseste NICIODATA cu `firebase deploy` — doar cu `firebase emulators:exec`. Trebuie sa stea la radacina repo-ului (nu in tooling/rules_tests) pentru ca Firebase CLI nu permite path-uri de rules care escapeaza directorul configului (`../../firestore.rules` e respins ca fiind in afara proiectului) — asa ca aici path-urile sunt directe, catre EXACT fisierele reale.",
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 5305,
+      "host": "127.0.0.1"
+    },
+    "storage": {
+      "port": 5306,
+      "host": "127.0.0.1"
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}
