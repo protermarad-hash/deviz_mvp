@@ -10,8 +10,6 @@
 // intoarce parintelui prin `Navigator.pop`, care face salvarea efectiva
 // (vezi `_openSupplierInvoiceImportPage` in lucrare_detalii_page.dart).
 
-import 'dart:convert';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
@@ -203,35 +201,69 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     });
 
     try {
-      // FAZA 2 pct. 14 — pre-verificare LOCALA, opportunistica: daca
-      // exact acelasi fisier (bytes) a mai fost importat, reutilizam
-      // direct documentul Firestore existent, fara sa mai apelam serverul
-      // de parsare. Hash-ul local (pe bytes brute) e doar un shortcut de
-      // UX — id-ul CANONIC/autoritar al facturii ramane cel calculat
-      // server-side (SHA-256 pe xmlContent decodat), vezi FAZA A-E/1-13.
-      // Daca fisierul are BOM sau alte diferente de encoding fata de
-      // textul canonic, acest shortcut pur si simplu nu gaseste nimic
-      // local si se trece la parsarea normala (server-side) — sigur, doar
-      // mai putin optim (un apel de retea in plus).
+      // FAZA "reconcile prin server" — NU mai exista niciun shortcut care
+      // sare peste server. Motiv (audit hash/dedup, vezi raportul
+      // dedicat): shortcut-ul vechi decidea reutilizarea PE BAZA hash-ului
+      // local (bytes brute, poate include BOM), ceea ce putea sari peste
+      // apelul catre parseSupplierInvoiceXml — si deci peste
+      // auto-repararea `source.xml` in Storage daca lipsea, chiar daca
+      // documentul Firestore exista deja. Acum, la FIECARE alegere de
+      // fisier: server-ul e apelat intotdeauna, iar `invoiceId`-ul lui e
+      // singura autoritate pentru identitatea facturii.
+      //
+      // `localHash` (bytes brute) NU mai decide nimic — e pastrat STRICT
+      // ca diagnostic (util doar la depanare: confirma daca hash-ul local
+      // coincide sau nu cu cel canonic, ex. cazul BOM).
       final localHash = _repository.computeSha256(bytes);
-      final existing = await _repository.loadExistingInvoiceByHash(localHash);
+      debugPrint('[InvoiceImport] localHash (diagnostic, bytes brute)=$localHash');
+
+      final xmlText = decodeXmlBytesToUtf8Text(bytes);
+      final parseResult = await _parserClient.parseXml(xmlText);
+      if (!mounted) return;
+
+      final bomMismatch = localHash != parseResult.invoiceId;
+      if (bomMismatch) {
+        debugPrint('[InvoiceImport] localHash difera de invoiceId server '
+            '(probabil BOM) — invoiceId server ramane autoritar.');
+      }
+
+      // Verificarea de reutilizare foloseste EXCLUSIV invoiceId-ul canonic
+      // (server), niciodata localHash — evita crearea unui document
+      // separat pentru acelasi continut logic (cazul BOM) si garanteaza
+      // ca `source.xml` a fost deja (re)persistat server-side inainte de
+      // aceasta verificare, indiferent daca documentul Firestore exista
+      // deja sau nu (FAZA 2 pct. 14 + self-heal Storage).
+      final existing =
+          await _repository.loadExistingInvoiceByHash(parseResult.invoiceId);
       if (existing != null) {
         if (!mounted) return;
         _applyLoadedInvoice(existing);
         return;
       }
 
-      var xmlText = utf8.decode(bytes, allowMalformed: false);
-      if (xmlText.isNotEmpty && xmlText.codeUnitAt(0) == 0xFEFF) {
-        xmlText = xmlText.substring(1);
+      // Fallback LEGACY — DOAR cand localHash difera de invoiceId-ul
+      // canonic (cazul BOM): mai verificam si dupa hash-ul vechi (bytes
+      // brute), pentru cazul rar in care aceeasi factura fizica a fost
+      // deja importata de o versiune anterioara a aplicatiei (care folosea
+      // hash-ul pe bytes brute ca invoiceId). Daca gasim un document
+      // legacy, il reutilizam — NU cream un al doilea document Firestore
+      // pentru aceeasi factura. `source.xml` deja (re)persistat mai sus
+      // sub id-ul canonic ramane, in acest caz rar, orfan la path-ul
+      // canonic — acceptabil prin design (vezi nota FAZA 6 despre fisiere
+      // orfane deterministe), NU necesita curatare.
+      if (bomMismatch) {
+        final legacyExisting =
+            await _repository.loadExistingInvoiceByHash(localHash);
+        if (legacyExisting != null) {
+          if (!mounted) return;
+          debugPrint('[InvoiceImport] factura legacy gasita dupa localHash '
+              '— reutilizata, fara duplicat.');
+          _applyLoadedInvoice(legacyExisting);
+          return;
+        }
       }
-      final parseResult = await _parserClient.parseXml(xmlText);
-      if (!mounted) return;
+
       setState(() {
-        // FAZA A-E/1-13 — id-ul canonic vine acum DIRECT din raspunsul
-        // serverului (SHA-256 calculat server-side, coerent cu XML-ul
-        // deja persistat server-side in Storage in acelasi apel) — nu
-        // ramane null pana la import, ca inainte.
         _invoiceId = parseResult.invoiceId;
         _invoiceMetadataPersisted = false;
         _header = parseResult.header;

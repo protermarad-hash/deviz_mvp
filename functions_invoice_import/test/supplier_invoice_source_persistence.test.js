@@ -108,6 +108,32 @@ test('8. reimport acelasi XML -> idempotent, nu rescrie fisierul existent', asyn
   assert.equal(stored.saveCallCount, 1, 'save() trebuie apelat o singura data, nu de doua ori');
 });
 
+test('SELF-HEAL: Firestore ar putea avea deja documentul (simulat aici prin apelarea de doua ori a persistSourceXmlIfNeeded pe acelasi path, a doua oara dupa ce fisierul a fost sters manual din bucket, ca un istoric de operatie partiala) -> source.xml este RECREAT, sourcePersisted-echivalent (created:true) la a doua incercare', async () => {
+  const bucket = createFakeBucket();
+  const xmlContent = '<Invoice><ID>F1</ID></Invoice>';
+  const storagePath = buildSourceStoragePath('uid-1', computeSourceFileHash(xmlContent));
+
+  // Prima persistare — starea normala (fisier creat).
+  const first = await persistSourceXmlIfNeeded({ bucket, storagePath, xmlContent });
+  assert.equal(first.created, true);
+
+  // Simuleaza pierderea fisierului din Storage (stergere manuala, esec
+  // istoric) — documentul Firestore corespunzator (nesimulat aici, dar
+  // vezi supplier_invoice_import_page_reconcile_test.dart pentru
+  // dovada ca, client-side, parseSupplierInvoiceXml este apelat
+  // INTOTDEAUNA, indiferent daca documentul Firestore exista deja).
+  bucket._files.delete(storagePath);
+  assert.equal((await bucket.file(storagePath).exists())[0], false);
+
+  // Reimport (server re-apelat, pentru ca acum clientul NU mai sare
+  // peste el doar pentru ca Firestore are deja documentul) -> fisierul
+  // trebuie recreat.
+  const second = await persistSourceXmlIfNeeded({ bucket, storagePath, xmlContent });
+  assert.equal(second.created, true, 'fisierul lipsa trebuie recreat (self-heal)');
+  assert.equal((await bucket.file(storagePath).exists())[0], true);
+  assert.equal(bucket._files.get(storagePath).content.toString('utf8'), xmlContent);
+});
+
 test('9b. doua facturi cu continut diferit -> doua fisiere Storage distincte, ambele persistate', async () => {
   const bucket = createFakeBucket();
   const xmlA = '<Invoice><ID>F1</ID></Invoice>';

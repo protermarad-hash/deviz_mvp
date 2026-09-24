@@ -5,6 +5,7 @@
 // (STRICT ADMIN, vezi FAZA 1.1) — acest fisier NU e sursa de adevar a
 // securitatii, doar respecta acelasi contract.
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -18,6 +19,23 @@ import 'supplier_invoice_models.dart';
 /// linii). Firestore permite maxim 500 operatii/tranzactie — pastram
 /// marja.
 const int kSupplierInvoiceMaxLinesPerBatch = 400;
+
+/// Decodeaza bytes-ii unui fisier XML in text UTF-8, eliminand un eventual
+/// BOM (U+FEFF) de la inceput — extras ca functie PURA, testabila
+/// independent (fara Firebase), din `_pickAndParseFile` in
+/// `supplier_invoice_import_page.dart`. Text-ul rezultat e EXACT ce se
+/// trimite ca `xmlContent` catre `parseSupplierInvoiceXml` si ce serverul
+/// foloseste pentru hash-ul canonic (`computeSourceFileHash`) — motiv
+/// pentru care hash-ul pe bytes brute (`computeSha256`) poate diferi de
+/// invoiceId-ul server pentru fisiere CU BOM (auditul hash/dedup FAZA
+/// "reconcile prin server").
+String decodeXmlBytesToUtf8Text(Uint8List bytes) {
+  final text = utf8.decode(bytes, allowMalformed: false);
+  if (text.isNotEmpty && text.codeUnitAt(0) == 0xFEFF) {
+    return text.substring(1);
+  }
+  return text;
+}
 
 class SupplierInvoiceDuplicateInfo {
   const SupplierInvoiceDuplicateInfo({
