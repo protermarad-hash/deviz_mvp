@@ -54,8 +54,7 @@ import 'job_site_document_services.dart';
 import 'job_site_documents_cloud_repository.dart';
 import 'job_site_documents_page.dart';
 import 'invoice_import/supplier_invoice_import_page.dart';
-import 'invoice_import/supplier_invoice_repository.dart';
-import '../materials/materials_catalog_service.dart';
+import 'invoice_import/supplier_invoice_import_repair.dart';
 import 'lucrare_raport_page.dart';
 import 'job_document_type_utils.dart';
 import 'lucrare_raport_complet_page.dart';
@@ -1254,31 +1253,6 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     if (!mounted) return;
     setState(() => _materials = combined);
 
-    // Best-effort, ne-fatal: materialele lucrarii sunt deja salvate cu
-    // succes (partea critica); un esec aici nu trebuie sa para utilizatorului
-    // ca importul a picat.
-    try {
-      await SupplierInvoiceRepository().markInvoiceAllocated(
-        invoiceId: outcome.invoiceId,
-        jobId: _jobSnapshot.id,
-      );
-    } catch (error) {
-      debugPrint('[InvoiceImport] markInvoiceAllocated esuat: $error');
-    }
-
-    if (outcome.materialsToCreateInCatalog.isNotEmpty) {
-      final catalogService = MaterialsCatalogService();
-      for (final material in outcome.materialsToCreateInCatalog) {
-        try {
-          await catalogService.upsertMaterial(material);
-        } catch (error) {
-          debugPrint(
-            '[InvoiceImport] creare material catalog esuata (${material.name}): $error',
-          );
-        }
-      }
-    }
-
     await _appendJournal(
       action: 'materials_imported_from_invoice',
       message:
@@ -1286,11 +1260,57 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           '(id: ${outcome.invoiceId}).',
     );
 
+    // FAZA 2.1 pct. 2 — materialele lucrarii sunt DEJA salvate (partea
+    // critica, ireversibila la acest punct). markInvoiceAllocated +
+    // sincronizarea catalogului raman best-effort, dar NU mai esueaza in
+    // tacere: rezultatul e comunicat explicit, cu retry idempotent.
+    await _syncInvoiceMetadataAfterImport(outcome);
+  }
+
+  /// FAZA 2.1 pct. 2/3 — apeleaza `repairInvoiceImportMetadata` (idempotent:
+  /// poate fi reapelata oricand fara sa creeze duplicate in catalog sau sa
+  /// duplice jobId in linkedJobIds) si informeaza utilizatorul daca ceva
+  /// nu s-a sincronizat, cu buton de reincercare in acelasi SnackBar.
+  Future<void> _syncInvoiceMetadataAfterImport(
+    SupplierInvoiceImportOutcome outcome,
+  ) async {
+    final result = await repairInvoiceImportMetadata(
+      invoiceId: outcome.invoiceId,
+      jobId: _jobSnapshot.id,
+      materialsToEnsureInCatalog: outcome.materialsToCreateInCatalog,
+    );
     if (!mounted) return;
+
+    if (result.isFullySynced) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${outcome.newMaterialRows.length} materiale importate cu succes in lucrare.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Materialele lucrarii sunt salvate si vizibile — doar metadata
+    // secundara (asocierea facturii si/sau catalogul) nu s-a sincronizat
+    // complet. NU se pierde nimic: retry-ul e sigur de reincercat oricand.
+    final problems = <String>[
+      if (!result.linkedJobIdsOk) 'asocierea facturii cu lucrarea',
+      if (result.catalogMaterialsFailed.isNotEmpty)
+        'sincronizarea catalogului (${result.catalogMaterialsFailed.length} pozitii)',
+    ].join(' si ');
+    debugPrint('[InvoiceImport] sincronizare incompleta: $problems');
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '${outcome.newMaterialRows.length} materiale importate cu succes in lucrare.',
+          '${outcome.newMaterialRows.length} materiale importate cu succes in lucrare, '
+          'dar $problems nu a reusit. Materialele sunt in siguranta.',
+        ),
+        duration: const Duration(seconds: 10),
+        action: SnackBarAction(
+          label: 'Reincearca',
+          onPressed: () => _syncInvoiceMetadataAfterImport(outcome),
         ),
       ),
     );

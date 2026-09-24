@@ -476,14 +476,11 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                 ],
               ),
             ),
-            if (!disabled &&
-                line.allocatedQty != null &&
-                line.quantity != null &&
-                line.allocatedQty! > line.quantity!)
+            if (!disabled && line.jobImportBlockReason != null)
               Padding(
                 padding: const EdgeInsets.only(left: 48, top: 4),
                 child: Text(
-                  'Atentie: cantitatea alocata depaseste cantitatea facturata pe aceasta linie.',
+                  line.jobImportBlockReason!,
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: theme.colorScheme.error),
                 ),

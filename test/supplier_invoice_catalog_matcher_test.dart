@@ -114,6 +114,27 @@ void main() {
       expect(resolution.materialId, isNot('mat-buc'));
       expect(resolution.toCreate, isNotNull);
     });
+
+    test(
+        '9. trei linii selectate din aceeasi factura, doua identice (nume+UM) -> '
+        'un singur material propus pentru creare, nu doua', () {
+      final matcher = SupplierInvoiceCatalogMatcher(const []);
+      final r1 =
+          matcher.resolve(name: 'Cot cupru 90 D22', unit: 'buc', price: 5);
+      final r2 =
+          matcher.resolve(name: 'Teava cupru D28', unit: 'buc', price: 20);
+      final r3 =
+          matcher.resolve(name: 'cot cupru 90 d22', unit: ' BUC ', price: 5);
+
+      final toCreate = [r1, r2, r3]
+          .map((r) => r.toCreate)
+          .whereType<MasterMaterial>()
+          .toList();
+
+      expect(toCreate.length, 2); // doar 2 produse distincte, nu 3
+      expect(r3.materialId, r1.materialId);
+      expect(r3.toCreate, isNull);
+    });
   });
 
   group('normalizeForCatalogMatch', () {

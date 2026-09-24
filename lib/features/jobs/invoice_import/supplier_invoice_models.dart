@@ -191,15 +191,35 @@ class SupplierInvoicePreviewLine {
       quantity == null ||
       unitPriceNoVat == null;
 
+  /// Motivul exact pentru care linia NU poate fi importata — `null` daca
+  /// e valida. FAZA 2.1 pct. 1: `0 < allocatedQty <= quantity facturata`
+  /// este OBLIGATORIU (nu doar avertisment) — nu corectam automat
+  /// valoarea introdusa de utilizator, doar blocam importul si explicam.
+  String? get jobImportBlockReason {
+    if (alreadyImported) {
+      return 'Aceasta linie a fost deja importata in aceasta lucrare.';
+    }
+    if (displayName.trim().isEmpty) return 'Denumire lipsa.';
+    if (friendlyUnit.trim().isEmpty) return 'Unitate de masura lipsa.';
+    if (unitPriceNoVat == null) return 'Pret fara TVA lipsa.';
+    final alloc = allocatedQty;
+    if (alloc == null || alloc <= 0) {
+      return 'Cantitatea alocata trebuie sa fie mai mare decat 0.';
+    }
+    final invoiced = quantity;
+    if (invoiced == null) {
+      return 'Cantitatea facturata lipseste — nu se poate valida alocarea.';
+    }
+    if (alloc > invoiced) {
+      return 'Cantitatea alocata nu poate depasi cantitatea facturata.';
+    }
+    return null;
+  }
+
   /// Conditiile cerute pentru ca linia sa poata fi importata in lucrare
-  /// (FAZA 2 pct. 15): denumire/UM/pret valide + allocatedQty > 0 +
-  /// nu e deja importata.
-  bool get isValidForJobImport =>
-      !alreadyImported &&
-      displayName.trim().isNotEmpty &&
-      friendlyUnit.trim().isNotEmpty &&
-      unitPriceNoVat != null &&
-      (allocatedQty ?? 0) > 0;
+  /// (FAZA 2 pct. 15, intarit FAZA 2.1 pct. 1): denumire/UM/pret valide +
+  /// `0 < allocatedQty <= quantity` + nu e deja importata.
+  bool get isValidForJobImport => jobImportBlockReason == null;
 
   Map<String, dynamic> toLineDocMap() {
     return <String, dynamic>{
