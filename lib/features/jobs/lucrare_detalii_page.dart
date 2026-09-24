@@ -54,6 +54,8 @@ import 'job_site_document_services.dart';
 import 'job_site_documents_cloud_repository.dart';
 import 'job_site_documents_page.dart';
 import 'invoice_import/supplier_invoice_import_page.dart';
+import 'invoice_import/supplier_invoice_repository.dart';
+import '../materials/materials_catalog_service.dart';
 import 'lucrare_raport_page.dart';
 import 'job_document_type_utils.dart';
 import 'lucrare_raport_complet_page.dart';
@@ -1203,15 +1205,92 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
     );
   }
 
-  // FAZA 1 — Import materiale din factura (XML e-Factura). Punct de
-  // intrare minim; TOATA logica noua sta in lib/features/jobs/invoice_import/
-  // (fisier nou, izolat) — NU se adauga logica noua in acest fisier monolit.
+  // FAZA 1/2 — Import materiale din factura (XML e-Factura). Punct de
+  // intrare minim; TOATA logica de parsare/preview/catalog sta in
+  // lib/features/jobs/invoice_import/ (fisiere noi, izolate). Salvarea
+  // efectiva in JobRecord.materials foloseste INSA exact acelasi
+  // mecanism ca adaugarea manuala (_persistJobMaterials) — nicio logica
+  // de salvare nu e duplicata, doar apelata cu lista combinata.
   Future<void> _openSupplierInvoiceImportPage() async {
-    await Navigator.of(context).push(
+    final outcome = await Navigator.of(context).push<SupplierInvoiceImportOutcome>(
       MaterialPageRoute(
         builder: (_) => SupplierInvoiceImportPage(
           job: _jobSnapshot,
           roleKey: widget.roleKey,
+        ),
+      ),
+    );
+    if (outcome == null || outcome.newMaterialRows.isEmpty) return;
+    await _applySupplierInvoiceImportOutcome(outcome);
+  }
+
+  /// FAZA 2 pct. 10/11/13 — combina materialele EXISTENTE cu cele noi
+  /// (APPEND, nu inlocuire) si salveaza prin _persistJobMaterials. Doar
+  /// DUPA succesul acelei salvari actualizeaza metadata facturii
+  /// (linkedJobIds/status) si creeaza materialele noi in catalogul
+  /// general — daca salvarea materialelor lucrarii esueaza, factura NU
+  /// este marcata ca importata si NU se creeaza nimic in catalog.
+  Future<void> _applySupplierInvoiceImportOutcome(
+    SupplierInvoiceImportOutcome outcome,
+  ) async {
+    final combined = <Map<String, dynamic>>[
+      ..._materials,
+      ...outcome.newMaterialRows,
+    ];
+    try {
+      await _persistJobMaterials(combined);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Eroare la salvarea materialelor importate din factura: $error. '
+            'Factura ramane disponibila pentru reincercare.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _materials = combined);
+
+    // Best-effort, ne-fatal: materialele lucrarii sunt deja salvate cu
+    // succes (partea critica); un esec aici nu trebuie sa para utilizatorului
+    // ca importul a picat.
+    try {
+      await SupplierInvoiceRepository().markInvoiceAllocated(
+        invoiceId: outcome.invoiceId,
+        jobId: _jobSnapshot.id,
+      );
+    } catch (error) {
+      debugPrint('[InvoiceImport] markInvoiceAllocated esuat: $error');
+    }
+
+    if (outcome.materialsToCreateInCatalog.isNotEmpty) {
+      final catalogService = MaterialsCatalogService();
+      for (final material in outcome.materialsToCreateInCatalog) {
+        try {
+          await catalogService.upsertMaterial(material);
+        } catch (error) {
+          debugPrint(
+            '[InvoiceImport] creare material catalog esuata (${material.name}): $error',
+          );
+        }
+      }
+    }
+
+    await _appendJournal(
+      action: 'materials_imported_from_invoice',
+      message:
+          '${outcome.newMaterialRows.length} materiale importate din factura '
+          '(id: ${outcome.invoiceId}).',
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${outcome.newMaterialRows.length} materiale importate cu succes in lucrare.',
         ),
       ),
     );

@@ -1,9 +1,9 @@
-// FAZA 1 / FAZA 1.1 — persistarea facturii de verificare in
-// `supplier_invoices` + subcolectia `lines`. Colectii NOI, izolate — NU
-// scrie niciodata in `jobs`/`materials`/catalog. Protejat de
-// firestore.rules/storage.rules (STRICT ADMIN, vezi FAZA 1.1) — acest
-// fisier NU e sursa de adevar a securitatii, doar respecta acelasi
-// contract.
+// FAZA 1 / FAZA 1.1 / FAZA 2 — persistarea facturii in `supplier_invoices`
+// + subcolectia `lines`, si actualizarea metadatei dupa import in
+// lucrare. Colectii NOI, izolate — NU scrie niciodata in
+// `jobs`/`materials`/catalog. Protejat de firestore.rules/storage.rules
+// (STRICT ADMIN, vezi FAZA 1.1) — acest fisier NU e sursa de adevar a
+// securitatii, doar respecta acelasi contract.
 
 import 'dart:typed_data';
 
@@ -34,7 +34,9 @@ class SupplierInvoiceDuplicateInfo {
 
 /// Aruncata cand tranzactia atomica de salvare detecteaza ca hash-ul
 /// exista deja (inclusiv in cazul unei curse intre doua request-uri
-/// simultane — vezi FAZA 1.1 pct. 7).
+/// simultane — vezi FAZA 1.1 pct. 7). FAZA 2: fluxul normal NU mai
+/// trateaza asta ca eroare fatala (vezi `loadExistingInvoiceByHash`),
+/// dar tranzactia tot arunca aceasta exceptie daca apare o cursa reala.
 class SupplierInvoiceDuplicateException implements Exception {
   const SupplierInvoiceDuplicateException(this.info);
 
@@ -43,6 +45,25 @@ class SupplierInvoiceDuplicateException implements Exception {
   @override
   String toString() =>
       'Factura exista deja (id=${info.invoiceId}, numar=${info.invoiceNumber}).';
+}
+
+/// O factura complet incarcata din Firestore: antet + toate liniile, CU
+/// `lineDocId` populat pe fiecare (necesar pentru import in lucrare si
+/// pentru detectia "deja importata" — FAZA 2 pct. 9/14).
+class SupplierInvoiceLoaded {
+  const SupplierInvoiceLoaded({
+    required this.invoiceId,
+    required this.header,
+    required this.lines,
+    required this.linkedJobIds,
+    required this.status,
+  });
+
+  final String invoiceId;
+  final SupplierInvoiceParsedHeader header;
+  final List<SupplierInvoicePreviewLine> lines;
+  final List<String> linkedJobIds;
+  final String status;
 }
 
 class SupplierInvoiceRepository {
@@ -63,56 +84,76 @@ class SupplierInvoiceRepository {
   /// FAZA 1.1 — deduplicare ATOMICA si Firestore-nativa: ID-ul
   /// documentului `supplier_invoices/{id}` este chiar hash-ul SHA-256 al
   /// fisierului sursa (nu un ID generat aleator). Doua facturi cu acelasi
-  /// continut de fisier NU pot exista niciodata ca documente separate —
-  /// garantie STRUCTURALA, nu doar o verificare "check-then-create" care
-  /// ar lasa o fereastra de cursa intre doua request-uri simultane.
+  /// continut de fisier NU pot exista niciodata ca documente separate.
   DocumentReference<Map<String, dynamic>> _invoiceRefForHash(String hash) =>
       _invoices.doc(hash);
 
-  /// Verificare rapida, NEATOMICA, folosita doar pentru UX (mesaj clar
-  /// inainte de upload, ca sa nu incarcam inutil fisierul in Storage daca
-  /// factura exista deja). Protectia REALA impotriva curselor este in
-  /// `saveForReview` (tranzactie Firestore pe doc ID determinist).
-  Future<SupplierInvoiceDuplicateInfo?> findByFileHash(String hash) async {
+  /// FAZA 2 pct. 14 — verifica daca factura exista deja (dupa hash) si,
+  /// daca da, o incarca COMPLET (antet + toate liniile, cu lineDocId).
+  /// Inlocuieste vechiul comportament "duplicat = eroare fatala": o
+  /// factura poate fi reutilizata pentru orice lucrare, indiferent daca a
+  /// mai fost asociata alteia. NU re-uploadeaza XML, NU creeaza document
+  /// nou.
+  Future<SupplierInvoiceLoaded?> loadExistingInvoiceByHash(
+    String hash,
+  ) async {
     if (hash.isEmpty) return null;
     final snap = await _invoiceRefForHash(hash).get();
     if (!snap.exists) return null;
-    final data = snap.data() ?? const <String, dynamic>{};
-    return SupplierInvoiceDuplicateInfo(
-      invoiceId: snap.id,
-      invoiceNumber: (data['invoiceNumber'] ?? '').toString(),
-      supplierName: (data['supplierName'] ?? '').toString(),
+    return _loadInvoice(snap);
+  }
+
+  Future<SupplierInvoiceLoaded> _loadInvoice(
+    DocumentSnapshot<Map<String, dynamic>> invoiceSnap,
+  ) async {
+    final data = invoiceSnap.data() ?? const <String, dynamic>{};
+    final linesSnap = await invoiceSnap.reference
+        .collection(FirebaseCollections.supplierInvoiceLines)
+        .orderBy('lineIndex')
+        .get();
+    final lines = linesSnap.docs
+        .map(
+          (d) => SupplierInvoicePreviewLine.fromMap(d.data(), lineDocId: d.id),
+        )
+        .toList(growable: false);
+    final linkedJobIds = (data['linkedJobIds'] is List)
+        ? (data['linkedJobIds'] as List).map((e) => e.toString()).toList()
+        : <String>[];
+    return SupplierInvoiceLoaded(
+      invoiceId: invoiceSnap.id,
+      header: SupplierInvoiceParsedHeader.fromMap(data),
+      lines: lines,
+      linkedJobIds: linkedJobIds,
+      status: (data['status'] ?? '').toString(),
     );
   }
 
-  /// Salveaza factura + liniile SELECTATE pentru verificare ulterioara.
-  /// NU scrie in JobRecord.materials — doar in colectiile noi, izolate.
+  /// FAZA 2 — persista o factura NOUA (hash inexistent inca), cu TOATE
+  /// liniile parsate (nu doar cele selectate — pastram factura sursa
+  /// completa, selectia afecteaza doar ce se importa in lucrare).
   ///
-  /// Ordine: (1) verificare rapida (UX) — evita upload inutil daca hash-ul
-  /// exista deja; (2) upload XML in Storage (path deterministic, bazat pe
-  /// hash — reincarcarea aceluiasi fisier e idempotenta); (3) TRANZACTIE
-  /// Firestore atomica: re-verifica existenta doc-ului (inchide fereastra
-  /// de cursa) + scrie doc factura + toate liniile, all-or-nothing. Daca
-  /// tranzactia esueaza (inclusiv din cauza unui duplicat detectat in
-  /// interior), fisierul din Storage e sters (best-effort) ca sa nu ramana
-  /// orfan.
+  /// Ordine: (1) upload XML in Storage, (2) TRANZACTIE Firestore atomica:
+  /// re-verifica existenta doc-ului (inchide fereastra de cursa) + scrie
+  /// doc factura + toate liniile, all-or-nothing. Daca tranzactia esueaza
+  /// (inclusiv duplicat detectat in interior), fisierul din Storage e
+  /// sters (best-effort) ca sa nu ramana orfan.
   ///
-  /// Arunca [SupplierInvoiceDuplicateException] daca factura exista deja
-  /// (detectat fie la pasul 1, fie atomic in tranzactia de la pasul 3).
-  Future<String> saveForReview({
+  /// Arunca [SupplierInvoiceDuplicateException] doar in cazul rar al unei
+  /// curse reale (alt request a creat exact acelasi hash intre timp) —
+  /// apelantul trebuie sa reincerce cu `loadExistingInvoiceByHash`.
+  Future<SupplierInvoiceLoaded> persistNewInvoice({
     required Uint8List xmlBytes,
     required String sourceFileHash,
     required SupplierInvoiceParsedHeader header,
-    required List<SupplierInvoicePreviewLine> selectedLines,
-    required String jobId,
+    required List<SupplierInvoicePreviewLine> allLines,
   }) async {
-    if (selectedLines.isEmpty) {
-      throw ArgumentError('Nicio linie selectata pentru salvare.');
+    if (allLines.isEmpty) {
+      throw ArgumentError('Factura nu are nicio linie.');
     }
-    if (selectedLines.length > kSupplierInvoiceMaxLinesPerBatch) {
+    if (allLines.length > kSupplierInvoiceMaxLinesPerBatch) {
       throw ArgumentError(
-        'Prea multe linii selectate (${selectedLines.length}) pentru un singur '
-        'import (limita FAZA 1: $kSupplierInvoiceMaxLinesPerBatch).',
+        'Prea multe linii (${allLines.length}) pentru un singur import '
+        '(limita: $kSupplierInvoiceMaxLinesPerBatch).',
       );
     }
     if (sourceFileHash.isEmpty) {
@@ -123,16 +164,15 @@ class SupplierInvoiceRepository {
     if (authUser == null) {
       throw StateError('Trebuie sa fii autentificat.');
     }
-    // Refresh token inainte de upload — previne 'unauthorized' la token
-    // expirat, acelasi pattern ca field_photo_capture_service.dart.
     await authUser.getIdToken(true);
 
     final invoiceRef = _invoiceRefForHash(sourceFileHash);
     final invoiceId = invoiceRef.id;
 
-    final existingBeforeUpload = await findByFileHash(sourceFileHash);
+    final existingBeforeUpload =
+        await loadExistingInvoiceByHash(sourceFileHash);
     if (existingBeforeUpload != null) {
-      throw SupplierInvoiceDuplicateException(existingBeforeUpload);
+      return existingBeforeUpload;
     }
 
     final storagePath =
@@ -144,6 +184,7 @@ class SupplierInvoiceRepository {
       SettableMetadata(contentType: 'application/xml'),
     );
 
+    final lineRefs = <DocumentReference<Map<String, dynamic>>>[];
     try {
       await _db.runTransaction((transaction) async {
         final existingSnap = await transaction.get(invoiceRef);
@@ -172,16 +213,15 @@ class SupplierInvoiceRepository {
           'currency': header.currency,
           'totalWithoutVat': header.totalWithoutVat,
           'totalVat': header.totalVat,
-          'status': supplierInvoiceStatusToString(
-            SupplierInvoiceStatus.pendingReview,
-          ),
-          'linkedJobIds': <String>[jobId],
+          'status': supplierInvoiceStatusToString(SupplierInvoiceStatus.parsed),
+          'linkedJobIds': <String>[],
         });
 
         final linesRef =
             invoiceRef.collection(FirebaseCollections.supplierInvoiceLines);
-        for (final line in selectedLines) {
+        for (final line in allLines) {
           final lineDoc = linesRef.doc();
+          lineRefs.add(lineDoc);
           final map = line.toLineDocMap();
           map['id'] = lineDoc.id;
           transaction.set(lineDoc, map);
@@ -191,33 +231,38 @@ class SupplierInvoiceRepository {
       try {
         await storageRef.delete();
       } catch (_) {
-        // best-effort — daca nici stergerea nu reuseste, fisierul orfan
-        // ramane in supplier_invoices/{uid}/{invoiceId}/, izolat, fara
-        // niciun document Firestore care sa-l refere.
+        // best-effort — vezi nota FAZA 1.1 despre fisiere orfane izolate.
       }
       rethrow;
     }
 
-    return invoiceId;
+    for (var i = 0; i < allLines.length; i++) {
+      allLines[i].lineDocId = lineRefs[i].id;
+    }
+
+    return SupplierInvoiceLoaded(
+      invoiceId: invoiceId,
+      header: header,
+      lines: allLines,
+      linkedJobIds: const <String>[],
+      status: supplierInvoiceStatusToString(SupplierInvoiceStatus.parsed),
+    );
   }
 
-  /// Facturile legate de o lucrare — interogare pe legatura inversa
-  /// (linkedJobIds array-contains jobId). Sortare facuta client-side
-  /// (dupa importedAt) ca sa NU fie nevoie de niciun index Firestore nou
-  /// (array-contains simplu e auto-indexat; array-contains + orderBy pe
-  /// alt camp ar necesita index compus).
-  Future<List<Map<String, dynamic>>> getInvoicesForJob(String jobId) async {
-    final snap =
-        await _invoices.where('linkedJobIds', arrayContains: jobId).get();
-    final docs = snap.docs
-        .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
-        .toList();
-    docs.sort((a, b) {
-      final ta = a['importedAt'];
-      final tb = b['importedAt'];
-      if (ta is Timestamp && tb is Timestamp) return tb.compareTo(ta);
-      return 0;
+  /// FAZA 2 pct. 13 — apelata DOAR dupa ce salvarea materialelor lucrarii
+  /// a reusit (vezi pct. 11: o salvare esuata NU trebuie sa marcheze
+  /// factura ca importata). Idempotenta: `arrayUnion` nu duplica jobId
+  /// daca e apelata de mai multe ori. Status trece la `hasAllocations`
+  /// (NU "applied" — o factura poate alimenta mai multe lucrari, nu e
+  /// niciodata "consumata complet" din perspectiva acestui flux).
+  Future<void> markInvoiceAllocated({
+    required String invoiceId,
+    required String jobId,
+  }) async {
+    await _invoices.doc(invoiceId).update(<String, dynamic>{
+      'linkedJobIds': FieldValue.arrayUnion(<String>[jobId]),
+      'status':
+          supplierInvoiceStatusToString(SupplierInvoiceStatus.hasAllocations),
     });
-    return docs;
   }
 }

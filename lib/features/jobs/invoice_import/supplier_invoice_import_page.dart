@@ -1,10 +1,14 @@
-// FAZA 1 — ecran "Import materiale din factura": upload XML e-Factura,
-// parsare server-side, PREVIEW editabil, salvare pentru verificare.
+// FAZA 1 / FAZA 2 — ecran "Import materiale din factura": upload/reia XML
+// e-Factura, parsare server-side sau reutilizare factura existenta,
+// PREVIEW editabil, import confirmat in materialele lucrarii.
 //
-// IMPORTANT (Faza 1): niciun buton din acest ecran nu scrie in
-// JobRecord.materials. Butonul final e explicit "Salveaza factura pentru
-// verificare", NU "Importa in lucrare" — alocarea efectiva in lucrare este
-// Faza 2, neaprobata inca.
+// FAZA 2: butonul final este "Importa in lucrare" — apasarea lui scrie
+// efectiv materiale noi in JobRecord.materials (prin exact acelasi
+// mecanism folosit de adaugarea manuala, `_persistJobMaterials` din
+// lucrare_detalii_page.dart — NU o cale noua/paralela). Aceasta pagina
+// NU scrie ea insasi in `materials`: construieste lista de linii noi si o
+// intoarce parintelui prin `Navigator.pop`, care face salvarea efectiva
+// (vezi `_openSupplierInvoiceImportPage` in lucrare_detalii_page.dart).
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -14,11 +18,30 @@ import 'package:flutter/material.dart';
 
 import '../../../core/auth/app_role_policy.dart';
 import '../../../core/auth_models.dart';
+import '../../master/master_local_store.dart';
+import '../../materials/materials_catalog_service.dart';
 import '../job_models.dart';
+import 'supplier_invoice_catalog_matcher.dart';
+import 'supplier_invoice_job_material_mapper.dart';
 import 'supplier_invoice_models.dart';
 import 'supplier_invoice_parser_client.dart';
 import 'supplier_invoice_repository.dart';
-import 'supplier_invoice_unit_labels.dart';
+
+/// Rezultatul intors de acest ecran catre pagina lucrarii, dupa ce
+/// utilizatorul a confirmat importul. Parintele face salvarea reala in
+/// `JobRecord.materials` si, doar dupa succes, actualizeaza metadata
+/// facturii (linkedJobIds/status) si creeaza materialele noi in catalog.
+class SupplierInvoiceImportOutcome {
+  const SupplierInvoiceImportOutcome({
+    required this.invoiceId,
+    required this.newMaterialRows,
+    required this.materialsToCreateInCatalog,
+  });
+
+  final String invoiceId;
+  final List<Map<String, dynamic>> newMaterialRows;
+  final List<MasterMaterial> materialsToCreateInCatalog;
+}
 
 class SupplierInvoiceImportPage extends StatefulWidget {
   const SupplierInvoiceImportPage({
@@ -40,11 +63,6 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       SupplierInvoiceParserClient();
   final SupplierInvoiceRepository _repository = SupplierInvoiceRepository();
 
-  // FAZA 1.1 — STRICT ADMIN, nu admin/office (cerinta pct. 2: doar
-  // administratorul editeaza Lucrari/Oferte si foloseste import-ul de
-  // facturi; office nu trebuie sa vada costuri reale de achizitie).
-  // Ascunderea de aici e doar UX — autorizarea reala e in Cloud
-  // Function + firestore.rules/storage.rules (isAdminOnly/isAdminOnlyForInvoices).
   bool get _isAuthorized =>
       AppRolePolicy.fromRoleKey(widget.roleKey) == UserRole.admin;
 
@@ -56,13 +74,30 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
   bool _isSaving = false;
   String? _errorMessage;
 
+  /// Non-null doar dupa ce factura a fost persistata (import nou) sau
+  /// incarcata dintr-un document existent (reutilizare, FAZA 2 pct. 14).
+  String? _invoiceId;
+
   SupplierInvoiceParsedHeader? _header;
   List<SupplierInvoicePreviewLine> _lines =
       const <SupplierInvoicePreviewLine>[];
 
-  bool get _allSelected => _lines.isNotEmpty && _lines.every((l) => l.selected);
+  bool get _allSelected =>
+      _selectableLines.isNotEmpty && _selectableLines.every((l) => l.selected);
+
+  Iterable<SupplierInvoicePreviewLine> get _selectableLines =>
+      _lines.where((l) => !l.alreadyImported);
+
+  List<SupplierInvoicePreviewLine> get _selectedValidLines => _lines
+      .where((l) => l.selected && l.isValidForJobImport)
+      .toList(growable: false);
 
   int get _selectedCount => _lines.where((l) => l.selected).length;
+
+  bool get _canImport =>
+      !_isSaving &&
+      _selectedValidLines.isNotEmpty &&
+      _lines.where((l) => l.selected).every((l) => l.isValidForJobImport);
 
   @override
   Widget build(BuildContext context) {
@@ -84,7 +119,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     );
   }
 
-  // ── Pasul 1: alegere fisier XML ─────────────────────────────────────
+  // ── Pasul 1: alegere fisier XML (sau reutilizare factura existenta) ──
 
   Widget _buildPickStep(BuildContext context) {
     return Center(
@@ -101,7 +136,9 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
             const SizedBox(height: 8),
             const Text(
               'Aceasta faza accepta DOAR fisiere XML e-Factura (format UBL). '
-              'PDF/imagini nu sunt suportate in aceasta versiune.',
+              'PDF/imagini nu sunt suportate in aceasta versiune. Daca '
+              'factura a mai fost importata (acelasi fisier), va fi '
+              'reutilizata automat — nu se creeaza duplicat.',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
@@ -139,9 +176,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
   }
 
   Future<void> _pickAndParseFile() async {
-    setState(() {
-      _errorMessage = null;
-    });
+    setState(() => _errorMessage = null);
     final result = await FilePicker.pickFiles(
       withData: true,
       allowMultiple: false,
@@ -164,23 +199,31 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     });
 
     try {
-      // Decodare UTF-8 corecta (diacritice romanesti in denumiri de
-      // furnizor/produse) — NU String.fromCharCodes (ar corupe orice
-      // caracter multi-byte). BOM (des generat de instrumente Windows)
-      // e eliminat defensiv daca e prezent.
+      final hash = _repository.computeSha256(bytes);
+
+      // FAZA 2 pct. 14 — daca factura exista deja (indiferent de lucrare),
+      // o reutilizam direct, fara sa re-parsam/re-uploadam.
+      final existing = await _repository.loadExistingInvoiceByHash(hash);
+      if (existing != null) {
+        if (!mounted) return;
+        _applyLoadedInvoice(existing, hash);
+        return;
+      }
+
       var xmlText = utf8.decode(bytes, allowMalformed: false);
       if (xmlText.isNotEmpty && xmlText.codeUnitAt(0) == 0xFEFF) {
         xmlText = xmlText.substring(1);
       }
-      final hash = _repository.computeSha256(bytes);
       final parseResult = await _parserClient.parseXml(xmlText);
       if (!mounted) return;
       setState(() {
         _fileHash = hash;
+        _invoiceId = null;
         _header = parseResult.header;
         _lines = parseResult.lines;
         _isParsing = false;
       });
+      _markAlreadyImportedLines();
     } on SupplierInvoiceParseException catch (error) {
       if (!mounted) return;
       setState(() {
@@ -194,6 +237,39 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
         _errorMessage = 'Eroare neasteptata la parsare: $error';
       });
     }
+  }
+
+  void _applyLoadedInvoice(SupplierInvoiceLoaded loaded, String hash) {
+    setState(() {
+      _fileHash = hash;
+      _invoiceId = loaded.invoiceId;
+      _header = loaded.header;
+      _lines = loaded.lines;
+      _isParsing = false;
+    });
+    _markAlreadyImportedLines();
+  }
+
+  /// FAZA 2 pct. 9 — marcheaza liniile deja importate in LUCRAREA
+  /// CURENTA (dupa sourceInvoiceId + lineDocId), le deselecteaza si le
+  /// exclude din selectie ("deja importata", nu doar dupa denumire).
+  void _markAlreadyImportedLines() {
+    final invoiceId = _invoiceId;
+    if (invoiceId == null) return;
+    final alreadyImported = alreadyImportedLineDocIds(
+      jobMaterials: widget.job.materials,
+      invoiceId: invoiceId,
+    );
+    if (alreadyImported.isEmpty) return;
+    setState(() {
+      for (final line in _lines) {
+        if (line.lineDocId != null &&
+            alreadyImported.contains(line.lineDocId)) {
+          line.alreadyImported = true;
+          line.selected = false;
+        }
+      }
+    });
   }
 
   // ── Pasul 2: preview editabil ───────────────────────────────────────
@@ -225,6 +301,11 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                     '${header.totalWithoutVat!.toStringAsFixed(2)} '
                     '${header.currency ?? ''}',
                   ),
+                if (_invoiceId != null)
+                  Text(
+                    'Factura salvata (id: $_invoiceId).',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
               ],
             ),
           ),
@@ -237,7 +318,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                 value: _allSelected,
                 onChanged: (checked) {
                   setState(() {
-                    for (final line in _lines) {
+                    for (final line in _selectableLines) {
                       line.selected = checked ?? false;
                     }
                   });
@@ -269,17 +350,15 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
               ),
               const Spacer(),
               FilledButton.icon(
-                onPressed: (_isSaving || _selectedCount == 0)
-                    ? null
-                    : _onSaveForReview,
+                onPressed: _canImport ? _onConfirmImportPressed : null,
                 icon: _isSaving
                     ? const SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.save_outlined),
-                label: const Text('Salveaza factura pentru verificare'),
+                    : const Icon(Icons.playlist_add_check_outlined),
+                label: const Text('Importa in lucrare'),
               ),
             ],
           ),
@@ -290,10 +369,13 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
 
   Widget _buildLineCard(SupplierInvoicePreviewLine line) {
     final theme = Theme.of(context);
+    final disabled = line.alreadyImported;
     return Card(
-      color: line.hasProblem
-          ? theme.colorScheme.errorContainer.withValues(alpha: 0.25)
-          : null,
+      color: disabled
+          ? theme.colorScheme.surfaceContainerHighest
+          : (line.hasProblem
+              ? theme.colorScheme.errorContainer.withValues(alpha: 0.25)
+              : null),
       child: Padding(
         padding: const EdgeInsets.all(10),
         child: Column(
@@ -303,9 +385,19 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
               children: [
                 Checkbox(
                   value: line.selected,
-                  onChanged: (checked) =>
-                      setState(() => line.selected = checked ?? false),
+                  onChanged: disabled
+                      ? null
+                      : (checked) =>
+                          setState(() => line.selected = checked ?? false),
                 ),
+                if (disabled)
+                  const Padding(
+                    padding: EdgeInsets.only(right: 8),
+                    child: Chip(
+                      label: Text('Deja importata'),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
                 if (line.supplierProductCode != null)
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
@@ -317,6 +409,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                 Expanded(
                   child: TextFormField(
                     initialValue: line.displayName,
+                    enabled: !disabled,
                     decoration: const InputDecoration(
                       labelText: 'Denumire',
                       isDense: true,
@@ -342,29 +435,35 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                 runSpacing: 8,
                 children: [
                   _numberField(
-                    label: 'Cantitate',
+                    label: 'Cantitate facturata',
                     value: line.quantity,
+                    enabled: !disabled,
                     onChanged: (v) => line.quantity = v,
+                  ),
+                  _numberField(
+                    label: 'Cantitate alocata',
+                    value: line.allocatedQty,
+                    enabled: !disabled,
+                    onChanged: (v) => line.allocatedQty = v,
                   ),
                   _textField(
                     label: 'UM',
-                    // Afisare prietenoasa (H87 -> buc) — valoarea originala
-                    // UBL ramane in line.unit pana cand utilizatorul chiar
-                    // editeaza campul (vezi supplier_invoice_unit_labels.dart).
-                    value: friendlyUnitLabel(line.unit),
+                    value: line.friendlyUnit,
+                    enabled: !disabled,
                     onChanged: (v) =>
                         line.unit = v.trim().isEmpty ? null : v.trim(),
                   ),
                   _numberField(
                     label: 'Pret fara TVA',
                     value: line.unitPriceNoVat,
+                    enabled: !disabled,
                     onChanged: (v) => line.unitPriceNoVat = v,
                   ),
                   SizedBox(
-                    width: 130,
+                    width: 140,
                     child: Text(
-                      'Valoare: '
-                      '${line.currentLineTotalNoVat?.toStringAsFixed(2) ?? '—'} '
+                      'Valoare alocata: '
+                      '${line.allocatedLineTotalNoVat?.toStringAsFixed(2) ?? '—'} '
                       '${line.currency ?? ''}',
                     ),
                   ),
@@ -377,6 +476,18 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
                 ],
               ),
             ),
+            if (!disabled &&
+                line.allocatedQty != null &&
+                line.quantity != null &&
+                line.allocatedQty! > line.quantity!)
+              Padding(
+                padding: const EdgeInsets.only(left: 48, top: 4),
+                child: Text(
+                  'Atentie: cantitatea alocata depaseste cantitatea facturata pe aceasta linie.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.error),
+                ),
+              ),
             if (line.warnings.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(left: 48, top: 4),
@@ -397,11 +508,13 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     required String label,
     required String value,
     required ValueChanged<String> onChanged,
+    bool enabled = true,
   }) {
     return SizedBox(
       width: 90,
       child: TextFormField(
         initialValue: value,
+        enabled: enabled,
         decoration: InputDecoration(labelText: label, isDense: true),
         onChanged: onChanged,
       ),
@@ -412,11 +525,13 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     required String label,
     required double? value,
     required ValueChanged<double?> onChanged,
+    bool enabled = true,
   }) {
     return SizedBox(
-      width: 110,
+      width: 130,
       child: TextFormField(
         initialValue: value?.toString() ?? '',
+        enabled: enabled,
         decoration: InputDecoration(labelText: label, isDense: true),
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         onChanged: (text) {
@@ -432,66 +547,113 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       _fileName = null;
       _xmlBytes = null;
       _fileHash = null;
+      _invoiceId = null;
       _header = null;
       _lines = const <SupplierInvoicePreviewLine>[];
       _errorMessage = null;
     });
   }
 
-  Future<void> _onSaveForReview() async {
-    final xmlBytes = _xmlBytes;
-    final hash = _fileHash;
-    final header = _header;
-    if (xmlBytes == null || hash == null || header == null) return;
+  Future<void> _onConfirmImportPressed() async {
+    final selected = _selectedValidLines;
+    if (selected.isEmpty) return;
 
-    setState(() => _isSaving = true);
+    final totalValue = selected.fold<double>(
+      0,
+      (sum, l) => sum + (l.allocatedLineTotalNoVat ?? 0),
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Confirma importul'),
+        content: Text(
+          'Vor fi adaugate ${selected.length} pozitii in lucrare, '
+          'in valoare totala de ${totalValue.toStringAsFixed(2)} RON fara TVA.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Confirma importul'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await _doImport(selected);
+  }
+
+  Future<void> _doImport(List<SupplierInvoicePreviewLine> selected) async {
+    setState(() {
+      _isSaving = true;
+      _errorMessage = null;
+    });
 
     try {
-      final selected = _lines.where((l) => l.selected).toList(growable: false);
-      // FAZA 1.1: saveForReview face el insusi verificarea de duplicat +
-      // o repeta ATOMIC intr-o tranzactie Firestore (doc ID determinist =
-      // hash-ul fisierului), ca sa inchida fereastra de cursa dintre doua
-      // request-uri simultane — vezi supplier_invoice_repository.dart.
-      final invoiceId = await _repository.saveForReview(
-        xmlBytes: xmlBytes,
-        sourceFileHash: hash,
-        header: header,
-        selectedLines: selected,
-        jobId: widget.job.id,
-      );
+      var invoiceId = _invoiceId;
+      if (invoiceId == null) {
+        final xmlBytes = _xmlBytes;
+        final hash = _fileHash;
+        final header = _header;
+        if (xmlBytes == null || hash == null || header == null) {
+          throw StateError('Factura nu este pregatita pentru import.');
+        }
+        final persisted = await _repository.persistNewInvoice(
+          xmlBytes: xmlBytes,
+          sourceFileHash: hash,
+          header: header,
+          allLines: _lines,
+        );
+        invoiceId = persisted.invoiceId;
+        if (!mounted) return;
+        setState(() => _invoiceId = invoiceId);
+      }
+
+      final catalog = await MaterialsCatalogService().listMaterials();
+      final matcher = SupplierInvoiceCatalogMatcher(catalog);
+      final baseMillis = DateTime.now().millisecondsSinceEpoch;
+
+      final newMaterialRows = <Map<String, dynamic>>[];
+      final materialsToCreate = <MasterMaterial>[];
+
+      for (var i = 0; i < selected.length; i++) {
+        final line = selected[i];
+        final resolution = matcher.resolve(
+          name: line.displayName,
+          unit: line.friendlyUnit,
+          price: line.unitPriceNoVat ?? 0,
+        );
+        if (resolution.toCreate != null) {
+          materialsToCreate.add(resolution.toCreate!);
+        }
+        newMaterialRows.add(
+          buildJobMaterialFromInvoiceLine(
+            line: line,
+            materialId: resolution.materialId,
+            invoiceId: invoiceId,
+            jobMaterialId: generateJobMaterialId(baseMillis, i),
+          ),
+        );
+      }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text(
-                'Factura salvata pentru verificare (${selected.length} linii). ID: $invoiceId')),
-      );
-      Navigator.of(context).pop();
-    } on SupplierInvoiceDuplicateException catch (error) {
-      if (!mounted) return;
-      setState(() => _isSaving = false);
-      await showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Factura deja importata'),
-          content: Text(
-            'Aceasta factura a fost deja importata anterior.\n\n'
-            'Numar factura: ${error.info.invoiceNumber}\n'
-            'Furnizor: ${error.info.supplierName}',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Am inteles'),
-            ),
-          ],
+      Navigator.of(context).pop(
+        SupplierInvoiceImportOutcome(
+          invoiceId: invoiceId,
+          newMaterialRows: newMaterialRows,
+          materialsToCreateInCatalog: materialsToCreate,
         ),
       );
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _isSaving = false;
-        _errorMessage = 'Eroare la salvare: $error';
+        _errorMessage = 'Eroare la pregatirea importului: $error';
       });
     }
   }
