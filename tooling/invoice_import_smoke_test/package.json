@@ -1,0 +1,11 @@
+{
+  "name": "deviz-mvp-invoice-import-smoke-test",
+  "private": true,
+  "description": "FAZA 3 - smoke-test server-side (Firebase Emulator Suite, proiect demo- local) pentru fluxul Import materiale din factura: parser real (Cloud Function) + reguli reale + model de date real. NU un test al UI-ului Flutter (limitare documentata in raport).",
+  "scripts": {
+    "test": "cd ../.. && firebase emulators:exec --project demo-invoice-smoke-test --config firebase.smoke-test.json \"node tooling/invoice_import_smoke_test/run_smoke_test.js\""
+  },
+  "dependencies": {
+    "firebase-admin": "^13.8.0"
+  }
+}
