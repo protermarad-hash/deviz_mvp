@@ -562,7 +562,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('Confirma importul'),
         content: Text(
           'Vor fi adaugate ${selected.length} pozitii in lucrare, '
@@ -570,17 +570,19 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text('Confirma importul'),
           ),
         ],
       ),
     );
     if (confirmed != true) return;
+
+    debugPrint('IMPORT_STEP_01 confirm pressed t=${DateTime.now().toIso8601String()} selectedCount=${selected.length}');
 
     await _doImport(selected);
   }
@@ -590,6 +592,8 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       _isSaving = true;
       _errorMessage = null;
     });
+
+    debugPrint('IMPORT_STEP_02 validation done t=${DateTime.now().toIso8601String()} selectedCount=${selected.length}');
 
     try {
       var invoiceId = _invoiceId;
@@ -638,7 +642,13 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
         );
       }
 
+      debugPrint('IMPORT_STEP_03 materials mapped t=${DateTime.now().toIso8601String()} '
+          'rowCount=${newMaterialRows.length} '
+          'qtyType=${newMaterialRows.isNotEmpty ? newMaterialRows.first['qty'].runtimeType : 'n/a'} '
+          'toCreateCount=${materialsToCreate.length}');
+
       if (!mounted) return;
+      debugPrint('IMPORT_STEP_08 before navigator pop t=${DateTime.now().toIso8601String()} rowCount=${newMaterialRows.length}');
       Navigator.of(context).pop(
         SupplierInvoiceImportOutcome(
           invoiceId: invoiceId,
@@ -646,7 +656,10 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
           materialsToCreateInCatalog: materialsToCreate,
         ),
       );
-    } catch (error) {
+    } catch (error, stack) {
+      debugPrint('IMPORT_STEP_ERROR t=${DateTime.now().toIso8601String()} '
+          'exceptionType=${error.runtimeType} message=$error');
+      debugPrint('$stack');
       if (!mounted) return;
       setState(() {
         _isSaving = false;

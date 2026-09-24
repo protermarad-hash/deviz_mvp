@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 import '../cloud/firebase_collections.dart';
 import 'field_auth_models.dart';
@@ -110,10 +111,27 @@ class FieldFirebaseAuthAdapter {
 
     final forcedAdmin = email == _forcedAdminEmail;
 
-    final byUid = await _usersCollection
-        .where('firebase_uid', isEqualTo: uid)
-        .limit(1)
-        .get();
+    debugPrint('[AuthDiag] ensureCloudProfileForFirebaseUser uid=$uid email=$email');
+    QuerySnapshot<Map<String, dynamic>> byUid;
+    try {
+      byUid = await _usersCollection
+          .where('firebase_uid', isEqualTo: uid)
+          .limit(1)
+          .get();
+      debugPrint('[AuthDiag] query firebase_uid==$uid OK, matches=${byUid.docs.length}');
+    } catch (error) {
+      debugPrint('[AuthDiag] query firebase_uid==$uid FAILED: '
+          '${error.runtimeType} ${error is FirebaseException ? error.code : ''} $error');
+      rethrow;
+    }
+    try {
+      final selfDoc = await _usersCollection.doc(uid).get();
+      debugPrint('[AuthDiag] doc users/$uid exists=${selfDoc.exists} '
+          'data=${selfDoc.exists ? selfDoc.data() : null}');
+    } catch (error) {
+      debugPrint('[AuthDiag] doc users/$uid GET FAILED: '
+          '${error.runtimeType} ${error is FirebaseException ? error.code : ''} $error');
+    }
     if (byUid.docs.isNotEmpty) {
       final doc = byUid.docs.first;
       final current = doc.data();

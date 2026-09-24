@@ -1219,6 +1219,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
         ),
       ),
     );
+    debugPrint('IMPORT_STEP_09 after navigator pop t=${DateTime.now().toIso8601String()} '
+        'outcomeIsNull=${outcome == null} '
+        'rowCount=${outcome?.newMaterialRows.length ?? 0}');
     if (outcome == null || outcome.newMaterialRows.isEmpty) return;
     await _applySupplierInvoiceImportOutcome(outcome);
   }
@@ -1236,9 +1239,13 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       ..._materials,
       ...outcome.newMaterialRows,
     ];
+    debugPrint('IMPORT_STEP_04 before persist t=${DateTime.now().toIso8601String()} combinedCount=${combined.length}');
     try {
       await _persistJobMaterials(combined);
-    } catch (error) {
+    } catch (error, stack) {
+      debugPrint('IMPORT_STEP_ERROR t=${DateTime.now().toIso8601String()} '
+          'exceptionType=${error.runtimeType} message=$error');
+      debugPrint('$stack');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1250,6 +1257,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       );
       return;
     }
+    debugPrint('IMPORT_STEP_05 after persist t=${DateTime.now().toIso8601String()} combinedCount=${combined.length}');
     if (!mounted) return;
     setState(() => _materials = combined);
 
@@ -1274,11 +1282,15 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
   Future<void> _syncInvoiceMetadataAfterImport(
     SupplierInvoiceImportOutcome outcome,
   ) async {
+    debugPrint('IMPORT_STEP_06 before metadata repair t=${DateTime.now().toIso8601String()} '
+        'toCreateCount=${outcome.materialsToCreateInCatalog.length}');
     final result = await repairInvoiceImportMetadata(
       invoiceId: outcome.invoiceId,
       jobId: _jobSnapshot.id,
       materialsToEnsureInCatalog: outcome.materialsToCreateInCatalog,
     );
+    debugPrint('IMPORT_STEP_07 after metadata repair t=${DateTime.now().toIso8601String()} '
+        'fullySynced=${result.isFullySynced}');
     if (!mounted) return;
 
     if (result.isFullySynced) {
