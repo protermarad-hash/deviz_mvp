@@ -62,5 +62,21 @@ void main() {
       expect(source.contains('FirebaseStorage'), false,
           reason: 'nu ar trebui sa mai existe nicio referinta la clasa FirebaseStorage');
     });
+
+    test(
+        'STRUCTURAL (FAZA "persist invoice metadata server-side"): nu mai '
+        'exista niciun apel .runTransaction(...) sau persistNewInvoice(...) '
+        '— tranzactia Firestore care declansa crash-ul nativ pe Windows a '
+        'fost eliminata complet din acest fisier', () {
+      final source = File(
+        'lib/features/jobs/invoice_import/supplier_invoice_repository.dart',
+      ).readAsStringSync();
+
+      expect(source.contains('.runTransaction('), false,
+          reason: 'nu ar trebui sa mai existe niciun apel runTransaction '
+              '(sursa crash-ului nativ cloud_firestore pe Windows)');
+      expect(source.contains('persistNewInvoice('), false,
+          reason: 'metoda persistNewInvoice a fost eliminata complet');
+    });
   });
 }

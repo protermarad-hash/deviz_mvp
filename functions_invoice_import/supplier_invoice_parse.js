@@ -3,29 +3,49 @@
 // FAZA 1 — Import materiale din factura: parser XML e-Factura (UBL Invoice).
 //
 // Modul IZOLAT. NU scrie in `jobs`, NU scrie in `materials`, NU scrie in
-// catalogul de produse, NU scrie in Firestore `supplier_invoices` (asta
-// ramane client-side, prin SupplierInvoiceRepository.persistNewInvoice —
-// protejata de firestore.rules).
+// catalogul de produse.
 //
-// FAZA A-E/1-13 (bug crash nativ firebase_storage pe Windows) — acest
-// modul NU mai este stateless in privinta Storage: dupa parsare cu succes,
-// persista XML-ul sursa DIRECT in Firebase Storage prin Admin SDK
-// (bypaseaza storage.rules — de aceea autorizarea admin-only ramane
-// STRICT server-side, vezi requireAdminForInvoices mai jos, neschimbata).
-// Motiv: pluginul `firebase_storage` pe Windows desktop are un defect
-// structural confirmat (inspectie sursa + harness izolat de reproducere) —
-// `storageRef.putData(...)` client-side trimite mesaje pe canalul Flutter
-// dintr-un thread nativ gresit, ceea ce sub concurenta doboara procesul
-// INAINTE ca importul sa ajunga la persistarea materialelor. Mutand
-// persistarea XML-ului server-side, clientul Windows nu mai executa deloc
-// cod firebase_storage pentru acest feature.
+// FAZA A-E/1-13 (crash nativ firebase_storage pe Windows) + FAZA
+// "persist invoice metadata server-side" (crash nativ cloud_firestore
+// .runTransaction() pe Windows, confirmat separat prin harness izolat) —
+// acest modul persista ACUM COMPLET sursa facturii server-side, prin
+// Admin SDK (bypaseaza firestore.rules/storage.rules — de aceea
+// autorizarea admin-only ramane STRICT server-side, vezi
+// requireAdminForInvoices mai jos, neschimbata):
+//   1. XML-ul sursa, in Firebase Storage (persistSourceXmlIfNeeded);
+//   2. Documentul `supplier_invoices/{invoiceId}` + subcolectia `lines`,
+//      in Firestore (persistInvoiceMetadataIfNeeded).
+// Motiv, in ambele cazuri: pluginul FlutterFire pe Windows desktop are un
+// defect structural confirmat (inspectie sursa + harness izolat de
+// reproducere) — atat `storageRef.putData(...)` cat si
+// `FirebaseFirestore.runTransaction(...)` trimit mesaje pe canalul
+// Flutter dintr-un thread nativ gresit al SDK-ului C++ Firebase, ceea ce
+// doboara procesul INAINTE ca importul sa ajunga la persistarea
+// materialelor. Mutand toata persistarea facturii server-side, clientul
+// Windows nu mai executa deloc `putData`/`runTransaction` pentru acest
+// feature — vezi supplier_invoice_repository.dart (functia
+// `persistNewInvoice`, care facea exact tranzactia Firestore afectata, a
+// fost eliminata complet).
 //
 // invoiceId = SHA-256(xmlContent) calculat AICI (canonic, server-side) —
-// acelasi ID e folosit ca nume de document Firestore de catre
-// SupplierInvoiceRepository si ca segment de path in Storage. Path-ul
-// Storage e construit EXCLUSIV server-side din (uid autentificat,
-// invoiceId calculat) — clientul NU poate influenta path-ul in niciun fel
-// (nu exista niciun camp de input citit in acest scop).
+// acelasi ID e folosit ca nume de document Firestore si ca segment de
+// path in Storage. Path-ul Storage e construit EXCLUSIV server-side din
+// (uid autentificat, invoiceId calculat) — clientul NU poate influenta
+// path-ul in niciun fel (nu exista niciun camp de input citit in acest
+// scop).
+//
+// IDEMPOTENTA / campuri immutable vs mutable: daca documentul factura
+// exista deja, `persistInvoiceMetadataIfNeeded` NU il atinge deloc — NU
+// suprascrie `linkedJobIds`/`status` (mutate ulterior de fluxul de
+// alocare in lucrare, vezi lucrare_detalii_page.dart /
+// repairInvoiceImportMetadata) si NU recreeaza liniile. Header-ul si
+// liniile intoarse in raspuns provin INTOTDEAUNA din parsarea curenta
+// (`result.header`/`result.lines`), nu din documentul Firestore existent
+// — sigur prin constructie, pentru ca acelasi invoiceId implica
+// determinist acelasi continut XML, deci acelasi rezultat de parsare;
+// singurul lucru citit efectiv din Firestore in cazul de reutilizare sunt
+// ID-urile liniilor deja create (`lineDocId`), ca sa nu se creeze linii
+// noi/duplicate la reimport.
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
@@ -327,6 +347,90 @@ async function persistSourceXmlIfNeeded({ bucket, storagePath, xmlContent }) {
   return { created: true, storagePath };
 }
 
+/**
+ * Persista metadata facturii (`supplier_invoices/{invoiceId}`) + liniile
+ * (subcolectia `lines`) in Firestore prin Admin SDK, IDEMPOTENT, intr-o
+ * SINGURA tranzactie server-side (Admin SDK — NU e afectat de bug-ul
+ * client-plugin `runTransaction()` pe Windows).
+ *
+ * Daca documentul exista deja: NU scrie nimic — citeste doar ID-urile
+ * liniilor deja create (ordonate dupa `lineIndex`, deci in ACEEASI ordine
+ * ca `lines` primit ca parametru — vezi nota de determinism din
+ * header-ul fisierului) si le intoarce, ca sa poata fi asociate cu
+ * liniile proaspat parsate de apelant. `linkedJobIds`/`status` raman
+ * exact cum au fost lasate de fluxul de alocare in lucrare.
+ *
+ * Daca NU exista: creeaza documentul + toate liniile, atomic.
+ */
+async function persistInvoiceMetadataIfNeeded({
+  db,
+  invoiceId,
+  uid,
+  header,
+  lines,
+  storagePath,
+}) {
+  const invoiceRef = db.collection('supplier_invoices').doc(invoiceId);
+
+  return db.runTransaction(async (transaction) => {
+    const existingSnap = await transaction.get(invoiceRef);
+    if (existingSnap.exists) {
+      const linesSnap = await invoiceRef
+        .collection('lines')
+        .orderBy('lineIndex')
+        .get();
+      return {
+        created: false,
+        lineDocIds: linesSnap.docs.map((doc) => doc.id),
+      };
+    }
+
+    transaction.set(invoiceRef, {
+      id: invoiceId,
+      supplierName: header.supplierName,
+      supplierTaxId: header.supplierTaxId,
+      invoiceNumber: header.invoiceNumber,
+      invoiceDate: header.invoiceDate,
+      sourceType: 'xmlEInvoice',
+      sourceFileStoragePath: storagePath,
+      sourceFileHash: invoiceId,
+      importedByUserId: uid,
+      importedAt: admin.firestore.FieldValue.serverTimestamp(),
+      currency: header.currency,
+      totalWithoutVat: header.totalWithoutVat,
+      totalVat: header.totalVat,
+      status: 'parsed',
+      linkedJobIds: [],
+    });
+
+    const linesRef = invoiceRef.collection('lines');
+    const lineDocIds = [];
+    for (const line of lines) {
+      const lineDoc = linesRef.doc();
+      lineDocIds.push(lineDoc.id);
+      const lineData = {
+        id: lineDoc.id,
+        lineIndex: line.lineIndex,
+        rawName: line.rawName,
+        supplierProductCode: line.supplierProductCode,
+        unit: line.unit,
+        quantity: line.quantity,
+        unitPriceNoVat: line.unitPriceNoVat,
+        unitPriceDerived: line.unitPriceDerived,
+        vatRate: line.vatRate,
+        lineTotalNoVat: line.lineTotalNoVat,
+        currency: line.currency,
+      };
+      if (line.sourceLineId !== null && line.sourceLineId !== undefined) {
+        lineData.sourceLineId = line.sourceLineId;
+      }
+      transaction.set(lineDoc, lineData);
+    }
+
+    return { created: true, lineDocIds };
+  });
+}
+
 async function requireAdminForInvoices(request) {
   const auth = request && request.auth ? request.auth : null;
   const uid = auth ? (auth.uid || '').toString().trim() : '';
@@ -410,20 +514,59 @@ exports.parseSupplierInvoiceXml = onCall(
       );
     }
 
+    // FAZA "persist invoice metadata server-side" — dupa ce sursa e
+    // confirmat persistata in Storage (pasul de mai sus, mereu executat
+    // primul — vezi nota de ordine din header-ul fisierului), persistam
+    // metadata facturii + liniile in Firestore. Esec => eroare fatala
+    // (NU intoarcem un rezultat "de succes" care ar lasa clientul sa
+    // creada gresit ca factura/liniile exista in Firestore).
+    let metadataResult;
+    try {
+      metadataResult = await persistInvoiceMetadataIfNeeded({
+        db: admin.firestore(),
+        invoiceId,
+        uid,
+        header: result.header,
+        lines: result.lines,
+        storagePath,
+      });
+    } catch (firestoreError) {
+      logger.error('parseSupplierInvoiceXml: persist invoice metadata failed', {
+        durationMs: Date.now() - startedAtMs,
+        invoiceId,
+        errorMessage: firestoreError && firestoreError.message,
+      });
+      throw new HttpsError(
+        'internal',
+        'Nu am putut salva metadata facturii. Incearca din nou.',
+      );
+    }
+
+    // Header-ul/liniile raspunsului vin din parsarea CURENTA — determinist
+    // identice cu ce e stocat (acelasi invoiceId => acelasi continut, vezi
+    // header-ul fisierului) — doar `lineDocId` provine din rezultatul
+    // persistarii (nou creat sau deja existent).
+    const linesWithDocIds = result.lines.map((line, index) => ({
+      ...line,
+      lineDocId: metadataResult.lineDocIds[index],
+    }));
+
     const durationMs = Date.now() - startedAtMs;
     logger.info('parseSupplierInvoiceXml succeeded', {
       durationMs,
       lineCount: result.lines.length,
       invoiceId,
+      invoiceCreated: metadataResult.created,
     });
 
     return {
       ok: true,
       header: result.header,
-      lines: result.lines,
+      lines: linesWithDocIds,
       invoiceId,
       storagePath,
       sourcePersisted: true,
+      invoicePersisted: true,
     };
   },
 );
@@ -440,4 +583,5 @@ exports._internal = {
   computeSourceFileHash,
   buildSourceStoragePath,
   persistSourceXmlIfNeeded,
+  persistInvoiceMetadataIfNeeded,
 };

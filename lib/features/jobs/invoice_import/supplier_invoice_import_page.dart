@@ -69,17 +69,13 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
   bool _isSaving = false;
   String? _errorMessage;
 
-  /// Non-null dupa orice parsare reusita (FAZA A-E/1-13: id-ul canonic e
-  /// acum cunoscut IMEDIAT dupa parsare, calculat server-side — nu doar
-  /// dupa ce metadata Firestore a fost scrisa). Vezi [_invoiceMetadataPersisted]
-  /// pentru starea separata "documentul supplier_invoices exista deja".
+  /// Non-null dupa orice parsare reusita — id-ul canonic, calculat
+  /// server-side. FAZA "persist invoice metadata server-side": serverul
+  /// garanteaza ca documentul Firestore + liniile sunt deja persistate
+  /// (fresh-creat sau reutilizat) inainte ca acest id sa ajunga la client,
+  /// deci nu mai exista o stare intermediara "id cunoscut, dar metadata
+  /// inca nescrisa" de urmarit separat.
   String? _invoiceId;
-
-  /// true doar dupa ce documentul Firestore `supplier_invoices/{id}` +
-  /// liniile lui au fost efectiv scrise (import nou reusit) sau incarcate
-  /// dintr-un document existent (reutilizare, FAZA 2 pct. 14). Distinct de
-  /// [_invoiceId] (care e cunoscut mai devreme, imediat dupa parsare).
-  bool _invoiceMetadataPersisted = false;
 
   SupplierInvoiceParsedHeader? _header;
   List<SupplierInvoicePreviewLine> _lines =
@@ -225,33 +221,17 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       if (bomMismatch) {
         debugPrint('[InvoiceImport] localHash difera de invoiceId server '
             '(probabil BOM) — invoiceId server ramane autoritar.');
-      }
 
-      // Verificarea de reutilizare foloseste EXCLUSIV invoiceId-ul canonic
-      // (server), niciodata localHash — evita crearea unui document
-      // separat pentru acelasi continut logic (cazul BOM) si garanteaza
-      // ca `source.xml` a fost deja (re)persistat server-side inainte de
-      // aceasta verificare, indiferent daca documentul Firestore exista
-      // deja sau nu (FAZA 2 pct. 14 + self-heal Storage).
-      final existing =
-          await _repository.loadExistingInvoiceByHash(parseResult.invoiceId);
-      if (existing != null) {
-        if (!mounted) return;
-        _applyLoadedInvoice(existing);
-        return;
-      }
-
-      // Fallback LEGACY — DOAR cand localHash difera de invoiceId-ul
-      // canonic (cazul BOM): mai verificam si dupa hash-ul vechi (bytes
-      // brute), pentru cazul rar in care aceeasi factura fizica a fost
-      // deja importata de o versiune anterioara a aplicatiei (care folosea
-      // hash-ul pe bytes brute ca invoiceId). Daca gasim un document
-      // legacy, il reutilizam — NU cream un al doilea document Firestore
-      // pentru aceeasi factura. `source.xml` deja (re)persistat mai sus
-      // sub id-ul canonic ramane, in acest caz rar, orfan la path-ul
-      // canonic — acceptabil prin design (vezi nota FAZA 6 despre fisiere
-      // orfane deterministe), NU necesita curatare.
-      if (bomMismatch) {
+        // Fallback LEGACY — DOAR cand localHash difera de invoiceId-ul
+        // canonic (cazul BOM): mai verificam si dupa hash-ul vechi (bytes
+        // brute), pentru cazul rar in care aceeasi factura fizica a fost
+        // deja importata de o versiune anterioara a aplicatiei (care
+        // folosea hash-ul pe bytes brute ca invoiceId). Daca gasim un
+        // document legacy, il reutilizam — NU cream un al doilea document
+        // Firestore pentru aceeasi factura. `source.xml` deja persistat
+        // server-side sub id-ul canonic ramane, in acest caz rar, orfan la
+        // path-ul canonic — acceptabil prin design (vezi nota FAZA 6
+        // despre fisiere orfane deterministe), NU necesita curatare.
         final legacyExisting =
             await _repository.loadExistingInvoiceByHash(localHash);
         if (legacyExisting != null) {
@@ -263,9 +243,17 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
         }
       }
 
+      // FAZA "persist invoice metadata server-side" — `parseResult` este
+      // AUTORITAR si complet: serverul a persistat deja (creat sau
+      // reutilizat, idempotent) atat `source.xml` in Storage cat si
+      // documentul `supplier_invoices/{invoiceId}` + liniile in Firestore,
+      // INAINTE de a raspunde (vezi parseSupplierInvoiceXml). Nu mai e
+      // nevoie de niciun apel Firestore suplimentar aici pentru cazul
+      // canonic — liniile primite au deja `lineDocId` populat corect,
+      // fresh-creat sau reutilizat.
+      assert(parseResult.invoicePersisted, 'serverul garanteaza acest lucru sau arunca');
       setState(() {
         _invoiceId = parseResult.invoiceId;
-        _invoiceMetadataPersisted = false;
         _header = parseResult.header;
         _lines = parseResult.lines;
         _isParsing = false;
@@ -289,7 +277,6 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
   void _applyLoadedInvoice(SupplierInvoiceLoaded loaded) {
     setState(() {
       _invoiceId = loaded.invoiceId;
-      _invoiceMetadataPersisted = true;
       _header = loaded.header;
       _lines = loaded.lines;
       _isParsing = false;
@@ -590,7 +577,6 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     setState(() {
       _fileName = null;
       _invoiceId = null;
-      _invoiceMetadataPersisted = false;
       _header = null;
       _lines = const <SupplierInvoicePreviewLine>[];
       _errorMessage = null;
@@ -647,27 +633,26 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       if (invoiceId == null || invoiceId.isEmpty || header == null) {
         throw StateError('Factura nu este pregatita pentru import.');
       }
-      // FAZA A-E/1-13 — `invoiceId` e deja cunoscut (canonic, server-side)
-      // imediat dupa parsare; ramane doar sa scriem metadata Firestore
-      // (`supplier_invoices/{id}` + liniile), daca nu s-a facut deja.
-      // XML-ul sursa e deja in Storage — niciun upload aici.
-      if (!_invoiceMetadataPersisted) {
-        await _repository.persistNewInvoice(
-          invoiceId: invoiceId,
-          header: header,
-          allLines: _lines,
-        );
-        if (!mounted) return;
-        setState(() => _invoiceMetadataPersisted = true);
-      }
+      // FAZA "persist invoice metadata server-side" — `invoiceId` +
+      // metadata Firestore (`supplier_invoices/{id}` + liniile) sunt DEJA
+      // persistate server-side, garantat, de la momentul parsarii (vezi
+      // parseSupplierInvoiceXml) — nu mai exista niciun apel
+      // Firestore/Storage al clientului aici. Markerele IMPORT_STEP_02A-D
+      // (care bracketau tranzactia Firestore client-side) au fost
+      // eliminate odata cu acel cod — vezi supplier_invoice_repository.dart
+      // (persistNewInvoice, eliminat complet).
+      debugPrint('IMPORT_STEP_02E metadata deja persistata server-side t=${DateTime.now().toIso8601String()}');
 
+      debugPrint('IMPORT_STEP_02F before MaterialsCatalogService.listMaterials t=${DateTime.now().toIso8601String()}');
       final catalog = await MaterialsCatalogService().listMaterials();
+      debugPrint('IMPORT_STEP_02G after MaterialsCatalogService.listMaterials t=${DateTime.now().toIso8601String()} count=${catalog.length}');
       final matcher = SupplierInvoiceCatalogMatcher(catalog);
       final baseMillis = DateTime.now().millisecondsSinceEpoch;
 
       final newMaterialRows = <Map<String, dynamic>>[];
       final materialsToCreate = <MasterMaterial>[];
 
+      debugPrint('IMPORT_STEP_02H before mapping loop t=${DateTime.now().toIso8601String()}');
       for (var i = 0; i < selected.length; i++) {
         final line = selected[i];
         final resolution = matcher.resolve(
@@ -687,6 +672,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
           ),
         );
       }
+      debugPrint('IMPORT_STEP_02I after mapping loop t=${DateTime.now().toIso8601String()}');
 
       debugPrint('IMPORT_STEP_03 materials mapped t=${DateTime.now().toIso8601String()} '
           'rowCount=${newMaterialRows.length} '

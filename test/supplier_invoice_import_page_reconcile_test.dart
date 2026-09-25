@@ -1,5 +1,6 @@
-// FAZA "reconcile prin server" — teste STRUCTURALE pentru
-// _pickAndParseFile din supplier_invoice_import_page.dart.
+// FAZA "reconcile prin server" + "persist invoice metadata server-side" —
+// teste STRUCTURALE pentru _pickAndParseFile din
+// supplier_invoice_import_page.dart.
 //
 // De ce structural, nu comportamental: metoda e privata pe un State ce
 // necesita FilePicker + Firebase (cloud_functions, cloud_firestore) reale
@@ -7,18 +8,22 @@
 // acest ecran in suita curenta de teste (acelasi motiv documentat in
 // supplier_invoice_import_repair_test.dart pentru markInvoiceAllocated).
 // In loc sa simulam un mock fragil, verificam DIRECT ordinea reala a
-// codului sursa — proprietatea critica ceruta de audit: parserul
-// (server) trebuie apelat INTOTDEAUNA, iar verificarea de reutilizare
-// Firestore trebuie sa foloseasca EXCLUSIV invoiceId-ul canonic (server),
-// niciodata hash-ul local — nu un shortcut care sare peste server.
+// codului sursa — proprietatile critice cerute de audit:
+//   1. parserul (server) trebuie apelat INTOTDEAUNA, fara niciun shortcut
+//      care sare peste el;
+//   2. dupa parsare, clientul NU mai face NICIUN apel Firestore pentru
+//      cazul canonic (serverul e deja autoritar — invoicePersisted
+//      garantat) — singurul apel Firestore ramas e fallback-ul LEGACY,
+//      strict conditionat de divergenta BOM (localHash != invoiceId
+//      server), niciodata folosit pentru cazul normal;
+//   3. `_invoiceId` nu e niciodata setat direct din `localHash`.
 //
-// Comportamentul de fond (idempotenta persistarii Storage indiferent de
-// starea Firestore, reutilizare fara duplicat) e verificat separat:
+// Comportamentul de fond (idempotenta persistarii Storage/Firestore
+// indiferent de starea existenta, reutilizare fara duplicat, self-heal) e
+// verificat separat:
 // - functions_invoice_import/test/supplier_invoice_source_persistence.test.js
-//   (self-heal Storage — server, cu fake bucket)
+// - functions_invoice_import/test/supplier_invoice_metadata_persistence.test.js
 // - test/supplier_invoice_hash_dedup_test.dart (divergenta BOM)
-// - inspectia codului persistNewInvoice (tranzactie Firestore, verificare
-//   existentei dupa invoiceId canonic, neschimbata din FAZA 2/1.1).
 
 import 'dart:io';
 
@@ -69,28 +74,46 @@ void main() {
     });
 
     test(
-        'verificarea de reutilizare Firestore (loadExistingInvoiceByHash) '
-        'foloseste EXCLUSIV parseResult.invoiceId (canonic, server) — NU '
-        'localHash — ca prim criteriu de reuse', () {
+        'dupa parseXml, SINGURUL apel loadExistingInvoiceByHash ramas este '
+        'fallback-ul LEGACY, argumentul lui fiind localHash — NU '
+        'parseResult.invoiceId (serverul e deja autoritar pentru cazul '
+        'canonic, niciun apel Firestore suplimentar necesar)', () {
       final body = bodyOf('Future<void> _pickAndParseFile()');
 
       final parseCallIndex = body.indexOf('_parserClient.parseXml(');
       final afterParse = body.substring(parseCallIndex);
 
-      final firstExistenceCheckIndex =
-          afterParse.indexOf('loadExistingInvoiceByHash(');
-      expect(firstExistenceCheckIndex, greaterThanOrEqualTo(0),
-          reason: 'trebuie sa existe o verificare de reutilizare DUPA '
-              'apelul parserului');
+      final matches = 'loadExistingInvoiceByHash('.allMatches(afterParse).toList();
+      expect(matches.length, 1,
+          reason: 'trebuie sa existe EXACT un singur apel '
+              'loadExistingInvoiceByHash dupa parseXml (fallback-ul legacy) '
+              '— orice apel suplimentar ar insemna reintroducerea '
+              'verificarii canonice redundante');
 
-      // Argumentul primului apel loadExistingInvoiceByHash(...) de dupa
-      // parseXml trebuie sa fie invoiceId-ul canonic din raspunsul
-      // serverului, nu variabila locala.
-      final argStart = firstExistenceCheckIndex +
-          'loadExistingInvoiceByHash('.length;
+      final argStart = matches.first.end;
       final argEnd = afterParse.indexOf(')', argStart);
-      final firstArg = afterParse.substring(argStart, argEnd).trim();
-      expect(firstArg, 'parseResult.invoiceId');
+      final arg = afterParse.substring(argStart, argEnd).trim();
+      expect(arg, 'localHash',
+          reason: 'fallback-ul legacy trebuie sa verifice dupa hash-ul '
+              'local (bytes brute), nu dupa invoiceId-ul canonic');
+
+      // Acest apel trebuie sa fie strict conditionat de divergenta BOM
+      // (bomMismatch), nu necondiționat.
+      final callSite = afterParse.substring(0, matches.first.start);
+      expect(callSite.contains('if (bomMismatch)'), true,
+          reason: 'fallback-ul legacy trebuie sa ruleze DOAR cand '
+              'localHash difera de invoiceId-ul canonic');
+    });
+
+    test(
+        'clientul se bazeaza direct pe parseResult.invoicePersisted (NU mai '
+        'face niciun apel Firestore de scriere pentru metadata facturii)',
+        () {
+      final body = bodyOf('Future<void> _pickAndParseFile()');
+      expect(body.contains('parseResult.invoicePersisted'), true);
+      expect(body.contains('persistNewInvoice'), false,
+          reason: 'persistNewInvoice a fost eliminat complet din '
+              'SupplierInvoiceRepository — nu mai poate fi apelat aici');
     });
 
     test(
@@ -102,6 +125,29 @@ void main() {
       // "_invoiceId = localHash" — invoiceId-ul canonic vine mereu din
       // parseResult.invoiceId sau dintr-un document Firestore incarcat.
       expect(body.contains('_invoiceId = localHash'), false);
+    });
+  });
+
+  group('_doImport — nicio tranzactie/scriere Firestore client-side', () {
+    late String source;
+
+    setUpAll(() {
+      source = File(
+        'lib/features/jobs/invoice_import/supplier_invoice_import_page.dart',
+      ).readAsStringSync();
+    });
+
+    test('_doImport nu mai contine niciun apel persistNewInvoice(...)/runTransaction(...)', () {
+      final start = source.indexOf('Future<void> _doImport(');
+      expect(start, greaterThanOrEqualTo(0));
+      final end = source.indexOf('\n  }\n', start);
+      final body = source.substring(start, end);
+
+      // Verificam sintaxa de APEL (paranteza), nu simpla mentiune a
+      // numelui — comentariile explicative pot mentiona legitim
+      // "persistNewInvoice" ca sa documenteze DE CE a fost eliminat.
+      expect(body.contains('persistNewInvoice('), false);
+      expect(body.contains('.runTransaction('), false);
     });
   });
 }

@@ -39,9 +39,14 @@ class SupplierInvoiceParseResult {
     required this.lines,
     required this.invoiceId,
     required this.sourcePersisted,
+    required this.invoicePersisted,
   });
 
   final SupplierInvoiceParsedHeader header;
+
+  /// Liniile facturii, cu `lineDocId` DEJA populat (fresh-creat sau
+  /// reutilizat) — vezi `invoicePersisted`. Clientul nu mai trebuie sa
+  /// scrie nimic in Firestore ca sa obtina aceste ID-uri.
   final List<SupplierInvoicePreviewLine> lines;
 
   /// ID canonic al facturii — SHA-256(xmlContent), calculat SERVER-SIDE de
@@ -56,6 +61,13 @@ class SupplierInvoiceParseResult {
   /// niciun upload propriu catre Storage pentru acest feature (elimina
   /// crash-ul nativ firebase_storage confirmat pe Windows).
   final bool sourcePersisted;
+
+  /// true daca documentul `supplier_invoices/{invoiceId}` + liniile lui
+  /// sunt DEJA persistate in Firestore de server (creat acum sau
+  /// reutilizat) — clientul NU mai face nicio tranzactie Firestore proprie
+  /// pentru acest feature (elimina crash-ul nativ
+  /// `cloud_firestore.runTransaction()` confirmat pe Windows).
+  final bool invoicePersisted;
 }
 
 class SupplierInvoiceParserClient {
@@ -94,8 +106,14 @@ class SupplierInvoiceParserClient {
     final rawLines = (data['lines'] is List) ? data['lines'] as List : const [];
     final lines = rawLines
         .whereType<Map>()
-        .map((m) =>
-            SupplierInvoicePreviewLine.fromMap(Map<String, dynamic>.from(m)))
+        .map((m) {
+          final map = Map<String, dynamic>.from(m);
+          final lineDocId = (map['lineDocId'] ?? '').toString();
+          return SupplierInvoicePreviewLine.fromMap(
+            map,
+            lineDocId: lineDocId.isEmpty ? null : lineDocId,
+          );
+        })
         .toList(growable: false);
 
     return SupplierInvoiceParseResult(
@@ -103,6 +121,7 @@ class SupplierInvoiceParserClient {
       lines: lines,
       invoiceId: (data['invoiceId'] ?? '').toString(),
       sourcePersisted: data['sourcePersisted'] == true,
+      invoicePersisted: data['invoicePersisted'] == true,
     );
   }
 
