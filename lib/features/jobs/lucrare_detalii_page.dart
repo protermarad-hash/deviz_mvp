@@ -9,6 +9,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/auth/app_role_policy.dart';
+import '../../core/auth_models.dart' show UserRole;
 import '../../core/company_profile.dart';
 import '../../core/app_models.dart';
 import '../../core/local_store.dart';
@@ -52,6 +53,8 @@ import 'job_site_document_models.dart';
 import 'job_site_document_services.dart';
 import 'job_site_documents_cloud_repository.dart';
 import 'job_site_documents_page.dart';
+import 'invoice_import/supplier_invoice_import_page.dart';
+import 'invoice_import/supplier_invoice_import_repair.dart';
 import 'lucrare_raport_page.dart';
 import 'job_document_type_utils.dart';
 import 'lucrare_raport_complet_page.dart';
@@ -1196,6 +1199,118 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
           job: _jobSnapshot,
           clientName: widget.clientName,
           roleKey: widget.roleKey,
+        ),
+      ),
+    );
+  }
+
+  // FAZA 1/2 — Import materiale din factura (XML e-Factura). Punct de
+  // intrare minim; TOATA logica de parsare/preview/catalog sta in
+  // lib/features/jobs/invoice_import/ (fisiere noi, izolate). Salvarea
+  // efectiva in JobRecord.materials foloseste INSA exact acelasi
+  // mecanism ca adaugarea manuala (_persistJobMaterials) — nicio logica
+  // de salvare nu e duplicata, doar apelata cu lista combinata.
+  Future<void> _openSupplierInvoiceImportPage() async {
+    final outcome = await Navigator.of(context).push<SupplierInvoiceImportOutcome>(
+      MaterialPageRoute(
+        builder: (_) => SupplierInvoiceImportPage(
+          job: _jobSnapshot,
+          roleKey: widget.roleKey,
+        ),
+      ),
+    );
+    if (outcome == null || outcome.newMaterialRows.isEmpty) return;
+    await _applySupplierInvoiceImportOutcome(outcome);
+  }
+
+  /// FAZA 2 pct. 10/11/13 — combina materialele EXISTENTE cu cele noi
+  /// (APPEND, nu inlocuire) si salveaza prin _persistJobMaterials. Doar
+  /// DUPA succesul acelei salvari actualizeaza metadata facturii
+  /// (linkedJobIds/status) si creeaza materialele noi in catalogul
+  /// general — daca salvarea materialelor lucrarii esueaza, factura NU
+  /// este marcata ca importata si NU se creeaza nimic in catalog.
+  Future<void> _applySupplierInvoiceImportOutcome(
+    SupplierInvoiceImportOutcome outcome,
+  ) async {
+    final combined = <Map<String, dynamic>>[
+      ..._materials,
+      ...outcome.newMaterialRows,
+    ];
+    try {
+      await _persistJobMaterials(combined);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Eroare la salvarea materialelor importate din factura: $error. '
+            'Factura ramane disponibila pentru reincercare.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _materials = combined);
+
+    await _appendJournal(
+      action: 'materials_imported_from_invoice',
+      message:
+          '${outcome.newMaterialRows.length} materiale importate din factura '
+          '(id: ${outcome.invoiceId}).',
+    );
+
+    // FAZA 2.1 pct. 2 — materialele lucrarii sunt DEJA salvate (partea
+    // critica, ireversibila la acest punct). markInvoiceAllocated +
+    // sincronizarea catalogului raman best-effort, dar NU mai esueaza in
+    // tacere: rezultatul e comunicat explicit, cu retry idempotent.
+    await _syncInvoiceMetadataAfterImport(outcome);
+  }
+
+  /// FAZA 2.1 pct. 2/3 — apeleaza `repairInvoiceImportMetadata` (idempotent:
+  /// poate fi reapelata oricand fara sa creeze duplicate in catalog sau sa
+  /// duplice jobId in linkedJobIds) si informeaza utilizatorul daca ceva
+  /// nu s-a sincronizat, cu buton de reincercare in acelasi SnackBar.
+  Future<void> _syncInvoiceMetadataAfterImport(
+    SupplierInvoiceImportOutcome outcome,
+  ) async {
+    final result = await repairInvoiceImportMetadata(
+      invoiceId: outcome.invoiceId,
+      jobId: _jobSnapshot.id,
+      materialsToEnsureInCatalog: outcome.materialsToCreateInCatalog,
+    );
+    if (!mounted) return;
+
+    if (result.isFullySynced) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${outcome.newMaterialRows.length} materiale importate cu succes in lucrare.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    // Materialele lucrarii sunt salvate si vizibile — doar metadata
+    // secundara (asocierea facturii si/sau catalogul) nu s-a sincronizat
+    // complet. NU se pierde nimic: retry-ul e sigur de reincercat oricand.
+    final problems = <String>[
+      if (!result.linkedJobIdsOk) 'asocierea facturii cu lucrarea',
+      if (result.catalogMaterialsFailed.isNotEmpty)
+        'sincronizarea catalogului (${result.catalogMaterialsFailed.length} pozitii)',
+    ].join(' si ');
+    debugPrint('[InvoiceImport] sincronizare incompleta: $problems');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${outcome.newMaterialRows.length} materiale importate cu succes in lucrare, '
+          'dar $problems nu a reusit. Materialele sunt in siguranta.',
+        ),
+        duration: const Duration(seconds: 10),
+        action: SnackBarAction(
+          label: 'Reincearca',
+          onPressed: () => _syncInvoiceMetadataAfterImport(outcome),
         ),
       ),
     );
@@ -12591,10 +12706,26 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                           );
                         }),
                       ),
-                action: TextButton.icon(
-                  onPressed: _onAddMaterial,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Adaugă material'),
+                action: Wrap(
+                  spacing: 4,
+                  children: [
+                    // FAZA 1.1 — STRICT ADMIN, nu admin/office (aceeasi
+                    // conditie ca autorizarea reala din Cloud
+                    // Function/firestore.rules/storage.rules; ascunderea
+                    // aici e doar UX, NU mecanismul de securitate).
+                    if (AppRolePolicy.fromRoleKey(widget.roleKey) ==
+                        UserRole.admin)
+                      TextButton.icon(
+                        onPressed: _openSupplierInvoiceImportPage,
+                        icon: const Icon(Icons.receipt_long_outlined),
+                        label: const Text('Import din factură'),
+                      ),
+                    TextButton.icon(
+                      onPressed: _onAddMaterial,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Adaugă material'),
+                    ),
+                  ],
                 ),
               ),
             // "Resurse proprii" (manoperă proprie manuală introdusă prin
