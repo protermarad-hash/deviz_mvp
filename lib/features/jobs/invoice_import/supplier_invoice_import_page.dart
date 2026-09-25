@@ -614,8 +614,6 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
     );
     if (confirmed != true) return;
 
-    debugPrint('IMPORT_STEP_01 confirm pressed t=${DateTime.now().toIso8601String()} selectedCount=${selected.length}');
-
     await _doImport(selected);
   }
 
@@ -624,8 +622,6 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       _isSaving = true;
       _errorMessage = null;
     });
-
-    debugPrint('IMPORT_STEP_02 validation done t=${DateTime.now().toIso8601String()} selectedCount=${selected.length}');
 
     try {
       final invoiceId = _invoiceId;
@@ -637,22 +633,15 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
       // metadata Firestore (`supplier_invoices/{id}` + liniile) sunt DEJA
       // persistate server-side, garantat, de la momentul parsarii (vezi
       // parseSupplierInvoiceXml) — nu mai exista niciun apel
-      // Firestore/Storage al clientului aici. Markerele IMPORT_STEP_02A-D
-      // (care bracketau tranzactia Firestore client-side) au fost
-      // eliminate odata cu acel cod — vezi supplier_invoice_repository.dart
-      // (persistNewInvoice, eliminat complet).
-      debugPrint('IMPORT_STEP_02E metadata deja persistata server-side t=${DateTime.now().toIso8601String()}');
+      // Firestore/Storage al clientului aici.
 
-      debugPrint('IMPORT_STEP_02F before MaterialsCatalogService.listMaterials t=${DateTime.now().toIso8601String()}');
       final catalog = await MaterialsCatalogService().listMaterials();
-      debugPrint('IMPORT_STEP_02G after MaterialsCatalogService.listMaterials t=${DateTime.now().toIso8601String()} count=${catalog.length}');
       final matcher = SupplierInvoiceCatalogMatcher(catalog);
       final baseMillis = DateTime.now().millisecondsSinceEpoch;
 
       final newMaterialRows = <Map<String, dynamic>>[];
       final materialsToCreate = <MasterMaterial>[];
 
-      debugPrint('IMPORT_STEP_02H before mapping loop t=${DateTime.now().toIso8601String()}');
       for (var i = 0; i < selected.length; i++) {
         final line = selected[i];
         final resolution = matcher.resolve(
@@ -672,15 +661,8 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
           ),
         );
       }
-      debugPrint('IMPORT_STEP_02I after mapping loop t=${DateTime.now().toIso8601String()}');
-
-      debugPrint('IMPORT_STEP_03 materials mapped t=${DateTime.now().toIso8601String()} '
-          'rowCount=${newMaterialRows.length} '
-          'qtyType=${newMaterialRows.isNotEmpty ? newMaterialRows.first['qty'].runtimeType : 'n/a'} '
-          'toCreateCount=${materialsToCreate.length}');
 
       if (!mounted) return;
-      debugPrint('IMPORT_STEP_08 before navigator pop t=${DateTime.now().toIso8601String()} rowCount=${newMaterialRows.length}');
       Navigator.of(context).pop(
         SupplierInvoiceImportOutcome(
           invoiceId: invoiceId,
@@ -688,10 +670,7 @@ class _SupplierInvoiceImportPageState extends State<SupplierInvoiceImportPage> {
           materialsToCreateInCatalog: materialsToCreate,
         ),
       );
-    } catch (error, stack) {
-      debugPrint('IMPORT_STEP_ERROR t=${DateTime.now().toIso8601String()} '
-          'exceptionType=${error.runtimeType} message=$error');
-      debugPrint('$stack');
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _isSaving = false;
