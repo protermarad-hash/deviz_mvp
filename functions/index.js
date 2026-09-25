@@ -16,11 +16,6 @@ const db = admin.firestore();
 const { availability: whatsappAvailability } = require('./whatsapp_availability');
 exports.availability = whatsappAvailability;
 
-// FAZA 5 — parseSupplierInvoiceXml a fost mutat intr-un codebase Firebase
-// Functions IZOLAT (../functions_invoice_import/), ca sa deblocheze deploy-ul
-// legacy fara a atinge availability/WhatsApp. Vezi functions_invoice_import/
-// pentru implementare si teste.
-
 const COLLECTIONS = {
   notifications: 'notifications',
   emailQueue: 'notification_email_queue',
