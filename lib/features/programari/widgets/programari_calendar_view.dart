@@ -951,8 +951,17 @@ extension _ProgramariCalendarViewX on _ProgramariPageState {
         assignmentSummary.isNotEmpty &&
         placement.laneCount == 1 &&
         height >= 128;
-    final showClientLine =
-        showSecondaryLine && placement.laneCount == 1 && height >= 140;
+    // Cand programarea nu are job asociat, `secondary` afiseaza deja
+    // numele clientului (vezi mai sus) — a mai afisa `itemClient` intr-o
+    // linie separata dubla acelasi text si consuma spatiu vertical
+    // nebugetat, cauzand overflow-ul RenderFlex confirmat vizual (cardul
+    // "Eva Kovacs" aparea de doua ori). Linia de client ramane utila DOAR
+    // cand aduce informatie noua (job atasat, deci `secondary` != numele
+    // clientului).
+    final showClientLine = showSecondaryLine &&
+        placement.laneCount == 1 &&
+        height >= 140 &&
+        itemClient != secondary;
     final showAddressLine =
         showSecondaryLine && placement.laneCount == 1 && height >= 152;
 
