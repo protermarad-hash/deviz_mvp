@@ -34,9 +34,16 @@ void main() {
     late String source;
 
     setUpAll(() {
+      // Normalizare CRLF/CR -> LF: pe checkout Windows real (core.autocrlf=
+      // true), fisierul de pe disc are CRLF, ceea ce ar rupe cautarile de
+      // delimitatori bazate pe '\n' de mai jos — codul de productie e
+      // neschimbat, doar modul in care acest test citeste sursa.
       source = File(
         'lib/features/jobs/invoice_import/supplier_invoice_import_page.dart',
-      ).readAsStringSync();
+      )
+          .readAsStringSync()
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n');
     });
 
     String bodyOf(String methodSignature) {
@@ -132,9 +139,16 @@ void main() {
     late String source;
 
     setUpAll(() {
+      // Normalizare CRLF/CR -> LF: pe checkout Windows real (core.autocrlf=
+      // true), fisierul de pe disc are CRLF, ceea ce ar rupe cautarile de
+      // delimitatori bazate pe '\n' de mai jos — codul de productie e
+      // neschimbat, doar modul in care acest test citeste sursa.
       source = File(
         'lib/features/jobs/invoice_import/supplier_invoice_import_page.dart',
-      ).readAsStringSync();
+      )
+          .readAsStringSync()
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n');
     });
 
     test('_doImport nu mai contine niciun apel persistNewInvoice(...)/runTransaction(...)', () {
