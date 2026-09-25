@@ -89,9 +89,13 @@ windows/x64/
 x64/Release/
 
 # Config build separat client Costel Costea — NU în git (date Firebase izolate)
+# NOTA: lib/firebase_options_costel.dart NU mai e aici — e acum un STUB
+# versionat (vezi fisierul insusi + fix(ci): make optional Firebase config
+# checkout-safe). Dezvoltatorul care construieste local clientul Costel
+# foloseste `git update-index --skip-worktree` pe acel fisier in loc de
+# .gitignore, ca sa nu mai sparga checkout-uri curate/CI.
 android/app/google-services-costel.json
 android/app/src/costel/google-services.json
-lib/firebase_options_costel.dart
 android/app/google-services.bak.json
 build/proventaris-costel.apk
 build/proventaris-windows-costel.zip
