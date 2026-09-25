@@ -782,17 +782,31 @@ class _JobsPageState extends State<JobsPage> {
                                 width: 200,
                                 child: DropdownButtonFormField<JobStatus?>(
                                   initialValue: _statusFilter,
+                                  // Fara isExpanded:true, randul intern al
+                                  // dropdown-ului se dimensioneaza dupa cel
+                                  // mai lat item, ignorand latimea impusa de
+                                  // SizedBox — cauza RenderFlex overflow
+                                  // confirmata (constraints w=180 raportate
+                                  // de Flutter, provenind exact din acest
+                                  // camp).
+                                  isExpanded: true,
                                   decoration: const InputDecoration(
                                       labelText: 'Status'),
                                   items: [
                                     const DropdownMenuItem<JobStatus?>(
                                       value: null,
-                                      child: Text('Toate'),
+                                      child: Text(
+                                        'Toate',
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                                     ),
                                     ...JobStatus.values.map(
                                       (s) => DropdownMenuItem<JobStatus?>(
                                         value: s,
-                                        child: Text(s.label),
+                                        child: Text(
+                                          s.label,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -806,17 +820,27 @@ class _JobsPageState extends State<JobsPage> {
                                 width: 240,
                                 child: DropdownButtonFormField<String?>(
                                   initialValue: _normalizeClientFilter(),
+                                  // Vezi nota de mai sus (dropdown Status) —
+                                  // acesta e campul exact raportat in
+                                  // overflow (jobs_page.dart:807).
+                                  isExpanded: true,
                                   decoration: const InputDecoration(
                                       labelText: 'Client'),
                                   items: [
                                     const DropdownMenuItem<String?>(
                                       value: null,
-                                      child: Text('Toți clienții'),
+                                      child: Text(
+                                        'Toți clienții',
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
                                     ),
                                     ..._clients.map(
                                       (c) => DropdownMenuItem<String?>(
                                         value: c.id,
-                                        child: Text(c.label),
+                                        child: Text(
+                                          c.label,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                       ),
                                     ),
                                   ],
