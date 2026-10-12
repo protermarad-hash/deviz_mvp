@@ -133,6 +133,92 @@ class LucrareLaborCalculator {
     });
   }
 
+  /// Tariful efectiv (diurnă/zi, cazare/noapte) introdus în câmpul unui
+  /// pontaj. Valoarea tastată are prioritate — inclusiv 0, care e o valoare
+  /// explicită, nu „lipsă”. `fallback` (tariful existent al pontajului sau
+  /// tariful implicit al persoanei) se folosește doar când câmpul e gol,
+  /// invalid sau negativ.
+  static double resolveLaborUnitValue(String raw, double fallback) {
+    final parsed = double.tryParse(raw.trim().replaceAll(',', '.'));
+    if (parsed == null || parsed.isNaN || parsed.isInfinite || parsed < 0) {
+      return fallback;
+    }
+    return parsed;
+  }
+
+  /// Construiește rândul salvat din dialogul „Editează manoperă / ore”
+  /// (`_onEditLabor` din `lucrare_detalii_page.dart`) pe baza textului
+  /// curent din câmpuri. Extras ca funcție pură ca să poată fi testat cu
+  /// logica reală, fără a pompa toată pagina.
+  Map<String, dynamic> buildEditedLaborRow({
+    required Map<String, dynamic> original,
+    required String whoId,
+    required String whoLabel,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    required String hoursText,
+    required String hoursPerDayText,
+    required String tripDaysText,
+    required String zileDiurnaText,
+    required String noptiCazareText,
+    required String valoareDiurnaText,
+    required String valoareCazareText,
+    required double defaultPerDiemPerDay,
+    required double defaultLodgingPerNight,
+    required bool includeDiurna,
+    required bool includeCazare,
+    required double hourlyRate,
+    String notes = '',
+  }) {
+    double? parse(String raw) => double.tryParse(raw.replaceAll(',', '.'));
+    final hours = parse(hoursText) ?? 0;
+    final zileDiurna = parse(zileDiurnaText) ?? 0;
+    // Valoarea tastată în câmp are prioritate față de tariful preîncărcat
+    // (anterior `default > 0 ? default : câmp` ignora mereu câmpul când
+    // rândul avea deja un tarif, deci editările reveneau la valoarea veche).
+    final valoareDiurnaPeZi =
+        resolveLaborUnitValue(valoareDiurnaText, defaultPerDiemPerDay);
+    final noptiCazare = parse(noptiCazareText) ?? 0;
+    final valoareCazarePeNoapte =
+        resolveLaborUnitValue(valoareCazareText, defaultLodgingPerNight);
+    final tripDays =
+        parse(tripDaysText) ?? (zileDiurna > 0 ? zileDiurna : noptiCazare);
+    final includeDiurnaNow = includeDiurna || zileDiurna > 0;
+    final includeCazareNow = includeCazare || noptiCazare > 0;
+    final normalizedDaysPerDiem = includeDiurnaNow ? tripDays : 0.0;
+    final normalizedNightsLodging = includeCazareNow ? tripDays : 0.0;
+    final costOre = hours * hourlyRate;
+    final costDiurna = normalizedDaysPerDiem * valoareDiurnaPeZi;
+    final costCazare = normalizedNightsLodging * valoareCazarePeNoapte;
+    return <String, dynamic>{
+      'id':
+          '${original['id'] ?? 'job-labor-${DateTime.now().millisecondsSinceEpoch}'}',
+      'jobId': '${original['jobId'] ?? jobId}',
+      'whoId': whoId,
+      'type': whoId.startsWith('team:') ? 'team' : 'person',
+      'whoLabel': whoLabel,
+      'who': whoLabel,
+      'date': _formatDate(periodStart),
+      'periodStartDate': _encodeLaborPeriodDate(periodStart),
+      'periodEndDate': _encodeLaborPeriodDate(periodEnd),
+      'hoursPerDay': sanitizeLaborHoursPerDay(hoursPerDayText),
+      'hours': hours,
+      'hourlyRate': hourlyRate,
+      'tripDays': tripDays,
+      'includeDiurna': includeDiurnaNow,
+      'includeCazare': includeCazareNow,
+      'zileDiurna': normalizedDaysPerDiem,
+      'valoareDiurnaPeZi': valoareDiurnaPeZi,
+      'noptiCazare': normalizedNightsLodging,
+      'valoareCazarePeNoapte': valoareCazarePeNoapte,
+      'costOre': costOre,
+      'costDiurna': costDiurna,
+      'costCazare': costCazare,
+      'costTotalLinie': costOre + costDiurna + costCazare,
+      'notes': notes,
+    };
+  }
+
   double sanitizeLaborHoursPerDay(dynamic raw) {
     final value = _asDouble(raw);
     return value > 0 ? value : 8.0;

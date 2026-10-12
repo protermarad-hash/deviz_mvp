@@ -76,6 +76,10 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
   periodStart = DateTime(periodStart.year, periodStart.month, periodStart.day);
   periodEnd = DateTime(periodEnd.year, periodEnd.month, periodEnd.day);
   var selectedDays = <DateTime>{};
+  // La editare: un rând existent pe interval (ex. 04.08–06.08, 3 zile) își
+  // păstrează perioada și zilele cât timp data nu e schimbată explicit;
+  // altfel diurna/cazarea ar fi recalculate pe 1 zi la salvare.
+  var editDateChanged = false;
 
   List<JobPartnerWorker>? result;
   try {
@@ -319,10 +323,14 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
                             setDialogState(() {
                               periodStart = picked;
                               periodEnd = picked;
+                              editDateChanged = true;
                             });
                           },
                           icon: const Icon(Icons.calendar_today),
-                          label: Text('Data: ${lucrareFormatDate(periodStart)}'),
+                          label: Text(periodEnd.isAfter(periodStart)
+                              ? 'Perioadă: ${lucrareFormatDate(periodStart)}'
+                                  ' – ${lucrareFormatDate(periodEnd)}'
+                              : 'Data: ${lucrareFormatDate(periodStart)}'),
                         ),
                       ),
                     const SizedBox(height: 8),
@@ -472,13 +480,17 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
                       buildRow(
                         id: existing.id,
                         dayStart: periodStart,
-                        dayEnd: periodStart,
+                        dayEnd: periodEnd.isBefore(periodStart)
+                            ? periodStart
+                            : periodEnd,
                         hoursPerDay:
                             lucrareAsDouble(hoursPerDayCtrl.text) <= 0
                                 ? 8.0
                                 : lucrareAsDouble(hoursPerDayCtrl.text),
                         workedHours: lucrareAsDouble(hoursTotalCtrl.text),
-                        workDays: 1,
+                        workDays: !editDateChanged && existing.workDays > 1
+                            ? existing.workDays
+                            : 1,
                       ),
                     ]);
                     return;

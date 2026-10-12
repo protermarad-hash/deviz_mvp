@@ -4542,6 +4542,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                               decimal: true),
                           decoration: const InputDecoration(
                               labelText: 'Valoare diurnă/zi'),
+                          onChanged: (_) => setDialogState(() {}),
                         ),
                       ),
                     ],
@@ -4566,6 +4567,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                               decimal: true),
                           decoration: const InputDecoration(
                               labelText: 'Valoare cazare/noapte'),
+                          onChanged: (_) => setDialogState(() {}),
                         ),
                       ),
                     ],
@@ -4584,8 +4586,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     contentPadding: EdgeInsets.zero,
                     value: includeDiurna,
                     title: const Text('Include diurna'),
-                    subtitle: Text(
-                        'Valoare/zi: ${selectedPerDiemPerDay.toStringAsFixed(2)}'),
+                    // Afișează tariful din câmp (sursa salvată), nu tariful
+                    // preîncărcat — altfel subtitlul rămânea pe valoarea veche.
+                    subtitle: Text('Valoare/zi: '
+                        '${LucrareLaborCalculator.resolveLaborUnitValue(valoareDiurnaController.text, selectedPerDiemPerDay).toStringAsFixed(2)}'),
                     onChanged: (value) => setDialogState(() {
                       includeDiurna = value;
                       syncComputedValues();
@@ -4595,8 +4599,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     contentPadding: EdgeInsets.zero,
                     value: includeCazare,
                     title: const Text('Include cazare'),
-                    subtitle: Text(
-                        'Valoare/zi: ${selectedLodgingPerDay.toStringAsFixed(2)}'),
+                    subtitle: Text('Valoare/noapte: '
+                        '${LucrareLaborCalculator.resolveLaborUnitValue(valoareCazareController.text, selectedLodgingPerDay).toStringAsFixed(2)}'),
                     onChanged: (value) => setDialogState(() {
                       includeCazare = value;
                       syncComputedValues();
@@ -4639,6 +4643,14 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         manualRateController.text.replaceAll(',', '.')) ??
                     0;
                 final rate = manualRate > 0 ? manualRate : autoRate;
+                // Tariful tastat în câmp are prioritate; implicitul persoanei
+                // se folosește doar dacă câmpul e gol/invalid.
+                final valoareDiurnaPeZi =
+                    LucrareLaborCalculator.resolveLaborUnitValue(
+                        valoareDiurnaController.text, selectedPerDiemPerDay);
+                final valoareCazarePeNoapte =
+                    LucrareLaborCalculator.resolveLaborUnitValue(
+                        valoareCazareController.text, selectedLodgingPerDay);
 
                 if (multiDayMode) {
                   if (selectedDays.isEmpty) {
@@ -4662,9 +4674,9 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     hoursPerDayByDate: perDayHours,
                     hourlyRate: rate,
                     includeDiurna: includeDiurna,
-                    diurnaPerDay: selectedPerDiemPerDay,
+                    diurnaPerDay: valoareDiurnaPeZi,
                     includeCazare: includeCazare,
-                    cazarePerNoapte: selectedLodgingPerDay,
+                    cazarePerNoapte: valoareCazarePeNoapte,
                     notes: notesController.text.trim(),
                   );
                   Navigator.of(context).pop(entries);
@@ -4680,8 +4692,6 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 final tripDays = double.tryParse(
                         tripDaysController.text.replaceAll(',', '.')) ??
                     0;
-                final valoareDiurnaPeZi = selectedPerDiemPerDay;
-                final valoareCazarePeNoapte = selectedLodgingPerDay;
                 final zileDiurna = includeDiurna ? tripDays : 0.0;
                 final noptiCazare = includeCazare ? tripDays : 0.0;
                 final costOre = hours * rate;
@@ -5736,6 +5746,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                               decimal: true),
                           decoration: const InputDecoration(
                               labelText: 'Valoare diurnă/zi'),
+                          onChanged: (_) => setDialogState(() {}),
                         ),
                       ),
                     ],
@@ -5760,6 +5771,7 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                               decimal: true),
                           decoration: const InputDecoration(
                               labelText: 'Valoare cazare/noapte'),
+                          onChanged: (_) => setDialogState(() {}),
                         ),
                       ),
                     ],
@@ -5778,8 +5790,10 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     contentPadding: EdgeInsets.zero,
                     value: includeDiurna,
                     title: const Text('Include diurna'),
-                    subtitle: Text(
-                        'Valoare/zi: ${selectedPerDiemPerDay.toStringAsFixed(2)}'),
+                    // Afișează tariful din câmp (sursa salvată), nu tariful
+                    // preîncărcat — altfel subtitlul rămânea pe valoarea veche.
+                    subtitle: Text('Valoare/zi: '
+                        '${LucrareLaborCalculator.resolveLaborUnitValue(valoareDiurnaController.text, selectedPerDiemPerDay).toStringAsFixed(2)}'),
                     onChanged: (value) => setDialogState(() {
                       includeDiurna = value;
                       syncComputedValues();
@@ -5789,8 +5803,8 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                     contentPadding: EdgeInsets.zero,
                     value: includeCazare,
                     title: const Text('Include cazare'),
-                    subtitle: Text(
-                        'Valoare/zi: ${selectedLodgingPerDay.toStringAsFixed(2)}'),
+                    subtitle: Text('Valoare/noapte: '
+                        '${LucrareLaborCalculator.resolveLaborUnitValue(valoareCazareController.text, selectedLodgingPerDay).toStringAsFixed(2)}'),
                     onChanged: (value) => setDialogState(() {
                       includeCazare = value;
                       syncComputedValues();
@@ -5825,35 +5839,6 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                 if (periodEnd.isBefore(periodStart)) {
                   periodEnd = periodStart;
                 }
-                final hours = double.tryParse(
-                        hoursController.text.replaceAll(',', '.')) ??
-                    0;
-                final zileDiurna = double.tryParse(
-                        zileDiurnaController.text.replaceAll(',', '.')) ??
-                    0;
-                final valoareDiurnaPeZi = selectedPerDiemPerDay > 0
-                    ? selectedPerDiemPerDay
-                    : (double.tryParse(
-                          valoareDiurnaController.text.replaceAll(',', '.'),
-                        ) ??
-                        0);
-                final noptiCazare = double.tryParse(
-                        noptiCazareController.text.replaceAll(',', '.')) ??
-                    0;
-                final valoareCazarePeNoapte = selectedLodgingPerDay > 0
-                    ? selectedLodgingPerDay
-                    : (double.tryParse(
-                          valoareCazareController.text.replaceAll(',', '.'),
-                        ) ??
-                        0);
-                final tripDays = double.tryParse(
-                        tripDaysController.text.replaceAll(',', '.')) ??
-                    (zileDiurna > 0 ? zileDiurna : noptiCazare);
-                final includeDiurnaNow = includeDiurna || zileDiurna > 0;
-                final includeCazareNow = includeCazare || noptiCazare > 0;
-                final normalizedDaysPerDiem = includeDiurnaNow ? tripDays : 0.0;
-                final normalizedNightsLodging =
-                    includeCazareNow ? tripDays : 0.0;
                 final autoRate = _laborRateForWhoId(
                   normalizedSelection,
                   type: normalizedSelection.startsWith('team:')
@@ -5865,40 +5850,26 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
                         manualRateController.text.replaceAll(',', '.')) ??
                     0;
                 final rate = manualRate > 0 ? manualRate : autoRate;
-                final costOre = hours * rate;
-                final costDiurna = normalizedDaysPerDiem * valoareDiurnaPeZi;
-                final costCazare =
-                    normalizedNightsLodging * valoareCazarePeNoapte;
-                Navigator.of(context).pop({
-                  'id':
-                      '${row['id'] ?? 'job-labor-${DateTime.now().millisecondsSinceEpoch}'}',
-                  'jobId': '${row['jobId'] ?? _jobSnapshot.id}',
-                  'whoId': normalizedSelection,
-                  'type': normalizedSelection.startsWith('team:')
-                      ? 'team'
-                      : 'person',
-                  'whoLabel': '${selected.first['label'] ?? '-'}',
-                  'who': '${selected.first['label'] ?? '-'}',
-                  'date': _formatDate(periodStart),
-                  'periodStartDate': _encodeLaborPeriodDate(periodStart),
-                  'periodEndDate': _encodeLaborPeriodDate(periodEnd),
-                  'hoursPerDay':
-                      _sanitizeLaborHoursPerDay(hoursPerDayController.text),
-                  'hours': hours,
-                  'hourlyRate': rate,
-                  'tripDays': tripDays,
-                  'includeDiurna': includeDiurnaNow,
-                  'includeCazare': includeCazareNow,
-                  'zileDiurna': normalizedDaysPerDiem,
-                  'valoareDiurnaPeZi': valoareDiurnaPeZi,
-                  'noptiCazare': normalizedNightsLodging,
-                  'valoareCazarePeNoapte': valoareCazarePeNoapte,
-                  'costOre': costOre,
-                  'costDiurna': costDiurna,
-                  'costCazare': costCazare,
-                  'costTotalLinie': costOre + costDiurna + costCazare,
-                  'notes': notesController.text.trim(),
-                });
+                Navigator.of(context).pop(_laborCalc.buildEditedLaborRow(
+                  original: row,
+                  whoId: normalizedSelection,
+                  whoLabel: '${selected.first['label'] ?? '-'}',
+                  periodStart: periodStart,
+                  periodEnd: periodEnd,
+                  hoursText: hoursController.text,
+                  hoursPerDayText: hoursPerDayController.text,
+                  tripDaysText: tripDaysController.text,
+                  zileDiurnaText: zileDiurnaController.text,
+                  noptiCazareText: noptiCazareController.text,
+                  valoareDiurnaText: valoareDiurnaController.text,
+                  valoareCazareText: valoareCazareController.text,
+                  defaultPerDiemPerDay: selectedPerDiemPerDay,
+                  defaultLodgingPerNight: selectedLodgingPerDay,
+                  includeDiurna: includeDiurna,
+                  includeCazare: includeCazare,
+                  hourlyRate: rate,
+                  notes: notesController.text.trim(),
+                ));
               },
               child: const Text('Salvează'),
             ),
