@@ -317,12 +317,24 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
                             );
                             if (picked == null) return;
                             setDialogState(() {
-                              periodStart = picked;
-                              periodEnd = picked;
+                              // La editare, schimbarea datei MUTĂ intervalul
+                              // existent și îi păstrează durata (ex. 04–06.08
+                              // -> 05–07.08), deci zilele de diurnă/cazare și
+                              // costurile rămân coerente; nu se reduce la 1 zi.
+                              final shifted = shiftPartnerWorkPeriod(
+                                start: periodStart,
+                                end: periodEnd,
+                                newStart: picked,
+                              );
+                              periodStart = shifted.start;
+                              periodEnd = shifted.end;
                             });
                           },
                           icon: const Icon(Icons.calendar_today),
-                          label: Text('Data: ${lucrareFormatDate(periodStart)}'),
+                          label: Text(periodEnd.isAfter(periodStart)
+                              ? 'Perioadă: ${lucrareFormatDate(periodStart)}'
+                                  ' – ${lucrareFormatDate(periodEnd)}'
+                              : 'Data: ${lucrareFormatDate(periodStart)}'),
                         ),
                       ),
                     const SizedBox(height: 8),
@@ -472,13 +484,18 @@ Future<List<JobPartnerWorker>?> showPartnerWorkerDialog(
                       buildRow(
                         id: existing.id,
                         dayStart: periodStart,
-                        dayEnd: periodStart,
+                        dayEnd: periodEnd.isBefore(periodStart)
+                            ? periodStart
+                            : periodEnd,
                         hoursPerDay:
                             lucrareAsDouble(hoursPerDayCtrl.text) <= 0
                                 ? 8.0
                                 : lucrareAsDouble(hoursPerDayCtrl.text),
                         workedHours: lucrareAsDouble(hoursTotalCtrl.text),
-                        workDays: 1,
+                        // Durata se păstrează și la mutarea datei (vezi
+                        // shiftPartnerWorkPeriod), deci și numărul de zile.
+                        workDays:
+                            existing.workDays > 1 ? existing.workDays : 1,
                       ),
                     ]);
                     return;
@@ -568,3 +585,22 @@ String _fmtNum(double value) => value == value.roundToDouble()
     ? value.toStringAsFixed(0)
     : value.toStringAsFixed(2);
 
+/// Mută perioada unui pontaj partener existent la [newStart], păstrându-i
+/// durata în zile calendaristice (ex. 04.08–06.08 mutat la 05.08 devine
+/// 05.08–07.08). Calculul folosește date calendaristice (fără ore), deci nu
+/// pierde o zi la trecerea la ora de vară/iarnă și trece corect peste
+/// sfârșitul lunii sau al anului.
+({DateTime start, DateTime end}) shiftPartnerWorkPeriod({
+  required DateTime start,
+  required DateTime end,
+  required DateTime newStart,
+}) {
+  final startDay = DateTime.utc(start.year, start.month, start.day);
+  final endDay = DateTime.utc(end.year, end.month, end.day);
+  final lengthDays =
+      endDay.isBefore(startDay) ? 0 : endDay.difference(startDay).inDays;
+  final shiftedStart = DateTime(newStart.year, newStart.month, newStart.day);
+  final shiftedEnd =
+      DateTime(newStart.year, newStart.month, newStart.day + lengthDays);
+  return (start: shiftedStart, end: shiftedEnd);
+}
