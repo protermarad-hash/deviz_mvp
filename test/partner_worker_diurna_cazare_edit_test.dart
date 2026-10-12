@@ -36,6 +36,7 @@ void main() {
     JobPartnerWorker existing, {
     String? diurna,
     String? cazare,
+    String? pickDay,
   }) async {
     tester.view.physicalSize = const Size(1000, 1400);
     tester.view.devicePixelRatio = 1.0;
@@ -64,6 +65,15 @@ void main() {
     ));
     await tester.tap(find.text('deschide'));
     await tester.pumpAndSettle();
+    if (pickDay != null) {
+      // Butonul de dată al modului editare -> selectorul real de dată.
+      await tester.tap(find.byIcon(Icons.calendar_today));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(pickDay));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+    }
     if (diurna != null) {
       await tester.enterText(
           find.widgetWithText(TextField, 'Diurnă / zi (RON)'), diurna);
@@ -192,5 +202,147 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('04.08.2026'), findsOneWidget);
     expect(find.textContaining('06.08.2026'), findsOneWidget);
+  });
+
+  group('mutarea perioadei la schimbarea datei (fără reducere la 1 zi)', () {
+    JobPartnerWorker interval(DateTime start, DateTime end) => JobPartnerWorker(
+          id: 'pw-herman-1',
+          jobId: 'job-1',
+          partnerId: 'partner-1',
+          fullName: 'Herman Sebastian',
+          workedHours: 24,
+          hoursPerDay: 8,
+          hourlyRate: 40,
+          workPeriodStart: start,
+          workPeriodEnd: end,
+          workDays: 3,
+          perDiemDays: 3,
+          perDiemPerDay: 55,
+          lodgingNights: 3,
+          lodgingPerNight: 125,
+        );
+
+    void expectThreeDays(JobPartnerWorker row, DateTime start, DateTime end) {
+      expect(row.id, 'pw-herman-1', reason: 'același rând, vecinii neatinși');
+      expect(row.workPeriodStart, start);
+      expect(row.workPeriodEnd, end);
+      expect(row.workDays, 3);
+      expect(row.perDiemDays, 3);
+      expect(row.lodgingNights, 3);
+      expect(row.workedHours, 24);
+    }
+
+    testWidgets('04–06.08 mutat la 05.08 devine 05–07.08, 3 zile, 525 RON',
+        (tester) async {
+      final partnerBefore = partner.toMap();
+      final row = saveAndReload((await editInDialog(tester, hermanInterval(),
+          diurna: '100', cazare: '75', pickDay: '5'))!);
+
+      expectThreeDays(row, DateTime(2026, 8, 5), DateTime(2026, 8, 7));
+      expect(row.perDiemPerDay, 100);
+      expect(row.lodgingPerNight, 75);
+      expect(row.perDiemCost, 300);
+      expect(row.lodgingCost, 225);
+      expect(row.perDiemCost + row.lodgingCost, 525);
+      expect(row.total, 24 * 40 + 525);
+      expect(partner.toMap(), partnerBefore,
+          reason: 'datele partenerului nu sunt modificate de dialog');
+    });
+
+    testWidgets('mutarea fără schimbare de tarife păstrează tarifele',
+        (tester) async {
+      final row = saveAndReload(
+          (await editInDialog(tester, hermanInterval(), pickDay: '10'))!);
+
+      expectThreeDays(row, DateTime(2026, 8, 10), DateTime(2026, 8, 12));
+      expect(row.perDiemPerDay, 55);
+      expect(row.lodgingPerNight, 125);
+      expect(row.perDiemCost + row.lodgingCost, 3 * 55 + 3 * 125);
+    });
+
+    testWidgets('peste sfârșitul lunii: mutat la 31.08 devine 31.08–02.09',
+        (tester) async {
+      final row = saveAndReload(
+          (await editInDialog(tester, hermanInterval(), pickDay: '31'))!);
+
+      expectThreeDays(row, DateTime(2026, 8, 31), DateTime(2026, 9, 2));
+    });
+
+    testWidgets('peste sfârșitul anului: 30.12.2026–01.01.2027',
+        (tester) async {
+      final row = saveAndReload((await editInDialog(
+          tester, interval(DateTime(2026, 12, 4), DateTime(2026, 12, 6)),
+          pickDay: '30'))!);
+
+      expectThreeDays(row, DateTime(2026, 12, 30), DateTime(2027, 1, 1));
+    });
+
+    testWidgets('afișează noua perioadă în dialog după mutare', (tester) async {
+      tester.view.physicalSize = const Size(1000, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showPartnerWorkerDialog(
+                context,
+                partner: partner,
+                masterWorkers: const [],
+                jobId: 'job-1',
+                onValidationError: (_) {},
+                existing: hermanInterval(),
+              ),
+              child: const Text('deschide'),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('deschide'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.calendar_today));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('5'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('05.08.2026'), findsOneWidget);
+      expect(find.textContaining('07.08.2026'), findsOneWidget);
+    });
+  });
+
+  group('shiftPartnerWorkPeriod (funcția pură)', () {
+    test('păstrează durata calendaristică, inclusiv la trecerea la ora de vară',
+        () {
+      // 2026-03-29: trecerea la ora de vară în România (zi de 23 h).
+      final shifted = shiftPartnerWorkPeriod(
+        start: DateTime(2026, 3, 1),
+        end: DateTime(2026, 3, 3),
+        newStart: DateTime(2026, 3, 28),
+      );
+      expect(shifted.start, DateTime(2026, 3, 28));
+      expect(shifted.end, DateTime(2026, 3, 30));
+    });
+
+    test('un pontaj de o zi rămâne de o zi', () {
+      final shifted = shiftPartnerWorkPeriod(
+        start: DateTime(2026, 8, 4),
+        end: DateTime(2026, 8, 4),
+        newStart: DateTime(2026, 8, 9),
+      );
+      expect(shifted.start, DateTime(2026, 8, 9));
+      expect(shifted.end, DateTime(2026, 8, 9));
+    });
+
+    test('un sfârșit anterior începutului nu produce o durată negativă', () {
+      final shifted = shiftPartnerWorkPeriod(
+        start: DateTime(2026, 8, 6),
+        end: DateTime(2026, 8, 4),
+        newStart: DateTime(2026, 8, 10),
+      );
+      expect(shifted.start, DateTime(2026, 8, 10));
+      expect(shifted.end, DateTime(2026, 8, 10));
+    });
   });
 }
