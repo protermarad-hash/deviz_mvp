@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -17,8 +19,34 @@ import '../test/partner_worker_diurna_cazare_edit_test.dart' as partner;
 /// Harness-ul nu inițializează Firebase (fără `main.dart`, fără
 /// `FirebaseBootstrap`); garda de mai jos eșuează dacă vreo aplicație
 /// Firebase există totuși în Dart. Rulați doar pe un emulator izolat de rețea.
+///
+/// ATENȚIE: flavorul `proterm` inițializează nativ FirebaseApp de producție
+/// (google-services) la pornirea procesului, înainte de orice cod Dart.
+/// Garda de rețea din `setUpAll` NU poate preveni asta — doar oprește toată
+/// rularea dacă dispozitivul are acces la internet, ca o rulare accidentală
+/// pe un dispozitiv conectat să fie vizibilă imediat. Protecția reală rămâne
+/// emulatorul în mod avion, fără rute IP.
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() async {
+    final dnsResolved = await InternetAddress.lookup('firestore.googleapis.com')
+        .timeout(const Duration(seconds: 5))
+        .then((r) => r.isNotEmpty)
+        .catchError((Object _) => false);
+    final tcpReachable = await Socket.connect('8.8.8.8', 53,
+            timeout: const Duration(seconds: 3))
+        .then((s) {
+      s.destroy();
+      return true;
+    }).catchError((Object _) => false);
+    if (dnsResolved || tcpReachable) {
+      throw StateError(
+          'Dispozitivul are acces la internet (dns=$dnsResolved, '
+          'tcp=$tcpReachable). Rulați harness-ul doar pe emulator izolat '
+          '(mod avion, fără rute IP).');
+    }
+  });
 
   test('gardă izolare: nicio aplicație Firebase inițializată în Dart', () {
     expect(Firebase.apps, isEmpty);
