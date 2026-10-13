@@ -372,6 +372,29 @@ class MasterLocalStore {
     return merged;
   }
 
+  /// Ca [replaceEmployeesFromCloud], pentru echipe: un rezultat din cache-ul
+  /// offline se ÎMBINĂ cu lista locală după ID; doar răspunsul confirmat de
+  /// server înlocuiește lista locală.
+  static Future<List<MasterTeam>> replaceTeamsFromCloud(
+    List<MasterTeam> cloudRows, {
+    required bool fromCache,
+  }) async {
+    if (!fromCache) {
+      await writeTeams(cloudRows);
+      return cloudRows;
+    }
+    final mergedById = <String, MasterTeam>{
+      for (final t in await readTeams())
+        if (t.id.trim().isNotEmpty) t.id: t,
+    };
+    for (final t in cloudRows) {
+      if (t.id.trim().isNotEmpty) mergedById[t.id] = t;
+    }
+    final merged = mergedById.values.toList(growable: false);
+    await writeTeams(merged);
+    return merged;
+  }
+
   static Future<List<MasterTeam>> readTeams() async {
     final prefs = await SharedPreferences.getInstance();
     for (final key in <String>[_teamsKey, ..._teamsAliasKeys]) {
