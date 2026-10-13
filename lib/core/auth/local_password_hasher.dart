@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -54,6 +55,36 @@ class LocalPasswordHasher {
     final derived =
         pbkdf2(utf8.encode(password), parsed.salt, parsed.iterations,
             parsed.key.length);
+    return constantTimeEquals(derived, parsed.key);
+  }
+
+  /// Ca [hash], dar derivarea (costisitoare) rulează într-un isolate separat,
+  /// ca firul UI să nu înghețe (~2 s pentru 120 000 iterații pe emulator).
+  /// Sarea e generată în isolate-ul curent (`Random.secure`).
+  Future<String> hashAsync(String password) async {
+    if (password.isEmpty) {
+      throw ArgumentError('Parola nu poate fi goală.');
+    }
+    final salt = Uint8List(saltLength);
+    for (var i = 0; i < saltLength; i++) {
+      salt[i] = _random.nextInt(256);
+    }
+    final pw = utf8.encode(password);
+    final iters = iterations;
+    final key = await Isolate.run(() => pbkdf2(pw, salt, iters, keyLength));
+    return '$scheme\$$iters\$${base64Encode(salt)}\$${base64Encode(key)}';
+  }
+
+  /// Ca [verify], cu derivarea într-un isolate separat.
+  Future<bool> verifyAsync(String password, String stored) async {
+    if (password.isEmpty || stored.isEmpty) return false;
+    final parsed = _parse(stored);
+    if (parsed == null) return false;
+    final pw = utf8.encode(password);
+    final salt = parsed.salt;
+    final iters = parsed.iterations;
+    final len = parsed.key.length;
+    final derived = await Isolate.run(() => pbkdf2(pw, salt, iters, len));
     return constantTimeEquals(derived, parsed.key);
   }
 

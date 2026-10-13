@@ -120,13 +120,14 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
       if (user.email.trim().toLowerCase() != normalizedEmail) continue;
       final stored = user.passwordHash;
       final legacy = LocalPasswordHasher.isLegacy(stored);
-      if (!_verify(password, stored)) continue;
+      if (!await _verifyAsync(password, stored)) continue;
 
       // Migrare transparentă: formatul vechi (base64 reversibil) sau
       // parametri mai slabi sunt înlocuiți cu PBKDF2 la primul login reușit.
       var authenticated = user;
       if (legacy || _hasher.needsRehash(stored)) {
-        authenticated = user.copyWith(passwordHash: _hasher.hash(password));
+        authenticated =
+            user.copyWith(passwordHash: await _hasher.hashAsync(password));
         await saveUser(authenticated);
       }
 
@@ -152,10 +153,11 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
     return null;
   }
 
-  bool _verify(String password, String stored) =>
+  /// Verificare cu PBKDF2 în afara firului UI (formatul vechi e instantaneu).
+  Future<bool> _verifyAsync(String password, String stored) async =>
       LocalPasswordHasher.isLegacy(stored)
           ? LocalPasswordHasher.verifyLegacy(password, stored)
-          : _hasher.verify(password, stored);
+          : await _hasher.verifyAsync(password, stored);
 
   Future<Set<String>> _mustChangeIds() async {
     final prefs = await SharedPreferences.getInstance();
@@ -183,7 +185,7 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
     final index = users.indexWhere((u) => u.id == userId && u.active);
     if (index < 0) return 'Utilizatorul nu există sau este inactiv.';
     final user = users[index];
-    if (!_verify(currentPassword, user.passwordHash)) {
+    if (!await _verifyAsync(currentPassword, user.passwordHash)) {
       return 'Parola curentă este greșită.';
     }
     if (newPassword.length < minPasswordLength) {
@@ -192,7 +194,8 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
     if (newPassword == currentPassword || newPassword == devSeedPassword) {
       return 'Alege o parolă nouă, diferită de cea curentă.';
     }
-    await saveUser(user.copyWith(passwordHash: _hasher.hash(newPassword)));
+    await saveUser(
+        user.copyWith(passwordHash: await _hasher.hashAsync(newPassword)));
     await _setMustChange(userId, false);
     return null;
   }
