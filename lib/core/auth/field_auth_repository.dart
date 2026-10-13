@@ -15,4 +15,15 @@ abstract class FieldAuthRepository {
   });
 
   Future<void> logout();
+
+  /// `true` dacă utilizatorul trebuie să-și schimbe parola locală înainte de
+  /// a continua (ex. contul de dezvoltare cu parola implicită).
+  Future<bool> mustChangePassword(String userId);
+
+  /// Schimbă parola LOCALĂ; întoarce `null` la succes sau mesajul de eroare.
+  Future<String?> changeLocalPassword({
+    required String userId,
+    required String currentPassword,
+    required String newPassword,
+  });
 }
