@@ -74,11 +74,32 @@ class PontajFisaWorkerWeeklyTotal {
   int numarRanduri = 0;
   bool areRandSpansMultipleWeeks = false;
 
+  final List<PontajFisaWeeklyEntry> _intrari = [];
+
+  /// Intrările individuale (dată/perioadă, lucrare, ore, cost) din care
+  /// provine totalul de mai sus — sortate cronologic (`dataStart` crescător).
+  /// Adăugat Faza 1 (aug 2026), pentru detaliu per-intrare în UI (Faza 2) —
+  /// NU înlocuiește sumele existente (`totalOre`/`totalCost`/`numarRanduri`),
+  /// doar le însoțește. Un muncitor poate avea 2+ intrări din lucrări
+  /// DIFERITE în aceeași săptămână — fiecare intrare își păstrează propriul
+  /// `PontajFisaRow.jobCode`/`jobTitle`/`dataStart`/`dataEnd`.
+  List<PontajFisaWeeklyEntry> get intrari {
+    final list = [..._intrari];
+    list.sort((a, b) {
+      final aStart = a.row.dataStart;
+      final bStart = b.row.dataStart;
+      if (aStart == null || bStart == null) return 0;
+      return aStart.compareTo(bStart);
+    });
+    return list;
+  }
+
   void adaugaRand(PontajFisaWeeklyEntry entry) {
     totalOre += entry.row.oreTotale;
     totalCost += entry.row.costTotal;
     numarRanduri += 1;
     if (entry.spansMultipleWeeks) areRandSpansMultipleWeeks = true;
+    _intrari.add(entry);
   }
 }
 
@@ -189,4 +210,106 @@ List<PontajFisaWeeklyGroup> groupPontajFisaRowsByWeek(
   final result = groupsByWeekStart.values.toList()
     ..sort((a, b) => b.weekStart.compareTo(a.weekStart));
   return result;
+}
+
+/// Totalul unui partener într-O săptămână anume, în vederea Partener→
+/// Săptămână (Faza 4). REFOLOSEȘTE `PontajFisaPartnerWeeklyTotal` deja
+/// construit de `groupPontajFisaRowsByWeek()` — nu recalculează nimic.
+class PontajFisaPartnerWeekEntry {
+  const PontajFisaPartnerWeekEntry({
+    required this.weekStart,
+    required this.total,
+  });
+
+  final DateTime weekStart;
+  final PontajFisaPartnerWeeklyTotal total;
+}
+
+/// Un partener (firmă), cu totalurile lui pe FIECARE săptămână în care a
+/// avut activitate — vederea alternativă Partener→Săptămână→Muncitor
+/// (Faza 4), construită prin reorganizarea rezultatului deja grupat pe
+/// săptămână (`groupPontajFisaRowsByWeek`), NU printr-o citire nouă.
+class PontajFisaPartnerAcrossWeeks {
+  PontajFisaPartnerAcrossWeeks({
+    required this.partnerId,
+    required this.partnerNume,
+  });
+
+  final String partnerId;
+  final String partnerNume;
+
+  final List<PontajFisaPartnerWeekEntry> _saptamani = [];
+
+  /// Săptămânile acestui partener, sortate descrescător (cea mai recentă
+  /// primă) — consecvent cu ordinea din vederea Săptămână→Partener.
+  List<PontajFisaPartnerWeekEntry> get saptamani {
+    final list = [..._saptamani];
+    list.sort((a, b) => b.weekStart.compareTo(a.weekStart));
+    return list;
+  }
+
+  double get totalCost =>
+      _saptamani.fold<double>(0, (s, e) => s + e.total.totalCost);
+
+  void _adaugaSaptamana(DateTime weekStart, PontajFisaPartnerWeeklyTotal total) {
+    _saptamani.add(PontajFisaPartnerWeekEntry(weekStart: weekStart, total: total));
+  }
+}
+
+/// Reorganizează rezultatul deja grupat pe săptămână
+/// (`groupPontajFisaRowsByWeek`) într-o vedere Partener→Săptămână→Muncitor —
+/// ACELEAȘI date, doar regrupate local în memorie, FĂRĂ nicio citire nouă
+/// din repository/Firestore.
+///
+/// Rezultat sortat descrescător după `totalCost` (partenerul cu cel mai
+/// mare total de pontaj în intervalul afișat primul).
+List<PontajFisaPartnerAcrossWeeks> regroupByPartnerAcrossWeeks(
+  List<PontajFisaWeeklyGroup> weeklyGroups,
+) {
+  final byPartnerId = <String, PontajFisaPartnerAcrossWeeks>{};
+
+  for (final week in weeklyGroups) {
+    for (final partnerTotal in week.parteneri) {
+      final entry = byPartnerId.putIfAbsent(
+        partnerTotal.partnerId,
+        () => PontajFisaPartnerAcrossWeeks(
+          partnerId: partnerTotal.partnerId,
+          partnerNume: partnerTotal.partnerNume,
+        ),
+      );
+      entry._adaugaSaptamana(week.weekStart, partnerTotal);
+    }
+  }
+
+  final result = byPartnerId.values.toList()
+    ..sort((a, b) => b.totalCost.compareTo(a.totalCost));
+  return result;
+}
+
+/// FIX 3 (aug 2026) — listă compactă, deduplicată, a lucrărilor (cod+titlu)
+/// la care partenerul a fost alocat în ACEST card (o săptămână, un
+/// partener) — sursă: `worker.intrari` (Faza 1), deja disponibilă pe
+/// fiecare muncitor din `partner.muncitori`. Extrasă ca funcție PURĂ (fără
+/// dependință Flutter), testabilă direct.
+///
+/// Dedup pe `jobCode+jobTitle` (nu doar `jobCode` — o lucrare fără cod dar
+/// cu titlu tot trebuie să apară o singură dată), păstrând ordinea primei
+/// apariții (stabilă, nu resortează alfabetic — evită "sărituri" vizuale
+/// între randări ale aceluiași card).
+List<String> partnerJobLabels(PontajFisaPartnerWeeklyTotal partner) {
+  final seenKeys = <String>{};
+  final labels = <String>[];
+  for (final worker in partner.muncitori) {
+    for (final entry in worker.intrari) {
+      final row = entry.row;
+      final code = row.jobCode.trim();
+      final title = row.jobTitle.trim();
+      final label = title.isEmpty
+          ? code
+          : (code.isEmpty ? title : '$code · $title');
+      if (label.isEmpty) continue;
+      if (seenKeys.add('$code|$title')) labels.add(label);
+    }
+  }
+  return labels;
 }

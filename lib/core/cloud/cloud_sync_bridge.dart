@@ -655,8 +655,7 @@ class CloudSyncBridge {
     );
   }
 
-  Future<void> queueEchipamentInstalat(
-      Map<String, dynamic> echipament) async {
+  Future<void> queueEchipamentInstalat(Map<String, dynamic> echipament) async {
     final id = (echipament['id'] ?? '').toString();
     if (id.isEmpty) return;
     await _service.queueUpsert(
