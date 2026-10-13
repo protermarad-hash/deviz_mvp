@@ -15,13 +15,21 @@
 #  Rulare (din radacina proiectului):
 #     powershell -ExecutionPolicy Bypass -File scripts\build_proterm.ps1
 #     powershell -ExecutionPolicy Bypass -File scripts\build_proterm.ps1 -ApkOnly
+#     powershell -ExecutionPolicy Bypass -File scripts\build_proterm.ps1 -TestOnly
+#
+#  SIGNING GATE (docs/BUILD_AND_RELEASE_POLICY.md §7/§8, fail-closed):
+#   - build canonic: fingerprint-ul SHA-256 al certificatului de productie
+#     se citeste EXCLUSIV din scripts\release_cert_proterm.sha256 (fisier
+#     versionat, modificat doar prin PR revizuit). Lipsa/invalid -> BLOCKED
+#     inainte de build. APK-ul e verificat cu scripts\verify_apk_signature.ps1
+#     si ajunge in build\releases\ DOAR daca e acceptat.
+#   - -TestOnly: APK release semnat debug, permis explicit, livrat DOAR in
+#     build\test-only\proterm\android\ cu "TEST-ONLY" in nume. Niciodata in
+#     build\releases\. Implica -ApkOnly.
 # =============================================================
 param(
     [switch]$ApkOnly,  # doar APK Android (sare build-ul Windows)
-    # SHA-256 al certificatului de productie (metadata publica, din
-    # `apksigner verify --print-certs` pe un APK de productie confirmat).
-    # Daca e setat, APK-ul nou trebuie sa aiba exact acest certificat.
-    [string]$ExpectedCertSha256 = $env:PROVENTARIS_RELEASE_CERT_SHA256
+    [switch]$TestOnly  # artefact TEST ONLY (semnare debug), izolat de distributie
 )
 $ErrorActionPreference = "Stop"
 
@@ -29,13 +37,38 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-# Garda semnare (fail-closed, docs/BUILD_AND_RELEASE_POLICY.md §7): fara
-# configuratia de semnare de productie nu se construieste un APK release.
-# Se verifica DOAR existenta fisierului — continutul nu se citeste/afiseaza.
-if (-not (Test-Path "android\key.properties")) {
-    Write-Host "EROARE: android\key.properties lipseste - semnarea de productie nu este disponibila." -ForegroundColor Red
-    Write-Host "Build oprit (fail-closed): un APK release semnat debug NU este distribuibil." -ForegroundColor Red
-    exit 1
+$certFile = "scripts\release_cert_proterm.sha256"
+$expectedCertSha256 = $null
+if ($TestOnly) {
+    $ApkOnly = $true
+    # Opt-in explicit pentru garda Gradle (doar procesul curent).
+    $env:PROVENTARIS_ALLOW_DEBUG_SIGNED_RELEASE = "1"
+    Write-Host "MOD TEST ONLY: artefactul NU este distribuibil si nu va ajunge in build\releases\." -ForegroundColor Yellow
+} else {
+    # Fingerprint-ul asteptat: doar din fisierul versionat (sursa revizuita),
+    # NU din variabile de mediu/parametri - altfel s-ar putea "confirma" un
+    # APK cu propriul lui fingerprint afisat de build.
+    if (-not (Test-Path $certFile)) {
+        Write-Host "BLOCKED: $certFile lipseste - nu exista certificat de productie confirmat." -ForegroundColor Red
+        Write-Host "Vezi docs/BUILD_AND_RELEASE_POLICY.md sectiunea 8 (procedura de confirmare a fingerprint-ului)." -ForegroundColor Red
+        exit 2
+    }
+    $expectedCertSha256 = (Get-Content $certFile |
+        Where-Object { $_ -and -not $_.TrimStart().StartsWith('#') } |
+        Select-Object -First 1)
+    $normalized = if ($expectedCertSha256) { ($expectedCertSha256 -replace '[:\s]', '').ToLower() } else { '' }
+    if ($normalized -notmatch '^[0-9a-f]{64}$') {
+        Write-Host "BLOCKED: $certFile nu contine un SHA-256 valid (64 caractere hex)." -ForegroundColor Red
+        exit 2
+    }
+
+    # Configuratia de semnare de productie: se verifica DOAR existenta
+    # fisierului - continutul nu se citeste/afiseaza.
+    if (-not (Test-Path "android\key.properties")) {
+        Write-Host "EROARE: android\key.properties lipseste - semnarea de productie nu este disponibila." -ForegroundColor Red
+        Write-Host "Build oprit (fail-closed): un APK release semnat debug NU este distribuibil." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # Verificare preventiva: procese java/dart ramase dintr-un build anterior
@@ -69,12 +102,18 @@ Write-Host "Versiune detectata din pubspec.yaml: v$version+$buildNumber"
 $buildTag = "rel-" + (Get-Date -Format "yyyyMMdd-HHmm")
 Write-Host "Build tag: $buildTag"
 
-# Foldere dedicate (structura fixa build\releases\{client}\{platforma}\)
-$relApkDir = "build\releases\proterm\android"
+# Foldere dedicate. Distributie: build\releases\{client}\{platforma}\ ;
+# TEST ONLY: build\test-only\{client}\android\ (niciodata in build\releases\).
+# Folderele se creeaza abia DUPA verificarea semnaturii, ca un build respins
+# sa nu atinga directorul de distributie.
+if ($TestOnly) {
+    $outApkDir = "build\test-only\proterm\android"
+    $outApk = Join-Path $outApkDir "app-proterm-v$version-build$buildNumber-TEST-ONLY.apk"
+} else {
+    $outApkDir = "build\releases\proterm\android"
+    $outApk = Join-Path $outApkDir "app-proterm-v$version-build$buildNumber.apk"
+}
 $relWinDir = "build\releases\proterm\windows"
-New-Item -ItemType Directory -Force -Path $relApkDir | Out-Null
-New-Item -ItemType Directory -Force -Path $relWinDir | Out-Null
-$relApk = Join-Path $relApkDir "app-proterm-v$version-build$buildNumber.apk"
 $relZip = Join-Path $relWinDir "proventaris-windows-v$version-build$buildNumber.zip"
 
 # 1. Build APK Android (flavor proterm)
@@ -85,57 +124,24 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Build oprit - NU se copiaza niciun artefact in build\releases\proterm\." -ForegroundColor Red
     exit 1
 }
+$apkSrc = "build\app\outputs\flutter-apk\app-proterm-release.apk"
+if (-not (Test-Path $apkSrc)) {
+    Write-Host "EROARE: nu gasesc $apkSrc" -ForegroundColor Red
+    exit 1
+}
 
-# 1b. Verificare semnatura APK (fail-closed). Se citesc doar metadate publice
-#     ale certificatului (subiect + SHA-256), extrase din APK-ul construit.
-$apkBuilt = "build\app\outputs\flutter-apk\app-proterm-release.apk"
-$sdkRoot = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT, (Join-Path $env:LOCALAPPDATA "Android\Sdk")) |
-    Where-Object { $_ -and (Test-Path (Join-Path $_ "build-tools")) } | Select-Object -First 1
-$apksigner = $null
-if ($sdkRoot) {
-    $apksigner = Get-ChildItem (Join-Path $sdkRoot "build-tools") -Directory |
-        Sort-Object { try { [version]$_.Name } catch { [version]"0.0" } } -Descending |
-        ForEach-Object { Join-Path $_.FullName "apksigner.bat" } |
-        Where-Object { Test-Path $_ } | Select-Object -First 1
-}
-if (-not $apksigner) {
-    Write-Host "EROARE: apksigner nu a fost gasit (Android SDK build-tools) - semnatura nu poate fi verificata." -ForegroundColor Red
-    exit 1
-}
-# PowerShell 5.1: cu ErrorActionPreference=Stop, stderr-ul unui exe nativ
-# redirectat (2>&1) devine eroare fatala; avertismentele apksigner nu trebuie
-# sa opreasca scriptul - decide doar exit code-ul.
-$prevPref = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-$certOutput = & $apksigner verify --print-certs $apkBuilt 2>&1 | Out-String
-$apksignerExit = $LASTEXITCODE
-$ErrorActionPreference = $prevPref
-if ($apksignerExit -ne 0) {
-    Write-Host "EROARE: apksigner verify a esuat pentru $apkBuilt." -ForegroundColor Red
-    exit 1
-}
-$certSubject = ([regex]::Match($certOutput, 'Signer #1 certificate DN: (.+)')).Groups[1].Value.Trim()
-$certSha256 = ([regex]::Match($certOutput, 'Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)')).Groups[1].Value.Trim().ToLower()
-Write-Host "      Semnatura APK: $certSubject"
-Write-Host "      SHA-256 certificat: $certSha256"
-if (-not $certSubject -or -not $certSha256) {
-    Write-Host "EROARE: nu am putut citi certificatul de semnare din APK." -ForegroundColor Red
-    exit 1
-}
-if ($certSubject -match 'CN=Android Debug') {
-    Write-Host "EROARE: APK-ul release este semnat cu certificatul DEBUG - TEST ONLY, NOT DISTRIBUTABLE." -ForegroundColor Red
-    Write-Host "Build oprit - NU se copiaza niciun artefact in build\releases\proterm\." -ForegroundColor Red
-    exit 1
-}
-if ($ExpectedCertSha256) {
-    if ($certSha256 -ne $ExpectedCertSha256.Replace(':', '').Trim().ToLower()) {
-        Write-Host "EROARE: certificatul APK nu corespunde certificatului de productie asteptat." -ForegroundColor Red
-        Write-Host "Build oprit - NU se copiaza niciun artefact in build\releases\proterm\." -ForegroundColor Red
+# 1b. SIGNING GATE (doar build canonic): semnatura valida, nu Android Debug,
+#     certificat = fingerprint-ul de productie confirmat. Respins -> APK-ul
+#     se sterge si nimic nu ajunge in build\releases\.
+if (-not $TestOnly) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\verify_apk_signature.ps1" `
+        -ApkPath $apkSrc -ExpectedCertSha256 $expectedCertSha256
+    $verifyExit = $LASTEXITCODE
+    if ($verifyExit -ne 0) {
+        Remove-Item $apkSrc -Force -ErrorAction SilentlyContinue
+        Write-Host "Build oprit (signing gate, cod $verifyExit) - APK respins si sters; NU se copiaza nimic in build\releases\proterm\." -ForegroundColor Red
         exit 1
     }
-    Write-Host "      Certificat confirmat = certificatul de productie asteptat." -ForegroundColor Green
-} else {
-    Write-Host "ATENTIE: PROVENTARIS_RELEASE_CERT_SHA256 nu e setat - compara MANUAL SHA-256 certificat de mai sus cu certificatul de productie documentat inainte de distributie." -ForegroundColor Yellow
 }
 
 if (-not $ApkOnly) {
@@ -158,6 +164,7 @@ if (-not $ApkOnly) {
     }
 
     # 3. ZIP build Windows DIRECT in folderul dedicat (nume versionat)
+    New-Item -ItemType Directory -Force -Path $relWinDir | Out-Null
     Write-Host "[4/6] Arhivare build Windows -> $relZip ..."
     Compress-Archive -Path "build\windows\x64\runner\Release\*" `
         -DestinationPath $relZip -Force
@@ -166,24 +173,21 @@ if (-not $ApkOnly) {
 }
 
 # 4. Copiere APK din output-ul implicit Flutter in folderul dedicat.
-#    Cu flavors, Flutter genereaza app-proterm-release.apk.
-$apkSrc = "build\app\outputs\flutter-apk\app-proterm-release.apk"
-if (-not (Test-Path $apkSrc)) {
-    Write-Host "EROARE: nu gasesc $apkSrc" -ForegroundColor Red
-    exit 1
-}
-Copy-Item $apkSrc $relApk -Force
-Write-Host "[5/6] APK copiat -> $relApk"
+New-Item -ItemType Directory -Force -Path $outApkDir | Out-Null
+Copy-Item $apkSrc $outApk -Force
+Write-Host "[5/6] APK copiat -> $outApk"
 
 # 5. Curatare output implicit Flutter (conventie: NICIUN artefact livrabil nu
-#    ramane in build\app\outputs\... - sursa unica de adevar e build\releases\).
+#    ramane in build\app\outputs\...).
 Remove-Item $apkSrc -Force -ErrorAction SilentlyContinue
 Write-Host "[6/6] Sters output implicit Flutter: $apkSrc"
-Write-Host "      Artefacte finale (sursa unica) in build\releases\proterm\ :"
-Write-Host "      $relApk"
-Write-Host "      $relZip"
 
 Write-Host ""
-Write-Host "BUILD PRO TERM FINALIZAT! (v$version+$buildNumber - $buildTag)" -ForegroundColor Green
-Write-Host "APK:     $relApk"
-Write-Host "Windows: $relZip"
+if ($TestOnly) {
+    Write-Host "BUILD TEST ONLY FINALIZAT (v$version+$buildNumber - $buildTag) - NOT DISTRIBUTABLE" -ForegroundColor Yellow
+    Write-Host "APK TEST ONLY: $outApk"
+} else {
+    Write-Host "BUILD PRO TERM FINALIZAT! (v$version+$buildNumber - $buildTag)" -ForegroundColor Green
+    Write-Host "APK:     $outApk"
+    if (-not $ApkOnly) { Write-Host "Windows: $relZip" }
+}

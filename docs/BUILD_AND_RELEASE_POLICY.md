@@ -182,10 +182,41 @@ Keystore-ul de producție:
   doar cheile lipsă, niciodată valori. Excepție explicită, numai pentru artefacte `TEST ONLY`:
   variabila de mediu `PROVENTARIS_ALLOW_DEBUG_SIGNED_RELEASE=1`. Build-urile debug/profile
   (inclusiv CI) nu sunt afectate.
-- `scripts/build_proterm.ps1` oprește build-ul dacă `android/key.properties` lipsește și, după
-  build, verifică semnătura APK-ului cu `apksigner` (metadate publice): eșuează dacă certificatul
-  e `CN=Android Debug` sau, când `PROVENTARIS_RELEASE_CERT_SHA256` / `-ExpectedCertSha256` e setat,
-  dacă fingerprint-ul nu corespunde. Niciun artefact nu ajunge în `build\releases\` în caz de eșec.
+
+### 8.1 Signing gate în `scripts/build_proterm.ps1` (fluxul canonic)
+
+1. **Fingerprint de producție confirmat — obligatoriu.** Se citește **exclusiv** din fișierul
+   versionat `scripts/release_cert_proterm.sha256` (o linie, SHA-256 hex al certificatului; `:` și
+   majusculele sunt acceptate; liniile `#` sunt comentarii). Nu există suprascriere prin variabile de
+   mediu sau parametri. Lipsă / gol / invalid → **BLOCKED** (exit 2) **înainte** de build.
+2. `android/key.properties` trebuie să existe (doar existența e verificată).
+3. După build, `scripts/verify_apk_signature.ps1` verifică APK-ul (metadate publice, `apksigner
+   verify --print-certs`): semnătură validă, exact un semnatar, certificat ≠ `CN=Android Debug`
+   (verificare separată, indiferent de fingerprint), SHA-256 certificat = fingerprint-ul confirmat.
+   Respins → APK-ul construit se șterge, **nimic** nu ajunge în `build\releases\`.
+   Coduri: 10 fingerprint lipsă, 11 fingerprint invalid, 12 `apksigner` lipsă, 13 APK invalid,
+   14 certificat debug, 15 certificat diferit, 16 număr de semnatari ≠ 1.
+
+**Confirmarea fingerprint-ului (o singură dată, de owner):** din o sursă independentă de build-ul
+verificat — de ex. `apksigner verify --print-certs` pe un APK de producție deja livrat și instalat
+cu succes ca update, sau `keytool -list -v` rulat de owner pe keystore-ul de producție. Valoarea
+(metadată publică) se adaugă în `scripts/release_cert_proterm.sha256` **printr-un PR revizuit**.
+**Nu** se copiază fingerprint-ul afișat de build-ul curent — ar confirma APK-ul cu el însuși.
+Până la confirmare, build-ul canonic este BLOCKED.
+
+### 8.2 Artefacte TEST ONLY
+
+`scripts/build_proterm.ps1 -TestOnly` (implică `-ApkOnly`) setează opt-in-ul Gradle doar pentru
+procesul curent, nu cere fingerprint și livrează APK-ul **numai** în
+`build\test-only\proterm\android\app-proterm-v<versiune>-build<N>-TEST-ONLY.apk` — niciodată în
+`build\releases\`. Statusul unui astfel de artefact este întotdeauna `TEST ONLY` (§7, §11).
+
+### 8.3 Teste
+
+`powershell -ExecutionPolicy Bypass -File scripts\tests\verify_apk_signature.tests.ps1` (necesită
+un APK debug local, `apksigner`, `keytool`): fingerprint lipsă / invalid / corect / greșit,
+certificat debug, APK invalid / trunchiat / inexistent, doi semnatari, BLOCKED în
+`build_proterm.ps1`. Folosește doar keystore-uri de test generate temporar.
 - `key.properties` este exclus explicit din git (`.gitignore`: `key.properties`, `android/key.properties`).
 - `scripts/build_proterm.ps1` documentează în comentariile proprii pasul de generare a keystore-ului
   de producție (`keytool -genkey ...`) și presupune existența locală a `android/key.properties` cu
