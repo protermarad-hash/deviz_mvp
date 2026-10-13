@@ -497,6 +497,17 @@ class OfflineSyncRuntime {
 
       // Curăță backlog-ul: elimină itemele deja sincronizate (rămase din versiuni
       // anterioare) și cele cu prea multe retry-uri (moarte). O singură citire+scriere.
+      // Offline nu se poate sincroniza nimic: scrierile Firestore nu se
+      // finalizează fără server, iar așteptarea lor ar bloca syncPending (și
+      // apelanții care îl așteaptă, ex. încărcarea fișei de lucrare) până la
+      // reconectare. Coada rămâne neatinsă și se reia la următorul ciclu.
+      if (!await FirebaseBootstrap.checkOnline()) {
+        debugPrint(
+          '[Programari] cloud sync end duration_ms=${stopwatch.elapsedMilliseconds} result=false reason=offline',
+        );
+        return false;
+      }
+
       await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
 
       final pending = await _queueRepository.listPendingItems();
