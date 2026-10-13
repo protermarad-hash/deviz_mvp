@@ -242,9 +242,11 @@ class _HrPayrollPageState extends State<HrPayrollPage> {
       return MasterLocalStore.readEmployees();
     }
     try {
-      final rows = await FirebaseAngajatiRepository().listEmployees();
-      await MasterLocalStore.writeEmployees(rows);
-      return rows;
+      final cloud = FirebaseAngajatiRepository();
+      return MasterLocalStore.replaceEmployeesFromCloud(
+        await cloud.listEmployees(),
+        fromCache: cloud.lastListFromCache,
+      );
     } catch (_) {
       return MasterLocalStore.readEmployees();
     }

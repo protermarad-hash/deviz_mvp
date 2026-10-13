@@ -342,6 +342,25 @@ class MasterLocalStore {
     );
   }
 
+  /// Actualizează lista locală de angajați cu rezultatul cloud, FĂRĂ a o
+  /// goli pe baza unui răspuns gol venit din cache-ul offline.
+  ///
+  /// Offline, Firestore întoarce cache-ul local fără eroare; pe o instalare
+  /// nouă acesta e gol. Un rezultat gol + [fromCache] NU înseamnă „0 angajați”
+  /// → lista locală existentă e păstrată și returnată. Un rezultat gol
+  /// confirmat de server (`fromCache == false`) rămâne autoritativ.
+  static Future<List<MasterEmployee>> replaceEmployeesFromCloud(
+    List<MasterEmployee> cloudRows, {
+    required bool fromCache,
+  }) async {
+    if (cloudRows.isEmpty && fromCache) {
+      final local = await readEmployees();
+      if (local.isNotEmpty) return local;
+    }
+    await writeEmployees(cloudRows);
+    return cloudRows;
+  }
+
   static Future<List<MasterTeam>> readTeams() async {
     final prefs = await SharedPreferences.getInstance();
     for (final key in <String>[_teamsKey, ..._teamsAliasKeys]) {

@@ -77,6 +77,23 @@ class OfflineSyncRuntime {
     }
   }
 
+  /// Ca [pendingUpsertEntityIds], dar include și itemele aflate în pauză de
+  /// reîncercare (`nextAttemptAt` în viitor): o modificare locală nesincronizată
+  /// rămâne prioritară la merge până la confirmarea efectivă.
+  Future<Set<String>> unsyncedUpsertEntityIds(
+      CloudEntityType entityType) async {
+    try {
+      final items = await _queueRepository.listItems();
+      return items
+          .where((item) =>
+              item.entityType == entityType && !item.isSynced && !item.deleted)
+          .map((item) => item.entityId)
+          .toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
   Future<void> queueJob(JobRecord job) async {
     await _bridge.queueJob(job.toMap());
   }

@@ -97,8 +97,10 @@ class _TeamsPageState extends State<TeamsPage> {
       return MasterLocalStore.readEmployees();
     }
     try {
-      final rows = await cloud.listEmployees();
-      await MasterLocalStore.writeEmployees(rows);
+      final rows = await MasterLocalStore.replaceEmployeesFromCloud(
+        await cloud.listEmployees(),
+        fromCache: cloud.lastListFromCache,
+      );
       return rows;
     } catch (_) {
       return MasterLocalStore.readEmployees();
