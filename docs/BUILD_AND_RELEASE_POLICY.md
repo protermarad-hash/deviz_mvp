@@ -174,9 +174,18 @@ Keystore-ul de producție:
   semnare debug fără avertisment
 
 **Mecanismul existent în acest proiect** (fără expunere de valori):
-- `android/app/build.gradle.kts` citește `key.properties` din rădăcina proiectului, dacă există,
-  și configurează `signingConfigs.create("release")` din acel fișier; dacă `key.properties` nu
-  există, `buildTypes.release.signingConfig` cade automat pe `signingConfigs.getByName("debug")`.
+- `android/app/build.gradle.kts` citește `android/key.properties`, dacă există, și configurează
+  `signingConfigs.create("release")` numai dacă sunt prezente toate cheile (`storeFile`,
+  `storePassword`, `keyAlias`, `keyPassword`) și fișierul keystore există.
+- **Fail-closed (de la 1.13.0+114):** orice task release (`assemble`/`bundle`/`package…Release`)
+  fără configurație completă **eșuează** — nu mai cade tacit pe certificatul debug. Mesajul numește
+  doar cheile lipsă, niciodată valori. Excepție explicită, numai pentru artefacte `TEST ONLY`:
+  variabila de mediu `PROVENTARIS_ALLOW_DEBUG_SIGNED_RELEASE=1`. Build-urile debug/profile
+  (inclusiv CI) nu sunt afectate.
+- `scripts/build_proterm.ps1` oprește build-ul dacă `android/key.properties` lipsește și, după
+  build, verifică semnătura APK-ului cu `apksigner` (metadate publice): eșuează dacă certificatul
+  e `CN=Android Debug` sau, când `PROVENTARIS_RELEASE_CERT_SHA256` / `-ExpectedCertSha256` e setat,
+  dacă fingerprint-ul nu corespunde. Niciun artefact nu ajunge în `build\releases\` în caz de eșec.
 - `key.properties` este exclus explicit din git (`.gitignore`: `key.properties`, `android/key.properties`).
 - `scripts/build_proterm.ps1` documentează în comentariile proprii pasul de generare a keystore-ului
   de producție (`keytool -genkey ...`) și presupune existența locală a `android/key.properties` cu

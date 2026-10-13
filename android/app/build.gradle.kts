@@ -20,6 +20,25 @@ if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
 }
 
+// ── Gardă semnare release (fail-closed) — vezi docs/BUILD_AND_RELEASE_POLICY.md §7 ──
+// Un build release fără configurație completă de semnare NU mai cade tacit pe
+// certificatul debug (incidentul 1.13.0+113): build-ul eșuează. Mesajele numesc
+// doar cheile lipsă — niciodată valori, parole sau path-uri.
+// Excepție explicită, doar pentru artefacte TEST ONLY:
+//   PROVENTARIS_ALLOW_DEBUG_SIGNED_RELEASE=1
+// Build-urile debug/profile (inclusiv CI) nu sunt afectate.
+val requiredSigningKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val missingSigningKeys = requiredSigningKeys.filter {
+    keystoreProperties.getProperty(it).isNullOrBlank()
+}
+val releaseStoreFileExists = keystoreProperties.getProperty("storeFile")
+    ?.takeIf { it.isNotBlank() }
+    ?.let { project.file(it).exists() } == true
+val releaseSigningReady = keystorePropertiesFile.exists() &&
+    missingSigningKeys.isEmpty() && releaseStoreFileExists
+val allowDebugSignedRelease =
+    providers.environmentVariable("PROVENTARIS_ALLOW_DEBUG_SIGNED_RELEASE").orNull == "1"
+
 android {
     namespace = "ro.proterm.proventaris"
     compileSdk = flutter.compileSdkVersion
@@ -56,7 +75,7 @@ android {
     }
 
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
+        if (releaseSigningReady) {
             create("release") {
                 keyAlias = keystoreProperties["keyAlias"] as String
                 keyPassword = keystoreProperties["keyPassword"] as String
@@ -76,15 +95,42 @@ android {
 
     buildTypes {
         release {
-            // Dacă key.properties există → semnare cu keystore de producție
-            // Dacă nu există → fallback la debug (NUMAI pentru development local)
-            signingConfig = if (keystorePropertiesFile.exists() &&
-                                signingConfigs.names.contains("release")) {
+            // Configurație completă → semnare cu keystore de producție.
+            // Altfel → debug DOAR ca valoare de configurare; garda de mai jos
+            // oprește orice task release, cu excepția opt-in-ului TEST ONLY.
+            signingConfig = if (releaseSigningReady) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
             }
         }
+    }
+}
+
+gradle.taskGraph.whenReady {
+    val releaseTaskPattern = Regex("^(assemble|bundle|package)\\w*Release$")
+    val runsRelease = allTasks.any {
+        it.project == project && releaseTaskPattern.matches(it.name)
+    }
+    if (!runsRelease || releaseSigningReady) return@whenReady
+    val reason = when {
+        !keystorePropertiesFile.exists() -> "android/key.properties lipsește"
+        missingSigningKeys.isNotEmpty() ->
+            "android/key.properties nu conține: ${missingSigningKeys.joinToString()}"
+        else -> "fișierul keystore indicat de storeFile nu există"
+    }
+    if (allowDebugSignedRelease) {
+        logger.warn(
+            "ATENȚIE: build release semnat cu certificatul DEBUG ($reason). " +
+                "Artefact TEST ONLY — NOT DISTRIBUTABLE."
+        )
+    } else {
+        throw GradleException(
+            "Semnare release indisponibilă: $reason. Build oprit (fail-closed) " +
+                "ca să nu rezulte un APK release semnat debug. Pentru un artefact " +
+                "TEST ONLY setați explicit PROVENTARIS_ALLOW_DEBUG_SIGNED_RELEASE=1. " +
+                "Vezi docs/BUILD_AND_RELEASE_POLICY.md §7."
+        )
     }
 }
 
