@@ -342,23 +342,34 @@ class MasterLocalStore {
     );
   }
 
-  /// Actualizează lista locală de angajați cu rezultatul cloud, FĂRĂ a o
-  /// goli pe baza unui răspuns gol venit din cache-ul offline.
+  /// Actualizează lista locală de angajați cu rezultatul cloud, fără pierderi
+  /// pe baza unui răspuns din cache-ul offline.
   ///
-  /// Offline, Firestore întoarce cache-ul local fără eroare; pe o instalare
-  /// nouă acesta e gol. Un rezultat gol + [fromCache] NU înseamnă „0 angajați”
-  /// → lista locală existentă e păstrată și returnată. Un rezultat gol
-  /// confirmat de server (`fromCache == false`) rămâne autoritativ.
+  /// Offline, Firestore întoarce cache-ul local fără eroare; acesta poate fi
+  /// gol (instalare nouă) sau incomplet (doar scrierile în așteptare). Un
+  /// rezultat [fromCache] NU este autoritativ: se ÎMBINĂ cu lista locală după
+  /// ID (versiunea din cache câștigă la același ID; angajații doar-locali se
+  /// păstrează). Un rezultat confirmat de server (`fromCache == false`)
+  /// rămâne autoritativ și înlocuiește lista locală (inclusiv lista goală).
   static Future<List<MasterEmployee>> replaceEmployeesFromCloud(
     List<MasterEmployee> cloudRows, {
     required bool fromCache,
   }) async {
-    if (cloudRows.isEmpty && fromCache) {
-      final local = await readEmployees();
-      if (local.isNotEmpty) return local;
+    if (!fromCache) {
+      await writeEmployees(cloudRows);
+      return cloudRows;
     }
-    await writeEmployees(cloudRows);
-    return cloudRows;
+    final local = await readEmployees();
+    final mergedById = <String, MasterEmployee>{
+      for (final e in local)
+        if (e.id.trim().isNotEmpty) e.id: e,
+    };
+    for (final e in cloudRows) {
+      if (e.id.trim().isNotEmpty) mergedById[e.id] = e;
+    }
+    final merged = mergedById.values.toList(growable: false);
+    await writeEmployees(merged);
+    return merged;
   }
 
   static Future<List<MasterTeam>> readTeams() async {

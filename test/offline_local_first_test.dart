@@ -231,6 +231,25 @@ void main() {
       expect(r, isEmpty);
       expect(await MasterLocalStore.readEmployees(), isEmpty);
     });
+    test('cache INCOMPLET (doar scrierea în așteptare) se îmbină, nu înlocuiește',
+        () async {
+      await MasterLocalStore.writeEmployees(const [emp]);
+      const nou = MasterEmployee(
+          id: 'e-nou', name: 'Angajat nou', role: 'QA', active: true);
+      final r = await MasterLocalStore.replaceEmployeesFromCloud(const [nou],
+          fromCache: true);
+      expect(r.map((e) => e.id).toSet(), {'e1', 'e-nou'});
+      expect((await MasterLocalStore.readEmployees()).map((e) => e.id).toSet(),
+          {'e1', 'e-nou'});
+    });
+    test('răspuns de la server înlocuiește lista locală', () async {
+      await MasterLocalStore.writeEmployees(const [emp]);
+      const nou = MasterEmployee(
+          id: 'e-nou', name: 'Angajat nou', role: 'QA', active: true);
+      final r = await MasterLocalStore.replaceEmployeesFromCloud(const [nou],
+          fromCache: false);
+      expect(r.map((e) => e.id), ['e-nou']);
+    });
     test('listă nevidă (cache sau server) actualizează local', () async {
       await MasterLocalStore.writeEmployees(const [emp]);
       const e2 = MasterEmployee(

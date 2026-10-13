@@ -109,6 +109,13 @@ class _EmployeesMasterPageState extends State<EmployeesMasterPage> {
     }
   }
 
+  /// Lista salvată local apare imediat în UI; reîncărcarea ulterioară
+  /// (care poate aștepta răspunsul Firestore) doar o confirmă.
+  void _showLocalRows(List<MasterEmployee> rows) {
+    if (!mounted) return;
+    setState(() => _rows = rows);
+  }
+
   /// Etichetă de sursă după o scriere cloud lansată fără blocare.
   void _applyCloudPushOutcome(CloudPushOutcome outcome) {
     switch (outcome) {
@@ -137,6 +144,7 @@ class _EmployeesMasterPageState extends State<EmployeesMasterPage> {
       next.add(row);
     }
     await MasterLocalStore.writeEmployees(next);
+    _showLocalRows(next);
     final cloud = _cloudRepository;
     if (cloud == null) {
       _dataSourceLabel = 'local_cache';
@@ -151,6 +159,7 @@ class _EmployeesMasterPageState extends State<EmployeesMasterPage> {
   Future<void> _deleteEmployeeResolved(MasterEmployee row) async {
     final next = _rows.where((e) => e.id != row.id).toList(growable: false);
     await MasterLocalStore.writeEmployees(next);
+    _showLocalRows(next);
     final cloud = _cloudRepository;
     if (cloud == null) {
       _dataSourceLabel = 'local_cache';
