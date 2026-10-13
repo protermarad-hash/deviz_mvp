@@ -1,18 +1,35 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'field_auth_models.dart';
 import 'field_auth_repository.dart';
+import 'local_password_hasher.dart';
 
 class FieldLocalAuthRepository implements FieldAuthRepository {
+  /// [seedDefaultAdmin]: creează contul local de dezvoltare `admin@local.test`
+  /// când lista locală e goală. Implicit DOAR în build-urile non-release —
+  /// o instalare release nu primește niciodată un administrator cu parolă
+  /// cunoscută (parola de dezvoltare e definită în cod).
+  FieldLocalAuthRepository({
+    bool? seedDefaultAdmin,
+    LocalPasswordHasher? hasher,
+  })  : _seedDefaultAdmin = seedDefaultAdmin ?? !kReleaseMode,
+        _hasher = hasher ?? LocalPasswordHasher();
+
   static const String _usersKey = 'field_auth_users_v1';
   static const String _sessionKey = 'field_auth_session_v1';
+  static const String defaultAdminEmail = 'admin@local.test';
+
+  final bool _seedDefaultAdmin;
+  final LocalPasswordHasher _hasher;
 
   @override
   String get authSourceLabel => 'local';
 
   Future<void> ensureSeedUsers() async {
+    if (!_seedDefaultAdmin) return;
     final users = await listUsers();
     if (users.isNotEmpty) return;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -20,7 +37,7 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
       FieldAuthUser(
         id: 'user-admin-$now',
         name: 'Admin local',
-        email: 'admin@local.test',
+        email: defaultAdminEmail,
         role: FieldUserRole.admin,
         active: true,
         passwordHash: hashPasswordForStorage('1234'),
@@ -87,23 +104,36 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
     required String password,
   }) async {
     await ensureSeedUsers();
+    if (password.isEmpty) return null;
     final users = await listUsers();
     final normalizedEmail = email.trim().toLowerCase();
-    final hash = hashPasswordForStorage(password);
     for (final user in users) {
       if (!user.active) continue;
       if (user.email.trim().toLowerCase() != normalizedEmail) continue;
-      if (user.passwordHash != hash) continue;
+      final stored = user.passwordHash;
+      final legacy = LocalPasswordHasher.isLegacy(stored);
+      final valid = legacy
+          ? LocalPasswordHasher.verifyLegacy(password, stored)
+          : _hasher.verify(password, stored);
+      if (!valid) continue;
+
+      // Migrare transparentă: formatul vechi (base64 reversibil) sau
+      // parametri mai slabi sunt înlocuiți cu PBKDF2 la primul login reușit.
+      var authenticated = user;
+      if (legacy || _hasher.needsRehash(stored)) {
+        authenticated = user.copyWith(passwordHash: _hasher.hash(password));
+        await saveUser(authenticated);
+      }
 
       await saveSession(
         FieldAuthSession(
-          userId: user.id,
-          email: user.email,
-          role: user.role,
+          userId: authenticated.id,
+          email: authenticated.email,
+          role: authenticated.role,
           loggedInAt: DateTime.now(),
         ),
       );
-      return user;
+      return authenticated;
     }
     return null;
   }
@@ -113,8 +143,6 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
     await saveSession(null);
   }
 
-  String hashPasswordForStorage(String value) {
-    // Lightweight local hash placeholder for pilot usage.
-    return base64Encode(utf8.encode(value));
-  }
+  /// Hash PBKDF2 pentru o parolă locală nouă (vezi [LocalPasswordHasher]).
+  String hashPasswordForStorage(String value) => _hasher.hash(value);
 }
