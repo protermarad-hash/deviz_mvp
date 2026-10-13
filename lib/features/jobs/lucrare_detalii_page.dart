@@ -4736,15 +4736,21 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       ),
     );
 
-    hoursController.dispose();
-    hoursPerDayController.dispose();
-    tripDaysController.dispose();
-    zileDiurnaController.dispose();
-    valoareDiurnaController.dispose();
-    noptiCazareController.dispose();
-    valoareCazareController.dispose();
-    notesController.dispose();
-    manualRateController.dispose();
+    // Dispose amânat pe frame-ul următor: dialogul încă se redesenează în
+    // tranziția de ieșire după ce showDialog() revine; dispose imediat
+    // declanșa „TextEditingController was used after being disposed” și
+    // bloca redesenarea listei (același tipar ca showPartnerWorkerDialog).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      hoursController.dispose();
+      hoursPerDayController.dispose();
+      tripDaysController.dispose();
+      zileDiurnaController.dispose();
+      valoareDiurnaController.dispose();
+      noptiCazareController.dispose();
+      valoareCazareController.dispose();
+      notesController.dispose();
+      manualRateController.dispose();
+    });
     if (createdList == null || createdList.isEmpty) return;
 
     final next = <Map<String, dynamic>>[..._labor, ...createdList];
@@ -5878,15 +5884,21 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       ),
     );
 
-    hoursController.dispose();
-    hoursPerDayController.dispose();
-    tripDaysController.dispose();
-    zileDiurnaController.dispose();
-    valoareDiurnaController.dispose();
-    noptiCazareController.dispose();
-    valoareCazareController.dispose();
-    notesController.dispose();
-    manualRateController.dispose();
+    // Dispose amânat pe frame-ul următor: dialogul încă se redesenează în
+    // tranziția de ieșire după ce showDialog() revine; dispose imediat
+    // declanșa „TextEditingController was used after being disposed” și
+    // bloca redesenarea listei (același tipar ca showPartnerWorkerDialog).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      hoursController.dispose();
+      hoursPerDayController.dispose();
+      tripDaysController.dispose();
+      zileDiurnaController.dispose();
+      valoareDiurnaController.dispose();
+      noptiCazareController.dispose();
+      valoareCazareController.dispose();
+      notesController.dispose();
+      manualRateController.dispose();
+    });
     if (updated == null) return;
 
     final next = [..._labor];
