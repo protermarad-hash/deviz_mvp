@@ -97,6 +97,48 @@ class PartnerWeeklyPayment {
       );
 }
 
+/// Status de plată DERIVAT (Faza 3, aug 2026) — NU e stocat pe
+/// `PartnerWeeklyPayment` (nu se atinge modelul/schema, nu e nevoie de
+/// migrare pentru înregistrările vechi). Se calculează la citire, comparând
+/// `amountPaid` din `PartnerWeeklyPayment` (dacă există o înregistrare
+/// pentru partener+săptămână) cu totalul de pontaj curent al aceluiași
+/// partener în acea săptămână — rămâne mereu corect chiar dacă totalul se
+/// recalculează ulterior (nu depinde de `calculatedAmountAtMarking`, care e
+/// folosit STRICT pentru avertismentul separat de discrepanță).
+///
+/// Distinct de `PartnerWeeklyPaymentStatus` de mai sus (acela e un enum
+/// declarat dar nefolosit nicăieri — binar, bazat pe simpla existență a
+/// documentului; păstrat neatins, în afara scopului acestei schimbări).
+enum PartnerWeeklyPaymentDerivedStatus {
+  neplatit,
+  platitPartial,
+  platit,
+}
+
+/// Derivă statusul de plată al unui partener, într-o săptămână anume.
+///
+/// - `payment == null` → [PartnerWeeklyPaymentDerivedStatus.neplatit]
+///   (nicio înregistrare de plată pentru acel partener+săptămână).
+/// - `payment.amountPaid >= totalCost` (cu toleranță `tolerance` pentru
+///   erori de rotunjire) → [PartnerWeeklyPaymentDerivedStatus.platit].
+/// - `payment.amountPaid > 0` dar sub `totalCost` →
+///   [PartnerWeeklyPaymentDerivedStatus.platitPartial].
+/// - `payment != null` dar `amountPaid <= 0` → tratat tot ca `neplatit`
+///   (o plată înregistrată cu sumă zero nu e nici parțială, nici completă).
+PartnerWeeklyPaymentDerivedStatus derivePartnerWeeklyPaymentStatus({
+  required PartnerWeeklyPayment? payment,
+  required double totalCost,
+  double tolerance = 0.01,
+}) {
+  if (payment == null || payment.amountPaid <= 0) {
+    return PartnerWeeklyPaymentDerivedStatus.neplatit;
+  }
+  if (payment.amountPaid >= totalCost - tolerance) {
+    return PartnerWeeklyPaymentDerivedStatus.platit;
+  }
+  return PartnerWeeklyPaymentDerivedStatus.platitPartial;
+}
+
 /// Repository izolat pentru plăți săptămânale per partener (pontaj-partener).
 /// NU are nicio dependință de PartnerFinancialRepository sau de
 /// appointment_models.dart. Respectă pattern-ul offline-first al proiectului:
@@ -136,8 +178,7 @@ class PartnerWeeklyPaymentRepository {
   }
 
   /// Lista locală completă — pentru teste și forceSyncLocalToCloud.
-  Future<List<PartnerWeeklyPayment>> listLocalPayments() async =>
-      _readLocal();
+  Future<List<PartnerWeeklyPayment>> listLocalPayments() async => _readLocal();
 
   /// Citire cu fallback cloud, pentru un singur document.
   Future<PartnerWeeklyPayment?> getPayment(
@@ -172,8 +213,7 @@ class PartnerWeeklyPaymentRepository {
       DateTime start, DateTime end) async {
     final all = await _readLocal();
     final filtered = all
-        .where((p) =>
-            !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
+        .where((p) => !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
         .toList(growable: false);
     lastLocalCount = filtered.length;
 
@@ -183,8 +223,8 @@ class PartnerWeeklyPaymentRepository {
       final snapshot = await _collection.get();
       final cloud = snapshot.docs
           .map((doc) => PartnerWeeklyPayment.fromMap(doc.data()))
-          .where((p) =>
-              !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
+          .where(
+              (p) => !p.weekStart.isBefore(start) && !p.weekStart.isAfter(end))
           .toList(growable: false);
       lastFirestoreCount = cloud.length;
       lastFirestoreError = null;
@@ -202,8 +242,9 @@ class PartnerWeeklyPaymentRepository {
       }).toList(growable: false);
 
       final knownIds = resolved.map((p) => p.id).toSet();
-      final localOnly =
-          filtered.where((p) => !knownIds.contains(p.id)).toList(growable: false);
+      final localOnly = filtered
+          .where((p) => !knownIds.contains(p.id))
+          .toList(growable: false);
       for (final p in localOnly) {
         await OfflineSyncRuntime.instance
             .queuePartnerWeeklyPaymentUpsert(p.toMap());
@@ -221,7 +262,8 @@ class PartnerWeeklyPaymentRepository {
       return merged;
     } catch (e) {
       lastFirestoreError = e.toString();
-      debugPrint('[PartnerWeeklyPayment] listPaymentsForPeriod cloud eroare: $e');
+      debugPrint(
+          '[PartnerWeeklyPayment] listPaymentsForPeriod cloud eroare: $e');
       return filtered;
     }
   }
@@ -258,9 +300,7 @@ class PartnerWeeklyPaymentRepository {
     int synced = 0;
     for (final p in locals) {
       try {
-        await _collection
-            .doc(p.id)
-            .set(p.toMap(), SetOptions(merge: true));
+        await _collection.doc(p.id).set(p.toMap(), SetOptions(merge: true));
         await OfflineSyncRuntime.instance
             .queuePartnerWeeklyPaymentUpsert(p.toMap());
         synced++;

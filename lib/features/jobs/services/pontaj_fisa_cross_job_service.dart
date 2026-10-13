@@ -51,8 +51,6 @@ Future<PontajFisaCrossJobResult> buildPontajFisaCrossJob({
   required DateTime periodEnd,
 }) async {
   final jobs = await repository.listJobs();
-  final partners = await repository.listPartners();
-  final partnerNamesById = {for (final p in partners) p.id: p.name};
 
   final targetName = personaNume.trim().toLowerCase();
   final ownRows = <PontajFisaRow>[];
@@ -72,6 +70,14 @@ Future<PontajFisaCrossJobResult> buildPontajFisaCrossJob({
         .map(JobPartnerWorker.fromMap)
         .where((w) => w.id.isNotEmpty)
         .toList(growable: false);
+    // FIX: aceeași cauză ca în pontaj_fisa_all_partners_service.dart —
+    // numele partenerului se rezolvă din `job.jobPartners` (JobPartner
+    // embedat per lucrare), NU din `repository.listPartners()` (spațiu de
+    // ID diferit, PartnerRecord global) — `partnerId` de pe fiecare rând e
+    // mereu un `JobPartner.id`.
+    final partnerNamesById = {
+      for (final p in job.jobPartners.map(JobPartner.fromMap)) p.id: p.name,
+    };
     final jobPartnerRows = buildPontajFisaPartnerRows(
       jobPartnerWorkers,
       periodStart: periodStart,

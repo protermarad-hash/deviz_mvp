@@ -39,8 +39,6 @@ Future<PontajFisaAllPartnersResult> buildPontajFisaAllPartnerRows({
   required DateTime periodEnd,
 }) async {
   final jobs = await repository.listJobs();
-  final partners = await repository.listPartners();
-  final partnerNamesById = {for (final p in partners) p.id: p.name};
 
   final rows = <PontajFisaRow>[];
   for (final job in jobs) {
@@ -49,6 +47,19 @@ Future<PontajFisaAllPartnersResult> buildPontajFisaAllPartnerRows({
         .where((w) => w.id.isNotEmpty)
         .toList(growable: false);
     if (jobPartnerWorkers.isEmpty) continue;
+
+    // FIX: numele partenerului trebuie rezolvat din `job.jobPartners`
+    // (entități JobPartner EMBEDATE per lucrare, cu id format
+    // `job-partner-<timestamp>`) — NU din `repository.listPartners()`
+    // (colecția globală PartnerRecord, spațiu de ID complet diferit).
+    // `JobPartnerWorker.partnerId` referă mereu un `JobPartner.id`, la fel
+    // ca fluxul per-lucrare corect din lucrare_detalii_page.dart (`_partners`
+    // e `List<JobPartner>`, populat din `job.jobPartners`). Fără acest fix,
+    // `partnerNamesById[w.partnerId]` nu găsea NICIODATĂ o potrivire, iar
+    // UI-ul cădea pe fallback-ul `partner.partnerId` (id brut afișat).
+    final partnerNamesById = {
+      for (final p in job.jobPartners.map(JobPartner.fromMap)) p.id: p.name,
+    };
 
     rows.addAll(
       buildPontajFisaPartnerRows(
