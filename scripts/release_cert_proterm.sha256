@@ -1,0 +1,7 @@
+# Certificat de productie Android PRO TERM (ro.proterm.proventaris) - SHA-256 al certificatului (metadata publica).
+# Subiect: CN=pro term srl, OU=Unknown, O=pro term srl, L=arad, ST=arad, C=ro
+# Provenienta (verificata 2026-10-13, vezi PR-ul care a introdus acest fisier):
+#   A) APK-uri distribuite: 1.1.0+3 (2026-06-17) si 1.12.1+112 (2026-09-25, primit pe Galaxy Z Fold7) - apksigner verify --print-certs
+#   B) configuratia locala de semnare: gradlew :app:signingReport, varianta protermRelease
+#   A == B. Se modifica DOAR printr-un PR revizuit, cu dovada provenientei (docs/BUILD_AND_RELEASE_POLICY.md sectiunea 8.1).
+c14588c25cc5ba5fd1990663bcfc156af4991b6b9af9d02c0bae2e045bc2925d
