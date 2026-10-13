@@ -278,6 +278,22 @@ class FieldFirebaseAuthRepository implements FieldAuthRepository {
   }
 
   @override
+  Future<bool> mustChangePassword(String userId) =>
+      _localRepository.mustChangePassword(userId);
+
+  @override
+  Future<String?> changeLocalPassword({
+    required String userId,
+    required String currentPassword,
+    required String newPassword,
+  }) =>
+      _localRepository.changeLocalPassword(
+        userId: userId,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+
+  @override
   Future<void> logout() async {
     if (_cloudReady) {
       try {

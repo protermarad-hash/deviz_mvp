@@ -681,9 +681,12 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
     final localRows = await MasterLocalStore.readTeams();
     try {
       if (FirebaseBootstrap.isInitialized) {
-        final cloudRows = await FirebaseEchipeRepository().listTeams();
+        final teamsCloud = FirebaseEchipeRepository();
+        final cloudRows = await MasterLocalStore.replaceTeamsFromCloud(
+          await teamsCloud.listTeams(),
+          fromCache: teamsCloud.lastListFromCache,
+        );
         if (cloudRows.isNotEmpty) {
-          await MasterLocalStore.writeTeams(cloudRows);
           return cloudRows
               .where((row) => row.id.trim().isNotEmpty)
               .map(_teamFromMaster)

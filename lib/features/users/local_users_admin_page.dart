@@ -69,8 +69,10 @@ class _LocalUsersAdminPageState extends State<LocalUsersAdminPage> {
       return MasterLocalStore.readEmployees();
     }
     try {
-      final rows = await _employeesCloudRepository.listEmployees();
-      await MasterLocalStore.writeEmployees(rows);
+      final rows = await MasterLocalStore.replaceEmployeesFromCloud(
+        await _employeesCloudRepository.listEmployees(),
+        fromCache: _employeesCloudRepository.lastListFromCache,
+      );
       return rows;
     } catch (_) {
       return MasterLocalStore.readEmployees();
@@ -82,8 +84,10 @@ class _LocalUsersAdminPageState extends State<LocalUsersAdminPage> {
       return MasterLocalStore.readTeams();
     }
     try {
-      final rows = await _teamsCloudRepository.listTeams();
-      await MasterLocalStore.writeTeams(rows);
+      final rows = await MasterLocalStore.replaceTeamsFromCloud(
+        await _teamsCloudRepository.listTeams(),
+        fromCache: _teamsCloudRepository.lastListFromCache,
+      );
       return rows;
     } catch (_) {
       return MasterLocalStore.readTeams();

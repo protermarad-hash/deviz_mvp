@@ -22,8 +22,14 @@ class FirebaseAngajatiRepository implements AngajatiCloudRepository {
   }
 
   @override
+  bool lastListFromCache = false;
+
+  @override
   Future<List<MasterEmployee>> listEmployees() async {
     final snapshot = await _collection.get();
+    // Offline, `get()` întoarce cache-ul local (posibil gol pe o instalare
+    // nouă) fără eroare — apelanții nu trebuie să-l trateze ca listă reală.
+    lastListFromCache = snapshot.metadata.isFromCache;
     return snapshot.docs
         .map((doc) => MasterEmployee.fromMap(_normalizeMap(doc.data())))
         .where((item) => item.id.trim().isNotEmpty)

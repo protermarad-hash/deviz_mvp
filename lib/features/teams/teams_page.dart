@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/app_theme_preset.dart';
 import '../../core/help_content.dart';
 import '../../core/widgets/help_button.dart';
+import '../../core/cloud/cloud_push.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/local_app_data_repository.dart';
@@ -67,7 +68,11 @@ class _TeamsPageState extends State<TeamsPage> {
     }
     try {
       var cloudRows = await cloud.listTeams();
-      if (cloudRows.isEmpty && localRows.isNotEmpty) {
+      // Re-upload DOAR când serverul confirmă lista goală; un cache offline
+      // gol nu declanșează scrieri care ar aștepta rețeaua (pagina blocată).
+      if (cloudRows.isEmpty &&
+          localRows.isNotEmpty &&
+          !cloud.lastListFromCache) {
         final knownIds = <String>{};
         for (final row in localRows) {
           final id = row.id.trim();
@@ -79,10 +84,13 @@ class _TeamsPageState extends State<TeamsPage> {
         }
         cloudRows = await cloud.listTeams();
       }
-      _dataSourceLabel = 'cloud';
-      _cloudFallbackReason = null;
-      await MasterLocalStore.writeTeams(cloudRows);
-      return cloudRows;
+      final fromCache = cloud.lastListFromCache;
+      _dataSourceLabel = fromCache ? 'local_cache' : 'cloud';
+      _cloudFallbackReason = fromCache ? 'offline — date din cache' : null;
+      return MasterLocalStore.replaceTeamsFromCloud(
+        cloudRows,
+        fromCache: fromCache,
+      );
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
       _cloudFallbackReason = _shortCloudError(error);
@@ -97,33 +105,19 @@ class _TeamsPageState extends State<TeamsPage> {
       return MasterLocalStore.readEmployees();
     }
     try {
-      final rows = await cloud.listEmployees();
-      await MasterLocalStore.writeEmployees(rows);
+      final rows = await MasterLocalStore.replaceEmployeesFromCloud(
+        await cloud.listEmployees(),
+        fromCache: cloud.lastListFromCache,
+      );
       return rows;
     } catch (_) {
       return MasterLocalStore.readEmployees();
     }
   }
 
+  /// Salvare LOCALĂ întâi (UI imediat), apoi cloud fără a aștepta rețeaua;
+  /// neconfirmat (offline / eroare / timeout) → coada offline (idempotentă).
   Future<void> _saveTeamResolved(MasterTeam row) async {
-    _refreshCloudRepositories();
-    final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
-    if (cloud != null) {
-      try {
-        await cloud.upsertTeam(row);
-        _dataSourceLabel = 'cloud';
-        _cloudFallbackReason = null;
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _cloudFallbackReason = _shortCloudError(error);
-        _dataSourceLabel = 'local_cache';
-        queuedOffline = true;
-      }
-    } else {
-      _dataSourceLabel = 'local_cache';
-      _cloudFallbackReason = 'cloud indisponibil';
-    }
     final next = [..._teams];
     final index = next.indexWhere((e) => e.id == row.id);
     if (index >= 0) {
@@ -132,34 +126,56 @@ class _TeamsPageState extends State<TeamsPage> {
       next.add(row);
     }
     await MasterLocalStore.writeTeams(next);
-    if (queuedOffline) {
+    _showLocalTeams(next);
+    _refreshCloudRepositories();
+    final cloud = _cloudRepository;
+    final outcome = cloud == null
+        ? CloudPushOutcome.failed
+        : await pushToCloudWithoutBlocking(() => cloud.upsertTeam(row));
+    _applyCloudPushOutcome(outcome, cloudAvailable: cloud != null);
+    if (outcome != CloudPushOutcome.synced) {
       await OfflineSyncRuntime.instance.queueTeam(row);
     }
   }
 
   Future<void> _deleteTeamResolved(MasterTeam row) async {
-    _refreshCloudRepositories();
-    final cloud = _cloudRepository;
-    var queuedOffline = cloud == null;
-    if (cloud != null) {
-      try {
-        await cloud.deleteTeam(row.id);
-        _dataSourceLabel = 'cloud';
-        _cloudFallbackReason = null;
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-        _cloudFallbackReason = _shortCloudError(error);
-        _dataSourceLabel = 'local_cache';
-        queuedOffline = true;
-      }
-    } else {
-      _dataSourceLabel = 'local_cache';
-      _cloudFallbackReason = 'cloud indisponibil';
-    }
     final next = _teams.where((e) => e.id != row.id).toList(growable: false);
     await MasterLocalStore.writeTeams(next);
-    if (queuedOffline) {
+    _showLocalTeams(next);
+    _refreshCloudRepositories();
+    final cloud = _cloudRepository;
+    final outcome = cloud == null
+        ? CloudPushOutcome.failed
+        : await pushToCloudWithoutBlocking(() => cloud.deleteTeam(row.id));
+    _applyCloudPushOutcome(outcome, cloudAvailable: cloud != null);
+    if (outcome != CloudPushOutcome.synced) {
       await OfflineSyncRuntime.instance.queueTeamDelete(row.id);
+    }
+  }
+
+  void _showLocalTeams(List<MasterTeam> rows) {
+    if (!mounted) return;
+    setState(() => _teams = rows);
+  }
+
+  void _applyCloudPushOutcome(CloudPushOutcome outcome,
+      {required bool cloudAvailable}) {
+    if (!cloudAvailable) {
+      _dataSourceLabel = 'local_cache';
+      _cloudFallbackReason = 'cloud indisponibil';
+      return;
+    }
+    switch (outcome) {
+      case CloudPushOutcome.synced:
+        _dataSourceLabel = 'cloud';
+        _cloudFallbackReason = null;
+      case CloudPushOutcome.pendingOffline:
+        _dataSourceLabel = 'local_cache';
+        _cloudFallbackReason = 'offline — sincronizare în așteptare';
+      case CloudPushOutcome.failed:
+        _dataSourceLabel = 'local_cache';
+        _cloudFallbackReason = _shortCloudError(
+            FirebaseBootstrap.lastErrorMessage ?? 'sincronizare eșuată');
     }
   }
 

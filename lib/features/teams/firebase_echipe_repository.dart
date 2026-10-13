@@ -22,8 +22,13 @@ class FirebaseEchipeRepository implements EchipeCloudRepository {
   }
 
   @override
+  bool lastListFromCache = false;
+
+  @override
   Future<List<MasterTeam>> listTeams() async {
     final snapshot = await _collection.get();
+    // Offline, `get()` întoarce cache-ul local (gol/incomplet) fără eroare.
+    lastListFromCache = snapshot.metadata.isFromCache;
     return snapshot.docs
         .map((doc) => MasterTeam.fromMap(_normalizeMap(doc.data())))
         .where((item) => item.id.trim().isNotEmpty)

@@ -342,6 +342,59 @@ class MasterLocalStore {
     );
   }
 
+  /// Actualizează lista locală de angajați cu rezultatul cloud, fără pierderi
+  /// pe baza unui răspuns din cache-ul offline.
+  ///
+  /// Offline, Firestore întoarce cache-ul local fără eroare; acesta poate fi
+  /// gol (instalare nouă) sau incomplet (doar scrierile în așteptare). Un
+  /// rezultat [fromCache] NU este autoritativ: se ÎMBINĂ cu lista locală după
+  /// ID (versiunea din cache câștigă la același ID; angajații doar-locali se
+  /// păstrează). Un rezultat confirmat de server (`fromCache == false`)
+  /// rămâne autoritativ și înlocuiește lista locală (inclusiv lista goală).
+  static Future<List<MasterEmployee>> replaceEmployeesFromCloud(
+    List<MasterEmployee> cloudRows, {
+    required bool fromCache,
+  }) async {
+    if (!fromCache) {
+      await writeEmployees(cloudRows);
+      return cloudRows;
+    }
+    final local = await readEmployees();
+    final mergedById = <String, MasterEmployee>{
+      for (final e in local)
+        if (e.id.trim().isNotEmpty) e.id: e,
+    };
+    for (final e in cloudRows) {
+      if (e.id.trim().isNotEmpty) mergedById[e.id] = e;
+    }
+    final merged = mergedById.values.toList(growable: false);
+    await writeEmployees(merged);
+    return merged;
+  }
+
+  /// Ca [replaceEmployeesFromCloud], pentru echipe: un rezultat din cache-ul
+  /// offline se ÎMBINĂ cu lista locală după ID; doar răspunsul confirmat de
+  /// server înlocuiește lista locală.
+  static Future<List<MasterTeam>> replaceTeamsFromCloud(
+    List<MasterTeam> cloudRows, {
+    required bool fromCache,
+  }) async {
+    if (!fromCache) {
+      await writeTeams(cloudRows);
+      return cloudRows;
+    }
+    final mergedById = <String, MasterTeam>{
+      for (final t in await readTeams())
+        if (t.id.trim().isNotEmpty) t.id: t,
+    };
+    for (final t in cloudRows) {
+      if (t.id.trim().isNotEmpty) mergedById[t.id] = t;
+    }
+    final merged = mergedById.values.toList(growable: false);
+    await writeTeams(merged);
+    return merged;
+  }
+
   static Future<List<MasterTeam>> readTeams() async {
     final prefs = await SharedPreferences.getInstance();
     for (final key in <String>[_teamsKey, ..._teamsAliasKeys]) {

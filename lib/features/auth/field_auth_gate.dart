@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/auth/field_auth_service.dart';
 import 'field_login_page.dart';
+import 'forced_password_change_page.dart';
 
 class FieldAuthGate extends StatefulWidget {
   const FieldAuthGate({
@@ -46,6 +47,9 @@ class _FieldAuthGateState extends State<FieldAuthGate> {
             authService: widget.authService,
             title: widget.loginTitle,
           );
+        }
+        if (widget.authService.mustChangePassword) {
+          return ForcedPasswordChangePage(authService: widget.authService);
         }
         return widget.authenticatedBuilder(context);
       },
