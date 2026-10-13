@@ -3462,9 +3462,16 @@ class LocalAppDataRepository implements AppDataRepository {
       for (final item in localItems)
         if (item.id.trim().isNotEmpty) item.id: item,
     };
+    // CLAUDE.md BUG 7: o lucrare modificată offline (upsert încă în coadă) NU
+    // este suprascrisă de versiunea cloud/cache mai veche.
+    final pendingIds = await OfflineSyncRuntime.instance
+        .unsyncedUpsertEntityIds(CloudEntityType.jobs);
     for (final item in cloudItems) {
       final id = item.id.trim();
       if (id.isEmpty) {
+        continue;
+      }
+      if (pendingIds.contains(id) && mergedById.containsKey(id)) {
         continue;
       }
       mergedById[id] = item;

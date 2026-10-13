@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../core/cloud/firebase_bootstrap.dart';
+import '../../../core/cloud/cloud_push.dart';
 import '../../../core/cloud/offline_sync_runtime.dart';
 import '../../../core/repositories/app_data_repository.dart';
 import '../job_models.dart';
@@ -71,28 +71,36 @@ Future<void> lucrareSaveRows(
   await prefs.setString(key, jsonEncode(rows));
 }
 
-/// Salvează un job în cloud (best-effort) + local + queue offline.
+/// Salvează un job LOCAL întâi, apoi în cloud fără a bloca UI-ul.
 ///
-/// Centralizează blocul repetat de sincronizare: încearcă upsert în cloud
-/// (dacă `cloud` e disponibil), salvează local prin `repository` și pune în
-/// queue offline dacă cloud-ul lipsește sau a eșuat. Returnează job-ul salvat
-/// (din `repository.saveJob`), pe care apelantul îl atribuie stării locale.
+/// 1. `repository.saveJob` — sursa locală e actualizată imediat (UI-ul poate
+///    reflecta modificarea fără să aștepte rețeaua);
+/// 2. scrierea cloud este lansată prin [pushToCloudWithoutBlocking]: offline,
+///    Firestore o păstrează ca scriere în așteptare (cache-ul local rămâne
+///    coerent cu `mergeJobsFromCloud`); online, e așteptată cu timeout;
+/// 3. dacă nu este confirmată (offline / eroare / timeout), job-ul intră în
+///    coada offline — idempotent: coada păstrează un singur item nesincronizat
+///    per `entityId`, iar upsert-ul cloud este `set(merge)` pe același ID.
+///
+/// [online] permite testarea; implicit `FirebaseBootstrap.isOnline`.
 Future<JobRecord> lucrareSaveJobWithSync({
   required JobRecord job,
   required AppDataRepository repository,
   required LucrariCloudRepository? cloud,
+  bool? online,
+  Duration cloudTimeout = const Duration(seconds: 10),
 }) async {
-  var queuedOffline = cloud == null;
-  if (cloud != null) {
-    try {
-      await cloud.upsertJob(job);
-    } catch (error) {
-      FirebaseBootstrap.registerRuntimeError(error);
-      queuedOffline = true;
-    }
-  }
   final saved = await repository.saveJob(job);
-  if (queuedOffline) {
+  if (cloud == null) {
+    await OfflineSyncRuntime.instance.queueJob(saved);
+    return saved;
+  }
+  final outcome = await pushToCloudWithoutBlocking(
+    () => cloud.upsertJob(saved),
+    online: online,
+    timeout: cloudTimeout,
+  );
+  if (outcome != CloudPushOutcome.synced) {
     await OfflineSyncRuntime.instance.queueJob(saved);
   }
   return saved;

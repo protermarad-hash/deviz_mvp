@@ -270,8 +270,11 @@ class _DashboardPageState extends State<DashboardPage> {
       return _LoadResult<List<MasterEmployee>>.local(local);
     }
     try {
-      final rows = await cloud.listEmployees();
-      await MasterLocalStore.writeEmployees(rows);
+      final cloudRows = await cloud.listEmployees();
+      final rows = await MasterLocalStore.replaceEmployeesFromCloud(
+        cloudRows,
+        fromCache: cloud.lastListFromCache,
+      );
       return _LoadResult<List<MasterEmployee>>.cloud(rows);
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);

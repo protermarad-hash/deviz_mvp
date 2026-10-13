@@ -77,6 +77,23 @@ class OfflineSyncRuntime {
     }
   }
 
+  /// Ca [pendingUpsertEntityIds], dar include și itemele aflate în pauză de
+  /// reîncercare (`nextAttemptAt` în viitor): o modificare locală nesincronizată
+  /// rămâne prioritară la merge până la confirmarea efectivă.
+  Future<Set<String>> unsyncedUpsertEntityIds(
+      CloudEntityType entityType) async {
+    try {
+      final items = await _queueRepository.listItems();
+      return items
+          .where((item) =>
+              item.entityType == entityType && !item.isSynced && !item.deleted)
+          .map((item) => item.entityId)
+          .toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
   Future<void> queueJob(JobRecord job) async {
     await _bridge.queueJob(job.toMap());
   }
@@ -480,6 +497,17 @@ class OfflineSyncRuntime {
 
       // Curăță backlog-ul: elimină itemele deja sincronizate (rămase din versiuni
       // anterioare) și cele cu prea multe retry-uri (moarte). O singură citire+scriere.
+      // Offline nu se poate sincroniza nimic: scrierile Firestore nu se
+      // finalizează fără server, iar așteptarea lor ar bloca syncPending (și
+      // apelanții care îl așteaptă, ex. încărcarea fișei de lucrare) până la
+      // reconectare. Coada rămâne neatinsă și se reia la următorul ciclu.
+      if (!await FirebaseBootstrap.checkOnline()) {
+        debugPrint(
+          '[Programari] cloud sync end duration_ms=${stopwatch.elapsedMilliseconds} result=false reason=offline',
+        );
+        return false;
+      }
+
       await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
 
       final pending = await _queueRepository.listPendingItems();
