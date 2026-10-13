@@ -172,8 +172,22 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
   }
 
   @override
-  Future<bool> mustChangePassword(String userId) async =>
-      (await _mustChangeIds()).contains(userId);
+  Future<bool> mustChangePassword(String userId) async {
+    if ((await _mustChangeIds()).contains(userId)) return true;
+    // Sesiune restaurată după actualizare (fără login nou): contul de
+    // dezvoltare care are ÎNCĂ parola implicită trebuie și el să o schimbe.
+    if (_seedDefaultAdmin) return false;
+    for (final user in await listUsers()) {
+      if (user.id != userId) continue;
+      if (user.email.trim().toLowerCase() != defaultAdminEmail) return false;
+      if (await _verifyAsync(devSeedPassword, user.passwordHash)) {
+        await _setMustChange(userId, true);
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
 
   @override
   Future<String?> changeLocalPassword({
