@@ -218,7 +218,11 @@ class FieldFirebaseAuthAdapter {
       'id': id,
       'employee_id': (raw['employee_id'] ?? raw['employeeId'] ?? '').toString(),
       'team_id': (raw['team_id'] ?? raw['teamId'] ?? '').toString(),
-      'password_hash': (raw['password_hash'] ?? '').toString(),
+      // Nu se preia NICIODATĂ un hash de parolă din cloud: utilizatorii cloud
+      // se autentifică prin Firebase Auth, iar un `password_hash` rămas în
+      // documente vechi (format base64 reversibil) ar permite login local
+      // offline și ar fi expus în cache-ul dispozitivului.
+      'password_hash': '',
     });
   }
 }
