@@ -117,6 +117,18 @@ void main() {
     });
   });
 
+  group('PBKDF2 în isolate', () {
+    final h = LocalPasswordHasher(iterations: 2000);
+    test('hashAsync/verifyAsync compatibile cu varianta sincronă', () async {
+      final a = await h.hashAsync(_newPw);
+      expect(h.verify(_newPw, a), isTrue);
+      expect(await h.verifyAsync(_newPw, h.hash(_newPw)), isTrue);
+      expect(await h.verifyAsync('gresita-QA', a), isFalse);
+      expect(await h.verifyAsync('', a), isFalse);
+      expect(() => h.hashAsync(''), throwsArgumentError);
+    });
+  });
+
   group('FieldAuthGate', () {
     testWidgets('după login cu parola implicită -> ecran schimbare, apoi aplicația',
         (tester) async {
@@ -129,7 +141,9 @@ void main() {
         ),
       ));
       await tester.pumpAndSettle();
-      expect(await service.login(email: _admin, password: _seed), isTrue);
+      // PBKDF2 rulează într-un isolate -> are nevoie de timp real.
+      expect(await tester.runAsync(() => service.login(email: _admin, password: _seed)),
+          isTrue);
       await tester.pumpAndSettle();
       expect(find.text('Schimbă parola'), findsWidgets);
       expect(find.text('APLICATIE'), findsNothing);
@@ -141,6 +155,11 @@ void main() {
       await tester.enterText(
           find.widgetWithText(TextFormField, 'Confirmă parola nouă'), _newPw);
       await tester.tap(find.widgetWithText(FilledButton, 'Schimbă parola'));
+      for (var i = 0; i < 50 && service.mustChangePassword; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 100)));
+        await tester.pump();
+      }
       await tester.pumpAndSettle();
       expect(find.text('APLICATIE'), findsOneWidget);
     });
@@ -148,7 +167,7 @@ void main() {
     testWidgets('restart cu sesiune restaurată și marcaj -> tot ecranul de schimbare',
         (tester) async {
       _oldDeviceState();
-      await _release().login(email: _admin, password: _seed);
+      await tester.runAsync(() => _release().login(email: _admin, password: _seed));
       final service = FieldAuthService(_release());
       await tester.pumpWidget(MaterialApp(
         home: FieldAuthGate(
