@@ -61,6 +61,31 @@ void main() {
       expect(await _release().mustChangePassword('admin-legacy'), isTrue);
     });
 
+    test('sesiune restaurată după actualizare (fără login) -> schimbare obligatorie',
+        () async {
+      _oldDeviceState();
+      // Sesiunea creată de versiunea veche; fără login în versiunea nouă.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('field_auth_session_v1', jsonEncode(FieldAuthSession(
+              userId: 'admin-legacy',
+              email: _admin,
+              role: FieldUserRole.admin,
+              loggedInAt: DateTime(2026, 9, 1))
+          .toMap()));
+      expect(await _release().mustChangePassword('admin-legacy'), isTrue);
+      expect(await _release().mustChangePassword('u2'), isFalse);
+    });
+
+    test('contul implicit cu parola deja schimbată -> fără marcaj la restaurare',
+        () async {
+      _oldDeviceState();
+      final repo = _release();
+      await repo.login(email: _admin, password: _seed);
+      await repo.changeLocalPassword(
+          userId: 'admin-legacy', currentPassword: _seed, newPassword: _newPw);
+      expect(await _release().mustChangePassword('admin-legacy'), isFalse);
+    });
+
     test('alți utilizatori nu sunt afectați', () async {
       _oldDeviceState();
       final repo = _release();
