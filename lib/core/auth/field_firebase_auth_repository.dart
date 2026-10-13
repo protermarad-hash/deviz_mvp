@@ -40,7 +40,7 @@ class FieldFirebaseAuthRepository implements FieldAuthRepository {
       }
       _authSourceLabel = 'cloud';
       for (final user in users) {
-        await _localRepository.saveUser(user);
+        await _localRepository.saveCloudProjection(user);
       }
       return users;
     } catch (_) {
@@ -253,7 +253,7 @@ class FieldFirebaseAuthRepository implements FieldAuthRepository {
             session: session,
             profile: profile,
           );
-          await _localRepository.saveUser(projected);
+          await _localRepository.saveCloudProjection(projected);
           _authSourceLabel = 'cloud';
           return projected;
         }
@@ -348,7 +348,7 @@ class FieldFirebaseAuthRepository implements FieldAuthRepository {
     required FieldAuthUser? profile,
   }) async {
     final projected = _projectUserFromCloud(session: session, profile: profile);
-    await _localRepository.saveUser(projected);
+    await _localRepository.saveCloudProjection(projected);
   }
 }
 
