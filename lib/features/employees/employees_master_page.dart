@@ -177,8 +177,10 @@ class _EmployeesMasterPageState extends State<EmployeesMasterPage> {
       return MasterLocalStore.readTeams();
     }
     try {
-      final rows = await cloud.listTeams();
-      await MasterLocalStore.writeTeams(rows);
+      final rows = await MasterLocalStore.replaceTeamsFromCloud(
+        await cloud.listTeams(),
+        fromCache: cloud.lastListFromCache,
+      );
       return rows;
     } catch (_) {
       return MasterLocalStore.readTeams();
