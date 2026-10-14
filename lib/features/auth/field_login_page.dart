@@ -30,6 +30,10 @@ class _FieldLoginPageState extends State<FieldLoginPage> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
+    // Eroarea unei încercări anterioare nu trebuie să rămână vizibilă cât
+    // rulează verificarea noii parole (câteva secunde), altfel o autentificare
+    // corectă pare respinsă.
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
     await widget.authService.login(
       email: _emailController.text.trim(),
       password: _passwordController.text,
