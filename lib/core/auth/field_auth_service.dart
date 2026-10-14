@@ -16,11 +16,16 @@ class FieldAuthService extends ChangeNotifier {
   bool _loading = false;
   bool _restoring = false;
   bool _promotingCloudSession = false;
+  bool _mustChangePassword = false;
   String? _lastError;
 
   FieldAuthSession? get session => _session;
   FieldAuthUser? get currentUser => _currentUser;
   bool get isAuthenticated => _session != null;
+
+  /// Sesiune validă, dar parola locală trebuie schimbată înainte de a continua
+  /// (vezi FieldLocalAuthRepository.changeLocalPassword).
+  bool get mustChangePassword => _session != null && _mustChangePassword;
   bool get isLoading => _loading;
 
   /// True DOAR în timpul restaurării sesiunii la pornirea aplicației
@@ -57,6 +62,7 @@ class FieldAuthService extends ChangeNotifier {
       final dynamic restored = await _repository.loadSession();
       _session = _asSession(restored);
       _currentUser = await _resolveCurrentUser(_session);
+      await _refreshMustChangePassword();
     } catch (e) {
       _lastError = 'Nu am putut restaura sesiunea.';
     } finally {
@@ -105,6 +111,7 @@ class FieldAuthService extends ChangeNotifier {
       }
       _session = nextSession;
       _currentUser = await _resolveCurrentUser(nextSession);
+      await _refreshMustChangePassword();
       _loading = false;
       notifyListeners();
       return true;
@@ -124,8 +131,47 @@ class FieldAuthService extends ChangeNotifier {
       await _repository.logout();
       _session = null;
       _currentUser = null;
+      _mustChangePassword = false;
     } catch (e) {
       _lastError = 'Logout eșuat.';
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _refreshMustChangePassword() async {
+    final id = _session?.userId;
+    _mustChangePassword =
+        id != null && id.isNotEmpty && await _repository.mustChangePassword(id);
+  }
+
+  /// Schimbă parola locală a utilizatorului curent. `true` la succes; altfel
+  /// mesajul e în [lastError].
+  Future<bool> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final id = _session?.userId;
+    if (id == null) return false;
+    _loading = true;
+    _lastError = null;
+    notifyListeners();
+    try {
+      final error = await _repository.changeLocalPassword(
+        userId: id,
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+      if (error != null) {
+        _lastError = error;
+        return false;
+      }
+      _mustChangePassword = false;
+      return true;
+    } catch (e) {
+      _lastError = 'Schimbarea parolei a eșuat.';
+      return false;
     } finally {
       _loading = false;
       notifyListeners();

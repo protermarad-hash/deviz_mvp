@@ -20,7 +20,15 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
 
   static const String _usersKey = 'field_auth_users_v1';
   static const String _sessionKey = 'field_auth_session_v1';
+  static const String _mustChangeKey = 'field_auth_must_change_password_v1';
+  static const int minPasswordLength = 8;
   static const String defaultAdminEmail = 'admin@local.test';
+
+  /// Parola contului de dezvoltare (creat doar în build-uri non-release).
+  /// Dispozitivele care au rulat versiuni mai vechi o pot avea încă pe
+  /// `admin@local.test`; în release, folosirea ei impune schimbarea parolei.
+  @visibleForTesting
+  static const String devSeedPassword = '1234';
 
   final bool _seedDefaultAdmin;
   final LocalPasswordHasher _hasher;
@@ -40,7 +48,7 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
         email: defaultAdminEmail,
         role: FieldUserRole.admin,
         active: true,
-        passwordHash: hashPasswordForStorage('1234'),
+        passwordHash: hashPasswordForStorage(devSeedPassword),
       ),
     ];
     final prefs = await SharedPreferences.getInstance();
@@ -112,17 +120,24 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
       if (user.email.trim().toLowerCase() != normalizedEmail) continue;
       final stored = user.passwordHash;
       final legacy = LocalPasswordHasher.isLegacy(stored);
-      final valid = legacy
-          ? LocalPasswordHasher.verifyLegacy(password, stored)
-          : _hasher.verify(password, stored);
-      if (!valid) continue;
+      if (!await _verifyAsync(password, stored)) continue;
 
       // Migrare transparentă: formatul vechi (base64 reversibil) sau
       // parametri mai slabi sunt înlocuiți cu PBKDF2 la primul login reușit.
       var authenticated = user;
       if (legacy || _hasher.needsRehash(stored)) {
-        authenticated = user.copyWith(passwordHash: _hasher.hash(password));
+        authenticated =
+            user.copyWith(passwordHash: await _hasher.hashAsync(password));
         await saveUser(authenticated);
+      }
+
+      // Contul de dezvoltare rămas din versiuni vechi, folosit în release cu
+      // parola publică din cod: accesul NU este blocat (parola rămâne
+      // valabilă), dar aplicația cere schimbarea ei înainte de a continua.
+      if (!_seedDefaultAdmin &&
+          authenticated.email.trim().toLowerCase() == defaultAdminEmail &&
+          password == devSeedPassword) {
+        await _setMustChange(authenticated.id, true);
       }
 
       await saveSession(
@@ -135,6 +150,67 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
       );
       return authenticated;
     }
+    return null;
+  }
+
+  /// Verificare cu PBKDF2 în afara firului UI (formatul vechi e instantaneu).
+  Future<bool> _verifyAsync(String password, String stored) async =>
+      LocalPasswordHasher.isLegacy(stored)
+          ? LocalPasswordHasher.verifyLegacy(password, stored)
+          : await _hasher.verifyAsync(password, stored);
+
+  Future<Set<String>> _mustChangeIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_mustChangeKey) ?? const <String>[]).toSet();
+  }
+
+  Future<void> _setMustChange(String userId, bool value) async {
+    final ids = await _mustChangeIds();
+    if (value ? !ids.add(userId) : !ids.remove(userId)) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_mustChangeKey, ids.toList(growable: false));
+  }
+
+  @override
+  Future<bool> mustChangePassword(String userId) async {
+    if ((await _mustChangeIds()).contains(userId)) return true;
+    // Sesiune restaurată după actualizare (fără login nou): contul de
+    // dezvoltare care are ÎNCĂ parola implicită trebuie și el să o schimbe.
+    if (_seedDefaultAdmin) return false;
+    for (final user in await listUsers()) {
+      if (user.id != userId) continue;
+      if (user.email.trim().toLowerCase() != defaultAdminEmail) return false;
+      if (await _verifyAsync(devSeedPassword, user.passwordHash)) {
+        await _setMustChange(userId, true);
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
+  @override
+  Future<String?> changeLocalPassword({
+    required String userId,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final users = await listUsers();
+    final index = users.indexWhere((u) => u.id == userId && u.active);
+    if (index < 0) return 'Utilizatorul nu există sau este inactiv.';
+    final user = users[index];
+    if (!await _verifyAsync(currentPassword, user.passwordHash)) {
+      return 'Parola curentă este greșită.';
+    }
+    if (newPassword.length < minPasswordLength) {
+      return 'Parola nouă trebuie să aibă cel puțin $minPasswordLength caractere.';
+    }
+    if (newPassword == currentPassword || newPassword == devSeedPassword) {
+      return 'Alege o parolă nouă, diferită de cea curentă.';
+    }
+    await saveUser(
+        user.copyWith(passwordHash: await _hasher.hashAsync(newPassword)));
+    await _setMustChange(userId, false);
     return null;
   }
 
