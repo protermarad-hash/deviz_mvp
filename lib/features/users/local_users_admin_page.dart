@@ -69,8 +69,10 @@ class _LocalUsersAdminPageState extends State<LocalUsersAdminPage> {
       return MasterLocalStore.readEmployees();
     }
     try {
-      final rows = await _employeesCloudRepository.listEmployees();
-      await MasterLocalStore.writeEmployees(rows);
+      final rows = await MasterLocalStore.replaceEmployeesFromCloud(
+        await _employeesCloudRepository.listEmployees(),
+        fromCache: _employeesCloudRepository.lastListFromCache,
+      );
       return rows;
     } catch (_) {
       return MasterLocalStore.readEmployees();

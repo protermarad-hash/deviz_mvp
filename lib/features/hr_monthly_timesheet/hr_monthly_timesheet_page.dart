@@ -236,8 +236,11 @@ class _HrMonthlyTimesheetPageState extends State<HrMonthlyTimesheetPage> {
     var employees = local;
     if (FirebaseBootstrap.isInitialized) {
       try {
-        employees = await FirebaseAngajatiRepository().listEmployees();
-        await MasterLocalStore.writeEmployees(employees);
+        final cloud = FirebaseAngajatiRepository();
+        employees = await MasterLocalStore.replaceEmployeesFromCloud(
+          await cloud.listEmployees(),
+          fromCache: cloud.lastListFromCache,
+        );
       } catch (e) {
         debugPrint('[HrMonthlyTimesheet] citire angajați cloud eșuată, folosesc local: $e');
       }
