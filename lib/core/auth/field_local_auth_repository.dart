@@ -86,6 +86,20 @@ class FieldLocalAuthRepository implements FieldAuthRepository {
     );
   }
 
+  /// Salvează local un utilizator venit din cloud (listă, profil la login).
+  /// Cloud-ul nu transportă niciodată hash-ul parolei, deci un hash local
+  /// existent pentru același id este păstrat — altfel contul și-ar pierde
+  /// autentificarea locală offline după prima sincronizare.
+  Future<void> saveCloudProjection(FieldAuthUser user) async {
+    if (user.passwordHash.isNotEmpty) return saveUser(user);
+    for (final local in await listUsers()) {
+      if (local.id == user.id && local.passwordHash.isNotEmpty) {
+        return saveUser(user.copyWith(passwordHash: local.passwordHash));
+      }
+    }
+    return saveUser(user);
+  }
+
   @override
   Future<FieldAuthSession?> loadSession() async {
     final prefs = await SharedPreferences.getInstance();
