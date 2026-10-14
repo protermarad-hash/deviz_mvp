@@ -13,11 +13,18 @@ Izolarea nu se bazează doar pe blocarea DNS. Fiecare strat de mai jos este veri
 | `-dns-server 127.0.0.1` + `/system/etc/hosts` | `firestore.googleapis.com` → `127.0.0.1`, pe care nu ascultă nimic pe 443; restul numelor nu se rezolvă | test: `google.com` și `identitytoolkit.googleapis.com` nu se rezolvă; TCP spre `8.8.8.8:53` și `142.250.180.10:443` eșuează |
 | `adb reverse tcp:5310/5311` | singura cale spre exterior: un tunel adb către emulatoarele Firebase ale gazdei, legate la `127.0.0.1` | script: `adb reverse --list`; test: portul 5310 accesibil doar în fazele online |
 | Proiect `demo-proventaris-sync` | proiectele `demo-*` există doar în emulator | test: refuză orice `projectId` care nu începe cu `demo-`; `singleProjectMode` |
-| `useFirestoreEmulator` / `useAuthEmulator` înainte de codul aplicației | Firestore și Auth vorbesc doar cu `127.0.0.1` | test: `settings.host` trebuie să fie `127.0.0.1:5310` |
+| `useFirestoreEmulator` / `useAuthEmulator("fs-emulator.qa")` înainte de codul aplicației | Firestore și Auth vorbesc doar cu emulatorul local, prin tunelul adb | test: `settings.host` trebuie să fie exact `fs-emulator.qa:5310` |
 
-Proiectul demo se aplică fără modificări în codul aplicației. Testul inițializează aplicația Firebase implicită cu opțiunile reale, schimbând doar `projectId`. `FirebaseBootstrap.initializeSafe()` reutilizează apoi aplicația existentă: `firebase_core` compară doar `apiKey`, `databaseURL` și `storageBucket`.
+Proiectul demo se aplică fără modificări în codul aplicației. Pe Android, aplicația Firebase implicită e creată nativ din `android/app/google-services.json`, înainte de orice cod Dart. De aceea scriptul construiește APK-ul de test cu două fișiere modificate temporar, restaurate din git imediat după build și la orice ieșire:
 
-`/system/etc/hosts` este necesar pentru că `FirebaseBootstrap.checkOnline()` decide „online” printr-o rezolvare DNS. Pe un dispozitiv izolat, fără intrarea din `hosts`, sincronizarea nu ar porni niciodată.
+- `google-services.json`: doar `project_id` devine `demo-proventaris-sync`. Cheia API, bucket-ul și restul rămân identice, deci `firebase_core` refolosește aplicația nativă.
+- `android/app/src/debug/AndroidManifest.xml`: `usesCleartextTraffic="true"`, pentru că emulatorul Auth vorbește HTTP. Build-urile release nu folosesc acest manifest.
+
+Scriptul refuză să pornească dacă cele două fișiere au modificări locale și verifică la final că sunt identice cu git.
+
+Emulatorul Firebase se adresează prin numele `fs-emulator.qa` (din `/system/etc/hosts` → `127.0.0.1` → tunel adb). FlutterFire rescrie automat `127.0.0.1` și `localhost` în `10.0.2.2` pe emulatoarele Android, adresă inaccesibilă pe un dispozitiv fără rute.
+
+`/system/etc/hosts` (deci `-writable-system`) este necesar pentru că `FirebaseBootstrap.checkOnline()` decide „online” printr-o rezolvare DNS a `firestore.googleapis.com`. Fără intrarea din `hosts`, pe un dispozitiv izolat sincronizarea nu ar porni niciodată. Alternativa „rețea activă cu DNS controlat” ar da dispozitivului rute reale, iar izolarea n-ar mai putea fi demonstrată.
 
 ## Pregătirea emulatorului Android (o singură dată)
 
@@ -38,7 +45,15 @@ Din rădăcina repository-ului, cu Java și Firebase CLI instalate:
 DEVICE=emulator-5596 OUT=<director> bash tooling/sync_emulator/run_sync_scenarios.sh
 ```
 
-Scriptul pornește emulatoarele (`firebase.sync-test.json`, regulile reale din `firestore.rules`), comută online/offline (tunel adb + intrarea din `hosts`) și rulează fazele. Fiecare fază pornește un proces nou, deci include un restart real. La final, scriptul oprește doar procesele care ascultă pe porturile acestui test.
+Pașii scriptului:
+
+- construiește APK-ul de test **o singură dată**: `flutter build apk --debug`, cu timeout de 40 min;
+- pornește emulatoarele (`firebase.sync-test.json`, regulile reale din `firestore.rules`);
+- comută online/offline (tunel adb + intrarea din `hosts`) și rulează fazele.
+
+Faza curentă se transmite printr-un fișier din directorul aplicației (`run-as`), fără rebuild. Fiecare fază pornește un proces nou (`am start`), deci include un restart real.
+
+Timeout-uri: 30 s pentru fiecare comandă adb, 5 min pentru o fază, 3 min pentru pornirea emulatoarelor. La expirare sau la eșec, scriptul salvează un diagnostic (proces, activitate, ultimele loguri, ANR) și se oprește. La final, oprește doar procesele care ascultă pe porturile acestui test și verifică oprirea.
 
 Utilizatorul de test este creat pe dispozitiv, în emulatorul Auth, cu o parolă generată aleator. Parola nu apare în loguri. Profilul `users/{uid}` (admin, activ) este creat de gazdă cu drepturi de proprietar ale emulatorului, deci scrierile aplicației trec prin regulile reale.
 
