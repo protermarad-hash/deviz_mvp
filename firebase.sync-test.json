@@ -1,0 +1,20 @@
+{
+  "$comment": "Config EXCLUSIV pentru Firebase Emulator Suite local, folosit doar de tooling/sync_emulator (teste de sincronizare pe dispozitiv, proiect demo-proventaris-sync). NU e firebase.json-ul proiectului. NU se foloseste NICIODATA cu `firebase deploy`. Sta la radacina pentru ca Firebase CLI nu accepta path-uri de rules in afara directorului configului; foloseste EXACT firestore.rules din repository.",
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 5310,
+      "host": "127.0.0.1"
+    },
+    "auth": {
+      "port": 5311,
+      "host": "127.0.0.1"
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}
