@@ -69,19 +69,27 @@ class LocalOferteRepository {
         }
         merged.add(c);
       }
-      final seenOnServer = await RevisionBaseStore().idsWithBase(CloudEntityType.offers);
+      final bases = RevisionBaseStore();
+      final seenOnServer = await bases.idsWithBase(CloudEntityType.offers);
+      final firstMerge = !await bases.isInitialized(CloudEntityType.offers);
       final neverSynced = <OfferRecord>[];
       for (final o in local) {
         if (cloudIds.contains(o.id)) continue;
         if (protectedIds.contains(o.id)) {
           merged.add(o); // modificare locală în așteptare
         } else if (!seenOnServer.contains(o.id)) {
-          merged.add(o); // niciodată văzută pe server: date locale netrimise
-          neverSynced.add(o);
+          merged.add(o);
+          if (firstMerge) {
+            // Prima îmbinare după actualizare: netrimisă SAU ștearsă în altă parte.
+            await parkUnknownOnUpgrade(CloudEntityType.offers, o.id, o.toMap());
+          } else {
+            neverSynced.add(o); // niciodată văzută pe server: date locale netrimise
+          }
         }
         // Altfel: văzută pe server și ștearsă acolo → ștergerea se aplică local.
       }
       await _writeOffers(merged);
+      if (firstMerge) await bases.markInitialized(CloudEntityType.offers);
       return (merged, neverSynced);
     }).then((r) async {
       for (final o in r.$2) {

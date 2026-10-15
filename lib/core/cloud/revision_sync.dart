@@ -142,6 +142,21 @@ class RevisionBaseStore {
     }
   }
 
+  String get _initKey => '${_key}_init';
+
+  /// Prima îmbinare cu serverul a avut loc pe această instalare (RC 120). Înainte
+  /// de ea nu există baze, deci „fără bază” NU înseamnă „niciodată trimis”.
+  Future<bool> isInitialized(CloudEntityType type) async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_initKey) ?? const <String>[]).contains(type.name);
+  }
+
+  Future<void> markInitialized(CloudEntityType type) => KeyedMutex.run(_initKey, () async {
+        final prefs = await SharedPreferences.getInstance();
+        final done = {...?prefs.getStringList(_initKey), type.name};
+        await prefs.setStringList(_initKey, done.toList()..sort());
+      });
+
   /// Entitățile pentru care există o bază (au fost văzute pe server).
   Future<Set<String>> idsWithBase(CloudEntityType type) async {
     final prefix = '${type.name}:';
@@ -194,6 +209,27 @@ Object? _jsonSafe(Object? value) {
   if (value is DateTime) return value.toUtc().toIso8601String();
   return value.toString();
 }
+
+/// Prima îmbinare după actualizare: o înregistrare doar-locală, neprotejată, poate
+/// fi „niciodată trimisă” SAU ștearsă pe alt dispozitiv înainte de actualizare.
+/// Nu se poate distinge, deci NU se încarcă automat (ar readuce la viață o
+/// ștergere) și NU se șterge: rămâne local, cu un conflict `unknown_on_upgrade`.
+Future<void> parkUnknownOnUpgrade(
+  CloudEntityType type,
+  String id,
+  Map<String, dynamic> localPayload, {
+  SyncConflictStore? store,
+}) =>
+    (store ?? SyncConflictStore()).add(SyncConflict(
+      entityType: type,
+      entityId: id,
+      kind: 'unknown_on_upgrade',
+      localPayload: localPayload,
+      serverPayload: null,
+      baseRev: null,
+      serverRev: null,
+      detectedAt: DateTime.now(),
+    ));
 
 /// Un conflict păstrat: varianta locală și cea de server, fără ștergere automată.
 class SyncConflict {

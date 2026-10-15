@@ -2691,8 +2691,9 @@ class LocalAppDataRepository implements AppDataRepository {
       final localItems = await _readLocalClientsOnly();
       final protectedIds = await OfflineSyncRuntime.instance
           .protectedEntityIds(CloudEntityType.clients);
-      final seenOnServer =
-          await RevisionBaseStore().idsWithBase(CloudEntityType.clients);
+      final bases = RevisionBaseStore();
+      final seenOnServer = await bases.idsWithBase(CloudEntityType.clients);
+      final firstMerge = !await bases.isInitialized(CloudEntityType.clients);
       final localById = {for (final item in localItems) item.id: item};
       final cloudIds = <String>{};
       final merged = <ClientRecord>[];
@@ -2713,16 +2714,23 @@ class LocalAppDataRepository implements AppDataRepository {
         if (protectedIds.contains(local.id)) {
           merged.add(local); // modificare locală în așteptare
         } else if (!seenOnServer.contains(local.id)) {
-          // Niciodată văzut pe server: date locale netrimise — se păstrează și
-          // se pun în coadă (scriere condiționată la sincronizare).
           merged.add(local);
-          await OfflineSyncRuntime.instance.queueClient(local);
+          if (firstMerge) {
+            // Prima îmbinare după actualizare: netrimis SAU șters în altă parte
+            // înainte de actualizare → păstrat local + conflict, fără încărcare.
+            await parkUnknownOnUpgrade(CloudEntityType.clients, local.id, local.toMap());
+          } else {
+            // Niciodată văzut pe server: date locale netrimise — se păstrează și
+            // se pun în coadă (scriere condiționată la sincronizare).
+            await OfflineSyncRuntime.instance.queueClient(local);
+          }
         }
         // Altfel: văzut pe server și șters acolo, fără modificare locală în
         // așteptare → ștergerea de la distanță se aplică local.
       }
       merged.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       await _writeClients(merged);
+      if (firstMerge) await bases.markInitialized(CloudEntityType.clients);
       return merged;
     });
   }

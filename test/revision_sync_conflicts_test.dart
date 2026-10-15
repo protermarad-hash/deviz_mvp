@@ -389,6 +389,7 @@ void main() {
       await repo.upsertOffer(o('o5', 'o5 doar locala, netrimisa'));
       // o4 a fost văzută pe server (are bază); o5 nu.
       await RevisionBaseStore().set(CloudEntityType.offers, 'o4', const RevisionBase(rev: 1, fingerprint: 'x'));
+      await RevisionBaseStore().markInitialized(CloudEntityType.offers); // nu e prima îmbinare
       LocalOferteRepository.debugProtectedIds = () async => {'o1', 'o3'};
       addTearDown(() => LocalOferteRepository.debugProtectedIds = null);
       final merged = await repo.mergeOffersFromCloud([o('o1', 'o1 din cloud'), o('o2', 'o2 din cloud')]);
@@ -669,6 +670,21 @@ void main() {
         expect(ids, contains('offers_o_new$i'));
         expect(ids, isNot(contains('jobs_j_old$i')));
       }
+    });
+
+    test('#9 prima îmbinare după actualizare: doar-local neprotejat → păstrat + conflict, fără încărcare', () async {
+      final repo = LocalOferteRepository();
+      await repo.upsertOffer(o('u1', 'necunoscută la actualizare'));
+      LocalOferteRepository.debugProtectedIds = () async => <String>{};
+      addTearDown(() => LocalOferteRepository.debugProtectedIds = null);
+      final merged = await repo.mergeOffersFromCloud(const []);
+      expect(merged.map((e) => e.id), contains('u1'), reason: 'nu se șterge');
+      final queued = (await LocalCloudSyncRepository().listItems()).map((i) => i.entityId);
+      expect(queued, isNot(contains('u1')), reason: 'nu se încarcă automat (poate fi o ștergere de la distanță)');
+      final c = (await SyncConflictStore().listOpen()).single;
+      expect(c.kind, 'unknown_on_upgrade');
+      expect(c.localPayload!['title'], 'necunoscută la actualizare');
+      expect(await RevisionBaseStore().isInitialized(CloudEntityType.offers), isTrue);
     });
 
     test('KeyedMutex: serializează pe cheie și este reentrant', () async {
