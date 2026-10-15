@@ -173,3 +173,34 @@ test('R10 utilizator inactiv: respins indiferent de revizie; alte colectii nesch
   await assertFails(dbAs('inactive').collection('clients').doc('i').set({ name: 'x', _rev: 1 }));
   await assertSucceeds(dbAs('devA').collection('partners').doc('p').set({ name: 'fara rev' }, { merge: true }));
 });
+
+// ── Varianta M3-a (decizie): aplicatiile vechi pot scrie DOAR documente inca
+// neatinse de 120 (fara _rev). Derivata din propunere la rularea testului.
+test('R11 varianta M3-a: scriere veche permisa doar pe documente fara _rev; documentele 120 protejate', async () => {
+  const variant = fs.readFileSync(PROPOSED, 'utf8').replace(
+    "return request.resource.data._rev == resource.data.get('_rev', 0) + 1;",
+    "return request.resource.data._rev == resource.data.get('_rev', 0) + 1\n" +
+      "        || (!('_rev' in resource.data) && !('_rev' in request.resource.data));",
+  );
+  assert.notEqual(variant, fs.readFileSync(PROPOSED, 'utf8'));
+  const env = await initializeTestEnvironment({
+    projectId: 'demo-rc120-rules-m3a',
+    firestore: { rules: variant, host: '127.0.0.1', port: 5307 },
+  });
+  try {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await db.collection('users').doc('old').set({ role: 'office', active: true });
+      await db.collection('clients').doc('neatins').set({ name: 'din 119' });
+      await db.collection('clients').doc('atins').set({ name: 'scris de 120', _rev: 1 });
+    });
+    const db = env.authenticatedContext('old').firestore();
+    await assertSucceeds(db.collection('clients').doc('neatins').set({ name: 'veche ok' }, { merge: true }));
+    await assertFails(db.collection('clients').doc('atins').set({ name: 'veche peste 120' }, { merge: true }));
+    await assertFails(db.collection('clients').doc('nou').set({ name: 'creare veche' })); // creare tot cu _rev = 1
+    await assertSucceeds(db.collection('clients').doc('neatins').set({ name: '120 migreaza', _rev: 1 }, { merge: true }));
+    await assertFails(db.collection('clients').doc('neatins').set({ name: 'veche dupa migrare' }, { merge: true }));
+  } finally {
+    await env.cleanup();
+  }
+});
