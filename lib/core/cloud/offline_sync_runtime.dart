@@ -100,12 +100,12 @@ class OfflineSyncRuntime {
   /// ștergeri) și conflicte deschise.
   Future<Set<String>> protectedEntityIds(CloudEntityType entityType) async {
     final ids = <String>{};
-    try {
-      final items = await _queueRepository.listItems();
-      ids.addAll(items
-          .where((item) => item.entityType == entityType && !item.isSynced)
-          .map((item) => item.entityId));
-    } catch (_) {/* coada indisponibilă: doar conflictele */}
+    // Fără try/catch: dacă coada nu poate fi citită, îmbinarea trebuie să eșueze
+    // (altfel modificările nesincronizate ar părea neprotejate și ar fi suprascrise).
+    final items = await _queueRepository.listItems();
+    ids.addAll(items
+        .where((item) => item.entityType == entityType && !item.isSynced)
+        .map((item) => item.entityId));
     ids.addAll(await SyncConflictStore().openEntityIds(entityType));
     return ids;
   }
@@ -469,6 +469,9 @@ class OfflineSyncRuntime {
   /// Curăță imediat coada: elimină itemele deja sincronizate și cele moarte.
   /// Se apelează la startup pentru a elibera rapid JSON-ul acumulat.
   Future<void> cleanupQueue() async {
+    // Ca în syncPending: elementele epuizate se păstrează întâi ca conflict
+    // (altfel modificarea locală ar dispărea silențios la pornire).
+    await _preserveExhaustedItems();
     await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
   }
 

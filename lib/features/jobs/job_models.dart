@@ -329,6 +329,7 @@ class BeneficiarySuppliedMaterial {
 
 class JobRecord {
   const JobRecord({
+    this.syncRev,
     required this.id,
     required this.jobCode,
     required this.clientId,
@@ -399,6 +400,10 @@ class JobRecord {
   });
 
   final String id;
+
+  /// Revizia de server (`_rev`) a versiunii din care provine înregistrarea
+  /// (RC 120): baza editării; null pentru date fără revizie.
+  final int? syncRev;
   final String jobCode;
   final String clientId;
   final String title;
@@ -518,6 +523,7 @@ class JobRecord {
   double get diferenta => totalReal - totalOferta;
 
   JobRecord copyWith({
+    int? syncRev,
     String? id,
     String? jobCode,
     String? clientId,
@@ -582,6 +588,7 @@ class JobRecord {
     Object? progresGlobalPercent = _sentinel,
   }) {
     return JobRecord(
+      syncRev: syncRev ?? this.syncRev,
       id: id ?? this.id,
       jobCode: jobCode ?? this.jobCode,
       clientId: clientId ?? this.clientId,
@@ -656,6 +663,7 @@ class JobRecord {
 
   Map<String, dynamic> toMap() {
     return {
+      if (syncRev != null) '_rev': syncRev,
       'id': id,
       'job_code': jobCode,
       'client_id': clientId,
@@ -774,6 +782,7 @@ class JobRecord {
     }
 
     return JobRecord(
+      syncRev: (map['_rev'] as num?)?.toInt(),
       id: id.isEmpty ? 'job-${now.microsecondsSinceEpoch}' : id,
       jobCode: (map['job_code'] ?? map['jobCode'] ?? '').toString().trim(),
       clientId: (map['client_id'] ?? map['clientId'] ?? '').toString().trim(),

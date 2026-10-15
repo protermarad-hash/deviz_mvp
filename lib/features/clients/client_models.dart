@@ -147,6 +147,7 @@ class ClientContactPerson {
 
 class ClientRecord {
   const ClientRecord({
+    this.syncRev,
     required this.id,
     required this.clientCode,
     this.externalClientCode = '',
@@ -175,6 +176,10 @@ class ClientRecord {
   });
 
   final String id;
+
+  /// Revizia de server (`_rev`) a versiunii din care provine înregistrarea
+  /// (RC 120): baza editării; null pentru date fără revizie.
+  final int? syncRev;
   final String clientCode;
   final String externalClientCode;
   final String externalClientSource;
@@ -202,6 +207,7 @@ class ClientRecord {
   final DateTime updatedAt;
 
   ClientRecord copyWith({
+    int? syncRev,
     String? id,
     String? clientCode,
     String? externalClientCode,
@@ -229,6 +235,7 @@ class ClientRecord {
     List<String>? phoneNumbers,
   }) {
     return ClientRecord(
+      syncRev: syncRev ?? this.syncRev,
       id: id ?? this.id,
       clientCode: clientCode ?? this.clientCode,
       externalClientCode: externalClientCode ?? this.externalClientCode,
@@ -267,6 +274,7 @@ class ClientRecord {
 
   Map<String, dynamic> toMap() {
     return {
+      if (syncRev != null) '_rev': syncRev,
       'id': id,
       'client_code': clientCode,
       'external_client_code': externalClientCode,
@@ -330,6 +338,7 @@ class ClientRecord {
     }
 
     return ClientRecord(
+      syncRev: (map['_rev'] as num?)?.toInt(),
       id: pick(const ['id', 'client_id', 'uid', 'key']),
       clientCode: pick(const ['client_code', 'code']),
       externalClientCode: pick(

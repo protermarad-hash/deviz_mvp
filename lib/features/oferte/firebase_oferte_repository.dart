@@ -24,7 +24,8 @@ class FirebaseOferteRepository implements OferteCloudRepository {
     if (id.isEmpty) return;
     // Ștergere condiționată: nu se șterge o versiune modificată între timp de alt dispozitiv.
     await RevisionWriter.standard(firestore: _firestore).delete(
-        type: CloudEntityType.offers, collection: FirebaseCollections.offers, id: id);
+        type: CloudEntityType.offers, collection: FirebaseCollections.offers, id: id,
+        keysFor: (data) => _offerToCloudMap(OfferRecord.fromMap(_normalizeOfferMap(data))).keys);
   }
 
   @override
@@ -48,6 +49,7 @@ class FirebaseOferteRepository implements OferteCloudRepository {
       collection: FirebaseCollections.offers,
       id: id,
       data: _offerToCloudMap(offer),
+      startRev: offer.syncRev,
     );
   }
 
@@ -176,6 +178,8 @@ class FirebaseOferteRepository implements OferteCloudRepository {
 
   Map<String, dynamic> _normalizeOfferMap(Map<String, dynamic> raw) {
     return <String, dynamic>{
+      // Revizia de server (RC 120): baza editării pornite din această versiune.
+      if (raw['_rev'] is num) '_rev': raw['_rev'],
       'id': (raw['id'] ?? '').toString(),
       'offer_number':
           (raw['offer_number'] ?? raw['offerNumber'] ?? raw['number'] ?? '')

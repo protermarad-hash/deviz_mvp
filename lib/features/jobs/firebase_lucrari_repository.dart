@@ -24,7 +24,8 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
     if (id.isEmpty) return;
     // Ștergere condiționată: nu se șterge o versiune modificată între timp de alt dispozitiv.
     await RevisionWriter.standard(firestore: _firestore).delete(
-        type: CloudEntityType.jobs, collection: FirebaseCollections.jobs, id: id);
+        type: CloudEntityType.jobs, collection: FirebaseCollections.jobs, id: id,
+        keysFor: (data) => _jobToCloudMap(JobRecord.fromMap(_normalizeJobMap(data))).keys);
   }
 
   @override
@@ -47,6 +48,7 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
       collection: FirebaseCollections.jobs,
       id: id,
       data: _jobToCloudMap(job),
+      startRev: job.syncRev,
     );
   }
 
@@ -148,6 +150,8 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
 
   Map<String, dynamic> _normalizeJobMap(Map<String, dynamic> raw) {
     return <String, dynamic>{
+      // Revizia de server (RC 120): baza editării pornite din această versiune.
+      if (raw['_rev'] is num) '_rev': raw['_rev'],
       'id': (raw['id'] ?? '').toString(),
       'job_code': (raw['job_code'] ?? raw['jobCode'] ?? '').toString(),
       'client_id': (raw['client_id'] ?? raw['clientId'] ?? '').toString(),

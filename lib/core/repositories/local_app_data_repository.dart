@@ -233,19 +233,6 @@ class LocalAppDataRepository implements AppDataRepository {
     }
   }
 
-  Future<void> _uploadClientsConditionally(List<ClientRecord> items) async {
-    final cloud = FirebaseClientiRepository();
-    for (final item in items) {
-      try {
-        await cloud.upsertClient(item);
-      } on RevisionConflictException {
-        // Ambele variante sunt păstrate în SyncConflictStore.
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
-      }
-    }
-  }
-
   void _uploadLocalOnlyPartnersBackground(List<PartnerRecord> items) {
     if (items.isEmpty || !_isPartnersCloudAvailable) {
       return;
@@ -373,8 +360,6 @@ class LocalAppDataRepository implements AppDataRepository {
   bool get _isMonthlyTimesheetsCloudAvailable =>
       FirebaseBootstrap.isOnline;
 
-  CollectionReference<Map<String, dynamic>> get _clientsCollection =>
-      FirebaseFirestore.instance.collection(FirebaseCollections.clients);
   CollectionReference<Map<String, dynamic>> get _partnersCollection =>
       FirebaseFirestore.instance.collection(FirebaseCollections.partners);
   CollectionReference<Map<String, dynamic>> get _partnerWorkersCollection =>
@@ -2679,27 +2664,9 @@ class LocalAppDataRepository implements AppDataRepository {
         _lastClientsFallbackReason = '';
         return cloudItems;
       }
-      var cloudItems = await _clientsCollection.get().then(
-            (snapshot) => snapshot.docs
-                .map((doc) => ClientRecord.fromMap(doc.data()))
-                .where((item) => item.id.trim().isNotEmpty)
-                .toList(growable: false)
-              ..sort(
-                (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-              ),
-          );
-      if (localItems.isNotEmpty) {
-        final cloudIds = cloudItems.map((item) => item.id).toSet();
-        final localOnly = localItems.where((l) => !cloudIds.contains(l.id)).toList();
-        if (localOnly.isNotEmpty) {
-          // Urcăm în Firebase itemii locali lipsă, fără a mai re-fetcha
-          await _uploadClientsConditionally(localOnly);
-          // Îmbinăm local, fără al doilea query Firebase
-          cloudItems = [...cloudItems, ...localOnly]
-            ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-        }
-      }
-      await _writeClients(cloudItems);
+      // Aceeași îmbinare protejată și sub blocare (RC 120): înainte, lista cloud
+      // înlocuia local fără protecție, în afara blocării clienților.
+      final cloudItems = await _listClientsCloudMerged(localItems);
       _lastClientsDataSourceLabel = 'cloud';
       _lastClientsFallbackReason = '';
       return cloudItems;
@@ -2734,9 +2701,12 @@ class LocalAppDataRepository implements AppDataRepository {
         final local = localById[cloudItem.id];
         // Modificare locală nesincronizată sau conflict deschis: versiunea
         // locală NU este înlocuită de cea din cloud.
-        merged.add(protectedIds.contains(cloudItem.id) && local != null
-            ? local
-            : cloudItem);
+        if (protectedIds.contains(cloudItem.id)) {
+          // Ștergere locală în așteptare (local lipsește): nu se readuce.
+          if (local != null) merged.add(local);
+          continue;
+        }
+        merged.add(cloudItem);
       }
       for (final local in localItems) {
         if (cloudIds.contains(local.id)) continue;
@@ -3478,7 +3448,10 @@ class LocalAppDataRepository implements AppDataRepository {
 
   Future<List<JobRecord>> mergeJobsFromCloud(
     List<JobRecord> cloudItems,
-  ) async {
+  ) =>
+      runEntitySyncLocked(CloudEntityType.jobs, () => _mergeJobsLocked(cloudItems));
+
+  Future<List<JobRecord>> _mergeJobsLocked(List<JobRecord> cloudItems) async {
     final localItems = await listJobs();
     final mergedById = <String, JobRecord>{
       for (final item in localItems)
@@ -3494,7 +3467,9 @@ class LocalAppDataRepository implements AppDataRepository {
       if (id.isEmpty) {
         continue;
       }
-      if (pendingIds.contains(id) && mergedById.containsKey(id)) {
+      // Protejată: varianta locală rămâne; dacă lipsește local (ștergere în
+      // așteptare) copia din cloud NU se readuce.
+      if (pendingIds.contains(id)) {
         continue;
       }
       mergedById[id] = item;

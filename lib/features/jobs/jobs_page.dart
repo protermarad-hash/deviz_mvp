@@ -17,6 +17,8 @@ import 'firebase_lucrari_repository.dart';
 import 'job_models.dart';
 import 'lucrare_detalii_page.dart';
 import 'lucrari_cloud_repository.dart';
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/revision_sync.dart';
 
 /// Prioritatea de afișare a unei lucrări după status (sortare logică, nu cronologică).
 /// Ordinea dorită: În execuție → Planificate → (Noi/Ofertate) →
@@ -363,7 +365,12 @@ class _JobsPageState extends State<JobsPage> {
       }).toList();
       effective = job.copyWith(liniiPlanificate: liniiAutoComplete);
     }
-    final next = await _repository.saveJob(effective);
+    // Salvare locală + coadă împreună, sub blocarea îmbinării (RC 120).
+    final next = await runEntitySyncLocked(CloudEntityType.jobs, () async {
+      final saved = await _repository.saveJob(effective);
+      await OfflineSyncRuntime.instance.queueJob(saved);
+      return saved;
+    });
     _refreshCloudRepository();
     final cloud = _cloudRepository;
     if (cloud != null) {
@@ -377,8 +384,7 @@ class _JobsPageState extends State<JobsPage> {
         _dataSourceLabel = _localLabelWithFallback();
       }
     }
-    // Queue ÎNTOTDEAUNA — garantează sync chiar și când cloud e disponibil (BUG 1)
-    await OfflineSyncRuntime.instance.queueJob(next);
+    // Coada a fost scrisă mai sus, ÎNTOTDEAUNA (BUG 1), înaintea cloud-ului.
     await _notifyJobSaved(next, previous: previous);
   }
 
@@ -446,9 +452,11 @@ class _JobsPageState extends State<JobsPage> {
         _dataSourceLabel = _localLabelWithFallback();
       }
     }
-    await _repository.deleteJob(jobId);
     // Queue ÎNTOTDEAUNA — garantează sync chiar și când cloud e disponibil (BUG 1)
-    await OfflineSyncRuntime.instance.queueJobDelete(jobId);
+    await runEntitySyncLocked(CloudEntityType.jobs, () async {
+      await _repository.deleteJob(jobId);
+      await OfflineSyncRuntime.instance.queueJobDelete(jobId);
+    });
   }
 
   Future<Iterable<dynamic>> _loadClientsRawSafe() async {

@@ -24,7 +24,8 @@ class FirebaseClientiRepository implements ClientiCloudRepository {
     if (id.isEmpty) return;
     // Ștergere condiționată: nu se șterge o versiune modificată între timp de alt dispozitiv.
     await RevisionWriter.standard(firestore: _firestore).delete(
-        type: CloudEntityType.clients, collection: FirebaseCollections.clients, id: id);
+        type: CloudEntityType.clients, collection: FirebaseCollections.clients, id: id,
+        keysFor: (data) => _clientToCloudMap(ClientRecord.fromMap(_normalizeClientMap(data))).keys);
   }
 
   @override
@@ -48,6 +49,7 @@ class FirebaseClientiRepository implements ClientiCloudRepository {
       collection: FirebaseCollections.clients,
       id: id,
       data: _clientToCloudMap(client),
+      startRev: client.syncRev,
     );
   }
 
@@ -116,6 +118,8 @@ class FirebaseClientiRepository implements ClientiCloudRepository {
 
   Map<String, dynamic> _normalizeClientMap(Map<String, dynamic> raw) {
     return <String, dynamic>{
+      // Revizia de server (RC 120): baza editării pornite din această versiune.
+      if (raw['_rev'] is num) '_rev': raw['_rev'],
       'id': (raw['id'] ?? '').toString(),
       'client_code':
           (raw['client_code'] ?? raw['clientCode'] ?? raw['code'] ?? '')

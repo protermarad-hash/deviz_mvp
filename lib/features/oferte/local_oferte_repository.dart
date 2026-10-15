@@ -45,10 +45,15 @@ class LocalOferteRepository {
   /// nu au fost văzute niciodată pe server (acestea intră și în coadă). Doar o
   /// ofertă văzută pe server, ștearsă acolo și fără modificare locală dispare.
   /// Înainte, `replaceOffers(cloud)` elimina orice ofertă doar-locală.
-  Future<List<OfferRecord>> mergeOffersFromCloud(List<OfferRecord> cloudItems) async {
-    final protectedIds = await (debugProtectedIds?.call() ??
-        OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.offers));
+  Future<List<OfferRecord>> mergeOffersFromCloud(List<OfferRecord> cloudItems) =>
+      runEntitySyncLocked(CloudEntityType.offers, () => _mergeOffersLocked(cloudItems));
+
+  Future<List<OfferRecord>> _mergeOffersLocked(List<OfferRecord> cloudItems) async {
     return _synchronized(() async {
+      // Sub blocarea comună: o salvare locală + coadă nu poate apărea între
+      // citirea entităților protejate și scrierea rezultatului.
+      final protectedIds = await (debugProtectedIds?.call() ??
+          OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.offers));
       final local = await _readOffers();
       final localById = {for (final o in local) o.id: o};
       final cloudIds = <String>{};
@@ -56,7 +61,13 @@ class LocalOferteRepository {
       for (final c in cloudItems) {
         cloudIds.add(c.id);
         final l = localById[c.id];
-        merged.add(protectedIds.contains(c.id) && l != null ? l : c);
+        if (protectedIds.contains(c.id)) {
+          // Modificare locală în așteptare: varianta locală rămâne; dacă local
+          // lipsește, e o ștergere în așteptare → NU se readuce copia din cloud.
+          if (l != null) merged.add(l);
+          continue;
+        }
+        merged.add(c);
       }
       final seenOnServer = await RevisionBaseStore().idsWithBase(CloudEntityType.offers);
       final neverSynced = <OfferRecord>[];

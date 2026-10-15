@@ -664,6 +664,7 @@ class OfferTotals {
 
 class OfferRecord {
   const OfferRecord({
+    this.syncRev,
     required this.id,
     required this.offerNumber,
     required this.title,
@@ -756,6 +757,10 @@ class OfferRecord {
   });
 
   final String id;
+
+  /// Revizia de server (`_rev`) a versiunii din care provine înregistrarea
+  /// (RC 120): baza editării; null pentru date fără revizie.
+  final int? syncRev;
   final String offerNumber;
   final String title;
   final String clientId;
@@ -901,6 +906,7 @@ class OfferRecord {
   }
 
   OfferRecord copyWith({
+    int? syncRev,
     String? id,
     String? offerNumber,
     String? title,
@@ -1002,6 +1008,7 @@ class OfferRecord {
       profitPercent: nextProfitPercent,
     );
     return OfferRecord(
+      syncRev: syncRev ?? this.syncRev,
       id: id ?? this.id,
       offerNumber: offerNumber ?? this.offerNumber,
       title: title ?? this.title,
@@ -1103,6 +1110,7 @@ class OfferRecord {
 
   Map<String, dynamic> toMap() {
     return <String, dynamic>{
+      if (syncRev != null) '_rev': syncRev,
       'id': id,
       'offer_number': offerNumber,
       'title': title,
@@ -1329,6 +1337,7 @@ class OfferRecord {
     );
 
     return OfferRecord(
+      syncRev: (map['_rev'] as num?)?.toInt(),
       id: id.isEmpty ? 'offer-${now.microsecondsSinceEpoch}' : id,
       offerNumber: pick(const <String>['offer_number', 'number']),
       title: pick(const <String>['title', 'offer_title']),

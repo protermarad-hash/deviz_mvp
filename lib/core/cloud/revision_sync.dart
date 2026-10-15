@@ -29,6 +29,14 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cloud_sync_models.dart';
+import 'keyed_mutex.dart';
+
+/// Blocare comună per tip de entitate: îmbinarea cloud → local și perechea
+/// „salvare locală + coadă” nu se intercalează. Altfel o îmbinare putea citi
+/// entitatea ca neprotejată (încă fără element în coadă) și suprascrie local
+/// editarea abia salvată. Reentrantă.
+Future<T> runEntitySyncLocked<T>(CloudEntityType type, Future<T> Function() body) =>
+    KeyedMutex.run('entity-sync:${type.name}', body);
 
 const String kRevField = '_rev';
 const String kRevWriterField = '_rev_writer';
@@ -95,17 +103,21 @@ int revisionOf(Map<String, dynamic>? data) {
 }
 
 class RevisionBase {
-  const RevisionBase({required this.rev, required this.fingerprint});
+  const RevisionBase({required this.rev, required this.fingerprint, this.ownWrite = false});
   final int rev;
   final String fingerprint;
 
-  Map<String, dynamic> toMap() => {'rev': rev, 'fp': fingerprint};
+  /// Versiunea a fost scrisă de ACEST dispozitiv (scriere condiționată proprie
+  /// sau citită de pe server cu `_rev_writer` propriu).
+  final bool ownWrite;
+
+  Map<String, dynamic> toMap() => {'rev': rev, 'fp': fingerprint, if (ownWrite) 'own': true};
   static RevisionBase? fromMap(Object? raw) {
     if (raw is! Map) return null;
     final rev = raw['rev'];
     final fp = raw['fp'];
     if (rev is! num || fp is! String || fp.isEmpty) return null;
-    return RevisionBase(rev: rev.toInt(), fingerprint: fp);
+    return RevisionBase(rev: rev.toInt(), fingerprint: fp, ownWrite: raw['own'] == true);
   }
 }
 
@@ -143,30 +155,33 @@ class RevisionBaseStore {
   Future<RevisionBase?> get(CloudEntityType type, String id) async =>
       RevisionBase.fromMap((await _read())[_entityKey(type, id)]);
 
-  Future<void> set(CloudEntityType type, String id, RevisionBase base) async {
+  Future<T> _locked<T>(Future<T> Function() body) => KeyedMutex.run(_key, body);
+
+  Future<void> set(CloudEntityType type, String id, RevisionBase base) => _locked(() async {
     final all = await _read();
     all[_entityKey(type, id)] = base.toMap();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all));
-  }
+  });
 
-  Future<void> setMany(CloudEntityType type, Map<String, RevisionBase> byId) async {
+  /// Bazele din citiri de server: [skip] decide SUB blocare (de exemplu entități
+  /// protejate între timp), ca o salvare intercalată să nu fie ignorată.
+  Future<void> setMany(CloudEntityType type, Map<String, RevisionBase> byId) => _locked(() async {
     if (byId.isEmpty) return;
     final all = await _read();
     byId.forEach((id, base) => all[_entityKey(type, id)] = base.toMap());
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all));
-  }
+  });
 
-  Future<void> remove(CloudEntityType type, String id) async {
+  Future<void> remove(CloudEntityType type, String id) => _locked(() async {
     final all = await _read();
     if (all.remove(_entityKey(type, id)) == null) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all));
-  }
+  });
 }
 
-/// Un conflict păstrat: varianta locală și cea de server, fără ștergere automată.
 /// Variantele din conflict se salvează local ca JSON. Documentele de server pot
 /// conține `Timestamp`, `GeoPoint`, referințe sau `FieldValue`, pe care
 /// `jsonEncode` le refuză: fără conversie, salvarea conflictului ar eșua.
@@ -180,6 +195,7 @@ Object? _jsonSafe(Object? value) {
   return value.toString();
 }
 
+/// Un conflict păstrat: varianta locală și cea de server, fără ștergere automată.
 class SyncConflict {
   SyncConflict({
     required this.entityType,
@@ -264,7 +280,10 @@ class SyncConflictStore {
     }
   }
 
-  Future<void> _archive(Iterable<SyncConflict> items, String reason) async {
+  Future<void> _archive(Iterable<SyncConflict> items, String reason) =>
+      KeyedMutex.run(_archiveKey, () => _archiveUnlocked(items.toList(), reason));
+
+  Future<void> _archiveUnlocked(List<SyncConflict> items, String reason) async {
     if (items.isEmpty) return;
     final all = [...await listArchived()];
     final at = DateTime.now().toIso8601String();
@@ -291,7 +310,7 @@ class SyncConflictStore {
   Future<Set<String>> openEntityIds(CloudEntityType type) async =>
       (await listOpen()).where((c) => c.entityType == type).map((c) => c.entityId).toSet();
 
-  Future<void> add(SyncConflict conflict) async {
+  Future<void> add(SyncConflict conflict) => KeyedMutex.run(_key, () async {
     final all = [...await listOpen()];
     bool same(SyncConflict c) => c.entityType == conflict.entityType && c.entityId == conflict.entityId;
     await _archive(all.where(same), 'replaced');
@@ -302,16 +321,17 @@ class SyncConflictStore {
     await prefs.setString(_key, jsonEncode(all.map((c) => c.toMap()).toList()));
     debugPrint('[Sync] CONFLICT ${conflict.kind} ${conflict.entityType.name}:${conflict.entityId} '
         'baza=${conflict.baseRev} server=${conflict.serverRev} (ambele variante pastrate)');
-  }
+  });
 
-  Future<void> resolve(CloudEntityType type, String id, {String resolution = 'resolved'}) async {
+  Future<void> resolve(CloudEntityType type, String id, {String resolution = 'resolved'}) =>
+      KeyedMutex.run(_key, () async {
     final all = [...await listOpen()];
     bool same(SyncConflict c) => c.entityType == type && c.entityId == id;
     await _archive(all.where(same), resolution);
     all.removeWhere(same);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all.map((c) => c.toMap()).toList()));
-  }
+  });
 }
 
 /// Aruncată de scrierile condiționate la conflict, DUPĂ ce conflictul a fost
@@ -445,11 +465,17 @@ class RevisionWriter {
     RevisionTransport? transport,
     RevisionBaseStore? bases,
     SyncConflictStore? conflicts,
-  })  : _transport = transport ?? FirestoreRevisionTransport(),
+    String? deviceId,
+  })  : _deviceId = deviceId,
+        _transport = transport ?? FirestoreRevisionTransport(),
         bases = bases ?? RevisionBaseStore(),
         conflicts = conflicts ?? SyncConflictStore();
 
   final RevisionTransport _transport;
+
+  /// Doar teste (mai multe „dispozitive” în același proces); altfel [SyncDeviceId].
+  final String? _deviceId;
+  Future<String> _me() async => _deviceId ?? await SyncDeviceId.get();
   final RevisionBaseStore bases;
   final SyncConflictStore conflicts;
 
@@ -465,15 +491,16 @@ class RevisionWriter {
     required String collection,
     required String id,
     required Map<String, dynamic> data,
+    int? startRev,
   }) async {
     final base = await bases.get(type, id);
-    final writer = await SyncDeviceId.get();
+    final writer = await _me();
     final keys = data.keys.where((k) => !_isVolatileKey(k)).toList();
     final localFp = contentFingerprint(data, keys);
     late _Decision decision;
     await _runReevaluatingOnRejection((tx) async {
       final server = await tx.get(collection, id);
-      decision = _decide(base: base, server: server, keys: keys, localFp: localFp);
+      decision = _decide(base: base, server: server, keys: keys, localFp: localFp, startRev: startRev);
       if (decision.write) {
         tx.set(collection, id, {
           ...data,
@@ -486,10 +513,13 @@ class RevisionWriter {
     return _apply(decision, type: type, id: id, local: data, localFp: localFp, base: base);
   }
 
+  /// [keysFor] = cheile pe care le scrie versiunea curentă (aceleași ca la bază);
+  /// fără ele, câmpuri scrise doar de alte versiuni ar face orice ștergere conflict.
   Future<ConditionalWriteOutcome> delete({
     required CloudEntityType type,
     required String collection,
     required String id,
+    Iterable<String> Function(Map<String, dynamic> serverData)? keysFor,
   }) async {
     final base = await bases.get(type, id);
     late _Decision decision;
@@ -499,7 +529,7 @@ class RevisionWriter {
         decision = _Decision.applied(serverRev: 0, serverFp: '', server: null);
         return;
       }
-      final keys = server.keys.where((k) => !_isVolatileKey(k)).toList();
+      final keys = (keysFor?.call(server) ?? server.keys).where((k) => !_isVolatileKey(k)).toList();
       final sRev = revisionOf(server);
       final sFp = contentFingerprint(server, keys);
       // Ștergerea e permisă doar dacă serverul este încă versiunea pe care
@@ -520,7 +550,8 @@ class RevisionWriter {
       await conflicts.add(c);
       throw RevisionConflictException(c);
     }
-    await bases.remove(type, id);
+    // Baza rămâne: entitatea a fost văzută pe server (și ștearsă). Astfel o copie
+    // locală rămasă nu e luată drept „niciodată trimisă” și readusă la viață.
     return decision.write ? ConditionalWriteOutcome.written : ConditionalWriteOutcome.alreadyApplied;
   }
 
@@ -543,11 +574,13 @@ class RevisionWriter {
     required Map<String, dynamic>? server,
     required List<String> keys,
     required String localFp,
+    int? startRev,
   }) {
     if (server == null) {
-      // Document inexistent: creare doar dacă nu l-am mai văzut pe server;
-      // altfel a fost șters de alt dispozitiv → nu-l readucem la viață orb.
-      return base == null
+      // Document inexistent: creare doar dacă nu l-am mai văzut pe server (nici
+      // baza, nici înregistrarea editată nu au revizie de server); altfel a fost
+      // șters de alt dispozitiv → nu-l readucem la viață orb.
+      return base == null && (startRev ?? 0) == 0
           ? _Decision.write(newRev: 1, server: null)
           : _Decision.conflict('deleted_remotely', server: null, serverRev: null);
     }
@@ -555,6 +588,20 @@ class RevisionWriter {
     final sFp = contentFingerprint(server, keys);
     if (sFp == localFp) {
       return _Decision.applied(serverRev: sRev, serverFp: sFp, server: server);
+    }
+    if (base != null && base.fingerprint == localFp) {
+      // Conținutul local este exact o versiune pe care serverul a avut-o deja
+      // (de exemplu scrierea imediată a reușit, iar elementul din coadă e reluat
+      // după ce alt dispozitiv a editat): nimic de trimis, fără conflict fals.
+      // Baza NU avansează: o editare locală ulterioară trebuie să rămână
+      // comparată cu versiunea din care a pornit.
+      return _Decision.superseded(serverRev: sRev, server: server);
+    }
+    if (startRev != null && base != null && startRev < base.rev && !base.ownWrite) {
+      // Editarea a pornit dintr-o versiune mai veche decât cea pe care alt
+      // dispozitiv a scris-o între timp (editor deschis, bază actualizată din
+      // fundal): scrierea ar șterge silențios editarea celuilalt → conflict.
+      return _Decision.conflict('concurrent_edit', server: server, serverRev: sRev);
     }
     if (base != null && base.rev == sRev && base.fingerprint == sFp) {
       return _Decision.write(newRev: sRev + 1, server: server);
@@ -580,9 +627,10 @@ class RevisionWriter {
       throw RevisionConflictException(c);
     }
     if (d.write) {
-      await bases.set(type, id, RevisionBase(rev: d.newRev, fingerprint: localFp));
+      await bases.set(type, id, RevisionBase(rev: d.newRev, fingerprint: localFp, ownWrite: true));
       return ConditionalWriteOutcome.written;
     }
+    if (d.isSuperseded) return ConditionalWriteOutcome.alreadyApplied;
     await bases.set(type, id, RevisionBase(rev: d.serverRev!, fingerprint: d.serverFp!));
     return ConditionalWriteOutcome.alreadyApplied;
   }
@@ -594,10 +642,15 @@ class RevisionWriter {
     required Iterable<String> Function(Map<String, dynamic> data) keysFor,
     required Set<String> protectedIds,
   }) async {
+    final me = await _me();
     final byId = <String, RevisionBase>{};
     serverDocs.forEach((id, data) {
       if (id.isEmpty || protectedIds.contains(id)) return;
-      byId[id] = RevisionBase(rev: revisionOf(data), fingerprint: contentFingerprint(data, keysFor(data)));
+      byId[id] = RevisionBase(
+        rev: revisionOf(data),
+        fingerprint: contentFingerprint(data, keysFor(data)),
+        ownWrite: data[kRevWriterField] == me,
+      );
     });
     await bases.setMany(type, byId);
   }
@@ -623,11 +676,13 @@ class RevisionWriter {
 
 class _Decision {
   _Decision.write({required this.newRev, required this.server})
-      : write = true, conflictKind = null, serverRev = null, serverFp = null;
+      : write = true, conflictKind = null, serverRev = null, serverFp = null, isSuperseded = false;
   _Decision.applied({required this.serverRev, required this.serverFp, required this.server})
-      : write = false, conflictKind = null, newRev = 0;
+      : write = false, conflictKind = null, newRev = 0, isSuperseded = false;
   _Decision.conflict(this.conflictKind, {required this.server, required this.serverRev})
-      : write = false, newRev = 0, serverFp = null;
+      : write = false, newRev = 0, serverFp = null, isSuperseded = false;
+  _Decision.superseded({required this.serverRev, required this.server})
+      : write = false, conflictKind = null, newRev = 0, serverFp = null, isSuperseded = true;
 
   final bool write;
   final int newRev;
@@ -635,4 +690,5 @@ class _Decision {
   final Map<String, dynamic>? server;
   final int? serverRev;
   final String? serverFp;
+  final bool isSuperseded;
 }

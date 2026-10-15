@@ -8,6 +8,8 @@ import '../../../core/cloud/offline_sync_runtime.dart';
 import '../../../core/repositories/app_data_repository.dart';
 import '../job_models.dart';
 import '../lucrari_cloud_repository.dart';
+import '../../../core/cloud/cloud_sync_models.dart';
+import '../../../core/cloud/revision_sync.dart';
 
 /// Chei SharedPreferences pentru o lucrare, derivate din `jobId`.
 ///
@@ -90,12 +92,15 @@ Future<JobRecord> lucrareSaveJobWithSync({
   bool? online,
   Duration cloudTimeout = const Duration(seconds: 10),
 }) async {
-  final saved = await repository.saveJob(job);
   // Coada ÎNAINTE de cloud (RC 120): editarea e durabilă la crash și protejată
   // la merge din momentul salvării. Dacă scrierea cloud de mai jos reușește,
   // elementul e confirmat la următoarea sincronizare fără a scrie din nou
   // (scriere condiționată de revizie: conținut identic = aplicat).
-  await OfflineSyncRuntime.instance.queueJob(saved);
+  final saved = await runEntitySyncLocked(CloudEntityType.jobs, () async {
+    final saved = await repository.saveJob(job);
+    await OfflineSyncRuntime.instance.queueJob(saved);
+    return saved;
+  });
   if (cloud == null) {
     return saved;
   }

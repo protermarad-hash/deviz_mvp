@@ -1,5 +1,7 @@
 import '../../../core/cloud/cloud_push.dart';
 import '../offer_models.dart';
+import '../../../core/cloud/cloud_sync_models.dart';
+import '../../../core/cloud/revision_sync.dart';
 
 /// Salvarea unei oferte, local întâi (același tipar ca `lucrareSaveJobWithSync`).
 ///
@@ -19,10 +21,13 @@ Future<CloudPushOutcome> offerSaveLocalFirst({
   bool? online,
   Duration cloudTimeout = const Duration(seconds: 10),
 }) async {
-  await saveLocal(offer);
   // Coada ÎNAINTE de cloud (RC 120): durabil la crash și protejat la merge; dacă
   // scrierea cloud reușește, elementul se confirmă idempotent (revizie).
-  await queue(offer);
+  // Salvarea locală și coada sub aceeași blocare ca îmbinarea din cloud.
+  await runEntitySyncLocked(CloudEntityType.offers, () async {
+    await saveLocal(offer);
+    await queue(offer);
+  });
   return cloudUpsert == null
       ? CloudPushOutcome.failed
       : await pushToCloudWithoutBlocking(

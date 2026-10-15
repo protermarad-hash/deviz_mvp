@@ -86,6 +86,8 @@ import 'services/pontaj_fisa_pdf_service.dart';
 import 'services/lucrare_ai_service.dart';
 import 'services/lucrare_pdf_builder.dart';
 import 'services/lucrare_document_actions.dart';
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/revision_sync.dart';
 
 class LucrareDetaliiPage extends StatefulWidget {
   const LucrareDetaliiPage({
@@ -11207,8 +11209,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       sourceDocumentType: sourceDocumentType,
     );
     try {
-      _jobSnapshot = await widget.repository.saveJob(updated);
-      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
+      _jobSnapshot = await runEntitySyncLocked(CloudEntityType.jobs, () async {
+        final saved = await widget.repository.saveJob(updated);
+        await OfflineSyncRuntime.instance.queueJob(saved);
+        return saved;
+      });
     } catch (e) {
       debugPrint('[Situatie] _saveLiniiPlanificate error: $e');
     }
@@ -11250,8 +11255,11 @@ class _LucrareDetaliiPageState extends State<LucrareDetaliiPage> {
       progresGlobalPercent: percent,
     );
     try {
-      _jobSnapshot = await widget.repository.saveJob(updated);
-      await OfflineSyncRuntime.instance.queueJob(_jobSnapshot);
+      _jobSnapshot = await runEntitySyncLocked(CloudEntityType.jobs, () async {
+        final saved = await widget.repository.saveJob(updated);
+        await OfflineSyncRuntime.instance.queueJob(saved);
+        return saved;
+      });
     } catch (e) {
       debugPrint('[Executie] _applyProgresGlobal error: $e');
     }
