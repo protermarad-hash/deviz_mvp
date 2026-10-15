@@ -33,10 +33,15 @@ import 'cloud_sync_models.dart';
 const String kRevField = '_rev';
 const String kRevWriterField = '_rev_writer';
 
+/// Ora serverului la scrierea condiționată. Un document al cărui `updateTime`
+/// (metadata Firestore) este mai nou decât `_rev_at` a fost modificat fără
+/// revizie (aplicație veche sau consolă): semnalul de monitorizare pentru M2.
+const String kRevAtField = '_rev_at';
+
 /// Câmpuri care nu fac parte din conținut (metadate, ștampile de timp care pot
 /// fi rescrise de versiuni vechi la fiecare trimitere).
 bool _isVolatileKey(String key) {
-  if (key == kRevField || key == kRevWriterField) return true;
+  if (key == kRevField || key == kRevWriterField || key == kRevAtField) return true;
   final k = key.toLowerCase();
   return k == 'updated_at' ||
       k == 'updatedat' ||
@@ -162,6 +167,19 @@ class RevisionBaseStore {
 }
 
 /// Un conflict păstrat: varianta locală și cea de server, fără ștergere automată.
+/// Variantele din conflict se salvează local ca JSON. Documentele de server pot
+/// conține `Timestamp`, `GeoPoint`, referințe sau `FieldValue`, pe care
+/// `jsonEncode` le refuză: fără conversie, salvarea conflictului ar eșua.
+Object? _jsonSafe(Object? value) {
+  if (value == null || value is bool || value is String) return value;
+  if (value is num) return value.isFinite ? value : value.toString();
+  if (value is Map) return {for (final e in value.entries) e.key.toString(): _jsonSafe(e.value)};
+  if (value is Iterable) return value.map(_jsonSafe).toList();
+  if (value is Timestamp) return value.toDate().toUtc().toIso8601String();
+  if (value is DateTime) return value.toUtc().toIso8601String();
+  return value.toString();
+}
+
 class SyncConflict {
   SyncConflict({
     required this.entityType,
@@ -190,8 +208,8 @@ class SyncConflict {
         'entity_type': entityType.name,
         'entity_id': entityId,
         'kind': kind,
-        'local_payload': localPayload,
-        'server_payload': serverPayload,
+        'local_payload': _jsonSafe(localPayload),
+        'server_payload': _jsonSafe(serverPayload),
         'base_rev': baseRev,
         'server_rev': serverRev,
         'detected_at': detectedAt.toIso8601String(),
@@ -225,8 +243,37 @@ class SyncConflict {
 class SyncConflictStore {
   /// [namespace] doar pentru teste (mai multe „dispozitive” în același proces).
   SyncConflictStore({String namespace = ''})
-      : _key = namespace.isEmpty ? 'sync_conflicts_v1' : 'sync_conflicts_v1_$namespace';
+      : _key = namespace.isEmpty ? 'sync_conflicts_v1' : 'sync_conflicts_v1_$namespace',
+        _archiveKey =
+            namespace.isEmpty ? 'sync_conflicts_archive_v1' : 'sync_conflicts_archive_v1_$namespace';
   final String _key;
+
+  /// Arhivă doar-adăugare: un conflict înlocuit (alt conflict pe aceeași entitate)
+  /// sau rezolvat nu se șterge, se mută aici cu ambele variante.
+  final String _archiveKey;
+
+  Future<List<Map<String, dynamic>>> listArchived() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_archiveKey);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is List ? decoded.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList() : const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _archive(Iterable<SyncConflict> items, String reason) async {
+    if (items.isEmpty) return;
+    final all = [...await listArchived()];
+    final at = DateTime.now().toIso8601String();
+    for (final c in items) {
+      all.add({...c.toMap(), 'archived_reason': reason, 'archived_at': at});
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_archiveKey, jsonEncode(all));
+  }
 
   Future<List<SyncConflict>> listOpen() async {
     final prefs = await SharedPreferences.getInstance();
@@ -245,18 +292,23 @@ class SyncConflictStore {
       (await listOpen()).where((c) => c.entityType == type).map((c) => c.entityId).toSet();
 
   Future<void> add(SyncConflict conflict) async {
-    final all = [...await listOpen()]..removeWhere((c) =>
-        c.entityType == conflict.entityType && c.entityId == conflict.entityId);
-    all.add(conflict);
+    final all = [...await listOpen()];
+    bool same(SyncConflict c) => c.entityType == conflict.entityType && c.entityId == conflict.entityId;
+    await _archive(all.where(same), 'replaced');
+    all
+      ..removeWhere(same)
+      ..add(conflict);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all.map((c) => c.toMap()).toList()));
     debugPrint('[Sync] CONFLICT ${conflict.kind} ${conflict.entityType.name}:${conflict.entityId} '
         'baza=${conflict.baseRev} server=${conflict.serverRev} (ambele variante pastrate)');
   }
 
-  Future<void> resolve(CloudEntityType type, String id) async {
-    final all = [...await listOpen()]
-      ..removeWhere((c) => c.entityType == type && c.entityId == id);
+  Future<void> resolve(CloudEntityType type, String id, {String resolution = 'resolved'}) async {
+    final all = [...await listOpen()];
+    bool same(SyncConflict c) => c.entityType == type && c.entityId == id;
+    await _archive(all.where(same), resolution);
+    all.removeWhere(same);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all.map((c) => c.toMap()).toList()));
   }
@@ -427,6 +479,7 @@ class RevisionWriter {
           ...data,
           kRevField: decision.newRev,
           kRevWriterField: writer,
+          kRevAtField: FieldValue.serverTimestamp(),
         });
       }
     });

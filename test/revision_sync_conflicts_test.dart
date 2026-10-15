@@ -5,7 +5,7 @@
 // ștergeri, idempotență și îmbinarea ofertelor fără pierderi locale.
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart' show FirebaseException;
+import 'package:cloud_firestore/cloud_firestore.dart' show FirebaseException, GeoPoint, Timestamp;
 import 'package:devizpro_ultra/core/cloud/cloud_sync_models.dart';
 import 'package:devizpro_ultra/core/cloud/local_cloud_sync_repository.dart';
 import 'package:devizpro_ultra/core/cloud/offline_sync_runtime.dart';
@@ -480,5 +480,50 @@ void main() {
       await a.delete(type: t, collection: col, id: 'c1');
       expect(s.read(col, 'c1'), isNull, reason: 'regulile nu condiționează ștergerea: vezi propunerea tombstone');
     });
+  });
+  test('arhiva conflictelor: variantele înlocuite sau rezolvate nu se pierd', () async {
+    final store = SyncConflictStore(namespace: 'arh');
+    SyncConflict k(String local, String server) => SyncConflict(
+          entityType: t, entityId: 'c1', kind: 'concurrent_edit',
+          localPayload: {'name': local}, serverPayload: {'name': server},
+          baseRev: 1, serverRev: 2, detectedAt: DateTime.now(),
+        );
+    await store.add(k('A1', 'B1'));
+    await store.add(k('A2', 'B2')); // conflict nou pe aceeași entitate
+    expect((await store.listOpen()).single.localPayload!['name'], 'A2');
+    await store.resolve(t, 'c1', resolution: 'kept_server');
+    expect(await store.listOpen(), isEmpty);
+    final arh = await store.listArchived();
+    expect(arh.map((m) => m['archived_reason']), ['replaced', 'kept_server']);
+    expect(arh.toString(), allOf(contains('A1'), contains('B1'), contains('A2'), contains('B2')));
+  });
+  test('_rev_at (ora serverului) se scrie la fiecare scriere condiționată și nu intră în amprentă', () async {
+    final s = FakeServer();
+    final a = device(s, 'A');
+    await up(a, client('v1'));
+    expect(s.read(col, 'c1')!.containsKey(kRevAtField), isTrue);
+    final withMeta = s.read(col, 'c1')!;
+    final keys = withMeta.keys.toList();
+    expect(contentFingerprint(withMeta, keys),
+        contentFingerprint({...withMeta}..remove(kRevAtField), keys));
+    expect(await up(a, client('v1')), ConditionalWriteOutcome.alreadyApplied);
+  });
+  test('conflictul se salvează și când varianta de server conține Timestamp/GeoPoint', () async {
+    final store = SyncConflictStore(namespace: 'ts');
+    await store.add(SyncConflict(
+      entityType: t, entityId: 'c1', kind: 'concurrent_edit',
+      localPayload: {'name': 'A'},
+      serverPayload: {
+        'name': 'B',
+        'created_at': Timestamp.fromDate(DateTime.utc(2026, 10, 1)),
+        'loc': const GeoPoint(46.18, 21.31),
+        'nested': {'t': Timestamp.fromDate(DateTime.utc(2026, 10, 2))},
+      },
+      baseRev: 1, serverRev: 2, detectedAt: DateTime.now(),
+    ));
+    final c = (await store.listOpen()).single;
+    expect(c.serverPayload!['name'], 'B');
+    expect(c.serverPayload!['created_at'], '2026-10-01T00:00:00.000Z');
+    expect((c.serverPayload!['nested'] as Map)['t'], '2026-10-02T00:00:00.000Z');
   });
 }
