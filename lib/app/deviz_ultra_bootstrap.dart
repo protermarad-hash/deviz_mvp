@@ -7,6 +7,7 @@ import '../core/auth_session.dart';
 import '../core/boot_trace.dart';
 import '../core/cloud/firebase_bootstrap.dart';
 import '../core/cloud/offline_sync_runtime.dart';
+import '../core/cloud/revision_sync.dart';
 
 class DevizUltraBootstrapApp extends StatefulWidget {
   const DevizUltraBootstrapApp({
@@ -55,6 +56,8 @@ class _DevizUltraBootstrapAppState extends State<DevizUltraBootstrapApp>
     // Curăță IMEDIAT coada de sync: elimină itemele vechi (sincronizate/moarte).
     // Fără aceasta, operațiile JSON pe coada mare blochează UI la prima utilizare.
     unawaited(OfflineSyncRuntime.instance.cleanupQueue());
+    // Indicatorul de conflicte (RC 120): conflictele persistate de la sesiunea anterioară.
+    unawaited(SyncConflictStore.refreshOpenCount());
     // syncPending rulează în fundal - nu blochează UI-ul la startup
     BootTrace.mark('bootstrap:syncPending dispatch');
     unawaited(OfflineSyncRuntime.instance.syncPending());
