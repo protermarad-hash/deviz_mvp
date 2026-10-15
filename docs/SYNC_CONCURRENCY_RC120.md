@@ -305,6 +305,10 @@ Opțional, migrarea explicită `_rev = 0` nu e necesară: regula tratează lipsa
 | Review #6: curățarea cozii la pornire elimina elementele epuizate fără să le păstreze | test | `94f0d0b` |
 | Review #7: coada / bazele / conflictele: citire-modificare-scriere fără blocare → element nou din coadă pierdut | test (pică pe codul vechi) | `94f0d0b`: `KeyedMutex` |
 | Review #9: prima rulare 120 (fără baze) reîncărca înregistrări șterse în altă parte | test | `f8f97bc`: păstrare locală + conflict `unknown_on_upgrade` |
+| Re-review #1: reluarea „aplicat” pierdea `ownWrite` → conflict fals la următoarea salvare pe același dispozitiv | test (pică pe codul vechi) | `ownWrite` din `_rev_writer` |
+| Re-review #2: editorii principali (client, ofertă, lucrare) construiau înregistrarea fără `syncRev` | analiză | editorii transmit `syncRev` |
+| Re-review #5: `_recordBases` calcula entitățile protejate în afara blocării | analiză | sub `runEntitySyncLocked`; salvarea/ștergerea clienților sub aceeași blocare |
+| Re-review #8: păstrarea elementelor epuizate putea eșua, iar curățarea le ștergea oricum | analiză | curățarea doar după păstrare reușită |
 
 ### Riscuri rămase (acceptate până la decizie)
 
@@ -313,21 +317,23 @@ Opțional, migrarea explicită `_rev = 0` nu e necesară: regula tratează lipsa
 - **Lucrări:** îmbinarea păstrează local orice lucrare doar-locală. O lucrare ștearsă în altă parte rămâne local și, dacă e editată, devine creare nouă (comportament anterior, neschimbat).
 - **Editori care construiesc înregistrarea de la zero** (fără `copyWith`) pierd `syncRev`. Pentru ei rămâne protecția prin bază (ca înainte de review #2).
 - **Ștergeri pe Windows** (§8) și **aplicații vechi** (§10): decizii D2/D3.
+- **Conflictele nu au încă interfață:** `retry_exhausted`, `unknown_on_upgrade` și conflictele de ștergere păstrează datele, dar entitatea rămâne protejată și invizibilă pentru utilizator până la rezolvare. Ecranul §9 este **condiție obligatorie înainte de distribuire (M1)**, nu opțională.
+- `complaint_quick_offer_tab` salvează oferta doar local (fără coadă). Comportament anterior, în afara căii condiționate.
 
 ## 13. Teste
 
 ### Unitare și analiză (cod `f8f97bc`)
 
-- `flutter test`: **556/556 PASS**.
+- `flutter test`: **557/557 PASS**.
 - `flutter analyze`: 0 erori, 0 avertismente. Cele 16 `info` sunt preexistente, în fișiere neatinse.
-- `test/revision_sync_conflicts_test.dart`: **42 de teste**. Acoperă:
+- `test/revision_sync_conflicts_test.dart`: **43 de teste**. Acoperă:
   - A offline / B online / A sincronizează;
   - editări simultane, reîncercare, confirmare pierdută, repornire, dublu-clic;
   - cozi vechi, ștergeri, aplicații vechi;
   - fereastra Windows cu și fără regulile M3;
   - arhiva conflictelor, `Timestamp` în conflicte;
-  - constatările de review #1–#7 și #9.
-  - #1, #3 și #7 **pică pe codul vechi** (verificat prin înlocuire temporară).
+  - constatările de review #1–#7 și #9, plus re-review #1.
+  - #1, #3, #7 și re-review #1 **pică pe codul vechi** (verificat prin înlocuire temporară).
 
 ### Reguli propuse (emulator, proiect `demo-`): **17/17 PASS**
 
@@ -373,7 +379,7 @@ Opțional, migrarea explicită `_rev = 0` nu e necesară: regula tratează lipsa
 | D1 | Citire PROD pentru inventarul M0 (Auth, token-uri, raportul de scrieri vechi) | doar citire; recomandat înainte de M1 |
 | D2 | Ștergeri pe Windows: acceptăm riscul (§8) sau implementăm tombstone înainte de M3 | recomandare: tombstone înainte de M3, dacă ștergerile pe Windows sunt uzuale |
 | D3 | Regulile M3 complete sau varianta M3-a (§10) | M3-a ca pas intermediar, dacă M0 nu poate garanta actualizarea tuturor dispozitivelor |
-| D4 | Ecranul de rezolvare a conflictelor (§9): în 120 sau în 121 | recomandare: înainte de distribuirea largă (M1, pasul 2) |
+| D4 | Ecranul de rezolvare a conflictelor (§9) | **obligatoriu înainte de M1**: fără el, conflictele sunt fundături (date păstrate, dar invizibile) |
 | D5 | Heartbeat de versiune și copie server a conflictelor (reguli noi, aditive) | opțional; reduce incertitudinea M0/M2 |
 | D6 | Ordinea proiectelor la M3 (Costel `proventaris-costel-costea` vs. principal `devizpro-ultra-pilot`) | întâi cel cu mai puține dispozitive |
 | D7 | Export Firestore înainte de M1 și înainte de M3 | obligatoriu în plan |

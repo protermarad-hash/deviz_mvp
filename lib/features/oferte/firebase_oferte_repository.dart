@@ -74,12 +74,15 @@ class FirebaseOferteRepository implements OferteCloudRepository {
           if (!doc.metadata.hasPendingWrites) doc.id: doc.data(),
       };
       if (docs.isEmpty) return;
-      await RevisionWriter.standard(firestore: _firestore).recordServerBases(
-        type: CloudEntityType.offers,
-        serverDocs: docs,
-        keysFor: (data) => _offerToCloudMap(OfferRecord.fromMap(_normalizeOfferMap(data))).keys,
-        protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.offers),
-      );
+      // Sub blocarea entității: o salvare + coadă nu se poate intercala între
+      // calculul entităților protejate și scrierea bazelor (RC 120).
+      await runEntitySyncLocked(CloudEntityType.offers, () async =>
+          RevisionWriter.standard(firestore: _firestore).recordServerBases(
+          type: CloudEntityType.offers,
+          serverDocs: docs,
+          keysFor: (data) => _offerToCloudMap(OfferRecord.fromMap(_normalizeOfferMap(data))).keys,
+          protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.offers),
+        ));
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
     }

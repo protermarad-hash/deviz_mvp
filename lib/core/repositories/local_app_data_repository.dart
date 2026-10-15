@@ -2938,7 +2938,7 @@ class LocalAppDataRepository implements AppDataRepository {
     );
     // Local întâi și coada ÎNAINTE de cloud, sub blocare: salvarea nu depinde
     // de server, e durabilă la crash și protejată la îmbinarea din cloud.
-    await _withClientsLock(() async {
+    await runEntitySyncLocked(CloudEntityType.clients, () => _withClientsLock(() async {
       final items = [...await _readLocalClientsOnly()];
       final index = items.indexWhere((item) => item.id == next.id);
       if (index >= 0) {
@@ -2948,7 +2948,7 @@ class LocalAppDataRepository implements AppDataRepository {
       }
       await _writeClients(items);
       await OfflineSyncRuntime.instance.queueClient(next);
-    });
+    }));
     if (debugClientsCloudAvailable ?? _isClientsCloudAvailable) {
       final data = {
         ...next.toMap(),
@@ -2981,12 +2981,12 @@ class LocalAppDataRepository implements AppDataRepository {
   @override
   Future<void> deleteClient(String clientId) async {
     // Local + coada ÎNAINTE de cloud, sub blocare (aceeași regulă ca la salvare).
-    await _withClientsLock(() async {
+    await runEntitySyncLocked(CloudEntityType.clients, () => _withClientsLock(() async {
       final items = [...await _readLocalClientsOnly()]
         ..removeWhere((item) => item.id == clientId);
       await _writeClients(items);
       await OfflineSyncRuntime.instance.queueClientDelete(clientId);
-    });
+    }));
     if (_isClientsCloudAvailable) {
       // Ștergere condiționată (nu șterge o versiune editată între timp de alt
       // dispozitiv) și fără blocare pe server inaccesibil.

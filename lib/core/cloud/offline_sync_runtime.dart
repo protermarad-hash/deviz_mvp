@@ -471,8 +471,10 @@ class OfflineSyncRuntime {
   Future<void> cleanupQueue() async {
     // Ca în syncPending: elementele epuizate se păstrează întâi ca conflict
     // (altfel modificarea locală ar dispărea silențios la pornire).
-    await _preserveExhaustedItems();
-    await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+    // Dacă păstrarea eșuează, NU se curăță (altfel s-ar pierde silențios).
+    if (await _preserveExhaustedItems()) {
+      await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+    }
   }
 
   Future<bool> syncPending() async {
@@ -527,8 +529,9 @@ class OfflineSyncRuntime {
         return false;
       }
 
-      await _preserveExhaustedItems();
-      await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+      if (await _preserveExhaustedItems()) {
+        await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+      }
 
       final pending = await _queueRepository.listPendingItems();
       if (pending.isEmpty) {
@@ -1117,9 +1120,9 @@ class OfflineSyncRuntime {
   /// Pentru clienți, oferte și lucrări, payload-ul local se păstrează ca
   /// conflict `retry_exhausted` înainte de curățare.
   @visibleForTesting
-  Future<void> debugPreserveExhaustedItems() => _preserveExhaustedItems();
+  Future<bool> debugPreserveExhaustedItems() => _preserveExhaustedItems();
 
-  Future<void> _preserveExhaustedItems() async {
+  Future<bool> _preserveExhaustedItems() async {
     try {
       final items = await _queueRepository.listItems();
       final store = SyncConflictStore();
@@ -1141,8 +1144,10 @@ class OfflineSyncRuntime {
           detectedAt: DateTime.now(),
         ));
       }
+      return true;
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
+      return false;
     }
   }
 

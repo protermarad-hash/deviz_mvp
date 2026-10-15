@@ -1645,6 +1645,8 @@ class _JobFormDialogState extends State<_JobFormDialog> {
       await widget.onSave(
         JobRecord(
           id: existing?.id ?? 'job-${now.microsecondsSinceEpoch}',
+          // RC 120: revizia versiunii din care a pornit editarea.
+          syncRev: existing?.syncRev,
           jobCode: _jobCode,
           clientId: _selectedClientId ?? '',
           title: _titleController.text.trim(),

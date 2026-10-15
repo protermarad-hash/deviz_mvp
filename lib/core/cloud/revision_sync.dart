@@ -179,8 +179,8 @@ class RevisionBaseStore {
     await prefs.setString(_key, jsonEncode(all));
   });
 
-  /// Bazele din citiri de server: [skip] decide SUB blocare (de exemplu entități
-  /// protejate între timp), ca o salvare intercalată să nu fie ignorată.
+  /// Bazele din citiri de server (apelantul exclude entitățile protejate și
+  /// rulează sub `runEntitySyncLocked`, ca o salvare + coadă să nu se intercaleze).
   Future<void> setMany(CloudEntityType type, Map<String, RevisionBase> byId) => _locked(() async {
     if (byId.isEmpty) return;
     final all = await _read();
@@ -667,7 +667,12 @@ class RevisionWriter {
       return ConditionalWriteOutcome.written;
     }
     if (d.isSuperseded) return ConditionalWriteOutcome.alreadyApplied;
-    await bases.set(type, id, RevisionBase(rev: d.serverRev!, fingerprint: d.serverFp!));
+    // Conținut identic pe server: dacă versiunea e scrierea acestui dispozitiv
+    // (de exemplu scrierea imediată, apoi reluarea din coadă), baza rămâne „proprie”;
+    // altfel următoarea editare dintr-o înregistrare locală cu revizia veche ar
+    // deveni conflict fals.
+    final own = d.server?[kRevWriterField] == await _me();
+    await bases.set(type, id, RevisionBase(rev: d.serverRev!, fingerprint: d.serverFp!, ownWrite: own));
     return ConditionalWriteOutcome.alreadyApplied;
   }
 

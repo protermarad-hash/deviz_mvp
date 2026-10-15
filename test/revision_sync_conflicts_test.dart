@@ -687,6 +687,22 @@ void main() {
       expect(await RevisionBaseStore().isInitialized(CloudEntityType.offers), isTrue);
     });
 
+    test('re-review #1: scriere imediată + reluare identică + editare din înregistrarea cu revizia veche → fără conflict fals', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('v1')); // rev 1
+      // salvare cu syncRev 1: scrierea imediată → rev 2 (proprie)
+      await a.upsert(type: t, collection: col, id: 'c1', data: client('v2'), startRev: 1);
+      // reluarea elementului din coadă: conținut identic → „aplicat”, baza rămâne proprie
+      expect(await a.upsert(type: t, collection: col, id: 'c1', data: client('v2'), startRev: 1),
+          ConditionalWriteOutcome.alreadyApplied);
+      expect((await a.bases.get(t, 'c1'))!.ownWrite, isTrue);
+      // următoarea salvare din aceeași înregistrare locală (syncRev încă 1)
+      expect(await a.upsert(type: t, collection: col, id: 'c1', data: client('v3'), startRev: 1),
+          ConditionalWriteOutcome.written);
+      expect(await a.conflicts.listOpen(), isEmpty);
+    });
+
     test('KeyedMutex: serializează pe cheie și este reentrant', () async {
       final order = <String>[];
       final f1 = KeyedMutex.run('k', () async {

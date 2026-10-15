@@ -72,12 +72,15 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
           if (!doc.metadata.hasPendingWrites) doc.id: doc.data(),
       };
       if (docs.isEmpty) return;
-      await RevisionWriter.standard(firestore: _firestore).recordServerBases(
-        type: CloudEntityType.jobs,
-        serverDocs: docs,
-        keysFor: (data) => _jobToCloudMap(JobRecord.fromMap(_normalizeJobMap(data))).keys,
-        protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.jobs),
-      );
+      // Sub blocarea entității: o salvare + coadă nu se poate intercala între
+      // calculul entităților protejate și scrierea bazelor (RC 120).
+      await runEntitySyncLocked(CloudEntityType.jobs, () async =>
+          RevisionWriter.standard(firestore: _firestore).recordServerBases(
+          type: CloudEntityType.jobs,
+          serverDocs: docs,
+          keysFor: (data) => _jobToCloudMap(JobRecord.fromMap(_normalizeJobMap(data))).keys,
+          protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.jobs),
+        ));
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
     }

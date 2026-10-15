@@ -74,12 +74,15 @@ class FirebaseClientiRepository implements ClientiCloudRepository {
           if (!doc.metadata.hasPendingWrites) doc.id: doc.data(),
       };
       if (docs.isEmpty) return;
-      await RevisionWriter.standard(firestore: _firestore).recordServerBases(
-        type: CloudEntityType.clients,
-        serverDocs: docs,
-        keysFor: (data) => _clientToCloudMap(ClientRecord.fromMap(_normalizeClientMap(data))).keys,
-        protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.clients),
-      );
+      // Sub blocarea entității: o salvare + coadă nu se poate intercala între
+      // calculul entităților protejate și scrierea bazelor (RC 120).
+      await runEntitySyncLocked(CloudEntityType.clients, () async =>
+          RevisionWriter.standard(firestore: _firestore).recordServerBases(
+          type: CloudEntityType.clients,
+          serverDocs: docs,
+          keysFor: (data) => _clientToCloudMap(ClientRecord.fromMap(_normalizeClientMap(data))).keys,
+          protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.clients),
+        ));
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
     }

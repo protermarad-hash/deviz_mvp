@@ -578,6 +578,8 @@ class OfferFormDialogState extends State<OfferFormDialog> {
 
     final offer = OfferRecord(
       id: seed?.id ?? 'offer-${now.microsecondsSinceEpoch}',
+      // RC 120: revizia versiunii din care a pornit editarea.
+      syncRev: seed?.syncRev,
       offerNumber: _offerNumber,
       title: _titleController.text.trim(),
       clientId: resolvedClientId,
