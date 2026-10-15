@@ -35,6 +35,7 @@ import '../oferte/offer_models.dart';
 import '../oferte/offer_standard_catalog_models.dart';
 import '../oferte/offer_standard_catalog_service.dart';
 import '../oferte/oferte_page.dart';
+import '../oferte/services/offer_persistence.dart';
 import '../product_catalog/product_catalog_models.dart';
 import '../product_catalog/product_catalog_page.dart';
 import '../product_catalog/product_sales_models.dart';
@@ -749,21 +750,14 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
   }
 
   Future<void> _saveOfferResolved(OfferRecord item) async {
-    final cloud = _cloudOferteRepository;
-    var queuedOffline = false;
-    if (cloud != null) {
-      try {
-        await cloud.upsertOffer(item);
-      } catch (_) {
-        queuedOffline = true;
-      }
-    } else {
-      queuedOffline = true;
-    }
-    await _localOferteRepository.upsertOffer(item);
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueOffer(item);
-    }
+    // Local întâi, cloud cu timeout; coada doar dacă cloud-ul nu a confirmat.
+    await offerSaveLocalFirst(
+      offer: item,
+      saveLocal: _localOferteRepository.upsertOffer,
+      cloudUpsert: _cloudOferteRepository?.upsertOffer,
+      queue: OfflineSyncRuntime.instance.queueOffer,
+      queueAlways: false,
+    );
   }
 
   FieldCommercialProductView? _catalogItemByProductId(
