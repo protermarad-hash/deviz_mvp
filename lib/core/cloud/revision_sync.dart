@@ -291,6 +291,11 @@ class FirestoreRevisionTransport implements RevisionTransport {
   final FirebaseFirestore _firestore;
   final Duration timeout;
 
+  /// Doar QA: rulează între citirea de pe server și scriere (Windows), pentru a
+  /// reproduce o scriere concurentă exact în fereastra neatomică. Null în producție.
+  @visibleForTesting
+  static Future<void> Function(String collection, String id)? debugAfterServerRead;
+
   @override
   Future<T> run<T>(Future<T> Function(RevisionTx tx) body) {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
@@ -327,6 +332,7 @@ class _ReadCheckWriteTx implements RevisionTx {
         .doc(id)
         .get(const GetOptions(source: Source.server))
         .timeout(_timeout);
+    await FirestoreRevisionTransport.debugAfterServerRead?.call(collection, id);
     return snap.exists ? snap.data() : null;
   }
 
@@ -413,7 +419,7 @@ class RevisionWriter {
     final keys = data.keys.where((k) => !_isVolatileKey(k)).toList();
     final localFp = contentFingerprint(data, keys);
     late _Decision decision;
-    await _transport.run<void>((tx) async {
+    await _runReevaluatingOnRejection((tx) async {
       final server = await tx.get(collection, id);
       decision = _decide(base: base, server: server, keys: keys, localFp: localFp);
       if (decision.write) {
@@ -434,7 +440,7 @@ class RevisionWriter {
   }) async {
     final base = await bases.get(type, id);
     late _Decision decision;
-    await _transport.run<void>((tx) async {
+    await _runReevaluatingOnRejection((tx) async {
       final server = await tx.get(collection, id);
       if (server == null) {
         decision = _Decision.applied(serverRev: 0, serverFp: '', server: null);
@@ -463,6 +469,20 @@ class RevisionWriter {
     }
     await bases.remove(type, id);
     return decision.write ? ConditionalWriteOutcome.written : ConditionalWriteOutcome.alreadyApplied;
+  }
+
+  /// Pe Windows verificarea nu e atomică: între citire și scriere, alt dispozitiv
+  /// poate scrie. Cu regulile cu revizie obligatorie (etapa M3), serverul respinge
+  /// atunci scrierea (`permission-denied`). Se reevaluează O SINGURĂ dată: recitire
+  /// și decizie (aplicat / conflict / scriere). Un refuz repetat (de exemplu
+  /// utilizator inactiv) se propagă; elementul rămâne în coadă.
+  Future<void> _runReevaluatingOnRejection(Future<void> Function(RevisionTx tx) body) async {
+    try {
+      await _transport.run<void>(body);
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied') rethrow;
+      await _transport.run<void>(body);
+    }
   }
 
   _Decision _decide({

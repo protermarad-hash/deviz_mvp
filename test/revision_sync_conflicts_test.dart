@@ -5,6 +5,7 @@
 // ștergeri, idempotență și îmbinarea ofertelor fără pierderi locale.
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart' show FirebaseException;
 import 'package:devizpro_ultra/core/cloud/cloud_sync_models.dart';
 import 'package:devizpro_ultra/core/cloud/local_cloud_sync_repository.dart';
 import 'package:devizpro_ultra/core/cloud/offline_sync_runtime.dart';
@@ -21,6 +22,17 @@ class FakeServer implements RevisionTransport {
   bool unreachable = false;
   bool loseAckAfterCommit = false;
   int commits = 0;
+
+  /// Regulile propuse M3: creare cu `_rev == 1`, actualizare cu `_rev + 1`,
+  /// ștergere necondiționată. Refuzul = `permission-denied`, ca pe Firestore.
+  bool enforceRevRules = false;
+
+  /// Refuză orice scriere (de exemplu utilizator inactiv).
+  bool denyAll = false;
+  int rejections = 0;
+
+  /// Rulează după citire și înaintea scrierii (fereastra neatomică de pe Windows).
+  void Function(String col, String id)? afterRead;
 
   Map<String, dynamic>? read(String col, String id) {
     final d = docs[col]?[id];
@@ -39,6 +51,14 @@ class FakeServer implements RevisionTransport {
     if (unreachable) throw TimeoutException('server inaccesibil');
     final tx = _FakeTx(this);
     final result = await body(tx);
+    if (tx.hasWrites) {
+      try {
+        tx.checkRules();
+      } on FirebaseException {
+        rejections++;
+        rethrow;
+      }
+    }
     tx.commit();
     commits++;
     if (loseAckAfterCommit) {
@@ -53,15 +73,42 @@ class _FakeTx implements RevisionTx {
   _FakeTx(this.server);
   final FakeServer server;
   final List<void Function()> _ops = [];
+  final List<(String, String, Map<String, dynamic>?)> _writes = [];
+  bool get hasWrites => _writes.isNotEmpty;
   @override
-  Future<Map<String, dynamic>?> get(String collection, String id) async => server.read(collection, id);
+  Future<Map<String, dynamic>?> get(String collection, String id) async {
+    final d = server.read(collection, id);
+    server.afterRead?.call(collection, id);
+    return d;
+  }
+
   @override
-  void set(String collection, String id, Map<String, dynamic> data) => _ops.add(() {
-        final c = server.docs.putIfAbsent(collection, () => {});
-        c[id] = {...?c[id], ...data};
-      });
+  void set(String collection, String id, Map<String, dynamic> data) {
+    _writes.add((collection, id, data));
+    _ops.add(() {
+      final c = server.docs.putIfAbsent(collection, () => {});
+      c[id] = {...?c[id], ...data};
+    });
+  }
+
   @override
-  void delete(String collection, String id) => _ops.add(() => server.docs[collection]?.remove(id));
+  void delete(String collection, String id) {
+    _writes.add((collection, id, null));
+    _ops.add(() => server.docs[collection]?.remove(id));
+  }
+
+  void checkRules() {
+    FirebaseException denied() =>
+        FirebaseException(plugin: 'cloud_firestore', code: 'permission-denied');
+    if (server.denyAll) throw denied();
+    if (!server.enforceRevRules) return;
+    for (final (col, id, data) in _writes) {
+      if (data == null) continue; // ștergere: necondiționată în regulile propuse
+      final current = server.docs[col]?[id];
+      final expected = current == null ? 1 : ((current['_rev'] as num?)?.toInt() ?? 0) + 1;
+      if (data['_rev'] != expected) throw denied();
+    }
+  }
   void commit() {
     for (final op in _ops) {
       op();
@@ -353,6 +400,85 @@ void main() {
           .where((i) => i.entityType == CloudEntityType.offers && !i.isSynced)
           .map((i) => i.entityId);
       expect(queued, contains('o5'), reason: 'oferta netrimisă intră în coadă');
+    });
+  });
+  group('fereastra neatomică citire→scriere (Windows) și regulile propuse M3', () {
+    Future<(FakeServer, RevisionWriter)> seeded() async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('v1'));
+      return (s, a);
+    }
+
+    void bWritesInWindow(FakeServer s) {
+      var done = false;
+      s.afterRead = (c, id) {
+        if (done) return;
+        done = true;
+        final cur = s.read(c, id)!;
+        s.docs[c]![id] = {...cur, 'name': 'Editare B (în fereastră)', '_rev': (cur['_rev'] as int) + 1};
+      };
+    }
+
+    test('RISC fără reguli (înainte de M3): scrierea lui B din fereastră este suprascrisă', () async {
+      final (s, a) = await seeded();
+      bWritesInWindow(s);
+      await up(a, client('Editare A'));
+      expect(s.read(col, 'c1')!['name'], 'Editare A',
+          reason: 'documentează de ce M3 este necesar pentru Windows');
+    });
+
+    test('cu regulile M3: A este respins, reevaluat imediat → conflict; B rămâne pe server', () async {
+      final (s, a) = await seeded();
+      s.enforceRevRules = true;
+      bWritesInWindow(s);
+      await expectLater(up(a, client('Editare A')), throwsA(isA<RevisionConflictException>()));
+      expect(s.rejections, 1);
+      expect(s.read(col, 'c1')!['name'], 'Editare B (în fereastră)');
+      expect(s.read(col, 'c1')!['_rev'], 2);
+      final c = (await a.conflicts.listOpen()).single;
+      expect(c.kind, 'concurrent_edit');
+      expect(c.localPayload!['name'], 'Editare A');
+      expect(c.serverPayload!['name'], 'Editare B (în fereastră)');
+    });
+
+    test('cu regulile M3: refuz persistent (utilizator inactiv) → eroare propagată, nimic pierdut', () async {
+      final (s, a) = await seeded();
+      s.denyAll = true;
+      await expectLater(up(a, client('Editare A')), throwsA(isA<FirebaseException>()));
+      expect(s.rejections, 2, reason: 'o singură reevaluare, fără buclă');
+      expect(await a.conflicts.listOpen(), isEmpty);
+      expect((await a.bases.get(t, 'c1'))!.rev, 1, reason: 'baza rămâne versiunea editată');
+      expect(s.read(col, 'c1')!['name'], 'v1');
+    });
+
+    test('cu regulile M3: confirmare pierdută → reîncercarea vede conținut identic, nu rescrie', () async {
+      final (s, a) = await seeded();
+      s.enforceRevRules = true;
+      s.loseAckAfterCommit = true;
+      await expectLater(up(a, client('v2')), throwsA(isA<TimeoutException>()));
+      final commits = s.commits;
+      expect(await up(a, client('v2')), ConditionalWriteOutcome.alreadyApplied);
+      expect(s.commits, commits + 1, reason: 'tranzacție fără scriere');
+      expect(s.rejections, 0);
+      expect(s.read(col, 'c1')!['_rev'], 2);
+    });
+
+    test('cu regulile M3: document vechi fără _rev → prima scriere 120 cu _rev = 1 este acceptată', () async {
+      final s = FakeServer()..legacyBlindWrite(col, 'c1', client('din 119'));
+      s.enforceRevRules = true;
+      final a = device(s, 'A');
+      await pull(a, s);
+      expect(await up(a, client('migrat')), ConditionalWriteOutcome.written);
+      expect(s.read(col, 'c1')!['_rev'], 1);
+    });
+
+    test('RISC CUNOSCUT și cu regulile M3: ștergerea invechită din fereastră pierde editarea lui B', () async {
+      final (s, a) = await seeded();
+      s.enforceRevRules = true;
+      bWritesInWindow(s);
+      await a.delete(type: t, collection: col, id: 'c1');
+      expect(s.read(col, 'c1'), isNull, reason: 'regulile nu condiționează ștergerea: vezi propunerea tombstone');
     });
   });
 }
