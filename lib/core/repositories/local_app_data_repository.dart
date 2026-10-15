@@ -72,7 +72,6 @@ class LocalAppDataRepository implements AppDataRepository {
   static int appointmentLocalJsonBytesApprox = 0;
   static int appointmentPendingDeleteCount = 0;
   static Future<void>? _pendingDeletesRetryFuture;
-  static Future<void>? _clientsBackgroundUploadFuture;
   static Future<void>? _partnersBackgroundUploadFuture;
   static Future<void>? _partnerWorkersBackgroundUploadFuture;
   static Future<void>? _partnerVehiclesBackgroundUploadFuture;
@@ -232,33 +231,6 @@ class LocalAppDataRepository implements AppDataRepository {
     if (operationCount > 0) {
       await batch.commit();
     }
-  }
-
-  void _uploadLocalOnlyClientsBackground(List<ClientRecord> items) {
-    if (items.isEmpty || !_isClientsCloudAvailable) {
-      return;
-    }
-    if (_clientsBackgroundUploadFuture != null) {
-      return;
-    }
-    final snapshot = List<ClientRecord>.from(items, growable: false);
-    final future = _uploadLocalOnlyClientsBackgroundImpl(snapshot);
-    _clientsBackgroundUploadFuture = future;
-    unawaited(
-      future.whenComplete(() {
-        if (identical(_clientsBackgroundUploadFuture, future)) {
-          _clientsBackgroundUploadFuture = null;
-        }
-      }),
-    );
-  }
-
-  Future<void> _uploadLocalOnlyClientsBackgroundImpl(
-    List<ClientRecord> items,
-  ) async {
-    // Scriere condiționată per client (nu batch orb): un client șters între timp
-    // de alt dispozitiv devine conflict `deleted_remotely`, nu este readus la viață.
-    await _uploadClientsConditionally(items);
   }
 
   Future<void> _uploadClientsConditionally(List<ClientRecord> items) async {
