@@ -322,7 +322,7 @@ Opțional, migrarea explicită `_rev = 0` nu e necesară: regula tratează lipsa
 
 ## 13. Teste
 
-### Unitare și analiză (cod `f8f97bc`)
+### Unitare și analiză (cod `9c3a295`)
 
 - `flutter test`: **557/557 PASS**.
 - `flutter analyze`: 0 erori, 0 avertismente. Cele 16 `info` sunt preexistente, în fișiere neatinse.
@@ -349,9 +349,9 @@ Opțional, migrarea explicită `_rev = 0` nu e necesară: regula tratează lipsa
 | R10 | utilizator inactiv respins; alte colecții neschimbate |
 | R11 | varianta M3-a: scrierea veche doar pe documente fără `_rev` |
 
-### Windows izolat (binar Release de test cu codul `f8f97bc`, Firestore Emulator, profil QA separat)
+### Windows izolat (binar Release de test cu codul `9c3a295`, Firestore Emulator, profil QA separat)
 
-- Exe `89c5a8b4…`, rulare `pvl-qa-common/runs/rc120_20261015_235456`: **S1–S6 PASS**.
+- Exe `ad0e0fb4…`, rulare `pvl-qa-common/runs/rc120_20261016_001344`: **S1–S6 PASS** (0 FAIL). Rularea anterioară, pe `f8f97bc` (`rc120_20261015_235456`), a fost tot PASS.
 - Monitorul `legacy_writes_report.mjs` a fost testat pe emulator: PASS.
 
 | Scenariu | Rezultat |
