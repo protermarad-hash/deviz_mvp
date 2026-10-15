@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_theme_preset.dart';
 import '../auth_models.dart';
 import '../app_models.dart';
+import '../cloud/cloud_push.dart';
 import '../cloud/firebase_bootstrap.dart';
 import '../cloud/firebase_collections.dart';
 import '../cloud/firestore_auth_warning_service.dart';
@@ -42,6 +43,16 @@ class LocalAppDataRepository implements AppDataRepository {
   /// Notifică toate paginile care afișează liste de clienți că s-a adăugat/șters
   /// un client. Paginile adaugă un listener în initState și îl elimină în dispose.
   static final ValueNotifier<int> clientsChangeCount = ValueNotifier<int>(0);
+
+  /// Doar teste: înlocuiește scrierea cloud a clientului (ex. una care nu se
+  /// confirmă niciodată, ca pe un server inaccesibil).
+  @visibleForTesting
+  static Future<void> Function(String id, Map<String, dynamic> data)?
+      debugClientCloudWrite;
+
+  /// Doar teste: forțează disponibilitatea cloud pentru clienți.
+  @visibleForTesting
+  static bool? debugClientsCloudAvailable;
   static int appointmentLastLocalCount = 0;
   static int appointmentLastCloudCount = -1;
   static int appointmentLastFilteredTodayCount = -1;
@@ -2955,27 +2966,35 @@ class LocalAppDataRepository implements AppDataRepository {
     } else {
       items.add(next);
     }
-    if (_isClientsCloudAvailable) {
-      try {
-        await _clientsCollection.doc(next.id).set(
-          {
-            ...next.toMap(),
-            'updated_at': next.updatedAt.toIso8601String(),
-          },
-          SetOptions(merge: true),
-        );
+    // Local întâi: salvarea nu mai depinde de confirmarea serverului. Pe un
+    // server inaccesibil (DNS funcțional), `set()` nu se confirmă niciodată —
+    // înainte, UI-ul aștepta la nesfârșit, iar clientul nu ajungea local.
+    await _writeClients(items);
+    if (debugClientsCloudAvailable ?? _isClientsCloudAvailable) {
+      final data = {
+        ...next.toMap(),
+        'updated_at': next.updatedAt.toIso8601String(),
+      };
+      final outcome = await pushToCloudWithoutBlocking(
+        () => (debugClientCloudWrite ??
+            (id, map) => _clientsCollection
+                .doc(id)
+                .set(map, SetOptions(merge: true)))(next.id, data),
+        online: debugClientsCloudAvailable,
+      );
+      if (outcome == CloudPushOutcome.synced) {
         _lastClientsDataSourceLabel = 'cloud';
         _lastClientsFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
+      } else {
         _lastClientsDataSourceLabel = 'local_cache';
-        _lastClientsFallbackReason = error.toString().trim();
+        _lastClientsFallbackReason = outcome == CloudPushOutcome.failed
+            ? (FirebaseBootstrap.lastErrorMessage ?? '').trim()
+            : 'cloud indisponibil';
       }
     } else {
       _lastClientsDataSourceLabel = 'local_cache';
       _lastClientsFallbackReason = 'cloud indisponibil';
     }
-    await _writeClients(items);
     // Queue offline — garantează sincronizarea (CLAUDE.md: queue în repository)
     unawaited(OfflineSyncRuntime.instance.queueClient(next));
     // Notifică toate paginile care afișează clienți să reîncarce lista

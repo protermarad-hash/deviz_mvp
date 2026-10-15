@@ -5,7 +5,9 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/cloud/cloud_push.dart';
 import '../../core/cloud/firebase_bootstrap.dart';
+import 'services/offer_persistence.dart';
 import '../../core/cloud/firestore_auth_warning_service.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
 import '../../core/repositories/app_data_repository.dart';
@@ -459,40 +461,34 @@ class _OfertePageState extends State<OfertePage>
         ? item.copyWith(offerNumber: await widget.repository.nextOfferNumber())
         : item.copyWith(offerNumber: item.offerNumber.trim());
     final cloud = _cloudRepository;
-    if (cloud != null) {
-      // Retry de 3 ori cu backoff exponențial (1s, 2s, 4s) pentru erori tranzitorii
-      const maxRetries = 3;
-      Object? lastError;
-      for (var attempt = 0; attempt < maxRetries; attempt++) {
+    // Local întâi, cloud cu timeout, coada offline întotdeauna (reîncercările
+    // tranzitorii le face coada, nu UI-ul).
+    final outcome = await offerSaveLocalFirst(
+      offer: resolved,
+      saveLocal: (o) async {
         try {
-          if (attempt > 0) {
-            await Future.delayed(Duration(seconds: 1 << attempt));
-          }
-          await cloud.upsertOffer(resolved);
-          _setCloudSource();
-          lastError = null;
-          break;
+          await _localRepository.upsertOffer(o);
         } catch (error) {
-          lastError = error;
           FirebaseBootstrap.registerRuntimeError(error);
         }
-      }
-      if (lastError != null) {
-        _setLocalCacheSource(_shortCloudError(lastError));
-      }
+      },
+      cloudUpsert: cloud?.upsertOffer,
+      queue: (o) async {
+        try {
+          await OfflineSyncRuntime.instance.queueOffer(o);
+        } catch (error) {
+          FirebaseBootstrap.registerRuntimeError(error);
+        }
+      },
+    );
+    if (outcome == CloudPushOutcome.synced) {
+      _setCloudSource();
+    } else if (cloud != null) {
+      _setLocalCacheSource(_shortCloudError(
+          FirebaseBootstrap.lastErrorMessage ?? 'cloud indisponibil'));
     } else {
       _setLocalCacheSource(
           _fallbackReason ?? FirebaseBootstrap.lastErrorMessage);
-    }
-    try {
-      await _localRepository.upsertOffer(resolved);
-    } catch (error) {
-      FirebaseBootstrap.registerRuntimeError(error);
-    }
-    try {
-      await OfflineSyncRuntime.instance.queueOffer(resolved);
-    } catch (error) {
-      FirebaseBootstrap.registerRuntimeError(error);
     }
   }
 
