@@ -282,9 +282,57 @@ class FirestoreRevisionTransport implements RevisionTransport {
   final Duration timeout;
 
   @override
-  Future<T> run<T>(Future<T> Function(RevisionTx tx) body) => _firestore
-      .runTransaction<T>((t) => body(_FirestoreTx(_firestore, t)), timeout: timeout)
-      .timeout(timeout + const Duration(seconds: 5));
+  Future<T> run<T>(Future<T> Function(RevisionTx tx) body) {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+      return _runReadCheckWrite(body);
+    }
+    return _firestore
+        .runTransaction<T>((t) => body(_FirestoreTx(_firestore, t)), timeout: timeout)
+        .timeout(timeout + const Duration(seconds: 5));
+  }
+
+  /// Windows: tranzacțiile pluginului cloud_firestore 5.6.12 (SDK C++) opresc
+  /// procesul cu o excepție C++ necapturată (0xE06D7363, QA izolat 15.10.2026).
+  /// Aceeași verificare, fără tranzacție: citire DE PE SERVER, decizie, scriere.
+  /// Nu este atomică (fereastră de concurență de ordinul sutelor de ms, nu ore);
+  /// atomicitatea completă necesită regulile Firestore cu revizie obligatorie.
+  Future<T> _runReadCheckWrite<T>(Future<T> Function(RevisionTx tx) body) async {
+    final tx = _ReadCheckWriteTx(_firestore, timeout);
+    final result = await body(tx);
+    await tx.commit();
+    return result;
+  }
+}
+
+class _ReadCheckWriteTx implements RevisionTx {
+  _ReadCheckWriteTx(this._db, this._timeout);
+  final FirebaseFirestore _db;
+  final Duration _timeout;
+  final List<Future<void> Function()> _ops = [];
+
+  @override
+  Future<Map<String, dynamic>?> get(String collection, String id) async {
+    final snap = await _db
+        .collection(collection)
+        .doc(id)
+        .get(const GetOptions(source: Source.server))
+        .timeout(_timeout);
+    return snap.exists ? snap.data() : null;
+  }
+
+  @override
+  void set(String collection, String id, Map<String, dynamic> data) => _ops.add(
+      () => _db.collection(collection).doc(id).set(data, SetOptions(merge: true)));
+
+  @override
+  void delete(String collection, String id) =>
+      _ops.add(() => _db.collection(collection).doc(id).delete());
+
+  Future<void> commit() async {
+    for (final op in _ops) {
+      await op().timeout(_timeout);
+    }
+  }
 }
 
 class _FirestoreTx implements RevisionTx {
