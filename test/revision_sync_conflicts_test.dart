@@ -336,6 +336,9 @@ void main() {
       await repo.upsertOffer(o('o2', 'o2 local sincronizat'));
       await repo.upsertOffer(o('o3', 'o3 creata offline'));
       await repo.upsertOffer(o('o4', 'o4 stearsa pe server'));
+      await repo.upsertOffer(o('o5', 'o5 doar locala, netrimisa'));
+      // o4 a fost văzută pe server (are bază); o5 nu.
+      await RevisionBaseStore().set(CloudEntityType.offers, 'o4', const RevisionBase(rev: 1, fingerprint: 'x'));
       LocalOferteRepository.debugProtectedIds = () async => {'o1', 'o3'};
       addTearDown(() => LocalOferteRepository.debugProtectedIds = null);
       final merged = await repo.mergeOffersFromCloud([o('o1', 'o1 din cloud'), o('o2', 'o2 din cloud')]);
@@ -343,8 +346,13 @@ void main() {
       expect(byId['o1'], 'o1 local nesincronizat');
       expect(byId['o2'], 'o2 din cloud');
       expect(byId['o3'], 'o3 creata offline');
-      expect(byId.containsKey('o4'), isFalse, reason: 'neprotejată și absentă pe server');
-      expect((await repo.listOffers()).map((x) => x.id).toSet(), {'o1', 'o2', 'o3'});
+      expect(byId.containsKey('o4'), isFalse, reason: 'văzută pe server, ștearsă acolo, fără modificare locală');
+      expect(byId['o5'], 'o5 doar locala, netrimisa', reason: 'niciodată văzută pe server: nu se pierde');
+      expect((await repo.listOffers()).map((x) => x.id).toSet(), {'o1', 'o2', 'o3', 'o5'});
+      final queued = (await LocalCloudSyncRepository().listItems())
+          .where((i) => i.entityType == CloudEntityType.offers && !i.isSynced)
+          .map((i) => i.entityId);
+      expect(queued, contains('o5'), reason: 'oferta netrimisă intră în coadă');
     });
   });
 }

@@ -78,9 +78,9 @@ Future<void> lucrareSaveRows(
 /// 2. scrierea cloud este lansată prin [pushToCloudWithoutBlocking]: offline,
 ///    Firestore o păstrează ca scriere în așteptare (cache-ul local rămâne
 ///    coerent cu `mergeJobsFromCloud`); online, e așteptată cu timeout;
-/// 3. dacă nu este confirmată (offline / eroare / timeout), job-ul intră în
-///    coada offline — idempotent: coada păstrează un singur item nesincronizat
-///    per `entityId`, iar upsert-ul cloud este `set(merge)` pe același ID.
+/// 3. job-ul intră în coada offline ÎNAINTE de scrierea cloud (durabil la
+///    crash, protejat la merge); coada păstrează un singur item nesincronizat
+///    per `entityId`, iar scrierea cloud e condiționată de revizie (idempotentă).
 ///
 /// [online] permite testarea; implicit `FirebaseBootstrap.isOnline`.
 Future<JobRecord> lucrareSaveJobWithSync({
@@ -91,17 +91,18 @@ Future<JobRecord> lucrareSaveJobWithSync({
   Duration cloudTimeout = const Duration(seconds: 10),
 }) async {
   final saved = await repository.saveJob(job);
+  // Coada ÎNAINTE de cloud (RC 120): editarea e durabilă la crash și protejată
+  // la merge din momentul salvării. Dacă scrierea cloud de mai jos reușește,
+  // elementul e confirmat la următoarea sincronizare fără a scrie din nou
+  // (scriere condiționată de revizie: conținut identic = aplicat).
+  await OfflineSyncRuntime.instance.queueJob(saved);
   if (cloud == null) {
-    await OfflineSyncRuntime.instance.queueJob(saved);
     return saved;
   }
-  final outcome = await pushToCloudWithoutBlocking(
+  await pushToCloudWithoutBlocking(
     () => cloud.upsertJob(saved),
     online: online,
     timeout: cloudTimeout,
   );
-  if (outcome != CloudPushOutcome.synced) {
-    await OfflineSyncRuntime.instance.queueJob(saved);
-  }
   return saved;
 }

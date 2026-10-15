@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/cloud/cloud_sync_models.dart';
 import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/cloud/revision_sync.dart';
 import 'offer_models.dart';
 
 class LocalOferteRepository {
@@ -40,8 +41,10 @@ class LocalOferteRepository {
 
   /// Îmbină lista din cloud cu stocarea locală FĂRĂ a pierde modificări locale:
   /// pentru ofertele cu modificări nesincronizate sau conflict deschis rămâne
-  /// versiunea locală, iar ofertele doar-locale protejate (create offline,
-  /// încă netrimise) nu sunt șterse. Înainte, `replaceOffers(cloud)` le elimina.
+  /// versiunea locală; ofertele doar-locale se păstrează dacă sunt protejate sau
+  /// nu au fost văzute niciodată pe server (acestea intră și în coadă). Doar o
+  /// ofertă văzută pe server, ștearsă acolo și fără modificare locală dispare.
+  /// Înainte, `replaceOffers(cloud)` elimina orice ofertă doar-locală.
   Future<List<OfferRecord>> mergeOffersFromCloud(List<OfferRecord> cloudItems) async {
     final protectedIds = await (debugProtectedIds?.call() ??
         OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.offers));
@@ -55,9 +58,25 @@ class LocalOferteRepository {
         final l = localById[c.id];
         merged.add(protectedIds.contains(c.id) && l != null ? l : c);
       }
-      merged.addAll(local.where((o) => !cloudIds.contains(o.id) && protectedIds.contains(o.id)));
+      final seenOnServer = await RevisionBaseStore().idsWithBase(CloudEntityType.offers);
+      final neverSynced = <OfferRecord>[];
+      for (final o in local) {
+        if (cloudIds.contains(o.id)) continue;
+        if (protectedIds.contains(o.id)) {
+          merged.add(o); // modificare locală în așteptare
+        } else if (!seenOnServer.contains(o.id)) {
+          merged.add(o); // niciodată văzută pe server: date locale netrimise
+          neverSynced.add(o);
+        }
+        // Altfel: văzută pe server și ștearsă acolo → ștergerea se aplică local.
+      }
       await _writeOffers(merged);
-      return merged;
+      return (merged, neverSynced);
+    }).then((r) async {
+      for (final o in r.$2) {
+        await OfflineSyncRuntime.instance.queueOffer(o);
+      }
+      return r.$1;
     });
   }
 

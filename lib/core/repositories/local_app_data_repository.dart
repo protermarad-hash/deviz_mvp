@@ -46,6 +46,17 @@ class LocalAppDataRepository implements AppDataRepository {
   /// un client. Paginile adaugă un listener în initState și îl elimină în dispose.
   static final ValueNotifier<int> clientsChangeCount = ValueNotifier<int>(0);
 
+  /// Serializează citire–modificare–scriere pe stocarea locală a clienților
+  /// (salvare, ștergere, îmbinare din cloud în fundal). Fără ea, o îmbinare
+  /// pornită înaintea unei salvări putea scrie peste editarea locală (QA 120).
+  static Future<void> _clientsLock = Future<void>.value();
+  static Future<T> _withClientsLock<T>(Future<T> Function() body) {
+    final previous = _clientsLock;
+    final done = Completer<void>();
+    _clientsLock = done.future;
+    return previous.then((_) => body()).whenComplete(done.complete);
+  }
+
   /// Doar teste: înlocuiește scrierea cloud a clientului (ex. una care nu se
   /// confirmă niciodată, ca pe un server inaccesibil).
   @visibleForTesting
@@ -2731,36 +2742,47 @@ class LocalAppDataRepository implements AppDataRepository {
   }
 
   Future<List<ClientRecord>> _listClientsCloudMerged(
-    List<ClientRecord> localItems,
+    List<ClientRecord> localItemsHint,
   ) async {
-    // Citire prin repository: înregistrează bazele de revizie (doar pentru
-    // entitățile fără modificări locale nesincronizate / conflicte).
+    // Citire prin repository (în afara blocării): înregistrează bazele de
+    // revizie doar pentru entitățile fără modificări locale / conflicte.
     final cloudList = await FirebaseClientiRepository().listClients();
-    final protectedIds = await OfflineSyncRuntime.instance
-        .protectedEntityIds(CloudEntityType.clients);
-    final localById = {for (final item in localItems) item.id: item};
-    final cloudIds = <String>{};
-    final merged = <ClientRecord>[];
-    for (final cloudItem in cloudList) {
-      cloudIds.add(cloudItem.id);
-      final local = localById[cloudItem.id];
-      // Modificare locală nesincronizată sau conflict deschis: versiunea locală
-      // NU este înlocuită de cea din cloud.
-      merged.add(protectedIds.contains(cloudItem.id) && local != null
-          ? local
-          : cloudItem);
-    }
-    final localOnly =
-        localItems.where((item) => !cloudIds.contains(item.id)).toList();
-    if (localOnly.isNotEmpty) {
-      _uploadLocalOnlyClientsBackground(localOnly
-          .where((item) => !protectedIds.contains(item.id))
-          .toList());
-      merged.addAll(localOnly);
-    }
-    merged.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    await _writeClients(merged);
-    return merged;
+    return _withClientsLock(() async {
+      // Recitire SUB blocare: o salvare făcută între timp nu e suprascrisă.
+      final localItems = await _readLocalClientsOnly();
+      final protectedIds = await OfflineSyncRuntime.instance
+          .protectedEntityIds(CloudEntityType.clients);
+      final seenOnServer =
+          await RevisionBaseStore().idsWithBase(CloudEntityType.clients);
+      final localById = {for (final item in localItems) item.id: item};
+      final cloudIds = <String>{};
+      final merged = <ClientRecord>[];
+      for (final cloudItem in cloudList) {
+        cloudIds.add(cloudItem.id);
+        final local = localById[cloudItem.id];
+        // Modificare locală nesincronizată sau conflict deschis: versiunea
+        // locală NU este înlocuită de cea din cloud.
+        merged.add(protectedIds.contains(cloudItem.id) && local != null
+            ? local
+            : cloudItem);
+      }
+      for (final local in localItems) {
+        if (cloudIds.contains(local.id)) continue;
+        if (protectedIds.contains(local.id)) {
+          merged.add(local); // modificare locală în așteptare
+        } else if (!seenOnServer.contains(local.id)) {
+          // Niciodată văzut pe server: date locale netrimise — se păstrează și
+          // se pun în coadă (scriere condiționată la sincronizare).
+          merged.add(local);
+          await OfflineSyncRuntime.instance.queueClient(local);
+        }
+        // Altfel: văzut pe server și șters acolo, fără modificare locală în
+        // așteptare → ștergerea de la distanță se aplică local.
+      }
+      merged.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      await _writeClients(merged);
+      return merged;
+    });
   }
 
   /// Împrospătare cloud în fundal pentru clienți (single-flight).
@@ -2957,8 +2979,6 @@ class LocalAppDataRepository implements AppDataRepository {
   @override
   Future<ClientRecord> saveClient(ClientRecord client) async {
     final now = DateTime.now();
-    final items = [...await listClients()];
-    final index = items.indexWhere((item) => item.id == client.id);
     final next = client.copyWith(
       clientCode: client.clientCode.trim().isEmpty
           ? await nextClientCode()
@@ -2966,15 +2986,19 @@ class LocalAppDataRepository implements AppDataRepository {
       createdAt: client.createdAt,
       updatedAt: now,
     );
-    if (index >= 0) {
-      items[index] = next;
-    } else {
-      items.add(next);
-    }
-    // Local întâi: salvarea nu mai depinde de confirmarea serverului. Pe un
-    // server inaccesibil (DNS funcțional), `set()` nu se confirmă niciodată —
-    // înainte, UI-ul aștepta la nesfârșit, iar clientul nu ajungea local.
-    await _writeClients(items);
+    // Local întâi și coada ÎNAINTE de cloud, sub blocare: salvarea nu depinde
+    // de server, e durabilă la crash și protejată la îmbinarea din cloud.
+    await _withClientsLock(() async {
+      final items = [...await _readLocalClientsOnly()];
+      final index = items.indexWhere((item) => item.id == next.id);
+      if (index >= 0) {
+        items[index] = next;
+      } else {
+        items.add(next);
+      }
+      await _writeClients(items);
+      await OfflineSyncRuntime.instance.queueClient(next);
+    });
     if (debugClientsCloudAvailable ?? _isClientsCloudAvailable) {
       final data = {
         ...next.toMap(),
@@ -2999,8 +3023,6 @@ class LocalAppDataRepository implements AppDataRepository {
       _lastClientsDataSourceLabel = 'local_cache';
       _lastClientsFallbackReason = 'cloud indisponibil';
     }
-    // Queue offline — garantează sincronizarea (CLAUDE.md: queue în repository)
-    unawaited(OfflineSyncRuntime.instance.queueClient(next));
     // Notifică toate paginile care afișează clienți să reîncarce lista
     LocalAppDataRepository.clientsChangeCount.value++;
     return next;
@@ -3008,9 +3030,16 @@ class LocalAppDataRepository implements AppDataRepository {
 
   @override
   Future<void> deleteClient(String clientId) async {
+    // Local + coada ÎNAINTE de cloud, sub blocare (aceeași regulă ca la salvare).
+    await _withClientsLock(() async {
+      final items = [...await _readLocalClientsOnly()]
+        ..removeWhere((item) => item.id == clientId);
+      await _writeClients(items);
+      await OfflineSyncRuntime.instance.queueClientDelete(clientId);
+    });
     if (_isClientsCloudAvailable) {
       // Ștergere condiționată (nu șterge o versiune editată între timp de alt
-      // dispozitiv) și fără blocare pe server inaccesibil; coada rămâne.
+      // dispozitiv) și fără blocare pe server inaccesibil.
       final outcome = await pushToCloudWithoutBlocking(
         () => FirebaseClientiRepository().deleteClient(clientId),
       );
@@ -3025,11 +3054,6 @@ class LocalAppDataRepository implements AppDataRepository {
       _lastClientsDataSourceLabel = 'local_cache';
       _lastClientsFallbackReason = 'cloud indisponibil';
     }
-    final items = [...await listClients()]
-      ..removeWhere((item) => item.id == clientId);
-    await _writeClients(items);
-    // Queue offline — garantează sincronizarea (CLAUDE.md: queue în repository)
-    unawaited(OfflineSyncRuntime.instance.queueClientDelete(clientId));
     // Notifică toate paginile care afișează clienți să reîncarce lista
     LocalAppDataRepository.clientsChangeCount.value++;
   }

@@ -125,6 +125,16 @@ class RevisionBaseStore {
     }
   }
 
+  /// Entitățile pentru care există o bază (au fost văzute pe server).
+  Future<Set<String>> idsWithBase(CloudEntityType type) async {
+    final prefix = '${type.name}:';
+    return (await _read())
+        .keys
+        .where((k) => k.startsWith(prefix))
+        .map((k) => k.substring(prefix.length))
+        .toSet();
+  }
+
   Future<RevisionBase?> get(CloudEntityType type, String id) async =>
       RevisionBase.fromMap((await _read())[_entityKey(type, id)]);
 

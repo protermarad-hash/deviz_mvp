@@ -749,13 +749,12 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
   }
 
   Future<void> _saveOfferResolved(OfferRecord item) async {
-    // Local întâi, cloud cu timeout; coada doar dacă cloud-ul nu a confirmat.
+    // Local întâi, coada, apoi cloud cu timeout (scriere condiționată de revizie).
     await offerSaveLocalFirst(
       offer: item,
       saveLocal: _localOferteRepository.upsertOffer,
       cloudUpsert: _cloudOferteRepository?.upsertOffer,
       queue: OfflineSyncRuntime.instance.queueOffer,
-      queueAlways: false,
     );
   }
 
