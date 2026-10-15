@@ -1,6 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/cloud/revision_sync.dart';
 import 'job_models.dart';
 import 'lucrari_cloud_repository.dart';
 
@@ -18,12 +22,15 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
   Future<void> deleteJob(String jobId) async {
     final id = jobId.trim();
     if (id.isEmpty) return;
-    await _collection.doc(id).delete();
+    // Ștergere condiționată: nu se șterge o versiune modificată între timp de alt dispozitiv.
+    await RevisionWriter.standard(firestore: _firestore).delete(
+        type: CloudEntityType.jobs, collection: FirebaseCollections.jobs, id: id);
   }
 
   @override
   Future<List<JobRecord>> listJobs() async {
     final snapshot = await _collection.get();
+    await _recordBases(snapshot);
     return snapshot.docs
         .map((doc) => JobRecord.fromMap(_normalizeJobMap(doc.data())))
         .toList(growable: false);
@@ -33,16 +40,45 @@ class FirebaseLucrariRepository implements LucrariCloudRepository {
   Future<void> upsertJob(JobRecord job) async {
     final id = job.id.trim();
     if (id.isEmpty) return;
-    await _collection.doc(id).set(_jobToCloudMap(job), SetOptions(merge: true));
+    // Scriere condiționată de revizie (tranzacție): la conflict nu se scrie nimic
+    // și ambele variante se păstrează (RevisionConflictException).
+    await RevisionWriter.standard(firestore: _firestore).upsert(
+      type: CloudEntityType.jobs,
+      collection: FirebaseCollections.jobs,
+      id: id,
+      data: _jobToCloudMap(job),
+    );
   }
 
   @override
   Stream<List<JobRecord>> watchJobs() {
-    return _collection.snapshots().map((snapshot) {
+    return _collection.snapshots().asyncMap((snapshot) async {
+      await _recordBases(snapshot);
       return snapshot.docs
           .map((doc) => JobRecord.fromMap(_normalizeJobMap(doc.data())))
           .toList(growable: false);
     });
+  }
+
+  /// Baza de revizie din citiri confirmate de server (nu din cache și nu din
+  /// scrieri locale în așteptare); entitățile protejate nu sunt atinse.
+  Future<void> _recordBases(QuerySnapshot<Map<String, dynamic>> snapshot) async {
+    try {
+      if (snapshot.metadata.isFromCache) return;
+      final docs = <String, Map<String, dynamic>>{
+        for (final doc in snapshot.docs)
+          if (!doc.metadata.hasPendingWrites) doc.id: doc.data(),
+      };
+      if (docs.isEmpty) return;
+      await RevisionWriter.standard(firestore: _firestore).recordServerBases(
+        type: CloudEntityType.jobs,
+        serverDocs: docs,
+        keysFor: (data) => _jobToCloudMap(JobRecord.fromMap(_normalizeJobMap(data))).keys,
+        protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.jobs),
+      );
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    }
   }
 
   Map<String, dynamic> _jobToCloudMap(JobRecord job) {

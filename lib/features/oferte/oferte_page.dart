@@ -413,13 +413,13 @@ class _OfertePageState extends State<OfertePage>
     }
     _offersSubscription = cloud.watchOffers().listen(
       (cloudItems) async {
-        await _localRepository.replaceOffers(cloudItems);
+        final merged = await _localRepository.mergeOffersFromCloud(cloudItems);
         if (!mounted) {
           return;
         }
         setState(() {
           _setCloudSource();
-          _items = [...cloudItems]..sort(_compareOffersByDate);
+          _items = [...merged]..sort(_compareOffersByDate);
           _loading = false;
         });
       },
@@ -446,8 +446,7 @@ class _OfertePageState extends State<OfertePage>
     try {
       final cloudItems = await cloud.listOffers();
       _setCloudSource();
-      await _localRepository.replaceOffers(cloudItems);
-      return cloudItems;
+      return _localRepository.mergeOffersFromCloud(cloudItems);
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
       FirestoreAuthWarningService.instance.reportCloudError(error);

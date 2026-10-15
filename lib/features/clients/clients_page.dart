@@ -349,8 +349,7 @@ class _ClientsPageState extends State<ClientsPage> {
     if (FirebaseBootstrap.isInitialized) {
       try {
         final cloudItems = await FirebaseOferteRepository().listOffers();
-        await _localOffersRepository.replaceOffers(cloudItems);
-        return cloudItems;
+        return _localOffersRepository.mergeOffersFromCloud(cloudItems);
       } catch (e) {
         debugPrint('[ClientsPage] citire oferte cloud eșuată, folosesc local: $e');
       }

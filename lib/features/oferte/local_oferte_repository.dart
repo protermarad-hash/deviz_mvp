@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
 import 'offer_models.dart';
 
 class LocalOferteRepository {
@@ -30,6 +33,33 @@ class LocalOferteRepository {
 
   Future<void> replaceOffers(List<OfferRecord> items) =>
       _synchronized(() => _writeOffers(items));
+
+  /// Doar teste: furnizează entitățile protejate (altfel din OfflineSyncRuntime).
+  @visibleForTesting
+  static Future<Set<String>> Function()? debugProtectedIds;
+
+  /// Îmbină lista din cloud cu stocarea locală FĂRĂ a pierde modificări locale:
+  /// pentru ofertele cu modificări nesincronizate sau conflict deschis rămâne
+  /// versiunea locală, iar ofertele doar-locale protejate (create offline,
+  /// încă netrimise) nu sunt șterse. Înainte, `replaceOffers(cloud)` le elimina.
+  Future<List<OfferRecord>> mergeOffersFromCloud(List<OfferRecord> cloudItems) async {
+    final protectedIds = await (debugProtectedIds?.call() ??
+        OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.offers));
+    return _synchronized(() async {
+      final local = await _readOffers();
+      final localById = {for (final o in local) o.id: o};
+      final cloudIds = <String>{};
+      final merged = <OfferRecord>[];
+      for (final c in cloudItems) {
+        cloudIds.add(c.id);
+        final l = localById[c.id];
+        merged.add(protectedIds.contains(c.id) && l != null ? l : c);
+      }
+      merged.addAll(local.where((o) => !cloudIds.contains(o.id) && protectedIds.contains(o.id)));
+      await _writeOffers(merged);
+      return merged;
+    });
+  }
 
   Future<void> deleteOffer(String offerId) =>
       _synchronized(() => _deleteInternal(offerId));

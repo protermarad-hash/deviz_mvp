@@ -10,6 +10,8 @@ import '../app_theme_preset.dart';
 import '../auth_models.dart';
 import '../app_models.dart';
 import '../cloud/cloud_push.dart';
+import '../../features/clients/firebase_clienti_repository.dart';
+import '../cloud/revision_sync.dart';
 import '../cloud/firebase_bootstrap.dart';
 import '../cloud/firebase_collections.dart';
 import '../cloud/firestore_auth_warning_service.dart';
@@ -243,17 +245,21 @@ class LocalAppDataRepository implements AppDataRepository {
   Future<void> _uploadLocalOnlyClientsBackgroundImpl(
     List<ClientRecord> items,
   ) async {
-    try {
-      await _commitCloudUpsertsInBatches<ClientRecord>(
-        items: items,
-        docFor: (item) => _clientsCollection.doc(item.id),
-        dataFor: (item) => {
-          ...item.toMap(),
-          'updated_at': item.updatedAt.toIso8601String(),
-        },
-      );
-    } catch (error) {
-      FirebaseBootstrap.registerRuntimeError(error);
+    // Scriere condiționată per client (nu batch orb): un client șters între timp
+    // de alt dispozitiv devine conflict `deleted_remotely`, nu este readus la viață.
+    await _uploadClientsConditionally(items);
+  }
+
+  Future<void> _uploadClientsConditionally(List<ClientRecord> items) async {
+    final cloud = FirebaseClientiRepository();
+    for (final item in items) {
+      try {
+        await cloud.upsertClient(item);
+      } on RevisionConflictException {
+        // Ambele variante sunt păstrate în SyncConflictStore.
+      } catch (error) {
+        FirebaseBootstrap.registerRuntimeError(error);
+      }
     }
   }
 
@@ -2704,13 +2710,7 @@ class LocalAppDataRepository implements AppDataRepository {
         final localOnly = localItems.where((l) => !cloudIds.contains(l.id)).toList();
         if (localOnly.isNotEmpty) {
           // Urcăm în Firebase itemii locali lipsă, fără a mai re-fetcha
-          await Future.wait(localOnly.map((item) => _clientsCollection.doc(item.id).set(
-            {
-              ...item.toMap(),
-              'updated_at': item.updatedAt.toIso8601String(),
-            },
-            SetOptions(merge: true),
-          )));
+          await _uploadClientsConditionally(localOnly);
           // Îmbinăm local, fără al doilea query Firebase
           cloudItems = [...cloudItems, ...localOnly]
             ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -2733,29 +2733,34 @@ class LocalAppDataRepository implements AppDataRepository {
   Future<List<ClientRecord>> _listClientsCloudMerged(
     List<ClientRecord> localItems,
   ) async {
-    var cloudItems = await _clientsCollection.get().then(
-          (snapshot) => snapshot.docs
-              .map((doc) => ClientRecord.fromMap(doc.data()))
-              .where((item) => item.id.trim().isNotEmpty)
-              .toList(growable: false)
-            ..sort(
-              (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-            ),
-        );
-    if (localItems.isNotEmpty) {
-      final cloudIds = cloudItems.map((item) => item.id).toSet();
-      final localOnly =
-          localItems.where((item) => !cloudIds.contains(item.id)).toList();
-      if (localOnly.isNotEmpty) {
-        _uploadLocalOnlyClientsBackground(localOnly);
-        cloudItems = [...cloudItems, ...localOnly]
-          ..sort(
-            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-          );
-      }
+    // Citire prin repository: înregistrează bazele de revizie (doar pentru
+    // entitățile fără modificări locale nesincronizate / conflicte).
+    final cloudList = await FirebaseClientiRepository().listClients();
+    final protectedIds = await OfflineSyncRuntime.instance
+        .protectedEntityIds(CloudEntityType.clients);
+    final localById = {for (final item in localItems) item.id: item};
+    final cloudIds = <String>{};
+    final merged = <ClientRecord>[];
+    for (final cloudItem in cloudList) {
+      cloudIds.add(cloudItem.id);
+      final local = localById[cloudItem.id];
+      // Modificare locală nesincronizată sau conflict deschis: versiunea locală
+      // NU este înlocuită de cea din cloud.
+      merged.add(protectedIds.contains(cloudItem.id) && local != null
+          ? local
+          : cloudItem);
     }
-    await _writeClients(cloudItems);
-    return cloudItems;
+    final localOnly =
+        localItems.where((item) => !cloudIds.contains(item.id)).toList();
+    if (localOnly.isNotEmpty) {
+      _uploadLocalOnlyClientsBackground(localOnly
+          .where((item) => !protectedIds.contains(item.id))
+          .toList());
+      merged.addAll(localOnly);
+    }
+    merged.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    await _writeClients(merged);
+    return merged;
   }
 
   /// Împrospătare cloud în fundal pentru clienți (single-flight).
@@ -2977,9 +2982,8 @@ class LocalAppDataRepository implements AppDataRepository {
       };
       final outcome = await pushToCloudWithoutBlocking(
         () => (debugClientCloudWrite ??
-            (id, map) => _clientsCollection
-                .doc(id)
-                .set(map, SetOptions(merge: true)))(next.id, data),
+            (id, map) => FirebaseClientiRepository().upsertClient(next))(
+            next.id, data),
         online: debugClientsCloudAvailable,
       );
       if (outcome == CloudPushOutcome.synced) {
@@ -3005,14 +3009,17 @@ class LocalAppDataRepository implements AppDataRepository {
   @override
   Future<void> deleteClient(String clientId) async {
     if (_isClientsCloudAvailable) {
-      try {
-        await _clientsCollection.doc(clientId).delete();
+      // Ștergere condiționată (nu șterge o versiune editată între timp de alt
+      // dispozitiv) și fără blocare pe server inaccesibil; coada rămâne.
+      final outcome = await pushToCloudWithoutBlocking(
+        () => FirebaseClientiRepository().deleteClient(clientId),
+      );
+      if (outcome == CloudPushOutcome.synced) {
         _lastClientsDataSourceLabel = 'cloud';
         _lastClientsFallbackReason = '';
-      } catch (error) {
-        FirebaseBootstrap.registerRuntimeError(error);
+      } else {
         _lastClientsDataSourceLabel = 'local_cache';
-        _lastClientsFallbackReason = error.toString().trim();
+        _lastClientsFallbackReason = (FirebaseBootstrap.lastErrorMessage ?? '').trim();
       }
     } else {
       _lastClientsDataSourceLabel = 'local_cache';
@@ -3483,8 +3490,9 @@ class LocalAppDataRepository implements AppDataRepository {
     };
     // CLAUDE.md BUG 7: o lucrare modificată offline (upsert încă în coadă) NU
     // este suprascrisă de versiunea cloud/cache mai veche.
+    // Modificări locale nesincronizate (inclusiv ștergeri) și conflicte deschise.
     final pendingIds = await OfflineSyncRuntime.instance
-        .unsyncedUpsertEntityIds(CloudEntityType.jobs);
+        .protectedEntityIds(CloudEntityType.jobs);
     for (final item in cloudItems) {
       final id = item.id.trim();
       if (id.isEmpty) {
