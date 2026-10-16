@@ -556,6 +556,12 @@ class OfflineSyncRuntime {
         if (item.retryCount >= _maxRetryAttempts) {
           continue;
         }
+        // RC 121: lista `pending` e un instantaneu. Dacă între timp utilizatorul a
+        // salvat din nou aceeași entitate, elementul vechi a fost înlocuit în coadă
+        // de cel nou; trimiterea celui vechi ar readuce pe server conținut mai vechi.
+        if (!await _isStillQueued(item.id)) {
+          continue;
+        }
         try {
           switch (item.entityType) {
             case CloudEntityType.appointments:
@@ -1114,6 +1120,11 @@ class OfflineSyncRuntime {
       _isSyncing = false;
       _lastSyncFinishedAt = DateTime.now();
     }
+  }
+
+  Future<bool> _isStillQueued(String itemId) async {
+    final items = await _queueRepository.listItems();
+    return items.any((i) => i.id == itemId && !i.isSynced);
   }
 
   /// Elementele care au epuizat reîncercările erau șterse silențios din coadă.

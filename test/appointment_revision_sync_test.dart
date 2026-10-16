@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:devizpro_ultra/core/cloud/cloud_sync_models.dart';
+import 'package:devizpro_ultra/core/cloud/keyed_mutex.dart';
 import 'package:devizpro_ultra/core/cloud/revision_sync.dart';
 import 'package:devizpro_ultra/features/programari/appointment_models.dart';
 import 'package:devizpro_ultra/features/programari/firebase_programari_repository.dart';
@@ -227,6 +228,41 @@ void main() {
     };
     await expectLater(save(a, appt('A', rev: 1)), throwsA(isA<RevisionConflictException>()));
     expect(s.read(col, id)!['title'], 'B în fereastră');
+  });
+
+  test('review #3: lucrul pornit în fundal dintr-o secțiune blocată AȘTEAPTĂ blocarea după eliberare', () async {
+    final order = <String>[];
+    Future<void>? bg;
+    await KeyedMutex.run('k121', () async {
+      bg = KeyedMutex.detached(() => KeyedMutex.run('k121', () async => order.add('fundal')));
+      unawaited(bg);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      order.add('secțiune');
+    });
+    final other = KeyedMutex.run('k121', () async {
+      order.add('alt-apel-început');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      order.add('alt-apel-sfârșit');
+    });
+    await Future.wait([bg!, other]);
+    expect(order.first, 'secțiune');
+    expect(order.indexOf('fundal') < order.indexOf('alt-apel-început') ||
+        order.indexOf('fundal') > order.indexOf('alt-apel-sfârșit'), isTrue,
+        reason: 'fundalul nu se intercalează în interiorul altei deținători: $order');
+  });
+
+  test('review #2: fără bază (prima pornire / pornire offline) dar editorul pornit din revizia curentă → scriere', () async {
+    final s = FakeServer();
+    final a = device(s, 'A');
+    final b = device(s, 'B');
+    await save(a, appt('C1')); // rev 1
+    // B nu a înregistrat nicio bază (citire doar din cache), dar copia locală are _rev 1
+    expect(await save(b, appt('C1 editat pe B', rev: 1)), ConditionalWriteOutcome.written);
+    expect(s.read(col, id)!['_rev'], 2);
+    // același lucru dintr-o revizie veche → conflict (nu suprascriere)
+    final c = device(s, 'C');
+    await expectLater(save(c, appt('C din rev 1', rev: 1)), throwsA(isA<RevisionConflictException>()));
+    expect(s.read(col, id)!['title'], 'C1 editat pe B');
   });
 }
 

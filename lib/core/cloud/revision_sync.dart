@@ -651,6 +651,14 @@ class RevisionWriter {
       // comparată cu versiunea din care a pornit.
       return _Decision.superseded(serverRev: sRev, server: server);
     }
+    if (base == null && startRev != null && startRev > 0 && startRev == sRev) {
+      // Fără bază (prima pornire după actualizare, pornire offline, document în
+      // afara ferestrei de listare): editarea a pornit exact din revizia curentă
+      // a serverului → nimeni nu a scris prin protocolul de revizii între timp.
+      // (O scriere oarbă a unei aplicații vechi nu poate fi detectată fără bază;
+      // o resping regulile M3.)
+      return _Decision.write(newRev: sRev + 1, server: server);
+    }
     if (startRev != null && base != null && startRev < base.rev && !base.ownWrite) {
       // Editarea a pornit dintr-o versiune mai veche decât cea pe care alt
       // dispozitiv a scris-o între timp (editor deschis, bază actualizată din
