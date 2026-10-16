@@ -889,8 +889,7 @@ class _ReclamatiiPageState extends State<ReclamatiiPage> {
     }
     try {
       final cloudItems = await cloud.listOffers();
-      await _localOferteRepository.replaceOffers(cloudItems);
-      return cloudItems;
+      return _localOferteRepository.mergeOffersFromCloud(cloudItems);
     } catch (_) {
       return _localOferteRepository.listOffers();
     }

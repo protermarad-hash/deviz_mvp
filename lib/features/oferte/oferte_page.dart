@@ -50,6 +50,8 @@ import 'oferte_dialogs/offer_form_dialog.dart';
 import 'oferte_dialogs/offer_commercial_package_templates_dialog.dart';
 import 'oferte_dialogs/offer_labor_templates_dialog.dart';
 import '../../core/help/help_module_button.dart';
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/revision_sync.dart';
 
 /// Prioritatea de afișare a unei oferte după status (sortare logică).
 /// Comparator simplu, doar după dată descrescător (cele mai recente primele).
@@ -413,13 +415,13 @@ class _OfertePageState extends State<OfertePage>
     }
     _offersSubscription = cloud.watchOffers().listen(
       (cloudItems) async {
-        await _localRepository.replaceOffers(cloudItems);
+        final merged = await _localRepository.mergeOffersFromCloud(cloudItems);
         if (!mounted) {
           return;
         }
         setState(() {
           _setCloudSource();
-          _items = [...cloudItems]..sort(_compareOffersByDate);
+          _items = [...merged]..sort(_compareOffersByDate);
           _loading = false;
         });
       },
@@ -446,8 +448,7 @@ class _OfertePageState extends State<OfertePage>
     try {
       final cloudItems = await cloud.listOffers();
       _setCloudSource();
-      await _localRepository.replaceOffers(cloudItems);
-      return cloudItems;
+      return _localRepository.mergeOffersFromCloud(cloudItems);
     } catch (error) {
       FirebaseBootstrap.registerRuntimeError(error);
       FirestoreAuthWarningService.instance.reportCloudError(error);
@@ -506,8 +507,10 @@ class _OfertePageState extends State<OfertePage>
       _setLocalCacheSource(
           _fallbackReason ?? FirebaseBootstrap.lastErrorMessage);
     }
-    await _localRepository.deleteOffer(id);
-    await OfflineSyncRuntime.instance.queueOfferDelete(id);
+    await runEntitySyncLocked(CloudEntityType.offers, () async {
+      await _localRepository.deleteOffer(id);
+      await OfflineSyncRuntime.instance.queueOfferDelete(id);
+    });
   }
 
   Future<void> _quickUpdateOfferStatus(
@@ -580,10 +583,12 @@ class _OfertePageState extends State<OfertePage>
         queuedOffline = true;
       }
     }
-    final next = await widget.repository.saveJob(job);
-    if (queuedOffline) {
-      await OfflineSyncRuntime.instance.queueJob(next);
-    }
+    await runEntitySyncLocked(CloudEntityType.jobs, () async {
+      final next = await widget.repository.saveJob(job);
+      if (queuedOffline) {
+        await OfflineSyncRuntime.instance.queueJob(next);
+      }
+    });
   }
 
   Future<void> _load() async {

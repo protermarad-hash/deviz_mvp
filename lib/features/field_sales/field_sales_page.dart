@@ -742,21 +742,19 @@ class _FieldSalesPageState extends State<FieldSalesPage> {
     }
     try {
       final cloudItems = await cloud.listOffers();
-      await _localOferteRepository.replaceOffers(cloudItems);
-      return cloudItems;
+      return _localOferteRepository.mergeOffersFromCloud(cloudItems);
     } catch (_) {
       return _localOferteRepository.listOffers();
     }
   }
 
   Future<void> _saveOfferResolved(OfferRecord item) async {
-    // Local întâi, cloud cu timeout; coada doar dacă cloud-ul nu a confirmat.
+    // Local întâi, coada, apoi cloud cu timeout (scriere condiționată de revizie).
     await offerSaveLocalFirst(
       offer: item,
       saveLocal: _localOferteRepository.upsertOffer,
       cloudUpsert: _cloudOferteRepository?.upsertOffer,
       queue: OfflineSyncRuntime.instance.queueOffer,
-      queueAlways: false,
     );
   }
 

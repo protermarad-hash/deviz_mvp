@@ -1,6 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/cloud/revision_sync.dart';
 import 'client_models.dart';
 import 'clienti_cloud_repository.dart';
 
@@ -18,12 +22,16 @@ class FirebaseClientiRepository implements ClientiCloudRepository {
   Future<void> deleteClient(String clientId) async {
     final id = clientId.trim();
     if (id.isEmpty) return;
-    await _collection.doc(id).delete();
+    // Ștergere condiționată: nu se șterge o versiune modificată între timp de alt dispozitiv.
+    await RevisionWriter.standard(firestore: _firestore).delete(
+        type: CloudEntityType.clients, collection: FirebaseCollections.clients, id: id,
+        keysFor: (data) => _clientToCloudMap(ClientRecord.fromMap(_normalizeClientMap(data))).keys);
   }
 
   @override
   Future<List<ClientRecord>> listClients() async {
     final snapshot = await _collection.get();
+    await _recordBases(snapshot);
     return snapshot.docs
         .map((doc) => ClientRecord.fromMap(_normalizeClientMap(doc.data())))
         .where((item) => item.id.trim().isNotEmpty)
@@ -34,19 +42,50 @@ class FirebaseClientiRepository implements ClientiCloudRepository {
   Future<void> upsertClient(ClientRecord client) async {
     final id = client.id.trim();
     if (id.isEmpty) return;
-    await _collection
-        .doc(id)
-        .set(_clientToCloudMap(client), SetOptions(merge: true));
+    // Scriere condiționată de revizie (tranzacție): la conflict nu se scrie nimic
+    // și ambele variante se păstrează (RevisionConflictException).
+    await RevisionWriter.standard(firestore: _firestore).upsert(
+      type: CloudEntityType.clients,
+      collection: FirebaseCollections.clients,
+      id: id,
+      data: _clientToCloudMap(client),
+      startRev: client.syncRev,
+    );
   }
 
   @override
   Stream<List<ClientRecord>> watchClients() {
-    return _collection.snapshots().map((snapshot) {
+    return _collection.snapshots().asyncMap((snapshot) async {
+      await _recordBases(snapshot);
       return snapshot.docs
           .map((doc) => ClientRecord.fromMap(_normalizeClientMap(doc.data())))
           .where((item) => item.id.trim().isNotEmpty)
           .toList(growable: false);
     });
+  }
+
+  /// Baza de revizie din citiri confirmate de server (nu din cache și nu din
+  /// scrieri locale în așteptare); entitățile protejate nu sunt atinse.
+  Future<void> _recordBases(QuerySnapshot<Map<String, dynamic>> snapshot) async {
+    try {
+      if (snapshot.metadata.isFromCache) return;
+      final docs = <String, Map<String, dynamic>>{
+        for (final doc in snapshot.docs)
+          if (!doc.metadata.hasPendingWrites) doc.id: doc.data(),
+      };
+      if (docs.isEmpty) return;
+      // Sub blocarea entității: o salvare + coadă nu se poate intercala între
+      // calculul entităților protejate și scrierea bazelor (RC 120).
+      await runEntitySyncLocked(CloudEntityType.clients, () async =>
+          RevisionWriter.standard(firestore: _firestore).recordServerBases(
+          type: CloudEntityType.clients,
+          serverDocs: docs,
+          keysFor: (data) => _clientToCloudMap(ClientRecord.fromMap(_normalizeClientMap(data))).keys,
+          protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.clients),
+        ));
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    }
   }
 
   Map<String, dynamic> _clientToCloudMap(ClientRecord item) {
@@ -76,12 +115,14 @@ class FirebaseClientiRepository implements ClientiCloudRepository {
       'notes': item.notes,
       'is_active': item.isActive,
       'created_at': item.createdAt.toIso8601String(),
-      'updated_at': DateTime.now().toIso8601String(),
+      'updated_at': item.updatedAt.toIso8601String(),
     };
   }
 
   Map<String, dynamic> _normalizeClientMap(Map<String, dynamic> raw) {
     return <String, dynamic>{
+      // Revizia de server (RC 120): baza editării pornite din această versiune.
+      if (raw['_rev'] is num) '_rev': raw['_rev'],
       'id': (raw['id'] ?? '').toString(),
       'client_code':
           (raw['client_code'] ?? raw['clientCode'] ?? raw['code'] ?? '')

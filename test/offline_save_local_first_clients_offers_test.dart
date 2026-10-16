@@ -112,25 +112,25 @@ void main() {
         cloudTimeout: const Duration(milliseconds: 100),
       );
       expect(r, CloudPushOutcome.failed);
-      expect(order, ['local', 'cloud', 'queue']);
+      expect(order, ['local', 'queue', 'cloud']);
       expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
     });
 
-    test('confirmat + queueAlways=false (field_sales): fără coadă', () async {
+    test('confirmat: coada scrisă înaintea cloud-ului (RC 120), confirmată idempotent la sincronizare', () async {
       final order = <String>[];
       final r = await offerSaveLocalFirst(
         offer: _offer('o-ok'),
         saveLocal: (o) async => order.add('local'),
         cloudUpsert: (o) async => order.add('cloud'),
         queue: (o) async => order.add('queue'),
-        queueAlways: false,
         online: true,
       );
       expect(r, CloudPushOutcome.synced);
-      expect(order, ['local', 'cloud']);
+      expect(order, ['local', 'queue', 'cloud'],
+          reason: 'RC 120: coada înaintea cloud-ului (durabil la crash, protejat la merge)');
     });
 
-    test('confirmat + queueAlways=true (oferte_page): coada păstrată ca înainte', () async {
+    test('confirmat: ordinea local, coadă, cloud', () async {
       final order = <String>[];
       await offerSaveLocalFirst(
         offer: _offer('o-ok2'),
@@ -139,7 +139,7 @@ void main() {
         queue: (o) async => order.add('queue'),
         online: true,
       );
-      expect(order, ['local', 'cloud', 'queue']);
+      expect(order, ['local', 'queue', 'cloud']);
     });
 
     test('eroare cloud sau fără cloud: local + coadă', () async {
@@ -153,8 +153,7 @@ void main() {
           saveLocal: (o) async => order.add('local'),
           cloudUpsert: cloud,
           queue: (o) async => order.add('queue'),
-          queueAlways: false,
-          online: true,
+            online: true,
         );
         expect(r, CloudPushOutcome.failed);
         expect(order, ['local', 'queue']);
@@ -168,7 +167,6 @@ void main() {
         saveLocal: (o) async => order.add('local'),
         cloudUpsert: (o) => Completer<void>().future,
         queue: (o) async => order.add('queue'),
-        queueAlways: false,
         online: false,
       );
       expect(r, CloudPushOutcome.pendingOffline);

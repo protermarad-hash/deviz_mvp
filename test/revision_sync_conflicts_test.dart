@@ -1,0 +1,719 @@
+// Control de concurență (RC 120): reproduce defectul demonstrat pe 15.10.2026
+// (A editează offline, B salvează online, A revine și sincronizează) și
+// verifică editări simultane, reîncercări, crash după commit, repornire,
+// dublu-click, cozi vechi (fără bază), scrieri ale aplicațiilor vechi,
+// ștergeri, idempotență și îmbinarea ofertelor fără pierderi locale.
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart' show FirebaseException, GeoPoint, Timestamp;
+import 'package:devizpro_ultra/core/cloud/cloud_sync_models.dart';
+import 'package:devizpro_ultra/core/cloud/local_cloud_sync_repository.dart';
+import 'package:devizpro_ultra/core/cloud/offline_sync_runtime.dart';
+import 'package:devizpro_ultra/core/cloud/revision_sync.dart';
+import 'package:devizpro_ultra/features/oferte/services/offer_persistence.dart';
+import 'package:devizpro_ultra/core/cloud/keyed_mutex.dart';
+import 'package:devizpro_ultra/features/oferte/local_oferte_repository.dart';
+import 'package:devizpro_ultra/features/oferte/offer_models.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// Server Firestore fals: tranzacții atomice, indisponibilitate, confirmare
+/// pierdută după commit, scrieri oarbe ale aplicațiilor vechi.
+class FakeServer implements RevisionTransport {
+  final Map<String, Map<String, Map<String, dynamic>>> docs = {};
+  bool unreachable = false;
+  bool loseAckAfterCommit = false;
+  int commits = 0;
+
+  /// Regulile propuse M3: creare cu `_rev == 1`, actualizare cu `_rev + 1`,
+  /// ștergere necondiționată. Refuzul = `permission-denied`, ca pe Firestore.
+  bool enforceRevRules = false;
+
+  /// Refuză orice scriere (de exemplu utilizator inactiv).
+  bool denyAll = false;
+  int rejections = 0;
+
+  /// Rulează după citire și înaintea scrierii (fereastra neatomică de pe Windows).
+  void Function(String col, String id)? afterRead;
+
+  Map<String, dynamic>? read(String col, String id) {
+    final d = docs[col]?[id];
+    return d == null ? null : Map<String, dynamic>.from(d);
+  }
+
+  /// Aplicație veche (113/118/119): set(merge) orb, fără `_rev`, cu
+  /// `updated_at` restampilat la trimitere.
+  void legacyBlindWrite(String col, String id, Map<String, dynamic> data) {
+    final current = docs.putIfAbsent(col, () => {})[id] ?? <String, dynamic>{};
+    docs[col]![id] = {...current, ...data, 'updated_at': DateTime.now().toIso8601String()};
+  }
+
+  @override
+  Future<T> run<T>(Future<T> Function(RevisionTx tx) body) async {
+    if (unreachable) throw TimeoutException('server inaccesibil');
+    final tx = _FakeTx(this);
+    final result = await body(tx);
+    if (tx.hasWrites) {
+      try {
+        tx.checkRules();
+      } on FirebaseException {
+        rejections++;
+        rethrow;
+      }
+    }
+    tx.commit();
+    commits++;
+    if (loseAckAfterCommit) {
+      loseAckAfterCommit = false;
+      throw TimeoutException('confirmare pierduta dupa commit');
+    }
+    return result;
+  }
+}
+
+class _FakeTx implements RevisionTx {
+  _FakeTx(this.server);
+  final FakeServer server;
+  final List<void Function()> _ops = [];
+  final List<(String, String, Map<String, dynamic>?)> _writes = [];
+  bool get hasWrites => _writes.isNotEmpty;
+  @override
+  Future<Map<String, dynamic>?> get(String collection, String id) async {
+    final d = server.read(collection, id);
+    server.afterRead?.call(collection, id);
+    return d;
+  }
+
+  @override
+  void set(String collection, String id, Map<String, dynamic> data) {
+    _writes.add((collection, id, data));
+    _ops.add(() {
+      final c = server.docs.putIfAbsent(collection, () => {});
+      c[id] = {...?c[id], ...data};
+    });
+  }
+
+  @override
+  void delete(String collection, String id) {
+    _writes.add((collection, id, null));
+    _ops.add(() => server.docs[collection]?.remove(id));
+  }
+
+  void checkRules() {
+    FirebaseException denied() =>
+        FirebaseException(plugin: 'cloud_firestore', code: 'permission-denied');
+    if (server.denyAll) throw denied();
+    if (!server.enforceRevRules) return;
+    for (final (col, id, data) in _writes) {
+      if (data == null) continue; // ștergere: necondiționată în regulile propuse
+      final current = server.docs[col]?[id];
+      final expected = current == null ? 1 : ((current['_rev'] as num?)?.toInt() ?? 0) + 1;
+      if (data['_rev'] != expected) throw denied();
+    }
+  }
+  void commit() {
+    for (final op in _ops) {
+      op();
+    }
+  }
+}
+
+RevisionWriter device(FakeServer s, String name) => RevisionWriter(
+      transport: s,
+      bases: RevisionBaseStore(namespace: name),
+      conflicts: SyncConflictStore(namespace: name),
+      deviceId: 'dev-$name',
+    );
+
+Map<String, dynamic> client(String name, {String phone = '0700', String? notes}) => {
+      'id': 'c1', 'name': name, 'phone': phone, if (notes != null) 'notes': notes,
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+
+const col = 'clients';
+const t = CloudEntityType.clients;
+
+Future<ConditionalWriteOutcome> up(RevisionWriter w, Map<String, dynamic> data) =>
+    w.upsert(type: t, collection: col, id: 'c1', data: data);
+
+/// Dispozitivul citește documentul de pe server (cum fac listClients/watchClients).
+Future<void> pull(RevisionWriter w, FakeServer s, {Set<String> protectedIds = const {}}) =>
+    w.recordServerBases(
+      type: t,
+      serverDocs: {'c1': s.read(col, 'c1')!},
+      keysFor: (d) => d.keys,
+      protectedIds: protectedIds,
+    );
+
+void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  group('defectul demonstrat: A offline, B online, A revine', () {
+    test('REPRODUCERE comportament vechi (113/118/119): scrierea oarbă întârziată suprascrie B', () {
+      final s = FakeServer()..legacyBlindWrite(col, 'c1', client('Original'));
+      final editareA = client('Editare A (veche)'); // făcută offline, înaintea lui B
+      s.legacyBlindWrite(col, 'c1', client('Editare B (noua)'));
+      s.legacyBlindWrite(col, 'c1', editareA);           // A revine: set(merge) orb
+      expect(s.read(col, 'c1')!['name'], 'Editare A (veche)', reason: 'defectul: versiunea nouă a lui B e pierdută');
+    });
+
+    test('versiunea mai nouă a lui B NU este suprascrisă; varianta lui A se păstrează ca conflict', () async {
+      final s = FakeServer();
+      final a = device(s, 'A'), b = device(s, 'B');
+      await up(a, client('Original'));                  // rev 1, creat de A
+      await pull(b, s);                                  // B vede rev 1
+      // A editează offline (scrierea nu ajunge pe server).
+      s.unreachable = true;
+      await expectLater(up(a, client('Editare A (veche)')), throwsA(isA<TimeoutException>()));
+      s.unreachable = false;
+      // B salvează online o versiune mai nouă.
+      expect(await up(b, client('Editare B (noua)')), ConditionalWriteOutcome.written);
+      expect(s.read(col, 'c1')![kRevField], 2);
+      // A revine și sincronizează (coada retrimite editarea lui A).
+      await expectLater(up(a, client('Editare A (veche)')), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1')!['name'], 'Editare B (noua)', reason: 'serverul păstrează versiunea mai nouă');
+      expect(s.read(col, 'c1')![kRevField], 2);
+      final conflicts = await a.conflicts.listOpen();
+      expect(conflicts, hasLength(1));
+      expect(conflicts.single.kind, 'concurrent_edit');
+      expect(conflicts.single.localPayload!['name'], 'Editare A (veche)', reason: 'varianta locală nu se pierde');
+      expect(conflicts.single.serverPayload!['name'], 'Editare B (noua)');
+      expect(conflicts.single.baseRev, 1);
+      expect(conflicts.single.serverRev, 2);
+    });
+
+    test('ordinea NU se stabilește după updated_at: o ștampilă „mai nouă” nu câștigă conflictul', () async {
+      final s = FakeServer();
+      final a = device(s, 'A'), b = device(s, 'B');
+      await up(a, client('Original'));
+      await pull(b, s);
+      await up(b, client('Editare B'));
+      final future = {...client('Editare A'), 'updated_at': '2099-01-01T00:00:00.000'};
+      await expectLater(up(a, future), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1')!['name'], 'Editare B');
+    });
+  });
+
+  group('editări simultane, reîncercări, crash, repornire, dublu-click', () {
+    test('două dispozitive de pe aceeași bază: primul câștigă, al doilea devine conflict', () async {
+      final s = FakeServer();
+      final a = device(s, 'A'), b = device(s, 'B');
+      await up(a, client('X'));
+      await pull(b, s);
+      expect(await up(a, client('X-A')), ConditionalWriteOutcome.written);
+      await expectLater(up(b, client('X-B')), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1')!['name'], 'X-A');
+      expect((await b.conflicts.listOpen()).single.localPayload!['name'], 'X-B');
+    });
+
+    test('server inaccesibil: nimic scris, niciun conflict, baza neschimbată; reîncercarea reușește', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('V1'));
+      s.unreachable = true;
+      await expectLater(up(a, client('V2')), throwsA(isA<TimeoutException>()));
+      expect(s.commits, 1);
+      expect(await a.conflicts.listOpen(), isEmpty);
+      expect((await a.bases.get(t, 'c1'))!.rev, 1);
+      s.unreachable = false;
+      expect(await up(a, client('V2')), ConditionalWriteOutcome.written);
+      expect(s.read(col, 'c1')![kRevField], 2);
+    });
+
+    test('crash/confirmare pierdută după commit: reîncercarea e idempotentă (fără dublă incrementare)', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('V1'));
+      s.loseAckAfterCommit = true;
+      await expectLater(up(a, client('V2')), throwsA(isA<TimeoutException>()));
+      expect(s.read(col, 'c1')![kRevField], 2, reason: 'serverul a aplicat scrierea');
+      expect((await a.bases.get(t, 'c1'))!.rev, 1, reason: 'clientul nu a primit confirmarea');
+      expect(await up(a, client('V2')), ConditionalWriteOutcome.alreadyApplied);
+      expect(s.read(col, 'c1')![kRevField], 2);
+      expect((await a.bases.get(t, 'c1'))!.rev, 2);
+      expect(await a.conflicts.listOpen(), isEmpty);
+    });
+
+    test('repornire: baza și conflictele persistă (instanțe noi citesc aceleași date)', () async {
+      final s = FakeServer();
+      await up(device(s, 'A'), client('V1'));
+      await pull(device(s, 'B'), s);
+      await up(device(s, 'B'), client('V2-B'));
+      // „Repornire” A: instanță nouă, aceeași stocare.
+      await expectLater(up(device(s, 'A'), client('V2-A')), throwsA(isA<RevisionConflictException>()));
+      expect(await device(s, 'A').conflicts.listOpen(), hasLength(1));
+      expect((await device(s, 'A').bases.get(t, 'c1'))!.rev, 1);
+    });
+
+    test('dublu-click (aceeași salvare de două ori): o singură revizie nouă', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('V1'));
+      final data = client('V2');
+      expect(await up(a, data), ConditionalWriteOutcome.written);
+      expect(await up(a, data), ConditionalWriteOutcome.alreadyApplied);
+      expect(s.read(col, 'c1')![kRevField], 2);
+      expect(s.commits, 3);
+    });
+  });
+
+  group('compatibilitate: documente și cozi vechi, aplicații vechi', () {
+    test('document vechi fără _rev, citit de 120: editarea reușește și inițializează revizia', () async {
+      final s = FakeServer()..legacyBlindWrite(col, 'c1', client('Legacy'));
+      final a = device(s, 'A');
+      await pull(a, s);
+      expect((await a.bases.get(t, 'c1'))!.rev, 0);
+      expect(await up(a, client('Legacy editat de 120')), ConditionalWriteOutcome.written);
+      expect(s.read(col, 'c1')![kRevField], 1);
+    });
+
+    test('element vechi din coadă (fără bază): conflict dacă serverul diferă, nu suprascriere', () async {
+      final s = FakeServer()..legacyBlindWrite(col, 'c1', client('Server'));
+      final a = device(s, 'A');
+      await expectLater(up(a, client('Coada veche 119')), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1')!['name'], 'Server');
+    });
+
+    test('element vechi din coadă (fără bază): aplicat dacă serverul are deja exact conținutul', () async {
+      final s = FakeServer()..legacyBlindWrite(col, 'c1', client('Identic'));
+      expect(await up(device(s, 'A'), client('Identic')), ConditionalWriteOutcome.alreadyApplied);
+    });
+
+    test('element vechi din coadă (fără bază): documentul lipsă se creează', () async {
+      final s = FakeServer();
+      expect(await up(device(s, 'A'), client('Nou')), ConditionalWriteOutcome.written);
+      expect(s.read(col, 'c1')![kRevField], 1);
+    });
+
+    test('aplicație veche (scriere oarbă, fără _rev) e detectată prin amprentă: 120 nu o suprascrie', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('V1'));
+      s.legacyBlindWrite(col, 'c1', {'name': 'Editat pe 119', 'phone': '0700'});
+      expect(s.read(col, 'c1')![kRevField], 1, reason: 'aplicația veche nu modifică _rev');
+      await expectLater(up(a, client('Editat pe 120')), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1')!['name'], 'Editat pe 119');
+    });
+  });
+
+  group('ștergeri', () {
+    test('ștears de alt dispozitiv + editare locală: conflict, documentul NU este readus la viață', () async {
+      final s = FakeServer();
+      final a = device(s, 'A'), b = device(s, 'B');
+      await up(a, client('V1'));
+      await pull(b, s);
+      expect(await b.delete(type: t, collection: col, id: 'c1'), ConditionalWriteOutcome.written);
+      await expectLater(up(a, client('V2-A')), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1'), isNull);
+      final c = (await a.conflicts.listOpen()).single;
+      expect(c.kind, 'deleted_remotely');
+      expect(c.localPayload!['name'], 'V2-A');
+    });
+
+    test('ștergere locală după o editare la distanță: conflict, editarea de pe server rămâne', () async {
+      final s = FakeServer();
+      final a = device(s, 'A'), b = device(s, 'B');
+      await up(a, client('V1'));
+      await pull(b, s);
+      await up(b, client('V2-B'));
+      await expectLater(a.delete(type: t, collection: col, id: 'c1'), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1')!['name'], 'V2-B');
+      expect((await a.conflicts.listOpen()).single.kind, 'delete_vs_remote_edit');
+    });
+
+    test('ștergere pe baza curentă reușește; repetată este idempotentă', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('V1'));
+      expect(await a.delete(type: t, collection: col, id: 'c1'), ConditionalWriteOutcome.written);
+      expect(await a.delete(type: t, collection: col, id: 'c1'), ConditionalWriteOutcome.alreadyApplied);
+    });
+  });
+
+  group('amprentă și baze', () {
+    test('amprenta ignoră ordinea cheilor, int/double, null vs lipsă și câmpurile volatile', () {
+      final keys = ['id', 'name', 'qty', 'notes', 'updated_at', '_rev'];
+      final a = {'id': 'x', 'name': 'N', 'qty': 2, 'updated_at': '2026-01-01', '_rev': 3};
+      final b = {'_rev': 9, 'updated_at': '2030-05-05', 'qty': 2.0, 'name': 'N', 'id': 'x', 'notes': null};
+      expect(contentFingerprint(a, keys), contentFingerprint(b, keys));
+      expect(contentFingerprint(a, keys), isNot(contentFingerprint({...a, 'name': 'M'}, keys)));
+    });
+
+    test('baza nu se actualizează la citire pentru entitățile protejate (editare locală nesincronizată)', () async {
+      final s = FakeServer();
+      final a = device(s, 'A'), b = device(s, 'B');
+      await up(a, client('V1'));
+      await pull(b, s);
+      await up(b, client('V2-B'));
+      await pull(a, s, protectedIds: {'c1'});
+      expect((await a.bases.get(t, 'c1'))!.rev, 1, reason: 'altfel editarea locală ar suprascrie V2-B');
+      await expectLater(up(a, client('V2-A')), throwsA(isA<RevisionConflictException>()));
+    });
+
+    test('conflictele se deduplică per entitate (cea mai recentă variantă locală)', () async {
+      final s = FakeServer();
+      final a = device(s, 'A'), b = device(s, 'B');
+      await up(a, client('V1'));
+      await pull(b, s);
+      await up(b, client('V2-B'));
+      await expectLater(up(a, client('A1')), throwsA(isA<RevisionConflictException>()));
+      await expectLater(up(a, client('A2')), throwsA(isA<RevisionConflictException>()));
+      final c = await a.conflicts.listOpen();
+      expect(c, hasLength(1));
+      expect(c.single.localPayload!['name'], 'A2');
+    });
+  });
+
+  group('coadă și îmbinare fără pierderi', () {
+    test('reîncercări epuizate: payload-ul se păstrează ca conflict înainte de curățare', () async {
+      final repo = LocalCloudSyncRepository();
+      await repo.upsertItem(CloudSyncItem(
+        id: 'clients_c9_1', entityType: CloudEntityType.clients, entityId: 'c9',
+        payload: const {'id': 'c9', 'name': 'Editare care nu a ajuns'},
+        updatedAt: DateTime(2026, 10, 15), retryCount: 10,
+      ));
+      await OfflineSyncRuntime.instance.debugPreserveExhaustedItems();
+      final c = (await SyncConflictStore().listOpen()).single;
+      expect(c.kind, 'retry_exhausted');
+      expect(c.localPayload!['name'], 'Editare care nu a ajuns');
+    });
+
+    test('oferte: îmbinarea păstrează varianta locală protejată și ofertele create offline', () async {
+      final repo = LocalOferteRepository();
+      OfferRecord o(String id, String title) =>
+          OfferRecord.fromMap({'id': id, 'offer_number': 'N-$id', 'title': title});
+      await repo.upsertOffer(o('o1', 'o1 local nesincronizat'));
+      await repo.upsertOffer(o('o2', 'o2 local sincronizat'));
+      await repo.upsertOffer(o('o3', 'o3 creata offline'));
+      await repo.upsertOffer(o('o4', 'o4 stearsa pe server'));
+      await repo.upsertOffer(o('o5', 'o5 doar locala, netrimisa'));
+      // o4 a fost văzută pe server (are bază); o5 nu.
+      await RevisionBaseStore().set(CloudEntityType.offers, 'o4', const RevisionBase(rev: 1, fingerprint: 'x'));
+      await RevisionBaseStore().markInitialized(CloudEntityType.offers); // nu e prima îmbinare
+      LocalOferteRepository.debugProtectedIds = () async => {'o1', 'o3'};
+      addTearDown(() => LocalOferteRepository.debugProtectedIds = null);
+      final merged = await repo.mergeOffersFromCloud([o('o1', 'o1 din cloud'), o('o2', 'o2 din cloud')]);
+      final byId = {for (final x in merged) x.id: x.title};
+      expect(byId['o1'], 'o1 local nesincronizat');
+      expect(byId['o2'], 'o2 din cloud');
+      expect(byId['o3'], 'o3 creata offline');
+      expect(byId.containsKey('o4'), isFalse, reason: 'văzută pe server, ștearsă acolo, fără modificare locală');
+      expect(byId['o5'], 'o5 doar locala, netrimisa', reason: 'niciodată văzută pe server: nu se pierde');
+      expect((await repo.listOffers()).map((x) => x.id).toSet(), {'o1', 'o2', 'o3', 'o5'});
+      final queued = (await LocalCloudSyncRepository().listItems())
+          .where((i) => i.entityType == CloudEntityType.offers && !i.isSynced)
+          .map((i) => i.entityId);
+      expect(queued, contains('o5'), reason: 'oferta netrimisă intră în coadă');
+    });
+  });
+  group('fereastra neatomică citire→scriere (Windows) și regulile propuse M3', () {
+    Future<(FakeServer, RevisionWriter)> seeded() async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('v1'));
+      return (s, a);
+    }
+
+    void bWritesInWindow(FakeServer s) {
+      var done = false;
+      s.afterRead = (c, id) {
+        if (done) return;
+        done = true;
+        final cur = s.read(c, id)!;
+        s.docs[c]![id] = {...cur, 'name': 'Editare B (în fereastră)', '_rev': (cur['_rev'] as int) + 1};
+      };
+    }
+
+    test('RISC fără reguli (înainte de M3): scrierea lui B din fereastră este suprascrisă', () async {
+      final (s, a) = await seeded();
+      bWritesInWindow(s);
+      await up(a, client('Editare A'));
+      expect(s.read(col, 'c1')!['name'], 'Editare A',
+          reason: 'documentează de ce M3 este necesar pentru Windows');
+    });
+
+    test('cu regulile M3: A este respins, reevaluat imediat → conflict; B rămâne pe server', () async {
+      final (s, a) = await seeded();
+      s.enforceRevRules = true;
+      bWritesInWindow(s);
+      await expectLater(up(a, client('Editare A')), throwsA(isA<RevisionConflictException>()));
+      expect(s.rejections, 1);
+      expect(s.read(col, 'c1')!['name'], 'Editare B (în fereastră)');
+      expect(s.read(col, 'c1')!['_rev'], 2);
+      final c = (await a.conflicts.listOpen()).single;
+      expect(c.kind, 'concurrent_edit');
+      expect(c.localPayload!['name'], 'Editare A');
+      expect(c.serverPayload!['name'], 'Editare B (în fereastră)');
+    });
+
+    test('cu regulile M3: refuz persistent (utilizator inactiv) → eroare propagată, nimic pierdut', () async {
+      final (s, a) = await seeded();
+      s.denyAll = true;
+      await expectLater(up(a, client('Editare A')), throwsA(isA<FirebaseException>()));
+      expect(s.rejections, 2, reason: 'o singură reevaluare, fără buclă');
+      expect(await a.conflicts.listOpen(), isEmpty);
+      expect((await a.bases.get(t, 'c1'))!.rev, 1, reason: 'baza rămâne versiunea editată');
+      expect(s.read(col, 'c1')!['name'], 'v1');
+    });
+
+    test('cu regulile M3: confirmare pierdută → reîncercarea vede conținut identic, nu rescrie', () async {
+      final (s, a) = await seeded();
+      s.enforceRevRules = true;
+      s.loseAckAfterCommit = true;
+      await expectLater(up(a, client('v2')), throwsA(isA<TimeoutException>()));
+      final commits = s.commits;
+      expect(await up(a, client('v2')), ConditionalWriteOutcome.alreadyApplied);
+      expect(s.commits, commits + 1, reason: 'tranzacție fără scriere');
+      expect(s.rejections, 0);
+      expect(s.read(col, 'c1')!['_rev'], 2);
+    });
+
+    test('cu regulile M3: document vechi fără _rev → prima scriere 120 cu _rev = 1 este acceptată', () async {
+      final s = FakeServer()..legacyBlindWrite(col, 'c1', client('din 119'));
+      s.enforceRevRules = true;
+      final a = device(s, 'A');
+      await pull(a, s);
+      expect(await up(a, client('migrat')), ConditionalWriteOutcome.written);
+      expect(s.read(col, 'c1')!['_rev'], 1);
+    });
+
+    test('RISC CUNOSCUT și cu regulile M3: ștergerea invechită din fereastră pierde editarea lui B', () async {
+      final (s, a) = await seeded();
+      s.enforceRevRules = true;
+      bWritesInWindow(s);
+      await a.delete(type: t, collection: col, id: 'c1');
+      expect(s.read(col, 'c1'), isNull, reason: 'regulile nu condiționează ștergerea: vezi propunerea tombstone');
+    });
+  });
+  test('arhiva conflictelor: variantele înlocuite sau rezolvate nu se pierd', () async {
+    final store = SyncConflictStore(namespace: 'arh');
+    SyncConflict k(String local, String server) => SyncConflict(
+          entityType: t, entityId: 'c1', kind: 'concurrent_edit',
+          localPayload: {'name': local}, serverPayload: {'name': server},
+          baseRev: 1, serverRev: 2, detectedAt: DateTime.now(),
+        );
+    await store.add(k('A1', 'B1'));
+    await store.add(k('A2', 'B2')); // conflict nou pe aceeași entitate
+    expect((await store.listOpen()).single.localPayload!['name'], 'A2');
+    await store.resolve(t, 'c1', resolution: 'kept_server');
+    expect(await store.listOpen(), isEmpty);
+    final arh = await store.listArchived();
+    expect(arh.map((m) => m['archived_reason']), ['replaced', 'kept_server']);
+    expect(arh.toString(), allOf(contains('A1'), contains('B1'), contains('A2'), contains('B2')));
+  });
+  test('_rev_at (ora serverului) se scrie la fiecare scriere condiționată și nu intră în amprentă', () async {
+    final s = FakeServer();
+    final a = device(s, 'A');
+    await up(a, client('v1'));
+    expect(s.read(col, 'c1')!.containsKey(kRevAtField), isTrue);
+    final withMeta = s.read(col, 'c1')!;
+    final keys = withMeta.keys.toList();
+    expect(contentFingerprint(withMeta, keys),
+        contentFingerprint({...withMeta}..remove(kRevAtField), keys));
+    expect(await up(a, client('v1')), ConditionalWriteOutcome.alreadyApplied);
+  });
+  test('conflictul se salvează și când varianta de server conține Timestamp/GeoPoint', () async {
+    final store = SyncConflictStore(namespace: 'ts');
+    await store.add(SyncConflict(
+      entityType: t, entityId: 'c1', kind: 'concurrent_edit',
+      localPayload: {'name': 'A'},
+      serverPayload: {
+        'name': 'B',
+        'created_at': Timestamp.fromDate(DateTime.utc(2026, 10, 1)),
+        'loc': const GeoPoint(46.18, 21.31),
+        'nested': {'t': Timestamp.fromDate(DateTime.utc(2026, 10, 2))},
+      },
+      baseRev: 1, serverRev: 2, detectedAt: DateTime.now(),
+    ));
+    final c = (await store.listOpen()).single;
+    expect(c.serverPayload!['name'], 'B');
+    expect(c.serverPayload!['created_at'], '2026-10-01T00:00:00.000Z');
+    expect((c.serverPayload!['nested'] as Map)['t'], '2026-10-02T00:00:00.000Z');
+  });
+  group('constatările review-ului (RC 120)', () {
+    OfferRecord o(String id, String title) =>
+        OfferRecord.fromMap({'id': id, 'offer_number': 'N-$id', 'title': title});
+
+    test('#1 ștergere locală în așteptare: îmbinarea NU readuce copia din cloud', () async {
+      final repo = LocalOferteRepository();
+      await repo.upsertOffer(o('x', 'X'));
+      await repo.deleteOffer('x'); // ștearsă local, ștergere în coadă
+      LocalOferteRepository.debugProtectedIds = () async => {'x'};
+      addTearDown(() => LocalOferteRepository.debugProtectedIds = null);
+      final merged = await repo.mergeOffersFromCloud([o('x', 'X din cache')]);
+      expect(merged.map((e) => e.id), isNot(contains('x')));
+      expect((await repo.listOffers()).map((e) => e.id), isNot(contains('x')));
+    });
+
+    test('#1 după ștergerea reușită baza rămâne: copia rămasă nu e „niciodată trimisă”', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('v1'));
+      await a.delete(type: t, collection: col, id: 'c1');
+      expect(s.read(col, 'c1'), isNull);
+      expect(await a.bases.idsWithBase(t), contains('c1'));
+      // o reîncercare de creare din copia rămasă NU recreează documentul
+      await expectLater(up(a, client('fantoma')), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1'), isNull);
+    });
+
+    test('#2 editor deschis pe v1, B scrie v2, baza avansează din fundal → conflict, nu suprascriere', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      final b = device(s, 'B');
+      await up(a, client('v1')); // rev 1
+      await pull(b, s);
+      await up(b, client('v1', phone: '0711 (B)')); // rev 2, alt dispozitiv
+      await pull(a, s); // lista/watch din fundal: baza lui A = rev 2 (nu e scrierea lui)
+      await expectLater(
+        a.upsert(type: t, collection: col, id: 'c1', data: client('v1', notes: 'A'), startRev: 1),
+        throwsA(isA<RevisionConflictException>()),
+      );
+      expect(s.read(col, 'c1')!['phone'], '0711 (B)', reason: 'editarea lui B rămâne');
+    });
+
+    test('#2 propria scriere anterioară NU face conflict (înregistrarea locală are încă revizia veche)', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('v1')); // rev 1
+      await a.upsert(type: t, collection: col, id: 'c1', data: client('v2'), startRev: 1); // rev 2, proprie
+      expect(
+        await a.upsert(type: t, collection: col, id: 'c1', data: client('v3'), startRev: 1),
+        ConditionalWriteOutcome.written,
+      );
+      expect(s.read(col, 'c1')!['_rev'], 3);
+    });
+
+    test('#2 editare pornită dintr-o versiune de server care între timp a fost ștearsă → conflict', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await expectLater(
+        a.upsert(type: t, collection: col, id: 'c1', data: client('A'), startRev: 4),
+        throwsA(isA<RevisionConflictException>()),
+      );
+      expect(s.read(col, 'c1'), isNull);
+    });
+
+    test('#3 îmbinarea și salvarea locală + coada nu se intercalează (blocare comună)', () async {
+      final repo = LocalOferteRepository();
+      await repo.upsertOffer(o('x', 'veche'));
+      final queued = <String>{};
+      LocalOferteRepository.debugProtectedIds = () async {
+        final snapshot = {...queued}; // citirea cozii...
+        await Future<void>.delayed(const Duration(milliseconds: 30)); // ...apoi fereastra de cursă
+        return snapshot;
+      };
+      addTearDown(() => LocalOferteRepository.debugProtectedIds = null);
+      final merge = repo.mergeOffersFromCloud([o('x', 'veche din cloud')]);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      final save = offerSaveLocalFirst(
+        offer: o('x', 'EDITARE NOUA'),
+        saveLocal: repo.upsertOffer,
+        cloudUpsert: null,
+        queue: (x) async => queued.add(x.id),
+      );
+      await Future.wait([merge, save]);
+      expect((await repo.listOffers()).single.title, 'EDITARE NOUA');
+    });
+
+    test('#4 scriere imediată reușită, apoi B editează, apoi reluarea din coadă → fără conflict fals', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      final b = device(s, 'B');
+      await up(a, client('v1'));
+      await up(a, client('v2')); // scrierea imediată: rev 2
+      await pull(b, s);
+      await up(b, client('v2', phone: '0799 (B)')); // rev 3
+      expect(await up(a, client('v2')), ConditionalWriteOutcome.alreadyApplied, reason: 'elementul din coadă reluat');
+      expect(await a.conflicts.listOpen(), isEmpty);
+      expect(s.read(col, 'c1')!['phone'], '0799 (B)');
+      expect((await a.bases.get(t, 'c1'))!.rev, 2, reason: 'baza NU avansează la versiunea lui B');
+      // o editare locală ulterioară, pornită din v2, devine conflict (B păstrat)
+      await expectLater(up(a, client('v3')), throwsA(isA<RevisionConflictException>()));
+      expect(s.read(col, 'c1')!['phone'], '0799 (B)');
+    });
+
+    test('#5 ștergere: câmpuri scrise doar de versiuni vechi nu blochează ștergerea (aceleași chei ca baza)', () async {
+      final s = FakeServer()..legacyBlindWrite(col, 'c1', {...client('v1'), 'phone_numbers': ['0700']});
+      final a = device(s, 'A');
+      Iterable<String> writerKeys(Map<String, dynamic> d) => client('x').keys;
+      await a.recordServerBases(type: t, serverDocs: {'c1': s.read(col, 'c1')!}, keysFor: writerKeys, protectedIds: const {});
+      expect(await a.delete(type: t, collection: col, id: 'c1', keysFor: writerKeys), ConditionalWriteOutcome.written);
+      expect(s.read(col, 'c1'), isNull);
+    });
+
+    test('#6 curățarea cozii la pornire păstrează întâi elementele epuizate ca conflict', () async {
+      await LocalCloudSyncRepository().upsertItem(CloudSyncItem(
+        id: 'clients_c8_1', entityType: CloudEntityType.clients, entityId: 'c8',
+        payload: const {'id': 'c8', 'name': 'Editare epuizată'},
+        updatedAt: DateTime(2026, 10, 15), retryCount: 10,
+      ));
+      await OfflineSyncRuntime.instance.cleanupQueue();
+      expect(await LocalCloudSyncRepository().listItems(), isEmpty);
+      final c = (await SyncConflictStore().listOpen()).single;
+      expect(c.kind, 'retry_exhausted');
+      expect(c.localPayload!['name'], 'Editare epuizată');
+    });
+
+    test('#7 coada: confirmarea unui element vechi intercalată cu o salvare nouă nu pierde elementul nou', () async {
+      final repo = LocalCloudSyncRepository();
+      for (var i = 0; i < 25; i++) {
+        final old = CloudSyncItem(id: 'jobs_j_old$i', entityType: CloudEntityType.jobs, entityId: 'j$i',
+            payload: {'id': 'j$i', 'v': 'veche'}, updatedAt: DateTime(2026));
+        await repo.upsertItem(old);
+        final fresh = CloudSyncItem(id: 'offers_o_new$i', entityType: CloudEntityType.offers, entityId: 'o$i',
+            payload: {'id': 'o$i', 'v': 'noua'}, updatedAt: DateTime(2026));
+        await Future.wait([repo.markItemSynced(old.id, DateTime(2026)), repo.upsertItem(fresh)]);
+      }
+      final ids = (await repo.listItems()).map((i) => i.id).toSet();
+      for (var i = 0; i < 25; i++) {
+        expect(ids, contains('offers_o_new$i'));
+        expect(ids, isNot(contains('jobs_j_old$i')));
+      }
+    });
+
+    test('#9 prima îmbinare după actualizare: doar-local neprotejat → păstrat + conflict, fără încărcare', () async {
+      final repo = LocalOferteRepository();
+      await repo.upsertOffer(o('u1', 'necunoscută la actualizare'));
+      LocalOferteRepository.debugProtectedIds = () async => <String>{};
+      addTearDown(() => LocalOferteRepository.debugProtectedIds = null);
+      final merged = await repo.mergeOffersFromCloud(const []);
+      expect(merged.map((e) => e.id), contains('u1'), reason: 'nu se șterge');
+      final queued = (await LocalCloudSyncRepository().listItems()).map((i) => i.entityId);
+      expect(queued, isNot(contains('u1')), reason: 'nu se încarcă automat (poate fi o ștergere de la distanță)');
+      final c = (await SyncConflictStore().listOpen()).single;
+      expect(c.kind, 'unknown_on_upgrade');
+      expect(c.localPayload!['title'], 'necunoscută la actualizare');
+      expect(await RevisionBaseStore().isInitialized(CloudEntityType.offers), isTrue);
+    });
+
+    test('re-review #1: scriere imediată + reluare identică + editare din înregistrarea cu revizia veche → fără conflict fals', () async {
+      final s = FakeServer();
+      final a = device(s, 'A');
+      await up(a, client('v1')); // rev 1
+      // salvare cu syncRev 1: scrierea imediată → rev 2 (proprie)
+      await a.upsert(type: t, collection: col, id: 'c1', data: client('v2'), startRev: 1);
+      // reluarea elementului din coadă: conținut identic → „aplicat”, baza rămâne proprie
+      expect(await a.upsert(type: t, collection: col, id: 'c1', data: client('v2'), startRev: 1),
+          ConditionalWriteOutcome.alreadyApplied);
+      expect((await a.bases.get(t, 'c1'))!.ownWrite, isTrue);
+      // următoarea salvare din aceeași înregistrare locală (syncRev încă 1)
+      expect(await a.upsert(type: t, collection: col, id: 'c1', data: client('v3'), startRev: 1),
+          ConditionalWriteOutcome.written);
+      expect(await a.conflicts.listOpen(), isEmpty);
+    });
+
+    test('KeyedMutex: serializează pe cheie și este reentrant', () async {
+      final order = <String>[];
+      final f1 = KeyedMutex.run('k', () async {
+        order.add('1-start');
+        await KeyedMutex.run('k', () async => order.add('1-nested')); // fără blocaj
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        order.add('1-end');
+      });
+      final f2 = KeyedMutex.run('k', () async => order.add('2'));
+      await Future.wait([f1, f2]);
+      expect(order, ['1-start', '1-nested', '1-end', '2']);
+    });
+  });
+}

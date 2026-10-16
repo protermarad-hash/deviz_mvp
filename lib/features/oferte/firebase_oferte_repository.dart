@@ -1,6 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/firebase_bootstrap.dart';
 import '../../core/cloud/firebase_collections.dart';
+import '../../core/cloud/offline_sync_runtime.dart';
+import '../../core/cloud/revision_sync.dart';
 import 'offer_models.dart';
 import 'oferte_cloud_repository.dart';
 
@@ -18,12 +22,16 @@ class FirebaseOferteRepository implements OferteCloudRepository {
   Future<void> deleteOffer(String offerId) async {
     final id = offerId.trim();
     if (id.isEmpty) return;
-    await _collection.doc(id).delete();
+    // Ștergere condiționată: nu se șterge o versiune modificată între timp de alt dispozitiv.
+    await RevisionWriter.standard(firestore: _firestore).delete(
+        type: CloudEntityType.offers, collection: FirebaseCollections.offers, id: id,
+        keysFor: (data) => _offerToCloudMap(OfferRecord.fromMap(_normalizeOfferMap(data))).keys);
   }
 
   @override
   Future<List<OfferRecord>> listOffers() async {
     final snapshot = await _collection.get();
+    await _recordBases(snapshot);
     return snapshot.docs
         .map((doc) => OfferRecord.fromMap(_normalizeOfferMap(doc.data())))
         .where((item) => item.id.trim().isNotEmpty)
@@ -34,20 +42,50 @@ class FirebaseOferteRepository implements OferteCloudRepository {
   Future<void> upsertOffer(OfferRecord offer) async {
     final id = offer.id.trim();
     if (id.isEmpty) return;
-    await _collection.doc(id).set(
-          _offerToCloudMap(offer),
-          SetOptions(merge: true),
-        );
+    // Scriere condiționată de revizie (tranzacție): la conflict nu se scrie nimic
+    // și ambele variante se păstrează (RevisionConflictException).
+    await RevisionWriter.standard(firestore: _firestore).upsert(
+      type: CloudEntityType.offers,
+      collection: FirebaseCollections.offers,
+      id: id,
+      data: _offerToCloudMap(offer),
+      startRev: offer.syncRev,
+    );
   }
 
   @override
   Stream<List<OfferRecord>> watchOffers() {
-    return _collection.snapshots().map((snapshot) {
+    return _collection.snapshots().asyncMap((snapshot) async {
+      await _recordBases(snapshot);
       return snapshot.docs
           .map((doc) => OfferRecord.fromMap(_normalizeOfferMap(doc.data())))
           .where((item) => item.id.trim().isNotEmpty)
           .toList(growable: false);
     });
+  }
+
+  /// Baza de revizie din citiri confirmate de server (nu din cache și nu din
+  /// scrieri locale în așteptare); entitățile protejate nu sunt atinse.
+  Future<void> _recordBases(QuerySnapshot<Map<String, dynamic>> snapshot) async {
+    try {
+      if (snapshot.metadata.isFromCache) return;
+      final docs = <String, Map<String, dynamic>>{
+        for (final doc in snapshot.docs)
+          if (!doc.metadata.hasPendingWrites) doc.id: doc.data(),
+      };
+      if (docs.isEmpty) return;
+      // Sub blocarea entității: o salvare + coadă nu se poate intercala între
+      // calculul entităților protejate și scrierea bazelor (RC 120).
+      await runEntitySyncLocked(CloudEntityType.offers, () async =>
+          RevisionWriter.standard(firestore: _firestore).recordServerBases(
+          type: CloudEntityType.offers,
+          serverDocs: docs,
+          keysFor: (data) => _offerToCloudMap(OfferRecord.fromMap(_normalizeOfferMap(data))).keys,
+          protectedIds: await OfflineSyncRuntime.instance.protectedEntityIds(CloudEntityType.offers),
+        ));
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+    }
   }
 
   Map<String, dynamic> _offerToCloudMap(OfferRecord item) {
@@ -120,7 +158,7 @@ class FirebaseOferteRepository implements OferteCloudRepository {
           .map((item) => item.toMap())
           .toList(growable: false),
       'created_at': item.createdAt.toIso8601String(),
-      'updated_at': DateTime.now().toIso8601String(),
+      'updated_at': item.updatedAt.toIso8601String(),
       'created_by_user_id': item.createdByUserId,
       'created_by_user_email': item.createdByUserEmail,
       'registry_entry_id': item.registryEntryId,
@@ -143,6 +181,8 @@ class FirebaseOferteRepository implements OferteCloudRepository {
 
   Map<String, dynamic> _normalizeOfferMap(Map<String, dynamic> raw) {
     return <String, dynamic>{
+      // Revizia de server (RC 120): baza editării pornite din această versiune.
+      if (raw['_rev'] is num) '_rev': raw['_rev'],
       'id': (raw['id'] ?? '').toString(),
       'offer_number':
           (raw['offer_number'] ?? raw['offerNumber'] ?? raw['number'] ?? '')

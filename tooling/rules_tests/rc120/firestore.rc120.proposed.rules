@@ -1,0 +1,391 @@
+// PROPUNERE RC 120 (etapa M3) - firestore.rules + revizie obligatorie pentru clients/offers/jobs.
+// NU se publica fara aprobarea separata M3 (vezi docs/SYNC_CONCURRENCY_RC120.md). Testat doar pe emulator.
+// ═════════════════════════════════════════════════════════════════════════
+// firestore.rules — CANDIDAT PROMOVAT, TESTAT (322/322 teste, Etapa 0C)
+// Etapa Securitate Legacy 0E.1. Acesta este fișierul principal al
+// repository-ului, dar NU a fost încă publicat (`firebase deploy --only
+// firestore:rules`) — publicarea rămâne o etapă separată, condiționată de
+// backup Firestore și preflight de deploy dedicat.
+//
+// Regula CONFIRMATĂ ACTIVĂ în producție la momentul auditului inițial:
+// "allow read, write: if request.auth != null" pe orice document. Acest
+// fișier o înlocuiește cu o politică pe categorii de colecții, testată
+// exhaustiv pe Firebase Emulator Suite (322/322 teste; 105 colecții
+// top-level clasificate + subcolecția tools/history, toate cu binding
+// explicit pozitiv și negativ). Vezi tooling/firebase_security_hotfix/
+// README.md și ACCESS_MATRIX.md pentru istoricul complet al deciziilor.
+//
+// Modificări față de versiunea anterioară a acestui fișier:
+// 1. Colecțiile HR self-service (hr_attendance_entries,
+//    hr_self_service_attendance_sessions, hr_leave_requests,
+//    hr_monthly_timesheets, hr_payslips) — restricționate temporar la
+//    isAdminOrOffice() (self-service dezactivat până la backfill al unui
+//    câmp/index owner→uid verificabil — vezi README, "Blocker HR
+//    self-service").
+// 2. match /users/{userId} — write despărțit în create/update, cu allowlist
+//    strict de câmpuri pe care owner-ul le poate modifica. Owner-ul NU mai
+//    poate seta role/active/employee_id/teamId/firebase_uid pe propriul
+//    document, nici la create, nici la update — neutralizează la nivel de
+//    regulă mecanismul client-side de auto-escaladare la admin descris în
+//    lib/core/auth/field_firebase_auth_adapter.dart.
+//
+// Restul regulilor (Categoriile A/C/D, fallback explicit) sunt neschimbate
+// față de versiunea anterioară a acestui fișier.
+//
+// FAZA 4 (reconciliere) — adăugat suportul pentru supplier_invoices
+// (Import materiale din factură), strict admin, minimal, la finalul
+// Categoriei A. Nicio altă regulă din acest fișier nu a fost atinsă.
+// ═════════════════════════════════════════════════════════════════════════
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper-e de bază (identice cu firestore.rules) ─────────────────────
+    // ── RC 120: revizie obligatorie pentru clients/offers/jobs ──
+    // Creare: _rev == 1. Actualizare: _rev == revizia curenta + 1 (documentele
+    // vechi fara _rev pornesc de la 0). Scrierile aplicatiilor vechi (set merge
+    // fara _rev) pastreaza revizia curenta si sunt RESPINSE.
+    function revOnCreate() { return request.resource.data._rev == 1; }
+    function revOnUpdate() {
+      return request.resource.data._rev == resource.data.get('_rev', 0) + 1;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userExists() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userRole() {
+      return userExists() ? userDoc().data.role : null;
+    }
+
+    function isActive() {
+      return userExists() &&
+        (!('active' in userDoc().data) || userDoc().data.active == true);
+    }
+
+    function isAdminOrOffice() {
+      return isActive() && (userRole() == 'admin' || userRole() == 'office');
+    }
+
+    // FAZA 1.1 / FAZA 4 — strict admin, reutilizat DOAR pentru
+    // supplier_invoices (import materiale din factură). Nu modifică
+    // isAdminOrOffice()/isActive() existente, folosite de restul
+    // fișierului.
+    function isAdminOnly() {
+      return isActive() && userRole() == 'admin';
+    }
+
+    // Etapa Siguranță Programări 0F.3B1 — helper STRICT, dedicat EXCLUSIV
+    // istoricului de programări (appointment_versions/
+    // appointment_version_snapshots), NEreutilizat de restul aplicației, ca
+    // să nu schimbe comportamentul isActive()/isAdminOrOffice()/
+    // isOperational() existent (folosit pe zeci de colecții). Diferă de
+    // isActive() printr-un singur lucru, dar critic: NU tratează `active`
+    // absent din document ca activ — cere explicit ca `active` să existe ȘI
+    // să fie boolean true (== e strict tipizat în Firestore Rules — un
+    // string "true" nu trece).
+    function isActiveStrictForHistory() {
+      return userExists() &&
+        ('active' in userDoc().data) &&
+        userDoc().data.active == true;
+    }
+
+    function isAdminOrOfficeStrictForHistory() {
+      return isActiveStrictForHistory() && (userRole() == 'admin' || userRole() == 'office');
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isOperational() {
+      return isActive();
+    }
+
+    function isCatalogRead() {
+      return isActive();
+    }
+    function isCatalogWrite() {
+      return isAdminOrOffice();
+    }
+
+    // ── Helper NOU — allowlist pentru auto-editarea propriului profil ──────
+    // Câmpurile pe care un utilizator le poate modifica pe propriul document
+    // `users/{uid}`, fără a fi admin/office. Orice câmp din afara acestei
+    // liste, dacă e modificat de owner (nu de admin/office), respinge
+    // scrierea. CANDIDAT — lista exactă trebuie reconfirmată cu echipa de
+    // produs înainte de publicare (vezi README, "Decizii care necesită
+    // utilizatorul").
+    function selfEditableUserFields() {
+      return ['name', 'phone', 'updatedAt'];
+    }
+
+    // Câmpurile privilegiate pe care owner-ul NU le poate seta niciodată
+    // singur — doar admin/office. Verificare explicită, nu doar prin
+    // allowlist (apărare in-depth: chiar dacă allowlist-ul de mai sus ar fi
+    // extins greșit în viitor, această listă rămâne blocată separat).
+    function privilegedUserFields() {
+      return ['role', 'active', 'employee_id', 'teamId', 'firebase_uid'];
+    }
+
+    function onlyChangedKeysIn(allowedKeys) {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(allowedKeys);
+    }
+
+    function noPrivilegedKeysChanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(privilegedUserFields());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // UTILIZATORI — ÎNTĂRIT (vezi comentariul de sus)
+    // ═══════════════════════════════════════════════════════════════════
+    match /users/{userId} {
+      allow read: if isActive();
+
+      // Creare: doar propriul document (owner) sau admin/office pentru
+      // altcineva. La auto-creare (owner), rolul e forțat 'employee' și
+      // active nu poate porni ca privilegiu ascuns — niciun email nu
+      // primește tratament special aici.
+      allow create: if isAdminOrOffice()
+        || (
+          isOwner(userId)
+          && request.resource.data.role == 'employee'
+          && !('firebase_uid' in request.resource.data
+               && request.resource.data.firebase_uid != userId)
+        );
+
+      // Actualizare: admin/office pot modifica orice câmp. Owner-ul poate
+      // modifica DOAR câmpurile din selfEditableUserFields() și, apărare
+      // suplimentară, nu poate atinge niciun câmp din privilegedUserFields().
+      allow update: if isAdminOrOffice()
+        || (
+          isOwner(userId)
+          && onlyChangedKeysIn(selfEditableUserFields())
+          && noPrivilegedKeysChanged()
+        );
+
+      allow delete: if isAdminOrOffice();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA A — ADMIN/OFFICE ONLY (identică cu firestore.rules)
+    // ═══════════════════════════════════════════════════════════════════
+    match /company_profiles/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /company_cost_profiles/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /email_server_configs/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /email_delivery_logs/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /notification_email_queue/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /notification_push_queue/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /product_catalog_supplier_prices/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /product_catalog_price_lists/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /product_catalog_price_list_entries/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_rule_sets/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_rule_versions/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_payroll_input_snapshots/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_bonuses/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_deductions/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_advances/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_garnishments/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_payroll_calculations/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_payroll_runs/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_payroll_accounting_reports/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_payroll_payments/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_employee_profiles/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /hr_contracts/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /employee_pay_entries/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /employee_payments/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /employee_financial_summary/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /employee_settings/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /partner_transactions/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /partner_financial_summary/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /partner_settlements/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /partner_weekly_payments/{docId} { allow read, write: if isAdminOrOffice(); }
+    match /crm_records/{docId} { allow read, write: if isAdminOrOffice(); }
+
+    // Facturi furnizori importate (Import materiale din factură — FAZA 1 /
+    // reconciliat cu LIVE la FAZA 4). Conțin costuri reale de achiziție și
+    // date furnizor — STRICT ADMIN (nu admin/office — decizie explicită
+    // FAZA 1.1 pct. 2: doar administratorul editează Lucrări/Oferte și
+    // folosește import-ul de facturi; office nu trebuie să vadă costuri
+    // reale de achiziție). NU se relaxează niciodată la isAdminOrOffice().
+    match /supplier_invoices/{invoiceId} {
+      allow read, write: if isAdminOnly();
+
+      match /lines/{lineId} {
+        allow read, write: if isAdminOnly();
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA B — HR SELF-SERVICE — ÎNTĂRIT (BLOCKING, vezi README)
+    //
+    // firestore.rules (rădăcină) folosește isActive() aici (orice user
+    // activ), cu TODO explicit al autorilor. Investigația din Etapa 0C
+    // (agent read-only dedicat) a confirmat cu dovadă din cod:
+    //   - toate cele 5 colecții identifică documentul prin `employee_id`
+    //     (EmployeeRecord.id), NU prin firebase_uid;
+    //   - legătura reală user->angajat trece prin `hr_employee_profiles`
+    //     (user_id -> employee_id), care necesită un QUERY, nu un get() pe
+    //     cale cunoscută — Firestore Rules nu suportă query-uri arbitrare;
+    //   - hr_employee_profiles e deja admin/office-only, deci un get() aici
+    //     tot nu ar rezolva problema pentru un angajat obișnuit;
+    //   - aceste colecții sunt scrise și de office/admin PENTRU alți
+    //     angajați (dropdown de selecție), nu doar de owner.
+    //
+    // DECIZIE HOTFIX: fără un câmp/index owner->uid verificabil, NU se
+    // inventează o relație. Se aplică politica cea mai sigură compatibilă
+    // cu integritatea datelor: acces DOAR admin/office, self-service
+    // DEZACTIVAT TEMPORAR până la backfill (vezi README, "Blocker HR
+    // self-service" — propunere câmp `employees.firebase_uid` sau colecție
+    // `user_employee_map/{uid}`).
+    // ═══════════════════════════════════════════════════════════════════
+    match /hr_attendance_entries/{docId} {
+      allow read, write: if isAdminOrOffice(); // BLOCKING: self-service dezactivat pana la backfill owner->uid
+    }
+    match /hr_self_service_attendance_sessions/{docId} {
+      allow read, write: if isAdminOrOffice(); // BLOCKING: self-service dezactivat pana la backfill owner->uid
+    }
+    match /hr_leave_requests/{docId} {
+      allow read, write: if isAdminOrOffice(); // BLOCKING: self-service dezactivat pana la backfill owner->uid
+    }
+    match /hr_monthly_timesheets/{docId} {
+      allow read, write: if isAdminOrOffice(); // BLOCKING: self-service dezactivat pana la backfill owner->uid
+    }
+    match /hr_payslips/{docId} {
+      allow read, write: if isAdminOrOffice(); // BLOCKING: self-service dezactivat pana la backfill owner->uid (fluturas = date salariale individuale)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA D — identică cu firestore.rules
+    // ═══════════════════════════════════════════════════════════════════
+    match /materials/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /appointment_material_kit_templates/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /offer_labor_templates/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /offer_commercial_clause_templates/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /offer_commercial_package_templates/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /tool_categories/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /hr_leave_types/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /clauze_custom_catalog/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /app_config/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /help_content/{docId} { allow read: if isCatalogRead(); allow write: if isCatalogWrite(); }
+    match /app_settings/{docId} { allow read, write: if isActive(); }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CATEGORIA C — module operaționale (identică cu firestore.rules)
+    // ═══════════════════════════════════════════════════════════════════
+    match /teams/{docId} { allow read, write: if isOperational(); }
+
+    // Etapa Siguranță Programări 0F.3B: excepția temporară "TEMPORARY PRODUCTION
+    // COMPATIBILITY" (isSignedIn()) a fost eliminată — profilul legacy care o
+    // motiva a fost migrat la users/{firebaseUid} (0E.3J), iar appointments
+    // revine la politica strictă standard a Categoriei C.
+    match /appointments/{docId} { allow read, write: if isOperational(); }
+    match /deleted_appointments/{docId} { allow read, write: if isOperational(); }
+    match /appointment_history/{docId} { allow read, write: if isOperational(); }
+
+    match /appointment_versions/{versionId} {
+      allow read: if isAdminOrOfficeStrictForHistory();
+      allow create, update, delete: if false;
+    }
+    match /appointment_version_snapshots/{snapshotId} {
+      allow read: if isAdminOrOfficeStrictForHistory();
+      allow create, update, delete: if false;
+    }
+
+    match /appointment_restore_audits/{auditId} {
+      allow read: if isAdminOrOfficeStrictForHistory();
+      allow create, update, delete: if false;
+    }
+    match /agfr_equipments/{docId} { allow read, write: if isOperational(); }
+    match /agfr_interventions/{docId} { allow read, write: if isOperational(); }
+    match /agfr_reports/{docId} { allow read, write: if isOperational(); }
+    match /agfr_weighing_reports/{docId} { allow read, write: if isOperational(); }
+    match /refrigerant_reporting_records/{docId} { allow read, write: if isOperational(); }
+    match /jobs/{docId} {
+      allow read: if isOperational();
+      allow create: if isOperational() && revOnCreate();
+      allow update: if isOperational() && revOnUpdate();
+      allow delete: if isOperational();
+    }
+    match /clients/{docId} {
+      allow read: if isOperational();
+      allow create: if isOperational() && revOnCreate();
+      allow update: if isOperational() && revOnUpdate();
+      allow delete: if isOperational();
+    }
+    match /partners/{docId} { allow read, write: if isOperational(); }
+    match /partner_workers/{docId} { allow read, write: if isOperational(); }
+    match /partner_vehicles/{docId} { allow read, write: if isOperational(); }
+    match /offers/{docId} {
+      allow read: if isOperational();
+      allow create: if isOperational() && revOnCreate();
+      allow update: if isOperational() && revOnUpdate();
+      allow delete: if isOperational();
+    }
+    match /registry_entries/{docId} { allow read, write: if isOperational(); }
+    match /registry_settings/{docId} { allow read, write: if isOperational(); }
+    match /employees/{docId} { allow read, write: if isOperational(); }
+    match /vehicles/{docId} { allow read, write: if isOperational(); }
+    match /hr_trips/{docId} { allow read, write: if isOperational(); }
+    match /hr_travel_orders/{docId} { allow read, write: if isOperational(); }
+    match /complaints/{docId} { allow read, write: if isOperational(); }
+    match /repair_reports/{docId} { allow read, write: if isOperational(); }
+    match /warranty_intervention_reports/{docId} { allow read, write: if isOperational(); }
+    match /field_photos/{docId} { allow read, write: if isOperational(); }
+    match /job_site_documents/{docId} { allow read, write: if isOperational(); }
+    match /tools/{docId} {
+      allow read, write: if isOperational();
+      match /history/{historyId} { allow read, write: if isOperational(); }
+    }
+    match /tool_handovers/{docId} { allow read, write: if isOperational(); }
+    match /tool_transfer_requests/{docId} { allow read, write: if isOperational(); }
+    match /tool_transfer_notifications/{docId} { allow read, write: if isOperational(); }
+    match /tool_packages/{docId} { allow read, write: if isOperational(); }
+    match /tool_package_handovers/{docId} { allow read, write: if isOperational(); }
+    match /tool_package_movements/{docId} { allow read, write: if isOperational(); }
+    match /tool_package_notifications/{docId} { allow read, write: if isOperational(); }
+    match /product_catalog_products/{docId} { allow read, write: if isOperational(); }
+    match /product_catalog_sales/{docId} { allow read, write: if isOperational(); }
+    match /product_catalog_warranty_certificates/{docId} { allow read, write: if isOperational(); }
+    match /notifications/{docId} { allow read, write: if isOperational(); }
+    match /notification_preferences/{docId} { allow read, write: if isOperational(); }
+    match /notification_device_tokens/{docId} { allow read, write: if isOperational(); }
+    match /field_sales_leads/{docId} { allow read, write: if isOperational(); }
+    match /field_sales_requests/{docId} { allow read, write: if isOperational(); }
+    match /complaint_client_centralizers/{docId} { allow read, write: if isOperational(); }
+    match /complaint_work_orders/{docId} { allow read, write: if isOperational(); }
+    match /deviz_articole_template/{docId} { allow read, write: if isOperational(); }
+    match /devize_tehnice/{docId} { allow read, write: if isOperational(); }
+    match /devize_filtre_cta/{docId} { allow read, write: if isOperational(); }
+    match /app_tasks/{docId} { allow read, write: if isOperational(); }
+    match /stoc_items/{docId} { allow read, write: if isOperational(); }
+    match /stoc_miscari/{docId} { allow read, write: if isOperational(); }
+    match /gps_checkins/{docId} { allow read, write: if isOperational(); }
+    match /echipamente_instalate/{docId} { allow read, write: if isOperational(); }
+    match /mentenanta_contracte/{docId} { allow read, write: if isOperational(); }
+    match /mentenanta_interventii/{docId} { allow read, write: if isOperational(); }
+    match /servicii_prestate/{docId} { allow read, write: if isOperational(); }
+    match /pontaj_zile_lucrari/{docId} { allow read, write: if isOperational(); }
+    match /obiective_lunare/{docId} { allow read, write: if isOperational(); }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // FALLBACK EXPLICIT — identic cu firestore.rules. Orice colecție
+    // neenumerată e BLOCATĂ (deny by default).
+    // ═══════════════════════════════════════════════════════════════════
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -152,7 +152,8 @@ void main() {
       expect(await repo.listJobs(), hasLength(1));
       expect(await _queueFor('j1'), hasLength(1));
     });
-    test('online + confirmare cloud: salvat local, fără coadă', () async {
+    test('online + confirmare cloud: salvat local; coada scrisă ÎNAINTE de cloud (RC 120)',
+        () async {
       final repo = LocalAppDataRepository();
       await lucrareSaveJobWithSync(
           job: _job('j1', 'Lucrare QA'),
@@ -160,7 +161,9 @@ void main() {
           cloud: _FakeCloud(),
           online: true);
       expect(await repo.listJobs(), hasLength(1));
-      expect(await _queueFor('j1'), isEmpty);
+      // RC 120: elementul rămâne în coadă până la sincronizare, unde e confirmat
+      // fără o a doua scriere (scriere condiționată: conținut identic = aplicat).
+      expect(await _queueFor('j1'), hasLength(1));
     });
     test('fără cloud: salvat local + coadă', () async {
       final repo = LocalAppDataRepository();

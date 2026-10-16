@@ -4,17 +4,26 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cloud_sync_models.dart';
+import 'keyed_mutex.dart';
 import 'cloud_sync_repository.dart';
 
 class LocalCloudSyncRepository implements CloudSyncRepository {
   static const _syncQueueKey = 'cloud_sync_queue_v1';
 
+  /// Toate modificările cozii trec prin aceeași blocare: altfel o confirmare
+  /// (`markItemSynced`) intercalată cu o salvare (`upsertItem`) putea rescrie
+  /// lista fără elementul nou (RC 120).
+  static Future<T> _locked<T>(Future<T> Function() body) =>
+      KeyedMutex.run(_syncQueueKey, body);
+
   Future<SharedPreferences> get _prefs async => SharedPreferences.getInstance();
 
   @override
   Future<void> clearAll() async {
-    final prefs = await _prefs;
-    await prefs.remove(_syncQueueKey);
+    await _locked(() async {
+      final prefs = await _prefs;
+      await prefs.remove(_syncQueueKey);
+    });
   }
 
   @override
@@ -48,26 +57,30 @@ class LocalCloudSyncRepository implements CloudSyncRepository {
 
   @override
   Future<void> markItemSynced(String id, DateTime syncedAt) async {
-    // Ștergem direct itemul sincronizat — nu îl păstrăm cu isSynced=true.
-    // Motivul: coada nu se umfla indefinit; performanța rămâne constantă.
-    final items = await listItems();
-    final updated = items.where((item) => item.id != id).toList();
-    await _saveAll(updated);
+    await _locked(() async {
+      // Ștergem direct itemul sincronizat — nu îl păstrăm cu isSynced=true.
+      // Motivul: coada nu se umfla indefinit; performanța rămâne constantă.
+      final items = await listItems();
+      final updated = items.where((item) => item.id != id).toList();
+      await _saveAll(updated);
+    });
   }
 
   /// Elimină din coadă itemele deja sincronizate (isSynced=true) și pe cele
   /// care au depășit numărul maxim de reîncercări (sunt moarte).
   /// Se apelează la startul fiecărui syncPending() pentru a curăța backlog-ul.
   Future<void> clearStale({int maxRetries = 10}) async {
-    final items = await listItems();
-    final active = items
-        .where((i) => !i.isSynced && i.retryCount < maxRetries)
-        .toList();
-    if (active.length < items.length) {
-      debugPrint('[Queue] clearStale: ${items.length - active.length} iteme eliminate '
-          '(rămân ${active.length} active)');
-      await _saveAll(active);
-    }
+    await _locked(() async {
+      final items = await listItems();
+      final active =
+          items.where((i) => !i.isSynced && i.retryCount < maxRetries).toList();
+      if (active.length < items.length) {
+        debugPrint(
+            '[Queue] clearStale: ${items.length - active.length} iteme eliminate '
+            '(rămân ${active.length} active)');
+        await _saveAll(active);
+      }
+    });
   }
 
   @override
@@ -77,46 +90,28 @@ class LocalCloudSyncRepository implements CloudSyncRepository {
     required DateTime nextAttemptAt,
     required String errorMessage,
   }) async {
-    final items = await listItems();
-    final updated = items
-        .map(
-          (item) => item.id == id
-              ? item.copyWith(
-                  retryCount: item.retryCount + 1,
-                  lastError: errorMessage,
-                  lastAttemptAt: attemptedAt,
-                  nextAttemptAt: nextAttemptAt,
-                )
-              : item,
-        )
-        .toList();
-    await _saveAll(updated);
+    await _locked(() async {
+      final items = await listItems();
+      final updated = items
+          .map(
+            (item) => item.id == id
+                ? item.copyWith(
+                    retryCount: item.retryCount + 1,
+                    lastError: errorMessage,
+                    lastAttemptAt: attemptedAt,
+                    nextAttemptAt: nextAttemptAt,
+                  )
+                : item,
+          )
+          .toList();
+      await _saveAll(updated);
+    });
   }
 
   @override
   Future<void> upsertItem(CloudSyncItem item) async {
-    final items = List<CloudSyncItem>.of(await listItems());
-    items.removeWhere(
-      (existing) =>
-          !existing.isSynced &&
-          existing.entityType == item.entityType &&
-          existing.entityId == item.entityId,
-    );
-    final index = items.indexWhere((existing) => existing.id == item.id);
-    if (index >= 0) {
-      items[index] = item;
-    } else {
-      items.add(item);
-    }
-    await _saveAll(items);
-  }
-
-  /// Adaugă mai multe iteme în coadă cu O(1) citire + O(1) scriere SharedPreferences.
-  /// Înlocuiește bucla `for (item in list) { await upsertItem(item); }` (O(n) I/O).
-  Future<void> upsertBatch(List<CloudSyncItem> newItems) async {
-    if (newItems.isEmpty) return;
-    final items = List<CloudSyncItem>.of(await listItems());
-    for (final item in newItems) {
+    await _locked(() async {
+      final items = List<CloudSyncItem>.of(await listItems());
       items.removeWhere(
         (existing) =>
             !existing.isSynced &&
@@ -129,8 +124,32 @@ class LocalCloudSyncRepository implements CloudSyncRepository {
       } else {
         items.add(item);
       }
-    }
-    await _saveAll(items);
+      await _saveAll(items);
+    });
+  }
+
+  /// Adaugă mai multe iteme în coadă cu O(1) citire + O(1) scriere SharedPreferences.
+  /// Înlocuiește bucla `for (item in list) { await upsertItem(item); }` (O(n) I/O).
+  Future<void> upsertBatch(List<CloudSyncItem> newItems) async {
+    await _locked(() async {
+      if (newItems.isEmpty) return;
+      final items = List<CloudSyncItem>.of(await listItems());
+      for (final item in newItems) {
+        items.removeWhere(
+          (existing) =>
+              !existing.isSynced &&
+              existing.entityType == item.entityType &&
+              existing.entityId == item.entityId,
+        );
+        final index = items.indexWhere((existing) => existing.id == item.id);
+        if (index >= 0) {
+          items[index] = item;
+        } else {
+          items.add(item);
+        }
+      }
+      await _saveAll(items);
+    });
   }
 
   Future<void> _saveAll(List<CloudSyncItem> items) async {

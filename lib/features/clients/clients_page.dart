@@ -349,8 +349,7 @@ class _ClientsPageState extends State<ClientsPage> {
     if (FirebaseBootstrap.isInitialized) {
       try {
         final cloudItems = await FirebaseOferteRepository().listOffers();
-        await _localOffersRepository.replaceOffers(cloudItems);
-        return cloudItems;
+        return _localOffersRepository.mergeOffersFromCloud(cloudItems);
       } catch (e) {
         debugPrint('[ClientsPage] citire oferte cloud eșuată, folosesc local: $e');
       }
@@ -1218,6 +1217,8 @@ class _ClientsPageState extends State<ClientsPage> {
                     final now = DateTime.now();
                     final item = ClientRecord(
                       id: current?.id ?? now.microsecondsSinceEpoch.toString(),
+                      // RC 120: revizia versiunii din care a pornit editarea.
+                      syncRev: current?.syncRev,
                       clientCode: code.text.trim(),
                       externalClientCode: externalClientCode.text.trim(),
                       externalClientSource: externalClientSource.text.trim(),

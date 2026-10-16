@@ -31,6 +31,7 @@ import '../../features/teams/firebase_echipe_repository.dart';
 import 'cloud_sync_bridge.dart';
 import 'firebase_collections.dart';
 import 'cloud_sync_models.dart';
+import 'revision_sync.dart';
 import 'cloud_sync_service.dart';
 import 'firebase_bootstrap.dart';
 import 'local_cloud_sync_repository.dart';
@@ -92,6 +93,21 @@ class OfflineSyncRuntime {
     } catch (_) {
       return {};
     }
+  }
+
+  /// Entități care NU pot fi înlocuite de o citire din cloud și a căror bază de
+  /// revizie nu se actualizează: modificări locale nesincronizate (inclusiv
+  /// ștergeri) și conflicte deschise.
+  Future<Set<String>> protectedEntityIds(CloudEntityType entityType) async {
+    final ids = <String>{};
+    // Fără try/catch: dacă coada nu poate fi citită, îmbinarea trebuie să eșueze
+    // (altfel modificările nesincronizate ar părea neprotejate și ar fi suprascrise).
+    final items = await _queueRepository.listItems();
+    ids.addAll(items
+        .where((item) => item.entityType == entityType && !item.isSynced)
+        .map((item) => item.entityId));
+    ids.addAll(await SyncConflictStore().openEntityIds(entityType));
+    return ids;
   }
 
   Future<void> queueJob(JobRecord job) async {
@@ -453,7 +469,12 @@ class OfflineSyncRuntime {
   /// Curăță imediat coada: elimină itemele deja sincronizate și cele moarte.
   /// Se apelează la startup pentru a elibera rapid JSON-ul acumulat.
   Future<void> cleanupQueue() async {
-    await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+    // Ca în syncPending: elementele epuizate se păstrează întâi ca conflict
+    // (altfel modificarea locală ar dispărea silențios la pornire).
+    // Dacă păstrarea eșuează, NU se curăță (altfel s-ar pierde silențios).
+    if (await _preserveExhaustedItems()) {
+      await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+    }
   }
 
   Future<bool> syncPending() async {
@@ -508,7 +529,9 @@ class OfflineSyncRuntime {
         return false;
       }
 
-      await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+      if (await _preserveExhaustedItems()) {
+        await _queueRepository.clearStale(maxRetries: _maxRetryAttempts);
+      }
 
       final pending = await _queueRepository.listPendingItems();
       if (pending.isEmpty) {
@@ -1058,6 +1081,12 @@ class OfflineSyncRuntime {
               }
               break;
           }
+        } on RevisionConflictException catch (conflict) {
+          // Ambele variante sunt păstrate în SyncConflictStore; elementul nu se
+          // mai trimite orb (ar suprascrie versiunea de pe server).
+          debugPrint('[Sync] element parcat ca conflict: ${conflict.conflict.kind} '
+              '${item.entityType.name}:${item.entityId}');
+          await _queueRepository.markItemSynced(item.id, DateTime.now());
         } catch (error) {
           FirebaseBootstrap.registerRuntimeError(error);
           final attemptedAt = DateTime.now();
@@ -1084,6 +1113,41 @@ class OfflineSyncRuntime {
     } finally {
       _isSyncing = false;
       _lastSyncFinishedAt = DateTime.now();
+    }
+  }
+
+  /// Elementele care au epuizat reîncercările erau șterse silențios din coadă.
+  /// Pentru clienți, oferte și lucrări, payload-ul local se păstrează ca
+  /// conflict `retry_exhausted` înainte de curățare.
+  @visibleForTesting
+  Future<bool> debugPreserveExhaustedItems() => _preserveExhaustedItems();
+
+  Future<bool> _preserveExhaustedItems() async {
+    try {
+      final items = await _queueRepository.listItems();
+      final store = SyncConflictStore();
+      for (final item in items) {
+        if (item.isSynced || item.retryCount < _maxRetryAttempts) continue;
+        if (item.entityType != CloudEntityType.clients &&
+            item.entityType != CloudEntityType.offers &&
+            item.entityType != CloudEntityType.jobs) {
+          continue;
+        }
+        await store.add(SyncConflict(
+          entityType: item.entityType,
+          entityId: item.entityId,
+          kind: 'retry_exhausted',
+          localPayload: item.deleted ? null : item.payload,
+          serverPayload: null,
+          baseRev: null,
+          serverRev: null,
+          detectedAt: DateTime.now(),
+        ));
+      }
+      return true;
+    } catch (error) {
+      FirebaseBootstrap.registerRuntimeError(error);
+      return false;
     }
   }
 

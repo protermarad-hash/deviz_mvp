@@ -15,6 +15,8 @@ import 'deviz_tehnic_models.dart';
 import 'deviz_tehnic_pdf_service.dart';
 import 'deviz_tehnic_repository.dart';
 import 'deviz_tehnic_form_page.dart';
+import '../../core/cloud/cloud_sync_models.dart';
+import '../../core/cloud/revision_sync.dart';
 
 /// Comparator simplu, doar după dată descrescător (cele mai recente primele).
 /// Ordinea GRUPURILOR de status nu mai e hardcodată aici — e reordonabilă de
@@ -453,10 +455,13 @@ class _DevizTehnicListPageState extends State<DevizTehnicListPage>
           queuedOffline = true;
         }
       }
-      final savedJob = await widget.repository.saveJob(job);
-      if (queuedOffline) {
-        await OfflineSyncRuntime.instance.queueJob(savedJob);
-      }
+      final savedJob = await runEntitySyncLocked(CloudEntityType.jobs, () async {
+        final saved = await widget.repository.saveJob(job);
+        if (queuedOffline) {
+          await OfflineSyncRuntime.instance.queueJob(saved);
+        }
+        return saved;
+      });
 
       // Marchează devizul ca convertit
       final updatedDeviz = d.copyWith(
