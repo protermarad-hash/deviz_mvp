@@ -2495,6 +2495,8 @@ extension _ProgramariAppointmentFormDialogX on _ProgramariPageState {
                       id: isEditingExisting
                           ? appointment.id
                           : DateTime.now().microsecondsSinceEpoch.toString(),
+                      // RC 121: revizia versiunii din care a pornit editarea.
+                      syncRev: isEditingExisting ? appointment.syncRev : null,
                       clientId: selectedClientId.trim(),
                       clientName: _resolvedClientName(
                         selectedClientId,

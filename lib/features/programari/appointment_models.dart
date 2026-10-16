@@ -401,6 +401,7 @@ class AppointmentMaterialUsage {
 class Appointment {
   const Appointment({
     required this.id,
+    this.syncRev,
     required this.clientId,
     this.clientName = '',
     this.contractingClientId = '',
@@ -465,6 +466,10 @@ class Appointment {
   });
 
   final String id;
+
+  /// Revizia de server (`_rev`) a versiunii din care provine programarea
+  /// (RC 121): baza editării; null pentru date fără revizie.
+  final int? syncRev;
   final String clientId;
   final String clientName;
   final String contractingClientId;
@@ -548,6 +553,7 @@ class Appointment {
 
   Appointment copyWith({
     String? id,
+    int? syncRev,
     String? clientId,
     String? clientName,
     String? contractingClientId,
@@ -619,6 +625,7 @@ class Appointment {
   }) {
     return Appointment(
       id: id ?? this.id,
+      syncRev: syncRev ?? this.syncRev,
       clientId: clientId ?? this.clientId,
       clientName: clientName ?? this.clientName,
       contractingClientId: contractingClientId ?? this.contractingClientId,
@@ -760,6 +767,7 @@ class Appointment {
 
   Map<String, dynamic> toMap() {
     return {
+      if (syncRev != null) '_rev': syncRev,
       'id': id,
       'client_id': clientId,
       'client_name': clientName,
@@ -900,6 +908,7 @@ class Appointment {
 
     return Appointment(
       id: (map['id'] ?? '').toString(),
+      syncRev: (map['_rev'] as num?)?.toInt(),
       clientId: (map['client_id'] ?? '').toString(),
       clientName: (map['client_name'] ?? map['clientName'] ?? '').toString(),
       contractingClientId:
