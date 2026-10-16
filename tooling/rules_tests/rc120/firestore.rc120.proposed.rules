@@ -1,4 +1,4 @@
-// PROPUNERE RC 120 (etapa M3) - firestore.rules + revizie obligatorie pentru clients/offers/jobs.
+// PROPUNERE RC 120/121 (etapa M3) - firestore.rules + revizie obligatorie pentru clients/offers/jobs/appointments.
 // NU se publica fara aprobarea separata M3 (vezi docs/SYNC_CONCURRENCY_RC120.md). Testat doar pe emulator.
 // ═════════════════════════════════════════════════════════════════════════
 // firestore.rules — CANDIDAT PROMOVAT, TESTAT (322/322 teste, Etapa 0C)
@@ -291,7 +291,12 @@ service cloud.firestore {
     // COMPATIBILITY" (isSignedIn()) a fost eliminată — profilul legacy care o
     // motiva a fost migrat la users/{firebaseUid} (0E.3J), iar appointments
     // revine la politica strictă standard a Categoriei C.
-    match /appointments/{docId} { allow read, write: if isOperational(); }
+    match /appointments/{docId} {
+      allow read: if isOperational();
+      allow create: if isOperational() && revOnCreate();
+      allow update: if isOperational() && revOnUpdate();
+      allow delete: if isOperational();
+    }
     match /deleted_appointments/{docId} { allow read, write: if isOperational(); }
     match /appointment_history/{docId} { allow read, write: if isOperational(); }
 

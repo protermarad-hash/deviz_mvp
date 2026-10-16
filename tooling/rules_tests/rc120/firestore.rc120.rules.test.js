@@ -21,7 +21,7 @@ const {
 const PROPOSED = path.join(__dirname, 'firestore.rc120.proposed.rules');
 const LIVE = path.join(__dirname, '..', '..', '..', 'firestore.rules');
 const PROJECT_ID = 'demo-rc120-rules';
-const COLLECTIONS = ['clients', 'offers', 'jobs'];
+const COLLECTIONS = ['clients', 'offers', 'jobs', 'appointments'];
 
 let testEnv;
 
@@ -61,7 +61,7 @@ test.beforeEach(async () => {
   });
 });
 
-test('R1 propunerea = regulile live + DOAR revizia pe clients/offers/jobs (fara deriva)', () => {
+test('R1 propunerea = regulile live + DOAR revizia pe clients/offers/jobs/appointments (fara deriva)', () => {
   const norm = (s) => s.replace(/\r/g, '');
   let proposed = norm(fs.readFileSync(PROPOSED, 'utf8'));
   const live = norm(fs.readFileSync(LIVE, 'utf8'));
