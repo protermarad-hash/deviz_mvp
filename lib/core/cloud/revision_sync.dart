@@ -295,10 +295,26 @@ class SyncConflict {
 class SyncConflictStore {
   /// [namespace] doar pentru teste (mai multe „dispozitive” în același proces).
   SyncConflictStore({String namespace = ''})
-      : _key = namespace.isEmpty ? 'sync_conflicts_v1' : 'sync_conflicts_v1_$namespace',
+      : _isDefault = namespace.isEmpty,
+        _key = namespace.isEmpty ? 'sync_conflicts_v1' : 'sync_conflicts_v1_$namespace',
         _archiveKey =
             namespace.isEmpty ? 'sync_conflicts_archive_v1' : 'sync_conflicts_archive_v1_$namespace';
   final String _key;
+  final bool _isDefault;
+
+  /// Numărul conflictelor deschise pe acest dispozitiv (indicatorul din aplicație).
+  /// Un conflict = o modificare locală care NU a ajuns pe server și nu se mai
+  /// reîncearcă automat (spre deosebire de o eroare temporară din coadă).
+  static final ValueNotifier<int> openCount = ValueNotifier<int>(0);
+
+  /// La pornire: încarcă numărul conflictelor persistate.
+  static Future<void> refreshOpenCount() async {
+    openCount.value = (await SyncConflictStore().listOpen()).length;
+  }
+
+  Future<void> _publish(int count) async {
+    if (_isDefault) openCount.value = count;
+  }
 
   /// Arhivă doar-adăugare: un conflict înlocuit (alt conflict pe aceeași entitate)
   /// sau rezolvat nu se șterge, se mută aici cu ambele variante.
@@ -355,6 +371,7 @@ class SyncConflictStore {
       ..add(conflict);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all.map((c) => c.toMap()).toList()));
+    await _publish(all.length);
     debugPrint('[Sync] CONFLICT ${conflict.kind} ${conflict.entityType.name}:${conflict.entityId} '
         'baza=${conflict.baseRev} server=${conflict.serverRev} (ambele variante pastrate)');
   });
@@ -367,6 +384,7 @@ class SyncConflictStore {
     all.removeWhere(same);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, jsonEncode(all.map((c) => c.toMap()).toList()));
+    await _publish(all.length);
   });
 }
 

@@ -67,6 +67,7 @@ import '../features/crm/crm_repository.dart';
 import '../features/obiective/obiective_page.dart';
 import '../features/analiza/analiza_page.dart';
 import '../features/user_management/user_management_page.dart';
+import '../core/cloud/sync_conflict_banner.dart';
 
 typedef ShellPageBuilder = Widget Function(BuildContext context);
 
@@ -1283,6 +1284,8 @@ class _RoleReadyAppShellState extends State<RoleReadyAppShell> {
                   ? const SizedBox.shrink()
                   : _OfflineBanner(),
             ),
+            // RC 120: modificări locale care nu au ajuns pe server (conflict).
+            const SyncConflictBanner(),
             Expanded(child: stack),
           ],
         );
