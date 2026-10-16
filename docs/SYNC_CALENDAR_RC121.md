@@ -97,6 +97,45 @@ Datele scrise de 121 (`_rev`, `_rev_writer`, `_rev_at`) sunt ignorate de versiun
 | Review independent (9 constatări) | 7 remediate (#1–#4, #6–#8), #5 și #9 documentate |
 | Build Android (`assembleProtermDebug`) | PASS |
 | Build Windows (binar de test, același cod `lib`) | PASS |
-| **QA Windows real (A1–A3 calendar, S1/S7 regresie clienți)** | **BLOCKED**: protecția runner-ului refuză pornirea cât timp aplicația reală (pilotul, `C:\proventaris`) rulează pe PC-1 |
-| Android pe dispozitiv / emulator | NOT TESTED: cere build semnat RC 121, după aprobare |
+| **QA Windows real (A1–A3 calendar, S1/S7 regresie clienți)** | **PASS 5/5**, 90 verificări, 0 FAIL, 0 excepții, 0 timeout (2026-10-16, detalii în 7.1) |
+| Build Android release semnat 1.13.0+121 | PASS: certificat de producție, construit din `6949c89` (detalii în 7.1) |
+| Android pe dispozitiv | NOT TESTED: în așteptarea confirmării instalării |
+
+### 7.1 QA Windows real — dovezi (2026-10-16, 18:39–18:44)
+
+Rulat cu `pvl-qa-common\QA_RC121_DUPA_REPORNIRE.cmd` (`run_rc121_qa.sh`, apoi `ONLY='S1 S7' run_rc120_qa.sh`), după ce aplicația reală a fost închisă.
+
+| Test | Scenariu | Rezultat |
+|---|---|---|
+| A1 | Editare offline întârziată pe A, editare nouă pe B | PASS 13/13: serverul păstrează B (`_rev=2`), nicio scriere târzie a SDK-ului, conflict `concurrent_edit` cu varianta lui A păstrată local, persistă după repornire |
+| A2 | Ștergere offline învechită pe A, editare pe B | PASS 15/15: ștergerea nu atinge versiunea lui B, conflict `delete_vs_remote_edit` auto-rezolvat, programarea redevine vizibilă local |
+| A3 | Ștergere normală | PASS 14/14: ștearsă pe server, marker `deleted_appointments` scris, nu reapare după sincronizare și repornire |
+| S1 | Regresie clienți: editare offline vs B (120) | PASS 17/17 |
+| S7 | Regresie clienți: ștergere offline învechită | PASS 13/13 |
+
+**Binarul testat:**
+
+- `ProVentaris.exe` SHA-256 `D768494C2DCBD007B9E7231852763A229B3761DA76F51BBB7A52D432FD7B4FB5`
+- `data\app.so` SHA-256 `581D8BDB1C361BE287596BD54BE8F56BEC0DEF0656E5D16E80391AC674812312`
+- Identitate `ro.proterm.qa` / `ProVentarisQA`.
+
+**Limitări:**
+
+- Binarul QA nu e artefactul de livrare. E construit din worktree-ul `pvl-qa120` (bază `37ce3ed` + fișierele RC 121 necomise).
+  - Codul `lib/` este identic cu `6949c89` în 28 de fișiere.
+  - Diferă doar patch-ul QA: `firebase_options.dart` → proiectul `demo-proventaris-sync` și identitatea notificărilor.
+  - Eticheta de versiune a binarului QA este `1.13.0+114` (cosmetic).
+  - Faptul că binarul conține exact acest cod reiese din ore (build 16:29, ultima modificare de cod 16:21), nu dintr-un build reprodus.
+- Firestore și Auth au rulat în Firebase Emulator local (`127.0.0.1`), cu date sintetice și profile QA noi. Nu s-a folosit Firebase PROD, iar regulile rulate sunt `firestore.rules` (fără M3).
+- După rulare, 4 procese QA au rămas blocate la închidere: Windows le raportează ca terminate, dar nu le eliberează. Cauza e de mediu (probabil un driver de filtrare a rețelei, neconfirmat), nu de cod.
+  - Toate fazele s-au încheiat `EXITED`, cu cod 0.
+  - Procesele rămase nu împiedică pornirea aplicației reale.
+
+**APK release:** `app-proterm-v1.13.0-build121.apk`
+
+- SHA-256 `9854587DF0E2429C4A8128B2B730D88FFEFEE690A3AC764DE250ABBC6842D0C1`
+- `ro.proterm.proventaris`, `versionCode=121`, `versionName=1.13.0`
+- Semnătură v2 validă, certificat SHA-256 egal cu `scripts/release_cert_proterm.sha256`
+- Build tag `rel-20261016-1808`, construit din `6949c89` (reflog: checkout 18:08:13)
+- Nu este instalat pe niciun dispozitiv.
 
