@@ -1130,7 +1130,8 @@ class OfflineSyncRuntime {
         if (item.isSynced || item.retryCount < _maxRetryAttempts) continue;
         if (item.entityType != CloudEntityType.clients &&
             item.entityType != CloudEntityType.offers &&
-            item.entityType != CloudEntityType.jobs) {
+            item.entityType != CloudEntityType.jobs &&
+            item.entityType != CloudEntityType.appointments) {
           continue;
         }
         await store.add(SyncConflict(

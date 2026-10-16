@@ -61,6 +61,7 @@ String _entityLabel(CloudEntityType type) => switch (type) {
       CloudEntityType.clients => 'Client',
       CloudEntityType.offers => 'Ofertă',
       CloudEntityType.jobs => 'Lucrare',
+      CloudEntityType.appointments => 'Programare',
       _ => type.name,
     };
 

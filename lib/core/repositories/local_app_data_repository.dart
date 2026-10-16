@@ -32,6 +32,7 @@ import '../../features/oferte/local_oferte_repository.dart';
 import '../../features/partners/partner_models.dart';
 import '../../features/programari/appointment_models.dart';
 import '../../features/programari/appointment_requeue_policy.dart';
+import '../../features/programari/firebase_programari_repository.dart';
 import '../../features/reclamatii/complaint_document_models.dart';
 import '../../features/reclamatii/complaint_models.dart';
 import '../../features/reclamatii/repair_report_models.dart';
@@ -497,6 +498,13 @@ class LocalAppDataRepository implements AppDataRepository {
       // PERFORMANȚĂ: Firestore deletes rulează în BACKGROUND (nu blochează lista).
       // IDs-urile rămân în pendingDeleteIds pentru filtrare — se curăță asincron.
       final pendingDeleteIds = await _readDeletedAppointmentIds();
+      // RC 121: o ștergere respinsă (programarea editată între timp pe alt
+      // dispozitiv) nu mai ascunde programarea: varianta serverului revine.
+      final deleteConflictIds = await _appointmentDeleteConflictIds();
+      if (deleteConflictIds.isNotEmpty) {
+        pendingDeleteIds.removeAll(deleteConflictIds);
+        await _removeDeletedAppointmentIds(deleteConflictIds);
+      }
       appointmentPendingDeleteCount = pendingDeleteIds.length;
       if (pendingDeleteIds.isNotEmpty) {
         unawaited(_retryPendingDeletesBackground(Set<String>.from(pendingDeleteIds)));
@@ -513,68 +521,23 @@ class LocalAppDataRepository implements AppDataRepository {
             .toList(growable: false);
       }
 
-      // Combină: datele din cloud + local-only (create/modificate offline).
-      final cloudIds = cloudItems.map((item) => item.id).toSet();
-
-      // BUG FIX: Preferă versiunea locală pentru programările cu modificări
-      // offline în așteptare. Fără asta, sincronizarea cloud suprascrie
-      // modificările offline înainte ca queue-ul să le trimită în Firestore
-      // (race condition la restart cu internet).
-      final pendingIds = await OfflineSyncRuntime.instance
-          .pendingUpsertEntityIds(CloudEntityType.appointments);
-      final localById = <String, Appointment>{
-        for (final item in localItems) item.id: item,
-      };
-      final resolvedCloudItems = cloudItems.map((cloudItem) {
-        if (pendingIds.contains(cloudItem.id) &&
-            localById.containsKey(cloudItem.id)) {
-          return localById[cloudItem.id]!; // preferă modificarea offline
-        }
-        return cloudItem;
-      }).toList(growable: false);
-
-      // Programările prezente în cloud sunt CONFIRMATE → scoate-le din registrul
-      // de neconfirmate (best-effort, fire-and-forget).
-      unawaited(_markAppointmentsCloudConfirmed(cloudIds));
-
-      // BUG FIX: Include și programările create offline (nu există în cloud).
-      // Vechea logică includea DOAR items mai vechi de 14 luni — programările
-      // noi create offline cu dată recentă dispăreau complet din merge.
-      final localOnlyItems = localItems
-          .where((item) =>
-              !allDeletedIds.contains(item.id) &&
-              !cloudIds.contains(item.id))
-          .toList(growable: false);
-
-      // FIX ANTI-RESURECȚIE: NU mai re-cozăm orbește orice item local-only.
-      // Clasificăm: itemele neconfirmate (create offline) sau cu upsert pending
-      // se re-cozează normal; cele confirmate cândva în cloud, dar acum absente,
-      // se verifică determinist cu .doc(id).get() ÎNAINTE de orice decizie
-      // (fereastra de 425 zile le poate exclude fără să fie șterse).
-      final unconfirmedIds = await _readUnconfirmedAppointmentIds();
-      final requeuePlan = planLocalOnlyRequeue(
-        localOnlyItems: localOnlyItems,
-        unconfirmedIds: unconfirmedIds,
-        pendingUpsertIds: pendingIds,
-      );
-      if (requeuePlan.requeueNow.isNotEmpty) {
-        unawaited(_queueAppointmentsBatch(requeuePlan.requeueNow));
-      }
-      if (requeuePlan.verifyExistence.isNotEmpty) {
-        unawaited(
-          _verifyAndReconcileLocalOnlyBackground(requeuePlan.verifyExistence),
-        );
-      }
-
-      final merged =
-          _sortAppointments([...resolvedCloudItems, ...localOnlyItems]);
-      await _writeAppointments(merged);
+      // RC 121: îmbinarea rulează sub blocarea comună a programărilor, cu
+      // recitirea locală: o salvare/ștergere locală + coadă nu se poate
+      // intercala între citire și scriere (altfel ar fi suprascrisă local).
+      final result = await runEntitySyncLocked(
+          CloudEntityType.appointments,
+          () => _mergeAppointmentsLocked(
+                cloudItems: cloudItems,
+                allDeletedIds: allDeletedIds,
+                restoreIds: deleteConflictIds,
+              ));
+      final merged = result.merged;
       appointmentLastLocalCount = merged.length;
       appointmentLastFilteredTodayCount = _countAppointmentsForToday(merged);
       _lastAppointmentsDataSourceLabel = 'cloud';
       _lastAppointmentsFallbackReason = '';
       _programariLog(
-        'listAppointments end duration_ms=${listStopwatch.elapsedMilliseconds} count=${merged.length} cloud_count=${cloudItems.length} pending_deletes=${pendingDeleteIds.length} requeue=${requeuePlan.requeueNow.length} verify=${requeuePlan.verifyExistence.length}',
+        'listAppointments end duration_ms=${listStopwatch.elapsedMilliseconds} count=${merged.length} cloud_count=${cloudItems.length} pending_deletes=${pendingDeleteIds.length} requeue=${result.requeue} verify=${result.verify}',
       );
       return merged;
     } catch (error) {
@@ -587,6 +550,82 @@ class LocalAppDataRepository implements AppDataRepository {
       );
       return localItems;
     }
+  }
+
+  /// Programările cu o ștergere respinsă de server (conflict deschis
+  /// `delete_vs_remote_edit`): nu trebuie să rămână ascunse.
+  Future<Set<String>> _appointmentDeleteConflictIds() async {
+    final open = await SyncConflictStore().listOpen();
+    return open
+        .where((c) =>
+            c.entityType == CloudEntityType.appointments &&
+            c.kind == 'delete_vs_remote_edit')
+        .map((c) => c.entityId)
+        .toSet();
+  }
+
+  /// Îmbinarea cloud → local a programărilor (RC 121), apelată SUB
+  /// `runEntitySyncLocked(appointments)`:
+  /// - programările protejate (modificări/ștergeri în coadă sau conflict deschis)
+  ///   păstrează varianta locală; o ștergere locală în așteptare NU readuce
+  ///   copia din cloud;
+  /// - local-only: logica anti-resurecție existentă (re-coadă doar pentru
+  ///   neconfirmate/în coadă, verificare `.get()` pentru cele confirmate).
+  Future<({List<Appointment> merged, int requeue, int verify})>
+      _mergeAppointmentsLocked({
+    required List<Appointment> cloudItems,
+    required Set<String> allDeletedIds,
+    Set<String> restoreIds = const <String>{},
+  }) async {
+    final localItems = await _readLocalAppointmentsOnly();
+    final protectedIds = await OfflineSyncRuntime.instance
+        .protectedEntityIds(CloudEntityType.appointments);
+    final pendingIds = await OfflineSyncRuntime.instance
+        .pendingUpsertEntityIds(CloudEntityType.appointments);
+    final localById = <String, Appointment>{
+      for (final item in localItems) item.id: item,
+    };
+    final cloudIds = cloudItems.map((item) => item.id).toSet();
+    final resolvedCloudItems = <Appointment>[];
+    for (final cloudItem in cloudItems) {
+      if (protectedIds.contains(cloudItem.id)) {
+        final local = localById[cloudItem.id];
+        if (local != null) {
+          resolvedCloudItems.add(local);
+        } else if (restoreIds.contains(cloudItem.id)) {
+          resolvedCloudItems.add(cloudItem); // ștergere respinsă: revine varianta serverului
+        }
+        continue; // ștergere locală în așteptare: copia din cloud nu revine
+      }
+      resolvedCloudItems.add(cloudItem);
+    }
+    // Programările prezente în cloud sunt CONFIRMATE (fire-and-forget).
+    unawaited(_markAppointmentsCloudConfirmed(cloudIds));
+    final localOnlyItems = localItems
+        .where((item) =>
+            !allDeletedIds.contains(item.id) && !cloudIds.contains(item.id))
+        .toList(growable: false);
+    final unconfirmedIds = await _readUnconfirmedAppointmentIds();
+    final requeuePlan = planLocalOnlyRequeue(
+      localOnlyItems: localOnlyItems,
+      unconfirmedIds: unconfirmedIds,
+      pendingUpsertIds: pendingIds,
+    );
+    if (requeuePlan.requeueNow.isNotEmpty) {
+      unawaited(_queueAppointmentsBatch(requeuePlan.requeueNow));
+    }
+    if (requeuePlan.verifyExistence.isNotEmpty) {
+      unawaited(
+        _verifyAndReconcileLocalOnlyBackground(requeuePlan.verifyExistence),
+      );
+    }
+    final merged = _sortAppointments([...resolvedCloudItems, ...localOnlyItems]);
+    await _writeAppointments(merged);
+    return (
+      merged: merged,
+      requeue: requeuePlan.requeueNow.length,
+      verify: requeuePlan.verifyExistence.length,
+    );
   }
 
   @override
@@ -605,6 +644,8 @@ class LocalAppDataRepository implements AppDataRepository {
     try {
       // Fetch complet din Firestore, fără filtru de dată
       final snapshot = await _appointmentsCollection.get();
+      await FirebaseProgramariRepository.recordServerBases(snapshot.docs,
+          isFromCache: snapshot.metadata.isFromCache);
       var cloudItems = snapshot.docs
           .map(_appointmentFromDoc)
           .where((item) => item.id.trim().isNotEmpty)
@@ -613,61 +654,31 @@ class LocalAppDataRepository implements AppDataRepository {
 
       final serverTombstoneIds = await _getServerTombstoneIds();
       final pendingDeleteIds = await _readDeletedAppointmentIds();
+      final deleteConflictIds = await _appointmentDeleteConflictIds();
+      if (deleteConflictIds.isNotEmpty) {
+        pendingDeleteIds.removeAll(deleteConflictIds);
+        await _removeDeletedAppointmentIds(deleteConflictIds);
+      }
       final allDeletedIds = {...pendingDeleteIds, ...serverTombstoneIds};
       if (allDeletedIds.isNotEmpty) {
         cloudItems = cloudItems
             .where((item) => !allDeletedIds.contains(item.id))
             .toList(growable: false);
       }
-      // Include și programările locale cu modificări offline pending
-      final cloudIds = cloudItems.map((item) => item.id).toSet();
-      final pendingIds = await OfflineSyncRuntime.instance
-          .pendingUpsertEntityIds(CloudEntityType.appointments);
-      final localById = <String, Appointment>{
-        for (final item in localItems) item.id: item,
-      };
-      final resolvedCloudItems = cloudItems.map((cloudItem) {
-        if (pendingIds.contains(cloudItem.id) &&
-            localById.containsKey(cloudItem.id)) {
-          return localById[cloudItem.id]!;
-        }
-        return cloudItem;
-      }).toList(growable: false);
-      // Confirmă în registrul local itemele văzute în cloud (fire-and-forget).
-      unawaited(_markAppointmentsCloudConfirmed(cloudIds));
-      final localOnlyItems = localItems
-          .where((item) =>
-              !allDeletedIds.contains(item.id) &&
-              !cloudIds.contains(item.id))
-          .toList(growable: false);
-      // FIX ANTI-RESURECȚIE (identic cu calea cu fereastră): re-queue doar
-      // itemele neconfirmate/pending; cele confirmate dar absente se verifică
-      // determinist cu .doc(id).get(). Aici query-ul cloud a fost COMPLET (fără
-      // fereastră), deci un item confirmat absent e aproape sigur șters — dar
-      // verificarea .get() rămâne, ca plasă de siguranță contra unui scan parțial.
-      final unconfirmedIds = await _readUnconfirmedAppointmentIds();
-      final requeuePlan = planLocalOnlyRequeue(
-        localOnlyItems: localOnlyItems,
-        unconfirmedIds: unconfirmedIds,
-        pendingUpsertIds: pendingIds,
-      );
-      if (requeuePlan.requeueNow.isNotEmpty) {
-        unawaited(_queueAppointmentsBatch(requeuePlan.requeueNow));
-      }
-      if (requeuePlan.verifyExistence.isNotEmpty) {
-        unawaited(
-          _verifyAndReconcileLocalOnlyBackground(requeuePlan.verifyExistence),
-        );
-      }
-      final merged =
-          _sortAppointments([...resolvedCloudItems, ...localOnlyItems]);
-      await _writeAppointments(merged);
+      final result = await runEntitySyncLocked(
+          CloudEntityType.appointments,
+          () => _mergeAppointmentsLocked(
+                cloudItems: cloudItems,
+                allDeletedIds: allDeletedIds,
+                restoreIds: deleteConflictIds,
+              ));
+      final merged = result.merged;
       appointmentLastLocalCount = merged.length;
       appointmentLastFilteredTodayCount = _countAppointmentsForToday(merged);
       _lastAppointmentsDataSourceLabel = 'cloud';
       _lastAppointmentsFallbackReason = '';
       _programariLog(
-        'listAppointments end duration_ms=${listStopwatch.elapsedMilliseconds} count=${merged.length} cloud_count=${cloudItems.length} mode=all_history requeue=${requeuePlan.requeueNow.length} verify=${requeuePlan.verifyExistence.length}',
+        'listAppointments end duration_ms=${listStopwatch.elapsedMilliseconds} count=${merged.length} cloud_count=${cloudItems.length} mode=all_history requeue=${result.requeue} verify=${result.verify}',
       );
       return merged;
     } catch (error) {
@@ -686,50 +697,49 @@ class LocalAppDataRepository implements AppDataRepository {
   Future<void> saveAppointment(Appointment appointment) async {
     final localStopwatch = Stopwatch()..start();
     _programariLog('local save start id=${appointment.id}');
-    // 1. Salvare locală imediată
-    final items = [...await _readLocalAppointmentsOnly()];
-    final index = items.indexWhere((item) => item.id == appointment.id);
-    final isNewLocal = index < 0;
-    if (index >= 0) {
-      items[index] = appointment;
-    } else {
-      items.add(appointment);
-    }
-    await _writeAppointments(_sortAppointments(items));
-    // Fix anti-resurecție: o programare NOUĂ (nu editare) e „neconfirmată în
-    // cloud" până la primul upsert reușit. Astfel, dacă apare ca local-only la
-    // o listare ulterioară, e re-cozată ca item nou (nu verificată/ștearsă).
-    if (isNewLocal) {
-      await _addUnconfirmedAppointmentId(appointment.id);
-    }
+    // 1+2. Salvare locală + coadă, sub blocarea comună (RC 121): o îmbinare din
+    // cloud nu se poate intercala între ele și nu poate suprascrie editarea.
+    await runEntitySyncLocked(CloudEntityType.appointments, () async {
+      final items = [...await _readLocalAppointmentsOnly()];
+      final index = items.indexWhere((item) => item.id == appointment.id);
+      final isNewLocal = index < 0;
+      if (index >= 0) {
+        items[index] = appointment;
+      } else {
+        items.add(appointment);
+      }
+      await _writeAppointments(_sortAppointments(items));
+      // Fix anti-resurecție: o programare NOUĂ (nu editare) e „neconfirmată în
+      // cloud" până la primul upsert reușit.
+      if (isNewLocal) {
+        await _addUnconfirmedAppointmentId(appointment.id);
+      }
+      // Coada — await OBLIGATORIU (protecția la îmbinare citește coada).
+      await OfflineSyncRuntime.instance.queueAppointment(appointment);
+    });
     localStopwatch.stop();
     _programariLog(
-      'local save end duration_ms=${localStopwatch.elapsedMilliseconds} count=${items.length}',
+      'local save end duration_ms=${localStopwatch.elapsedMilliseconds}',
     );
-    // 2. Queue offline — await OBLIGATORIU: BUG 7 fix din listAppointments()
-    // verifică pendingUpsertEntityIds() care citește coada. Dacă queue nu e
-    // scris (unawaited), pendingIds este gol la reload → cloud suprascrie local.
-    await OfflineSyncRuntime.instance.queueAppointment(appointment);
-    // 3. Firestore direct — best-effort, fire-and-forget (BUG 8: nu await)
+    // 3. Cloud: scriere CONDIȚIONATĂ de revizie, cu timeout (RC 121). Înainte era
+    // `set(merge)` orb, fără timeout: SDK-ul o păstra offline și o trimitea mai
+    // târziu peste versiuni mai noi. La conflict nu se scrie nimic; elementul
+    // din coadă devine conflict la sincronizare (ambele variante păstrate).
     if (_isAppointmentsCloudAvailable) {
       _programariLog('cloud save start id=${appointment.id}');
-      _appointmentsCollection
-          .doc(appointment.id)
-          .set(appointment.toMap(), SetOptions(merge: true))
-          .then((_) {
-            _programariLog('cloud save end id=${appointment.id}');
-            _lastAppointmentsDataSourceLabel = 'cloud';
-            _lastAppointmentsFallbackReason = '';
-            // Upsert confirmat în Firestore → nu mai e „neconfirmat".
-            unawaited(
-              _markAppointmentsCloudConfirmed({appointment.id}),
-            );
-          })
-          .catchError((error) {
-            _programariLog('cloud save error id=${appointment.id} error=$error');
-            _lastAppointmentsDataSourceLabel = 'local_cache';
-            _lastAppointmentsFallbackReason = error.toString();
-          });
+      final outcome = await pushToCloudWithoutBlocking(
+        () => FirebaseProgramariRepository().upsertAppointment(appointment),
+      );
+      if (outcome == CloudPushOutcome.synced) {
+        _programariLog('cloud save end id=${appointment.id}');
+        _lastAppointmentsDataSourceLabel = 'cloud';
+        _lastAppointmentsFallbackReason = '';
+        unawaited(_markAppointmentsCloudConfirmed({appointment.id}));
+      } else {
+        _lastAppointmentsDataSourceLabel = 'local_cache';
+        _lastAppointmentsFallbackReason =
+            (FirebaseBootstrap.lastErrorMessage ?? '').trim();
+      }
     } else {
       _lastAppointmentsDataSourceLabel = 'local_cache';
       _lastAppointmentsFallbackReason = 'cloud indisponibil';
@@ -742,40 +752,65 @@ class LocalAppDataRepository implements AppDataRepository {
     if (trimmedId.isEmpty) {
       return;
     }
-    // 1. Ștergere locală imediată
-    final items = [...await _readLocalAppointmentsOnly()]
-      ..removeWhere((item) => item.id == appointmentId);
-    await _writeAppointments(items);
-    // 2. Adaugă în pending set local (pentru filtrare la listare)
-    await _addDeletedAppointmentId(trimmedId);
-    // Curăță din registrul de neconfirmate (dacă era o programare creată offline
-    // și ștearsă înainte de sincronizare) — evită intrări orfane.
-    unawaited(_markAppointmentsCloudConfirmed({trimmedId}));
-    // 3. Queue delete — await (consistent cu upsert, listAppointments pendingIds check)
-    await OfflineSyncRuntime.instance.queueAppointmentDelete(trimmedId);
-    // 4. Firestore direct — best-effort, fire-and-forget (BUG 8: nu await)
+    // 1-3. Ștergere locală + set de ștergeri în așteptare + coadă, sub blocare.
+    await runEntitySyncLocked(CloudEntityType.appointments, () async {
+      final items = [...await _readLocalAppointmentsOnly()]
+        ..removeWhere((item) => item.id == appointmentId);
+      await _writeAppointments(items);
+      await _addDeletedAppointmentId(trimmedId);
+      unawaited(_markAppointmentsCloudConfirmed({trimmedId}));
+      await OfflineSyncRuntime.instance.queueAppointmentDelete(trimmedId);
+    });
+    // 4. Cloud: ștergere CONDIȚIONATĂ (RC 121) + marker doar după succes. La
+    // conflict (editată între timp pe alt dispozitiv) varianta serverului revine
+    // local și nimic nu se șterge.
     if (_isAppointmentsCloudAvailable) {
-      _appointmentsCollection.doc(trimmedId).delete().then((_) {
-        // Tombstone pentru alte dispozitive
-        _deletedAppointmentsCollection
-            .doc(trimmedId)
-            .set({'deletedAt': FieldValue.serverTimestamp()})
-            .then((_) => _invalidateTombstoneCache())
-            .catchError((_) {});
-        // Curăță din pending set după succes
-        _removeDeletedAppointmentIds({trimmedId});
+      final outcome = await pushToCloudWithoutBlocking(
+        () => _deleteAppointmentConditionally(trimmedId),
+      );
+      if (outcome == CloudPushOutcome.synced) {
         _lastAppointmentsDataSourceLabel = 'cloud';
         _lastAppointmentsFallbackReason = '';
-      }).catchError((error) {
-        _programariLog('cloud save error id=$trimmedId operation=delete error=$error');
+      } else {
         _lastAppointmentsDataSourceLabel = 'local_cache';
-        _lastAppointmentsFallbackReason = error.toString();
-        // Rămâne în pending set pentru retry la listare
-      });
+        _lastAppointmentsFallbackReason =
+            (FirebaseBootstrap.lastErrorMessage ?? '').trim();
+      }
     } else {
       _lastAppointmentsDataSourceLabel = 'local_cache';
       _lastAppointmentsFallbackReason = 'cloud indisponibil';
     }
+  }
+
+  /// Ștergere condiționată + curățarea setului local; la conflict varianta de
+  /// server este readusă local (vizibilă), iar conflictul rămâne înregistrat.
+  Future<void> _deleteAppointmentConditionally(String id) async {
+    try {
+      await FirebaseProgramariRepository().deleteAppointment(id);
+      await _invalidateTombstoneCache();
+      await _removeDeletedAppointmentIds({id});
+    } on RevisionConflictException catch (conflict) {
+      await _restoreAppointmentAfterDeleteConflict(id, conflict.conflict.serverPayload);
+    }
+  }
+
+  Future<void> _restoreAppointmentAfterDeleteConflict(
+    String id,
+    Map<String, dynamic>? serverPayload,
+  ) async {
+    await runEntitySyncLocked(CloudEntityType.appointments, () async {
+      await _removeDeletedAppointmentIds({id});
+      if (serverPayload == null) return;
+      final restored = Appointment.fromMap(<String, dynamic>{
+        ...serverPayload,
+        'id': (serverPayload['id'] ?? id).toString(),
+      });
+      final items = [...await _readLocalAppointmentsOnly()]
+        ..removeWhere((item) => item.id == id)
+        ..add(restored);
+      await _writeAppointments(_sortAppointments(items));
+    });
+    _programariLog('delete conflict id=$id: versiunea de server pastrata local');
   }
 
   // ── Helper-e background pentru listAppointments ──────────────────────────
@@ -792,6 +827,9 @@ class LocalAppDataRepository implements AppDataRepository {
     final snapshot = await _appointmentsCollection
         .where('scheduled_date', isGreaterThanOrEqualTo: windowStartStr)
         .get();
+    // RC 121: baza de revizie din citiri confirmate de server.
+    await FirebaseProgramariRepository.recordServerBases(snapshot.docs,
+        isFromCache: snapshot.metadata.isFromCache);
     return snapshot.docs;
   }
 
@@ -830,16 +868,13 @@ class LocalAppDataRepository implements AppDataRepository {
     final retried = <String>{};
     for (final id in pendingIds) {
       try {
-        await _appointmentsCollection.doc(id).delete();
-        try {
-          await _deletedAppointmentsCollection
-              .doc(id)
-              .set({'deletedAt': FieldValue.serverTimestamp()});
-          await _invalidateTombstoneCache();
-        } catch (error) {
-          FirebaseBootstrap.registerRuntimeError(error);
-        }
+        // RC 121: ștergere condiționată (+ marker doar după succes).
+        await FirebaseProgramariRepository().deleteAppointment(id);
+        await _invalidateTombstoneCache();
         retried.add(id);
+      } on RevisionConflictException catch (conflict) {
+        await _restoreAppointmentAfterDeleteConflict(
+            id, conflict.conflict.serverPayload);
       } catch (error) {
         FirebaseBootstrap.registerRuntimeError(error);
         _programariLog('pending deletes retry error id=$id error=$error');
@@ -889,6 +924,8 @@ class LocalAppDataRepository implements AppDataRepository {
       try {
         final doc = await _appointmentsCollection.doc(id).get();
         fetchCount++;
+        await FirebaseProgramariRepository.recordServerBases([doc],
+            isFromCache: doc.metadata.isFromCache);
         if (doc.exists) {
           final data = doc.data();
           if (data != null) {
@@ -907,15 +944,21 @@ class LocalAppDataRepository implements AppDataRepository {
     }
 
     if (idsToRemove.isNotEmpty || refreshedById.isNotEmpty) {
-      final current = [...await _readLocalAppointmentsOnly()];
-      final next = <Appointment>[];
-      for (final a in current) {
-        if (idsToRemove.contains(a.id)) {
-          continue; // ștergere reală confirmată de Firestore → scoate din cache
+      await runEntitySyncLocked(CloudEntityType.appointments, () async {
+        // RC 121: programările protejate (coadă / conflict) nu se ating.
+        final protectedIds = await OfflineSyncRuntime.instance
+            .protectedEntityIds(CloudEntityType.appointments);
+        idsToRemove.removeAll(protectedIds);
+        final current = [...await _readLocalAppointmentsOnly()];
+        final next = <Appointment>[];
+        for (final a in current) {
+          if (idsToRemove.contains(a.id)) {
+            continue; // ștergere reală confirmată de Firestore → scoate din cache
+          }
+          next.add(protectedIds.contains(a.id) ? a : (refreshedById[a.id] ?? a));
         }
-        next.add(refreshedById[a.id] ?? a); // înlocuiește cu versiunea din cloud
-      }
-      await _writeAppointments(_sortAppointments(next));
+        await _writeAppointments(_sortAppointments(next));
+      });
     }
 
     // Marchează ștergerile confirmate ca pending local → filtrate la listări
