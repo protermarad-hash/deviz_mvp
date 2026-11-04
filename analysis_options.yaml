@@ -7,5 +7,6 @@ analyzer:
     # Lint nou în Dart 3.13 (toolchain-ul patch-ului eMudhra). Semnalează 13
     # locuri existente (deja în producție) — corectarea lor schimbă tratarea
     # erorilor la runtime, deci se face separat, nu în patch-ul de securitate.
-    # Rămâne vizibil ca info; NU îl dezactiva definitiv.
+    # Rămâne vizibil ca info; NU îl dezactiva definitiv. CI (flutter-ci.yml)
+    # pică dacă numărul depășește 13 — apariții noi rămân blocate.
     unawaited_return_in_try_block: info

@@ -24,6 +24,19 @@ jobs:
       - name: dart analyze
         run: flutter analyze --no-fatal-infos
 
+      # unawaited_return_in_try_block e coborât la info (analysis_options.yaml)
+      # doar pentru cele 13 locuri existente din producția 122. Orice apariție
+      # NOUĂ peste prag pică CI-ul — controlul rămâne activ pentru cod nou.
+      - name: Prag unawaited_return_in_try_block (max 13 cunoscute)
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings > analyze.txt || true
+          count=$(grep -c 'unawaited_return_in_try_block' analyze.txt || true)
+          echo "unawaited_return_in_try_block: $count (prag 13)"
+          if [ "$count" -gt 13 ]; then
+            echo "::error::Apariții noi unawaited_return_in_try_block ($count > 13). Adaugă await în try."
+            exit 1
+          fi
+
       - name: flutter test
         run: flutter test
 
